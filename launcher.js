@@ -7,6 +7,7 @@ let esSea = false;
 try { esSea = require('node:sea').isSea(); } catch (e) { esSea = false; }
 
 const ENTRY_PATH = path.join(__dirname, 'entry.js');
+const PENDING_UPDATE_PATH = path.join(__dirname, '.pending_update.json');
 
 const LOGS_DIR = path.join(__dirname, 'logs');
 fs.mkdirSync(LOGS_DIR, { recursive: true });
@@ -55,6 +56,12 @@ function iniciarProceso(def) {
 
     hijo.on('exit', (code, signal) => {
         if (cerrando) return;
+
+        if (fs.existsSync(PENDING_UPDATE_PATH)) {
+            iniciarActualizacion();
+            return;
+        }
+
         logLinea(`🔴 [${def.nombre}] se detuvo (code=${code} signal=${signal}) — reiniciando en ${REINTENTO_MS / 1000}s...`);
         setTimeout(() => iniciarProceso(def), REINTENTO_MS);
     });
@@ -64,6 +71,48 @@ function iniciarProceso(def) {
     });
 
     def.instancia = hijo;
+}
+
+function iniciarActualizacion() {
+    if (cerrando) return;
+    cerrando = true;
+    logLinea('🔄 Actualización lista — reemplazando el programa...');
+
+    for (const def of PROCESOS) {
+        if (def.instancia && !def.instancia.killed) def.instancia.kill();
+    }
+
+    try { fs.unlinkSync(PENDING_UPDATE_PATH); } catch (e) {}
+
+    if (!esSea) {
+        logLinea('⚠️ La auto-actualización solo aplica al .exe empaquetado — se omite en modo desarrollo.');
+        process.exit(0);
+        return;
+    }
+
+    const rutaExe = process.execPath;
+    const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
+    const rutaBat = path.join(__dirname, '_actualizar.bat');
+    const contenidoBat = [
+        '@echo off',
+        'timeout /t 2 /nobreak >nul',
+        ':retry',
+        `del "${rutaExe}" 2>nul`,
+        `if exist "${rutaExe}" (`,
+        '  timeout /t 1 /nobreak >nul',
+        '  goto retry',
+        ')',
+        `move /y "${rutaNueva}" "${rutaExe}"`,
+        `start "" "${rutaExe}"`,
+        'del "%~f0"',
+        ''
+    ].join('\r\n');
+    fs.writeFileSync(rutaBat, contenidoBat);
+
+    const proc = spawn('cmd.exe', ['/c', rutaBat], { cwd: __dirname, detached: true, stdio: 'ignore' });
+    proc.unref();
+
+    setTimeout(() => process.exit(0), 500);
 }
 
 function cerrarTodo() {

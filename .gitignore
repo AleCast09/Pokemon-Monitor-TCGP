@@ -25,3 +25,6 @@ assets/drive_cache/
 assets/drive_folder_map.json
 automation/Logs/
 logs/
+.pending_update.json
+_actualizar.bat
+MonitorPokemon.new.exe

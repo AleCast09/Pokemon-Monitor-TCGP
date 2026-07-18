@@ -15,6 +15,7 @@ const db = require('./database.js');
 
 const heartbeatScript = require('./heartbeat.js');
 const configScript = require('./config.js');
+const { chequearActualizaciones, obtenerVersionRemota, descargarActualizacion } = require('./update-checker.js');
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID || null;
@@ -2645,6 +2646,24 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply(payload);
         }
 
+        if (interaction.customId === 'actualizacion_luego') {
+            return await interaction.update({ content: '👍 Te vuelvo a avisar la próxima vez que abras el bot.', embeds: [], components: [] });
+        }
+
+        if (interaction.customId === 'actualizacion_ahora') {
+            await interaction.update({ content: '⏳ Descargando la actualización...', embeds: [], components: [] });
+            try {
+                const remota = await obtenerVersionRemota();
+                await descargarActualizacion(remota);
+                await interaction.editReply({ content: `✅ Actualización lista. Reiniciando con la versión **${remota.version}**...` });
+                setTimeout(() => process.exit(0), 1500);
+            } catch (e) {
+                console.error('DEBUG: error descargando actualización:', e?.message || e);
+                await interaction.editReply({ content: '❌ No se pudo descargar la actualización. Probá de nuevo más tarde.' });
+            }
+            return;
+        }
+
         if (!tienePermisosGestion(interaction)) {
             return await interaction.reply({ content: '❌ No tienes permisos para ejecutar acciones de control.', ephemeral: true });
         }
@@ -2945,6 +2964,8 @@ client.once('ready', async () => {
     } catch (error) {
         console.error('❌ Error registrando slash commands:', error?.response?.data || error?.message || error);
     }
+
+    chequearActualizaciones(client);
 });
 
 client.login(TOKEN);
