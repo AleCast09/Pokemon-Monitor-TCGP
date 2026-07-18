@@ -1,0 +1,30 @@
+{
+  "name": "monitor-pokemon",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "clean-webhooks": "node scripts/clean_webhooks.js",
+    "build:exe": "node scripts/build-exe.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.18.1",
+    "discord.js": "^14.26.4",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "form-data": "^4.0.6",
+    "jimp": "^1.6.1",
+    "multer": "^2.2.0",
+    "sharp": "^0.35.3",
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "postject": "^1.0.0-alpha.6"
+  }
+}

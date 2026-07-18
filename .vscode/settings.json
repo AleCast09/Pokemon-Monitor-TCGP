@@ -1,0 +1,5 @@
+{
+    "diffEditor.experimental.showMoves": true,
+    "editor.cursorStyle": "line",
+    "claudeCodeChat.permissions.yoloMode": false
+}

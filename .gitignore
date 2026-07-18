@@ -1,0 +1,27 @@
+# Secretos y configuración local — nunca deben subirse
+.env
+.env.*
+
+# Configuración local de Claude Code — puede contener claves reales
+# pegadas en el historial de comandos permitidos
+.claude/settings.local.json
+
+# Dependencias (se reinstalan con npm install)
+node_modules/
+
+# Carpeta de salida del empaquetado .exe (se regenera con el build)
+dist/
+
+# Bases de datos locales
+*.db
+
+# Estado/caché generado en tiempo de ejecución (se reconstruye solo)
+heartbeat_message_ids.json
+mensaje_id.txt
+mensaje_prueba_id.txt
+pm2list.json
+stats_cache.json
+assets/drive_cache/
+assets/drive_folder_map.json
+automation/Logs/
+logs/
