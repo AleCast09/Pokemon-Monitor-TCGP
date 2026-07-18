@@ -57,6 +57,8 @@ const ETIQUETAS_TIPO_WEBHOOK = {
     'godpack-alive': 'God Pack Alive',
     'godpack-dead': 'God Pack Dead',
     'heartbeat': 'Heartbeat',
+    'actualizaciones': 'Actualizaciones',
+    'apoyo': 'Apoya mi trabajo',
     'cmd_setup': 'Settings',
     'cmd_build_embed': 'Build Embed',
     'cmd_build_webhooks': 'Build Webhooks'
@@ -2737,6 +2739,14 @@ client.on('interactionCreate', async interaction => {
                 try {
                     const grupos = [
                         {
+                            categoria: '🔔 ACTUALIZACIONES 🔔',
+                            tipoCategoria: 'actualizaciones_categoria',
+                            canales: [
+                                { tipo: 'actualizaciones', name: '🔔-actualizaciones' },
+                                { tipo: 'apoyo', name: '💝-apoya-mi-trabajo' }
+                            ]
+                        },
+                        {
                             categoria: '⚙️ SETTINGS ⚙️',
                             tipoCategoria: 'settings_categoria',
                             canales: [
@@ -2838,6 +2848,17 @@ client.on('interactionCreate', async interaction => {
                         const webhook = await canal.createWebhook({ name: `Bot ${tipo}`, avatar: 'https://i.imgur.com/gK1q9yS.png' });
                         await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
                         await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.user.id, tipo, canal.id, webhook.url]);
+
+                        if (tipo === 'apoyo') {
+                            await enviarOEditarInterfaz(interaction.user.id, 'apoyo', webhook.url, {
+                                embeds: [{
+                                    title: '💝 Apoya este proyecto',
+                                    description: 'Si este bot te resultó útil, se agradece cualquier apoyo para seguir mejorándolo. ¡Gracias por usarlo! 💛',
+                                    color: 0xF0A93A
+                                }]
+                            });
+                        }
+
                         return canal;
                     };
 
