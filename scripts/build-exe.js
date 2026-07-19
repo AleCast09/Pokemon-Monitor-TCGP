@@ -18,8 +18,18 @@ global.__baseDir = (() => {
 })();
 `;
 
+function vaciarCarpeta(carpeta) {
+    // Se vacía el contenido en vez de borrar la carpeta en sí: si algún proceso
+    // (terminal, Explorer) tiene "dist" como directorio actual, Windows no deja
+    // borrar la carpeta pero sí borrar lo que hay adentro.
+    if (!fs.existsSync(carpeta)) return;
+    for (const nombre of fs.readdirSync(carpeta)) {
+        fs.rmSync(path.join(carpeta, nombre), { recursive: true, force: true });
+    }
+}
+
 async function bundlear() {
-    fs.rmSync(DIST, { recursive: true, force: true });
+    vaciarCarpeta(DIST);
     fs.mkdirSync(DIST, { recursive: true });
 
     await esbuild.build({

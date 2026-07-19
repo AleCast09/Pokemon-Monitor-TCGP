@@ -30,7 +30,7 @@ function avisarYaAbierto() {
     // Se usa un MessageBox de .NET vía PowerShell en vez de mshta.exe: mshta es
     // una herramienta vieja de Windows que Defender/EDR suele cerrar sola por
     // ser muy usada históricamente en malware — nada confiable para esto.
-    const mensaje = 'Monitor Pokemon ya esta corriendo en segundo plano. No hace falta abrirlo de nuevo.';
+    const mensaje = 'Monitor Pokemon ya esta corriendo en segundo plano. No hace falta abrirlo de nuevo.\n\nSi queres cambiar el token o agregar la API key de Google Drive, abri "Configurar de nuevo.bat" en la misma carpeta.';
     const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${mensaje}', 'Monitor Pokemon')`;
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script}"`, () => {});
 }
@@ -54,6 +54,8 @@ function logLinea(texto) {
 
 logLinea('');
 logLinea('======== Nueva sesión ========');
+logLinea('Esta ventana es Monitor Pokémon corriendo — normalmente queda oculta,');
+logLinea('si la ves, la podés minimizar tranquilo. Cerrarla con la X apaga el bot.');
 
 const PROCESOS = [
     { nombre: 'bot', rol: 'bot' },

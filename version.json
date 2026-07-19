@@ -1,8 +1,8 @@
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "notes": [
-    "Corrige que el bot avisaba de la misma actualización sin parar aunque ya se hubiera instalado.",
-    "Vuelve \"Configurar de nuevo\" para cambiar el token/API key más tarde, esta vez sin acumular procesos si se clickea varias veces."
+    "La ventana de consola ahora explica qué es y que cerrarla con la X apaga el bot.",
+    "El aviso de \"ya está corriendo\" ahora indica que hay que abrir \"Configurar de nuevo.bat\" para cambiar el token o la API key."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe"
 }
