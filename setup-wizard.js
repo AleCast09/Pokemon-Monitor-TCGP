@@ -147,6 +147,15 @@ body {
 .error-banner { display: none; background: rgba(193,67,63,0.12); border: 1px solid rgba(193,67,63,0.35);
   color: var(--danger); font-size: 12px; padding: 9px 12px; border-radius: 10px; }
 .error-banner.show { display: block; }
+.connected-shell { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--good-soft); border: 1.5px solid rgba(24,145,107,0.35); border-radius: 11px; padding: 10px 12px; }
+.connected-shell__text { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--good); }
+.connected-shell__actions { display: flex; gap: 6px; flex-shrink: 0; }
+.link-btn { border: 0; background: transparent; color: var(--ink-muted); cursor: pointer; font-size: 11.5px;
+  font-weight: 600; padding: 4px 8px; border-radius: 7px; }
+.link-btn:hover { background: var(--divider); color: var(--ink); }
+.link-btn--danger:hover { color: var(--danger); }
+.hidden { display: none !important; }
 .success-screen { display: none; flex-direction: column; align-items: center; text-align: center; padding: 48px 26px; gap: 12px; }
 .success-screen.show { display: flex; }
 .success-icon { width: 52px; height: 52px; border-radius: 50%; background: var(--good-soft); display: flex; align-items: center; justify-content: center; }
@@ -164,7 +173,7 @@ body {
     </div>
     <div>
       <p class="wizard__title">Configurar Monitor Pokémon</p>
-      <p class="wizard__subtitle">Conectá tu bot antes de empezar</p>
+      <p class="wizard__subtitle">Conecta tu bot antes de empezar</p>
     </div>
   </div>
 
@@ -178,13 +187,21 @@ body {
           <span class="pill pill--required">Obligatorio</span>
         </div>
         <p class="field__help">Developer Portal de Discord → tu aplicación → Bot → Reset Token.</p>
-        <div class="input-shell">
-          <input id="tokenInput" type="password" placeholder="Pegá aquí tu token..." autocomplete="off">
-          <button class="eye-btn" onclick="toggleVis('tokenInput')" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>
-          </button>
+        <div class="connected-shell hidden" id="tokenConnectedView">
+          <span class="connected-shell__text">✓ Token conectado</span>
+          <div class="connected-shell__actions">
+            <button class="link-btn" type="button" onclick="mostrarEdicionToken()">Reemplazar</button>
+          </div>
         </div>
-        <div class="field__status" id="tokenStatus"><span class="dot"></span><span>Sin conectar todavía</span></div>
+        <div id="tokenEditView">
+          <div class="input-shell">
+            <input id="tokenInput" type="password" placeholder="Pega aquí tu token..." autocomplete="off">
+            <button class="eye-btn" onclick="toggleVis('tokenInput')" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <div class="field__status" id="tokenStatus"><span class="dot"></span><span>Sin conectar todavía</span></div>
+        </div>
       </div>
 
       <div class="field">
@@ -192,14 +209,23 @@ body {
           <span class="field__label">API key de Google Drive</span>
           <span class="pill pill--optional">Opcional</span>
         </div>
-        <p class="field__help">Solo si querés que las cartas se vean en alta definición. Sin esto, el bot funciona igual con calidad normal.</p>
-        <div class="input-shell">
-          <input id="driveInput" type="password" placeholder="AIzaSy... (dejalo vacío para omitir)" autocomplete="off">
-          <button class="eye-btn" onclick="toggleVis('driveInput')" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>
-          </button>
+        <p class="field__help">Solo si quieres que las cartas se vean en alta definición. Sin esto, el bot funciona igual con calidad normal.</p>
+        <div class="connected-shell hidden" id="driveConnectedView">
+          <span class="connected-shell__text">✓ Conectado</span>
+          <div class="connected-shell__actions">
+            <button class="link-btn" type="button" onclick="mostrarEdicionDrive()">Reemplazar</button>
+            <button class="link-btn link-btn--danger" type="button" onclick="quitarDrive()">Quitar</button>
+          </div>
         </div>
-        <div class="field__status" id="driveStatus"><span class="dot"></span><span>No conectado — se usará calidad normal</span></div>
+        <div id="driveEditView">
+          <div class="input-shell">
+            <input id="driveInput" type="password" placeholder="AIzaSy... (déjalo vacío para omitir)" autocomplete="off">
+            <button class="eye-btn" onclick="toggleVis('driveInput')" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <div class="field__status" id="driveStatus"><span class="dot"></span><span>No conectado — se usará calidad normal</span></div>
+        </div>
       </div>
 
       <div class="toggle-card is-locked" id="hdCard">
@@ -213,24 +239,70 @@ body {
 
     <div class="wizard__foot">
       <button class="btn-primary" id="btnGuardar" type="button" onclick="guardar()">Guardar y continuar</button>
-      <p class="foot-note">Todo se guarda en tu <b>propia PC</b>, en un archivo local. Nada se envía a servidores externos salvo Discord y, si la activás, Google Drive.</p>
+      <p class="foot-note">Todo se guarda en tu <b>propia PC</b>, en un archivo local. Nada se envía a servidores externos salvo Discord y, si la activas, Google Drive.</p>
     </div>
   </div>
 
   <div class="success-screen" id="successView">
     <div class="success-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
     <p class="success-title">¡Listo!</p>
-    <p class="success-desc">Monitor Pokémon está iniciando. Ya podés cerrar esta pestaña.</p>
+    <p class="success-desc">Monitor Pokémon está iniciando. Ya puedes cerrar esta pestaña.</p>
   </div>
 </div>
 
 <script>
+const TOKEN_CONECTADO = __TOKEN_CONECTADO__;
+const DRIVE_CONECTADO = __DRIVE_CONECTADO__;
+const HD_ACTUAL = __HD_ACTUAL__;
+let driveKeyQuitada = false;
+
 function toggleVis(id) {
   const el = document.getElementById(id);
   el.type = el.type === 'password' ? 'text' : 'password';
 }
 
-let hdEnabled = false;
+function mostrarEdicionToken() {
+  document.getElementById('tokenConnectedView').classList.add('hidden');
+  document.getElementById('tokenEditView').classList.remove('hidden');
+  document.getElementById('tokenInput').focus();
+}
+
+function mostrarEdicionDrive() {
+  driveKeyQuitada = false;
+  document.getElementById('driveConnectedView').classList.add('hidden');
+  document.getElementById('driveEditView').classList.remove('hidden');
+  document.getElementById('driveInput').focus();
+}
+
+function quitarDrive() {
+  driveKeyQuitada = true;
+  document.getElementById('driveConnectedView').classList.add('hidden');
+  document.getElementById('driveEditView').classList.remove('hidden');
+  document.getElementById('driveInput').value = '';
+  document.getElementById('driveInput').dispatchEvent(new Event('input'));
+}
+
+let hdEnabled = HD_ACTUAL;
+
+if (TOKEN_CONECTADO) {
+  document.getElementById('tokenConnectedView').classList.remove('hidden');
+  document.getElementById('tokenEditView').classList.add('hidden');
+}
+
+if (DRIVE_CONECTADO) {
+  document.getElementById('driveConnectedView').classList.remove('hidden');
+  document.getElementById('driveEditView').classList.add('hidden');
+  const hdCard = document.getElementById('hdCard');
+  const hdSwitch = document.getElementById('hdSwitch');
+  const hdCardDesc = document.getElementById('hdCardDesc');
+  hdSwitch.disabled = false;
+  hdCard.classList.remove('is-locked');
+  hdSwitch.classList.toggle('on', hdEnabled);
+  hdCard.classList.toggle('is-active', hdEnabled);
+  hdCardDesc.textContent = hdEnabled
+    ? 'Activado — las cartas se van a ver en alta definición.'
+    : 'Desactivado — se va a usar la calidad normal para ahorrar espacio en disco.';
+}
 
 document.getElementById('driveInput').addEventListener('input', () => {
   const val = document.getElementById('driveInput').value.trim();
@@ -285,17 +357,28 @@ document.getElementById('tokenInput').addEventListener('input', () => {
 });
 
 async function guardar() {
-  const token = document.getElementById('tokenInput').value.trim();
-  const driveKey = document.getElementById('driveInput').value.trim();
+  const tokenEditando = !document.getElementById('tokenEditView').classList.contains('hidden');
+  const driveEditando = !document.getElementById('driveEditView').classList.contains('hidden');
   const errorBanner = document.getElementById('errorBanner');
   const btn = document.getElementById('btnGuardar');
 
-  if (!token) {
-    errorBanner.textContent = 'Falta el token del bot — es obligatorio para continuar.';
-    errorBanner.classList.add('show');
-    document.getElementById('tokenStatus').classList.add('is-bad');
-    document.getElementById('tokenStatus').innerHTML = '<span class="dot"></span><span>Falta el token</span>';
-    return;
+  let token = null;
+  if (tokenEditando) {
+    token = document.getElementById('tokenInput').value.trim();
+    if (!token) {
+      errorBanner.textContent = 'Falta el token del bot — es obligatorio para continuar.';
+      errorBanner.classList.add('show');
+      document.getElementById('tokenStatus').classList.add('is-bad');
+      document.getElementById('tokenStatus').innerHTML = '<span class="dot"></span><span>Falta el token</span>';
+      return;
+    }
+  }
+
+  let driveKey = null;
+  if (driveKeyQuitada) {
+    driveKey = '';
+  } else if (driveEditando) {
+    driveKey = document.getElementById('driveInput').value.trim();
   }
 
   btn.disabled = true;
@@ -305,14 +388,14 @@ async function guardar() {
     const resp = await fetch('/guardar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, driveKey, hdEnabled })
+      body: JSON.stringify({ token, driveKey, driveKeyQuitada, hdEnabled })
     });
     if (!resp.ok) throw new Error('fallo');
 
     document.getElementById('formView').style.display = 'none';
     document.getElementById('successView').classList.add('show');
   } catch (e) {
-    errorBanner.textContent = 'No se pudo guardar la configuración. Probá de nuevo.';
+    errorBanner.textContent = 'No se pudo guardar la configuración. Prueba de nuevo.';
     errorBanner.classList.add('show');
     btn.disabled = false;
     btn.textContent = 'Guardar y continuar';
@@ -329,8 +412,16 @@ function ejecutarWizard() {
 
         const server = http.createServer((req, res) => {
             if (req.method === 'GET' && (req.url === '/' || req.url === '')) {
+                const tokenConectado = !!(valores.DISCORD_BOT_TOKEN && valores.DISCORD_BOT_TOKEN.trim());
+                const driveConectado = !!(valores.GOOGLE_DRIVE_API_KEY && valores.GOOGLE_DRIVE_API_KEY.trim());
+                const hdActual = driveConectado && valores.GOOGLE_DRIVE_HD_ENABLED !== 'false';
+                const html = paginaHtml()
+                    .split('__LOGO_B64__').join(logoBase64())
+                    .split('__TOKEN_CONECTADO__').join(String(tokenConectado))
+                    .split('__DRIVE_CONECTADO__').join(String(driveConectado))
+                    .split('__HD_ACTUAL__').join(String(hdActual));
                 res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end(paginaHtml().split('__LOGO_B64__').join(logoBase64()));
+                res.end(html);
                 return;
             }
 
@@ -340,19 +431,35 @@ function ejecutarWizard() {
                 req.on('end', () => {
                     try {
                         const datos = JSON.parse(cuerpo);
-                        const token = String(datos.token || '').trim();
-                        const driveKey = String(datos.driveKey || '').trim();
                         const hdEnabled = !!datos.hdEnabled;
 
-                        if (!token) {
+                        // token === null/undefined significa "no tocado" — se conserva el que ya
+                        // había en el .env en vez de pedirlo de nuevo cada vez que se reabre el asistente.
+                        if (datos.token !== null && datos.token !== undefined) {
+                            const token = String(datos.token).trim();
+                            if (!token) {
+                                res.writeHead(400, { 'Content-Type': 'application/json' });
+                                res.end(JSON.stringify({ error: 'token_vacio' }));
+                                return;
+                            }
+                            valores.DISCORD_BOT_TOKEN = token;
+                        } else if (!valores.DISCORD_BOT_TOKEN) {
                             res.writeHead(400, { 'Content-Type': 'application/json' });
                             res.end(JSON.stringify({ error: 'token_vacio' }));
                             return;
                         }
 
-                        valores.DISCORD_BOT_TOKEN = token;
-                        valores.GOOGLE_DRIVE_API_KEY = driveKey;
-                        valores.GOOGLE_DRIVE_HD_ENABLED = driveKey ? String(hdEnabled) : 'false';
+                        if (datos.driveKeyQuitada) {
+                            valores.GOOGLE_DRIVE_API_KEY = '';
+                            valores.GOOGLE_DRIVE_HD_ENABLED = 'false';
+                        } else if (datos.driveKey !== null && datos.driveKey !== undefined) {
+                            const driveKey = String(datos.driveKey).trim();
+                            valores.GOOGLE_DRIVE_API_KEY = driveKey;
+                            valores.GOOGLE_DRIVE_HD_ENABLED = driveKey ? String(hdEnabled) : 'false';
+                        } else {
+                            // Drive key no tocada (ya estaba conectada) — solo se actualiza el switch de HD.
+                            valores.GOOGLE_DRIVE_HD_ENABLED = valores.GOOGLE_DRIVE_API_KEY ? String(hdEnabled) : 'false';
+                        }
                         guardarEnv(valores);
 
                         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -380,7 +487,7 @@ function ejecutarWizard() {
             const url = `http://127.0.0.1:${puerto}/`;
             console.log('');
             console.log('🌐 Abriendo configuración en el navegador...');
-            console.log('   Si no se abre solo, entrá manualmente a:', url);
+            console.log('   Si no se abre solo, entra manualmente a:', url);
             console.log('');
 
             // Acceso directo real como respaldo: si el intento automático de abrir

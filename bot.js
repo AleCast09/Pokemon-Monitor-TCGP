@@ -2307,18 +2307,18 @@ client.on('interactionCreate', async interaction => {
                     });
                     const mime = img.headers['content-type'] || '';
                     if (!mime.startsWith('image/')) {
-                        return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Esa URL no es una imagen. Probá con otra.' }));
+                        return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Esa URL no es una imagen. Prueba con otra.' }));
                     }
                     payload.avatar = `data:${mime};base64,${Buffer.from(img.data).toString('base64')}`;
                 } catch (e) {
-                    return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'No se pudo descargar esa imagen de perfil. Probá con otra URL.' }));
+                    return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'No se pudo descargar esa imagen de perfil. Prueba con otra URL.' }));
                 }
             }
 
             try {
                 await axios.patch(fila.webhook_url, payload);
             } catch (e) {
-                return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Discord rechazó el cambio. Probá de nuevo.' }));
+                return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Discord rechazó el cambio. Prueba de nuevo.' }));
             }
 
             return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { guardado: true }));
@@ -2660,7 +2660,7 @@ client.on('interactionCreate', async interaction => {
                 setTimeout(() => process.exit(0), 1500);
             } catch (e) {
                 console.error('DEBUG: error descargando actualización:', e?.message || e);
-                await interaction.editReply({ content: '❌ No se pudo descargar la actualización. Probá de nuevo más tarde.' });
+                await interaction.editReply({ content: '❌ No se pudo descargar la actualización. Prueba de nuevo más tarde.' });
             }
             return;
         }

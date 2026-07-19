@@ -30,9 +30,19 @@ function avisarYaAbierto() {
     // Se usa un MessageBox de .NET vía PowerShell en vez de mshta.exe: mshta es
     // una herramienta vieja de Windows que Defender/EDR suele cerrar sola por
     // ser muy usada históricamente en malware — nada confiable para esto.
-    const mensaje = 'Monitor Pokemon ya esta corriendo en segundo plano. No hace falta abrirlo de nuevo.\n\nSi queres cambiar el token o agregar la API key de Google Drive, abri "Configurar de nuevo.bat" en la misma carpeta.';
+    const mensaje = 'Monitor Pokemon ya esta corriendo en segundo plano. No hace falta abrirlo de nuevo.\n\nSi quieres cambiar el token o agregar la API key de Google Drive, abre "Configurar de nuevo.bat" en la misma carpeta.';
     const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${mensaje}', 'Monitor Pokemon')`;
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script}"`, () => {});
+}
+
+const ACCESO_CONFIGURAR_PATH = path.join(__dirname, 'Cambiar token o API key.lnk');
+
+function crearAccesoDirectoConfigurar() {
+    if (fs.existsSync(ACCESO_CONFIGURAR_PATH)) return;
+    const destino = path.join(__dirname, 'Configurar de nuevo.bat');
+    if (!fs.existsSync(destino)) return;
+    const script = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${ACCESO_CONFIGURAR_PATH.replace(/'/g, "''")}'); $s.TargetPath = '${destino.replace(/'/g, "''")}'; $s.WorkingDirectory = '${__dirname.replace(/'/g, "''")}'; $s.Save()`;
+    exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
 }
 
 function tomarLock() {
@@ -55,7 +65,7 @@ function logLinea(texto) {
 logLinea('');
 logLinea('======== Nueva sesión ========');
 logLinea('Esta ventana es Monitor Pokémon corriendo — normalmente queda oculta,');
-logLinea('si la ves, la podés minimizar tranquilo. Cerrarla con la X apaga el bot.');
+logLinea('si la ves, la puedes minimizar tranquilo. Cerrarla con la X apaga el bot.');
 
 const PROCESOS = [
     { nombre: 'bot', rol: 'bot' },
@@ -181,6 +191,7 @@ async function main() {
             logLinea('⚠️ La configuración se cerró sin guardar el token — se vuelve a abrir.');
         }
     }
+    crearAccesoDirectoConfigurar();
 
     logLinea('🚀 Monitor Pokémon — iniciando bot, trading y heartbeat...');
     for (const def of PROCESOS) {
