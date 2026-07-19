@@ -2827,6 +2827,34 @@ client.on('interactionCreate', async interaction => {
                         }
                     ];
 
+                    const EMBEDS_BIENVENIDA_POR_TIPO = {
+                        actualizaciones: { title: '🔔 Actualizaciones', description: 'Acá vas a recibir un aviso cuando haya una actualización nueva del bot, con un botón para instalarla al toque.' },
+                        apoyo: { title: '💝 Apoya este proyecto', description: 'Si este bot te resultó útil, se agradece cualquier apoyo para seguir mejorándolo. ¡Gracias por usarlo! 💛' },
+                        cmd_setup: { title: '⚙ Settings', description: 'Acá se usa `/setup` — abre el panel de control del bot (armar canales, etc).' },
+                        cmd_build_embed: { title: '🔧 Build Embed', description: 'Acá se usa `/embed` para configurar qué información se muestra en los embeds de los hallazgos.' },
+                        cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'Acá se usa `/webhook` para cambiar el nombre y el avatar de los webhooks de cada canal.' },
+                        heartbeat: { title: '💓 Heartbeat', description: 'Acá el bot reporta que sigue con vida y funcionando — el mensaje se actualiza solo, no hace falta hacer nada.' },
+                        s4t: { title: '🤖 S4T', description: 'Acá se postean todos los hallazgos apenas se detectan, antes de clasificarlos por rareza.' },
+                        '3-diamond': { title: '🔷 3 Diamond', description: 'Cartas de rareza 3-diamond encontradas se postean automáticamente acá.' },
+                        '4-diamond': { title: '💠 4 Diamond', description: 'Cartas de rareza 4-diamond encontradas se postean automáticamente acá.' },
+                        '1-star': { title: '⭐ 1 Star', description: 'Cartas de rareza 1-star encontradas se postean automáticamente acá.' },
+                        '1-star-shiny': { title: '🌟 1 Star Shiny', description: 'Cartas de rareza 1-star shiny encontradas se postean automáticamente acá.' },
+                        '2-star-trainer': { title: '⭐⭐ 2 Star Trainer', description: 'Cartas de entrenador de rareza 2-star encontradas se postean automáticamente acá.' },
+                        '2-star-rainbow': { title: '🌈 2 Star Rainbow', description: 'Cartas de rareza 2-star rainbow encontradas se postean automáticamente acá.' },
+                        '2-star-full-art': { title: '🎨 2 Star Full Art', description: 'Cartas de rareza 2-star full art encontradas se postean automáticamente acá.' },
+                        '2-star-shiny': { title: '✨ 2 Star Shiny', description: 'Cartas de rareza 2-star shiny encontradas se postean automáticamente acá.' },
+                        immersive: { title: '🌌 Immersive', description: 'Cartas de rareza immersive encontradas se postean automáticamente acá.' },
+                        'crown-rare': { title: '👑 Crown Rare', description: 'Cartas de rareza crown rare encontradas se postean automáticamente acá.' },
+                        wishlist: { title: '💖 Wishlist', description: 'Acá se postean los hallazgos que coinciden con alguna carta marcada en una wishlist.' },
+                        'godpack-general': { title: '📦 God Pack General', description: 'Todo sobre detectado como God Pack se reporta acá, sea alive o dead — es el canal de auditoría completa.' },
+                        'godpack-alive': { title: '👼 God Pack Alive', description: 'God Packs cuyas cartas son TODAS de rareza baja/estándar (1-star, 2-star-trainer, 2-star-full-art o 2-star-rainbow) — los de mayor valor comunitario.' },
+                        'godpack-dead': { title: '☠️ God Pack Dead', description: 'God Packs que incluyen alguna carta fuera de esas rarezas (shiny, crown, immersive, etc.) — pierden la clasificación de "alive".' },
+                        cmd_card_wishlist: { title: '💖 Cards Wishlist', description: 'Acá se usa `/wishlist` para buscar y ver las cartas de tu lista de deseados.' },
+                        cmd_card_all: { title: '⚡ All Cards', description: 'Acá se usa `/card` para buscar y ver cualquier carta del juego.' },
+                        cmd_extract_xlm: { title: '📄 Extract XLM', description: 'Acá se usa `/extract xlm` para extraer XLM en este canal.' },
+                        cmd_run_instance: { title: '🎮 Run MumuPlayer', description: 'Acá se usa `/run instance` para abrir una instancia de MuMu Player.' }
+                    };
+
                     const crearCategoriaSiNoExiste = async (nombreCategoria) => {
                         let categoria = interaction.guild.channels.cache.find(c => c.name === nombreCategoria && c.type === ChannelType.GuildCategory);
                         if (!categoria) {
@@ -2869,14 +2897,9 @@ client.on('interactionCreate', async interaction => {
                         await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
                         await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.user.id, tipo, canal.id, webhook.url]);
 
-                        if (tipo === 'apoyo') {
-                            await enviarOEditarInterfaz(interaction.user.id, 'apoyo', webhook.url, {
-                                embeds: [{
-                                    title: '💝 Apoya este proyecto',
-                                    description: 'Si este bot te resultó útil, se agradece cualquier apoyo para seguir mejorándolo. ¡Gracias por usarlo! 💛',
-                                    color: 0xF0A93A
-                                }]
-                            });
+                        const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
+                        if (embedBienvenida) {
+                            await enviarOEditarInterfaz(interaction.user.id, tipo, webhook.url, { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] });
                         }
 
                         return canal;
@@ -2958,15 +2981,63 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
+// El link de invitación no es secreto (cualquiera puede rearmar uno con el mismo
+// client ID), así que el bot se autoriza solo al primer servidor donde se usa y
+// se sale solo de cualquier otro — evita que alguien más lo agregue a su propio
+// servidor y use la instancia corriendo en esta PC sin permiso.
+async function obtenerGuildsAutorizados() {
+    const fila = await db.get(`SELECT status FROM estados_modulos WHERE nombre = 'guilds_autorizados'`);
+    if (!fila?.status) return null;
+    try { return JSON.parse(fila.status); } catch (e) { return null; }
+}
+
+async function guardarGuildsAutorizados(idsGuild) {
+    await db.run(`INSERT INTO estados_modulos (nombre, status) VALUES ('guilds_autorizados', ?) ON CONFLICT(nombre) DO UPDATE SET status = excluded.status`, [JSON.stringify(idsGuild)]);
+}
+
+async function autorizarGuildNueva(guildId) {
+    const actuales = (await obtenerGuildsAutorizados()) || [];
+    if (!actuales.includes(guildId)) await guardarGuildsAutorizados([...actuales, guildId]);
+}
+
+async function rechazarGuildNoAutorizado(guild) {
+    console.warn(`⚠️ Servidor no autorizado detectado (${guild.name} / ${guild.id}) — saliendo automáticamente.`);
+    try { await guild.leave(); } catch (e) { console.error('❌ Error al salir del servidor no autorizado:', e); }
+}
+
 client.once('ready', async () => {
     try {
         await registrarSlashCommands();
         console.log(`🤖 Bot listo como ${client.user.tag}`);
+
+        // Primera vez que corre esta versión: se adopta como autorizado TODO servidor
+        // donde el bot ya estaba (no se expulsa nada retroactivamente). De acá en más,
+        // cualquier servidor nuevo que no esté en esta lista se rechaza solo.
+        let guildsAutorizados = await obtenerGuildsAutorizados();
+        if (guildsAutorizados === null) {
+            guildsAutorizados = [...client.guilds.cache.keys()];
+            await guardarGuildsAutorizados(guildsAutorizados);
+        } else {
+            for (const g of client.guilds.cache.values()) {
+                if (!guildsAutorizados.includes(g.id)) await rechazarGuildNoAutorizado(g);
+            }
+        }
     } catch (error) {
         console.error('❌ Error registrando slash commands:', error?.response?.data || error?.message || error);
     }
 
     chequearActualizaciones(client);
+});
+
+client.on('guildCreate', async (guild) => {
+    const guildsAutorizados = (await obtenerGuildsAutorizados()) || [];
+    if (guildsAutorizados.includes(guild.id)) return;
+    if (guildsAutorizados.length === 0) {
+        await autorizarGuildNueva(guild.id);
+        console.log(`✅ Servidor autorizado automáticamente: ${guild.name} (${guild.id})`);
+        return;
+    }
+    await rechazarGuildNoAutorizado(guild);
 });
 
 client.login(TOKEN);

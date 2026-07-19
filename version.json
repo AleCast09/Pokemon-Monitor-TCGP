@@ -1,9 +1,8 @@
 {
-  "version": "1.2.3",
+  "version": "1.2.4",
   "notes": [
-    "El asistente ya no vuelve a pedir el token ni la API key si ya están guardados.",
-    "Ahora se puede activar/desactivar HD sin tener que volver a pegar la API key.",
-    "Se genera un acceso directo permanente \"Cambiar token o API key\" tras la primera configuración."
+    "Cada canal que crea /setup ahora explica para qué sirve y qué comando usar.",
+    "Seguridad: el bot ya no puede ser agregado a un servidor no autorizado — se sale solo."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe"
 }
