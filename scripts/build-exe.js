@@ -99,15 +99,21 @@ function ocultarArchivosSoporte() {
 
 function generarZip() {
     // Compress-Archive de PowerShell no incluye archivos con el atributo "oculto"
-    // (los deja afuera en silencio) — por eso se arma el zip con la clase de .NET,
-    // que sí toma todo sin importar el atributo.
+    // (los deja afuera en silencio) — por eso se arma el zip entrada por entrada
+    // con la clase de .NET. También se excluye logs/ (no debe distribuirse, y si
+    // el .exe está corriendo en dist/ el archivo de log queda bloqueado).
     const zipPath = path.join(RAIZ, 'MonitorPokemon.zip');
     if (fs.existsSync(zipPath)) fs.rmSync(zipPath);
-    execSync(
-        `powershell -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; ` +
-        `[System.IO.Compression.ZipFile]::CreateFromDirectory('${DIST}', '${zipPath}', ` +
-        `[System.IO.Compression.CompressionLevel]::Optimal, $false)"`
-    );
+    const script = [
+        `Add-Type -AssemblyName System.IO.Compression.FileSystem`,
+        `$zip = [System.IO.Compression.ZipFile]::Open('${zipPath}', 'Create')`,
+        `Get-ChildItem -Path '${DIST}' -Force -Recurse | Where-Object { -not $_.PSIsContainer -and $_.FullName -notlike '*\\logs\\*' } | ForEach-Object {`,
+        `    $relativePath = $_.FullName.Substring((Resolve-Path '${DIST}').Path.Length + 1)`,
+        `    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $relativePath, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null`,
+        `}`,
+        `$zip.Dispose()`
+    ].join('; ');
+    execSync(`powershell -Command "${script}"`);
     return zipPath;
 }
 
