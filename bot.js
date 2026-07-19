@@ -16,6 +16,7 @@ const db = require('./database.js');
 const heartbeatScript = require('./heartbeat.js');
 const configScript = require('./config.js');
 const { chequearActualizaciones, obtenerVersionRemota, descargarActualizacion } = require('./update-checker.js');
+const { obtenerMapaEmojisGuild } = require('./guild-emojis.js');
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID || null;
@@ -232,9 +233,8 @@ function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
         const expansionId = cardMap?.[id]?.ExpansionID;
         const expansion = expansionId ? (expansiones[expansionId] || expansionId) : 'Sin expansión';
         const categoria = categoriaDesdeInfo(cardmaster?.[id]);
-        const categoriaEmoji = categoriaFormateadaDesdeInfo(cardmaster?.[id]);
         const tipoRareza = tipoRarezaDesdeInfo(cardmaster?.[id]);
-        return { id, nombre, expansion, categoria, categoriaEmoji, tipoRareza };
+        return { id, nombre, expansion, categoria, tipoRareza };
     });
 
     cartas.sort((a, b) => a.expansion.localeCompare(b.expansion) || a.nombre.localeCompare(b.nombre));
@@ -257,9 +257,8 @@ function obtenerTodasLasCartas(rutaMasterCfg) {
         const expansionId = cardMap?.[id]?.ExpansionID;
         const expansion = expansionId ? (expansiones[expansionId] || expansionId) : 'Sin expansión';
         const categoria = categoriaDesdeInfo(info);
-        const categoriaEmoji = categoriaFormateadaDesdeInfo(info);
         const tipoRareza = tipoRarezaDesdeInfo(info);
-        return { id, nombre, expansion, categoria, categoriaEmoji, tipoRareza };
+        return { id, nombre, expansion, categoria, tipoRareza };
     });
 
     cartas.sort((a, b) => a.expansion.localeCompare(b.expansion) || a.nombre.localeCompare(b.nombre));
@@ -335,6 +334,7 @@ function construirEmbedListaCartas(cartas, pagina, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
     const titulo = opciones.titulo || '📋 Tu Wishlist';
     const vacioTexto = opciones.vacioTexto || 'No hay cartas guardadas en tu wishlist.';
+    const mapaEmojis = opciones.mapaEmojis || {};
 
     const totalPaginas = Math.max(1, Math.ceil(cartas.length / WISHLIST_POR_PAGINA));
     const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
@@ -352,7 +352,8 @@ function construirEmbedListaCartas(cartas, pagina, opciones = {}) {
                 lineas = [`**${carta.expansion}**`];
                 expansionActual = carta.expansion;
             }
-            lineas.push(`${inicio + i + 1}. ${carta.nombre} — ${carta.categoriaEmoji}`);
+            const emojiTexto = formatearCategoriaConIcono(carta.tipoRareza, mapaEmojis) || textoSinEmoji(carta.categoria);
+            lineas.push(`${inicio + i + 1}. ${carta.nombre} — ${emojiTexto}`);
         });
         if (lineas.length) bloques.push(lineas.join('\n'));
         listaTexto = bloques.join('\n\n');
@@ -415,16 +416,15 @@ const ORDEN_RAREZA = [
 function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
     const contexto = opciones.contexto || 'tu wishlist';
+    const mapaEmojis = opciones.mapaEmojis || {};
     const filtradas = cartas.filter(c => c.expansion === expansion);
 
     const conteo = {};
     const tipoPorCategoria = {};
-    const emojiTextoPorCategoria = {};
     for (const c of filtradas) {
         conteo[c.categoria] = (conteo[c.categoria] || 0) + 1;
         if (!tipoPorCategoria[c.categoria]) {
             tipoPorCategoria[c.categoria] = c.tipoRareza;
-            emojiTextoPorCategoria[c.categoria] = c.categoriaEmoji;
         }
     }
     const ordenDe = (cat) => {
@@ -432,9 +432,11 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
         return idx === -1 ? ORDEN_RAREZA.length : idx;
     };
     const categorias = Object.keys(conteo).sort((a, b) => ordenDe(a) - ordenDe(b));
-    const mapaEmojis = cargarMapaRarezaEmojisBot();
 
-    const lineas = categorias.map(cat => `${emojiTextoPorCategoria[cat]} — ${conteo[cat]} cartas`);
+    const lineas = categorias.map(cat => {
+        const emojiTexto = formatearCategoriaConIcono(tipoPorCategoria[cat], mapaEmojis) || textoSinEmoji(cat);
+        return `${emojiTexto} — ${conteo[cat]} cartas`;
+    });
 
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${expansion}`)
@@ -480,6 +482,7 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
 function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pagina = 0, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
     const contexto = opciones.contexto || 'tu wishlist';
+    const mapaEmojisCartas = opciones.mapaEmojis || {};
 
     const filtradas = cartas.filter(c => c.expansion === expansion && c.categoria === categoria);
     const totalPaginas = Math.max(1, Math.ceil(filtradas.length / WISHLIST_EXPANSION_POR_PAGINA));
@@ -487,19 +490,21 @@ function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pagina =
     const inicio = paginaSegura * WISHLIST_EXPANSION_POR_PAGINA;
     const items = filtradas.slice(inicio, inicio + WISHLIST_EXPANSION_POR_PAGINA);
 
-    const listaTexto = items.map((c, i) => `${inicio + i + 1}. ${c.nombre} — ${c.categoriaEmoji}`).join('\n');
+    const listaTexto = items.map((c, i) => {
+        const emojiTexto = formatearCategoriaConIcono(c.tipoRareza, mapaEmojisCartas) || textoSinEmoji(c.categoria);
+        return `${inicio + i + 1}. ${c.nombre} — ${emojiTexto}`;
+    }).join('\n');
 
     // El título del embed no puede renderizar emojis custom de Discord (es texto
     // plano) — por eso la categoría con su emoji real va como primera línea de
     // la descripción en vez de en el título.
-    const categoriaConEmoji = filtradas[0]?.categoriaEmoji || textoSinEmoji(categoria);
+    const categoriaConEmoji = (filtradas[0] && formatearCategoriaConIcono(filtradas[0].tipoRareza, mapaEmojisCartas)) || textoSinEmoji(categoria);
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${expansion}`)
         .setDescription(`${categoriaConEmoji}\n\n${listaTexto}\n\n🔎 **Selecciona una carta que buscas** \n(${filtradas.length} cartas en ${contexto}):`)
         .setColor(0xE91E63)
         .setFooter({ text: `Página ${paginaSegura + 1} de ${totalPaginas}` });
 
-    const mapaEmojisCartas = cargarMapaRarezaEmojisBot();
     const menu = new StringSelectMenuBuilder()
         .setCustomId(`${prefijo}_carta_seleccion::${expansion}::${categoria}::${paginaSegura}`)
         .setPlaceholder('Selecciona una carta')
@@ -700,23 +705,14 @@ const RAREZA_ICONOS_CARTAS = {
     'immersive': { emoji: 'rareza_estrella', cantidad: 3, etiqueta: 'Immersive', pipe: true, distintivo: '🌌' }
 };
 
-let _mapaRarezaEmojisBot = null;
-function cargarMapaRarezaEmojisBot() {
-    if (_mapaRarezaEmojisBot) return _mapaRarezaEmojisBot;
-    try {
-        _mapaRarezaEmojisBot = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'rarity_emojis.json'), 'utf8'));
-    } catch (e) {
-        _mapaRarezaEmojisBot = {};
-    }
-    return _mapaRarezaEmojisBot;
-}
-
-function formatearCategoriaConIcono(tipo) {
+// mapaEmojis: { nombreEmoji: idEmoji }, resuelto por servidor vía
+// obtenerMapaEmojisGuild() (guild-emojis.js) — cada aplicación de bot tiene
+// sus propios IDs de emoji, por eso ya no se puede usar un JSON hardcodeado.
+function formatearCategoriaConIcono(tipo, mapaEmojis) {
     const config = tipo ? RAREZA_ICONOS_CARTAS[tipo] : null;
     if (!config) return null;
 
-    const mapa = cargarMapaRarezaEmojisBot();
-    const idEmoji = mapa[config.emoji];
+    const idEmoji = mapaEmojis?.[config.emoji];
     const tagIcono = idEmoji ? `<:${config.emoji}:${idEmoji}>` : '';
     if (!tagIcono) return null;
 
@@ -725,9 +721,9 @@ function formatearCategoriaConIcono(tipo) {
     return config.pipe ? `${iconos} | ${sufijo}` : `${iconos} ${sufijo}`;
 }
 
-function categoriaFormateadaDesdeInfo(info) {
+function categoriaFormateadaDesdeInfo(info, mapaEmojis) {
     const tipo = tipoRarezaDesdeInfo(info);
-    return formatearCategoriaConIcono(tipo) || categoriaDesdeInfo(info);
+    return formatearCategoriaConIcono(tipo, mapaEmojis) || categoriaDesdeInfo(info);
 }
 
 function resolverCategoriaCarta(cartaId, rutaMasterPath) {
@@ -736,23 +732,24 @@ function resolverCategoriaCarta(cartaId, rutaMasterPath) {
     return categoriaDesdeInfo(cardmaster?.[cartaId]);
 }
 
-function resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath) {
+function resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis) {
     if (!rutaMasterPath) return 'Desconocida';
     const cardmaster = leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json'));
-    return categoriaFormateadaDesdeInfo(cardmaster?.[cartaId]);
+    return categoriaFormateadaDesdeInfo(cardmaster?.[cartaId], mapaEmojis);
 }
 
-async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volver = null) {
+async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volver = null, guild = null) {
+    const mapaEmojis = await obtenerMapaEmojisGuild(guild);
     const cardMap = cargarCardMap(rutaMasterPath);
     const en_US = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json')) : null;
     const info = cardMap?.[cartaId];
     const expansiones = construirMapaExpansiones(en_US);
     const expansionNombre = info?.ExpansionID ? (expansiones[info.ExpansionID] || info.ExpansionID) : 'Desconocida';
-    const categoria = resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath);
+    const categoria = resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis);
     const imagenPath = (await obtenerImagenHDBot(cardMap, cartaId)) || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID);
 
     const tipoIngles = cargarCardTypesBot()[nombre.toLowerCase()];
-    const tagElemento = tipoIngles ? tagTipoBot(`type_${tipoIngles.toLowerCase()}`) : '';
+    const tagElemento = tipoIngles ? tagTipoBot(`type_${tipoIngles.toLowerCase()}`, mapaEmojis) : '';
     const elemento = tagElemento ? `${tagElemento} ${tipoIngles}` : 'Desconocido';
 
     const embed = new EmbedBuilder()
@@ -1467,10 +1464,10 @@ async function tieneConfiguracion(userId, tipoModulo) {
 }
 
 const BUILD_EMBED_OPCIONES = [
-    { clave: 'mostrar_tipo', label: 'Tipo y nombre del Pokémon', ejemplo: () => `${tagTipoBot('type_psychic')} Slowbro`.trim() },
+    { clave: 'mostrar_tipo', label: 'Tipo y nombre del Pokémon', ejemplo: (mapaEmojis) => `${tagTipoBot('type_psychic', mapaEmojis)} Slowbro`.trim() },
     { clave: 'mostrar_logo', label: 'Logo de expansión', ejemplo: () => 'Logo arriba de la imagen' },
     { clave: 'mostrar_archivo', label: 'Archivo de la cuenta', ejemplo: () => '📁 Archivo de la cuenta' },
-    { clave: 'mostrar_categoria', label: 'Categoría de la carta', ejemplo: () => formatearRarezaPreview('1-star-shiny') },
+    { clave: 'mostrar_categoria', label: 'Categoría de la carta', ejemplo: (mapaEmojis) => formatearRarezaPreview('1-star-shiny', mapaEmojis) },
     { clave: 'mostrar_instancia', label: 'Instancia', ejemplo: () => '🖥️ Instancia' },
     { clave: 'mostrar_sobre', label: 'Nombre del sobre', ejemplo: () => '📦 Sobre' }
 ];
@@ -1490,27 +1487,16 @@ async function obtenerConfigBuildEmbed(userId) {
     return resultado;
 }
 
-let _mapaTipoEmojisBot = null;
-function cargarMapaTipoEmojisBot() {
-    if (_mapaTipoEmojisBot) return _mapaTipoEmojisBot;
-    try {
-        _mapaTipoEmojisBot = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'type_emojis.json'), 'utf8'));
-    } catch (e) {
-        _mapaTipoEmojisBot = {};
-    }
-    return _mapaTipoEmojisBot;
-}
-
 // Mismo criterio que normalizarNombreEx() en s4t.js: el juego escribe el sufijo
 // en minúscula ("Mewtwo ex"), el usuario lo quiere siempre en mayúscula ("Mewtwo EX").
 function normalizarNombreExBot(nombre) {
     return nombre ? nombre.replace(/\bex\b/gi, 'EX') : nombre;
 }
 
-function tagTipoBot(claveTipo) {
+// mapaEmojis: { nombreEmoji: idEmoji }, resuelto por servidor (ver guild-emojis.js).
+function tagTipoBot(claveTipo, mapaEmojis) {
     if (!claveTipo) return '';
-    const mapa = cargarMapaTipoEmojisBot();
-    const id = mapa[claveTipo];
+    const id = mapaEmojis?.[claveTipo];
     return id ? `<:${claveTipo}:${id}>` : '';
 }
 
@@ -1530,11 +1516,10 @@ const RAREZA_PREVIEW_CONFIG = {
     'immersive': { emoji: 'rareza_estrella', modo: 'prefijo', cantidad: 3, extra: '🌌', texto: 'Immersive' }
 };
 
-function formatearRarezaPreview(clave) {
+function formatearRarezaPreview(clave, mapaEmojis) {
     const config = RAREZA_PREVIEW_CONFIG[clave];
     if (!config) return '';
-    const mapa = cargarMapaRarezaEmojisBot();
-    const id = mapa[config.emoji];
+    const id = mapaEmojis?.[config.emoji];
     const tag = id ? `<:${config.emoji}:${id}>` : '';
     if (config.modo === 'reemplazar') return `${tag} › ${config.texto}`;
     const prefijo = new Array(config.cantidad).fill(tag).join('');
@@ -1732,10 +1717,10 @@ const BUILD_EMBED_CARTA_FALLBACK = {
     imagen: path.join(__dirname, 'assets', 'build_preview_card.png')
 };
 
-function lineaCartaPreview(estados, carta) {
+function lineaCartaPreview(estados, carta, mapaEmojis) {
     const lineas = [];
-    if (estados.mostrar_categoria) lineas.push(`> ${formatearRarezaPreview(carta.rarezaClave)}`);
-    const tagTipo = estados.mostrar_tipo ? tagTipoBot(carta.tipoClave) : '';
+    if (estados.mostrar_categoria) lineas.push(`> ${formatearRarezaPreview(carta.rarezaClave, mapaEmojis)}`);
+    const tagTipo = estados.mostrar_tipo ? tagTipoBot(carta.tipoClave, mapaEmojis) : '';
     lineas.push(`> ${tagTipo ? tagTipo + ' › ' : ''}**${carta.nombre}**`);
     return lineas.join('\n');
 }
@@ -1789,8 +1774,8 @@ async function componerCollagePreview(buffers) {
     }).composite(composite).png().toBuffer();
 }
 
-async function generarEmbedGeneral(estados, cartas, sobreTexto, rutaLogo, cardMap) {
-    const valorPrincipal = cartas.map(c => lineaCartaPreview(estados, c)).join('\n\n');
+async function generarEmbedGeneral(estados, cartas, sobreTexto, rutaLogo, cardMap, mapaEmojis) {
+    const valorPrincipal = cartas.map(c => lineaCartaPreview(estados, c, mapaEmojis)).join('\n\n');
     const campos = construirCamposPreview(estados, valorPrincipal, sobreTexto);
 
     const embed = new EmbedBuilder()
@@ -1823,8 +1808,8 @@ async function generarEmbedGeneral(estados, cartas, sobreTexto, rutaLogo, cardMa
     return { embed, files };
 }
 
-async function generarEmbedRareza(estados, carta, sobreTexto, rutaLogo, cardMap) {
-    const valorPrincipal = lineaCartaPreview(estados, carta);
+async function generarEmbedRareza(estados, carta, sobreTexto, rutaLogo, cardMap, mapaEmojis) {
+    const valorPrincipal = lineaCartaPreview(estados, carta, mapaEmojis);
     const campos = construirCamposPreview(estados, valorPrincipal, sobreTexto);
 
     const embed = new EmbedBuilder()
@@ -1847,11 +1832,11 @@ async function generarEmbedRareza(estados, carta, sobreTexto, rutaLogo, cardMap)
     return { embed, files };
 }
 
-async function generarEmbedWishlist(estados, carta, sobreTexto, rutaLogo, cardMap) {
-    const lineaRareza = estados.mostrar_categoria ? formatearRarezaPreview(carta.rarezaClave) : '';
-    const tagTipo = estados.mostrar_tipo ? tagTipoBot(carta.tipoClave) : '';
+async function generarEmbedWishlist(estados, carta, sobreTexto, rutaLogo, cardMap, mapaEmojis) {
+    const lineaRareza = estados.mostrar_categoria ? formatearRarezaPreview(carta.rarezaClave, mapaEmojis) : '';
+    const tagTipo = estados.mostrar_tipo ? tagTipoBot(carta.tipoClave, mapaEmojis) : '';
     const lineaNombre = `${tagTipo ? tagTipo + ' › ' : ''}**${carta.nombre}**`;
-    const idWishlist = cargarMapaRarezaEmojisBot()['icono_wishlist'];
+    const idWishlist = mapaEmojis?.['icono_wishlist'];
     const tagWishlist = idWishlist ? `<:icono_wishlist:${idWishlist}>` : '💖';
     const cuerpo = lineaRareza ? `${lineaRareza}\n> ${lineaNombre}` : lineaNombre;
     const valorPrincipal = `> ${tagWishlist} › Wishlist encontrada:\n> ${cuerpo}`;
@@ -1876,8 +1861,9 @@ async function generarEmbedWishlist(estados, carta, sobreTexto, rutaLogo, cardMa
     return { embed, files };
 }
 
-async function generarPanelBuildEmbed(userId) {
+async function generarPanelBuildEmbed(userId, guild = null) {
     const estados = await obtenerConfigBuildEmbed(userId);
+    const mapaEmojis = await obtenerMapaEmojisGuild(guild);
 
     const embedConfig = new EmbedBuilder()
         .setTitle('🔧 Build Embed — Configuración de S4T')
@@ -1885,7 +1871,7 @@ async function generarPanelBuildEmbed(userId) {
         .setColor(0xF1C40F)
         .addFields(BUILD_EMBED_OPCIONES.map(opcion => ({
             name: `${estados[opcion.clave] ? '✅' : '❌'} ${opcion.label}`,
-            value: opcion.ejemplo(),
+            value: opcion.ejemplo(mapaEmojis),
             inline: false
         })));
 
@@ -1911,9 +1897,9 @@ async function generarPanelBuildEmbed(userId) {
     const rutaLogo = eleccion?.logo || BUILD_EMBED_EJEMPLO.logoFallback;
     const cardMap = eleccion?.cardMap || {};
 
-    const general = await generarEmbedGeneral(estados, [obtenerCarta(0), obtenerCarta(1)], sobreTexto, rutaLogo, cardMap);
-    const rareza = await generarEmbedRareza(estados, obtenerCarta(2), sobreTexto, rutaLogo, cardMap);
-    const wishlist = await generarEmbedWishlist(estados, obtenerCarta(3), sobreTexto, rutaLogo, cardMap);
+    const general = await generarEmbedGeneral(estados, [obtenerCarta(0), obtenerCarta(1)], sobreTexto, rutaLogo, cardMap, mapaEmojis);
+    const rareza = await generarEmbedRareza(estados, obtenerCarta(2), sobreTexto, rutaLogo, cardMap, mapaEmojis);
+    const wishlist = await generarEmbedWishlist(estados, obtenerCarta(3), sobreTexto, rutaLogo, cardMap, mapaEmojis);
 
     return {
         embeds: [embedConfig, general.embed, rareza.embed, wishlist.embed],
@@ -2044,7 +2030,7 @@ client.on('interactionCreate', async interaction => {
         const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
         const carta = (cartas || []).find(c => c.id === cartaId);
         if (!carta) return await interaction.editReply({ content: '❌ No se encontró esa carta.' });
-        const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath);
+        const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
         return await interaction.editReply(payload);
     }
 
@@ -2073,7 +2059,7 @@ client.on('interactionCreate', async interaction => {
         const { cartas, rutaMasterPath } = await FUENTES_CARTAS.wishlist.obtenerCartas();
         const carta = (cartas || []).find(c => c.id === cartaId);
         if (!carta) return await interaction.editReply({ content: '❌ No se encontró esa carta en tu wishlist.' });
-        const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath);
+        const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
         return await interaction.editReply(payload);
     }
 
@@ -2112,7 +2098,7 @@ client.on('interactionCreate', async interaction => {
             return await interaction.reply({ content: `❌ Este comando solo funciona en <#${rowBuild.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply({ ephemeral: true });
-        const panelBuild = await generarPanelBuildEmbed(interaction.user.id);
+        const panelBuild = await generarPanelBuildEmbed(interaction.user.id, interaction.guild);
         return await interaction.editReply(panelBuild);
     }
 
@@ -2127,7 +2113,7 @@ client.on('interactionCreate', async interaction => {
             `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, ?, ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
             [interaction.user.id, `embed_${clave}`, nuevoEstado, nuevoEstado]
         );
-        const panelActualizado = await generarPanelBuildEmbed(interaction.user.id);
+        const panelActualizado = await generarPanelBuildEmbed(interaction.user.id, interaction.guild);
         return await interaction.editReply(panelActualizado);
     }
 
@@ -2359,7 +2345,8 @@ client.on('interactionCreate', async interaction => {
         const fuente = FUENTES_CARTAS[prefijo];
         const expansionElegida = interaction.values[0];
         const { cartas } = await fuente.obtenerCartas();
-        const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo, contexto: fuente.contexto });
+        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+        const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo, contexto: fuente.contexto, mapaEmojis });
         return await interaction.editReply(payload);
     }
 
@@ -2371,7 +2358,8 @@ client.on('interactionCreate', async interaction => {
         const expansion = interaction.values[0].slice(0, separador);
         const categoria = interaction.values[0].slice(separador + 2);
         const { cartas } = await fuente.obtenerCartas();
-        const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, 0, { prefijo, contexto: fuente.contexto });
+        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+        const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, 0, { prefijo, contexto: fuente.contexto, mapaEmojis });
         return await interaction.editReply(payload);
     }
 
@@ -2383,7 +2371,7 @@ client.on('interactionCreate', async interaction => {
         const cartaId = interaction.values[0];
         const { cartas, rutaMasterPath } = await fuente.obtenerCartas();
         const carta = (cartas || []).find(c => c.id === cartaId);
-        const payload = await construirEmbedDetalleCarta(cartaId, carta?.nombre || cartaId, rutaMasterPath, { prefijo, expansion, categoria, pagina });
+        const payload = await construirEmbedDetalleCarta(cartaId, carta?.nombre || cartaId, rutaMasterPath, { prefijo, expansion, categoria, pagina }, interaction.guild);
         return await interaction.editReply(payload);
     }
 
@@ -2393,7 +2381,8 @@ client.on('interactionCreate', async interaction => {
         const fuente = FUENTES_CARTAS[prefijo];
         const [, expansion, categoria, pagina] = interaction.customId.split('::');
         const { cartas } = await fuente.obtenerCartas();
-        const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, parseInt(pagina, 10) || 0, { prefijo, contexto: fuente.contexto });
+        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+        const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, parseInt(pagina, 10) || 0, { prefijo, contexto: fuente.contexto, mapaEmojis });
         return await interaction.editReply(payload);
     }
 
@@ -2461,7 +2450,8 @@ client.on('interactionCreate', async interaction => {
                 return await interaction.update({ content: fuente.errorSinDatos, embeds: [], components: [] });
             }
 
-            const payload = construirEmbedListaCartas(cartas, pagina, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto });
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = construirEmbedListaCartas(cartas, pagina, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis });
             if (esPrimeraVez) return await interaction.reply({ ...payload, ephemeral: true });
             return await interaction.update(payload);
         }
@@ -2475,7 +2465,8 @@ client.on('interactionCreate', async interaction => {
             const pagina = parseInt(paginaTexto, 10) || 0;
 
             const { cartas } = await fuente.obtenerCartas();
-            const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, pagina, { prefijo, contexto: fuente.contexto });
+            const mapaEmojisPagina = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, pagina, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisPagina });
             return await interaction.editReply(payload);
         }
 
@@ -2485,7 +2476,8 @@ client.on('interactionCreate', async interaction => {
             const fuente = FUENTES_CARTAS[prefijo];
             const expansion = interaction.customId.replace(`${prefijo}_volver_categorias::`, '');
             const { cartas } = await fuente.obtenerCartas();
-            const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansion, { prefijo, contexto: fuente.contexto });
+            const mapaEmojisVolver = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansion, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisVolver });
             return await interaction.editReply(payload);
         }
 
@@ -2494,9 +2486,10 @@ client.on('interactionCreate', async interaction => {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
             const { cartas } = await fuente.obtenerCartas();
+            const mapaEmojisExpansiones = await obtenerMapaEmojisGuild(interaction.guild);
             const payload = prefijo === 'allcards'
                 ? construirEmbedResumenExpansiones(cartas || [], { prefijo })
-                : construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto });
+                : construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis: mapaEmojisExpansiones });
             return await interaction.editReply(payload);
         }
 
