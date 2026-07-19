@@ -1,8 +1,7 @@
 {
-  "version": "1.2.4",
+  "version": "1.2.5",
   "notes": [
-    "Cada canal que crea /setup ahora explica para qué sirve y qué comando usar.",
-    "Seguridad: el bot ya no puede ser agregado a un servidor no autorizado — se sale solo."
+    "Los emojis de tipo y rareza (agua, fuego, diamante, corona, etc.) ahora se ven bien en cualquier servidor, no solo en el original."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe"
 }
