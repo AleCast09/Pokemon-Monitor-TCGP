@@ -10,7 +10,7 @@ MONITOR POKÉMON — CÓMO INSTALARLO
 3. Si Windows te muestra un aviso de seguridad al abrir algo (SmartScreen o
    "Control Inteligente de Aplicaciones"):
    - Abrí primero "Desbloquear.bat" (dejalo terminar, se cierra solo).
-   - Después probá de nuevo con "Iniciar Monitor Pokemon.vbs".
+   - Después probá de nuevo con "Iniciar Monitor Pokemon.bat".
 
    SI "Desbloquear.bat" TAMBIÉN TE SALE BLOQUEADO:
    a) Adentro de la carpeta (en un espacio vacío), mantené apretado SHIFT
@@ -18,12 +18,20 @@ MONITOR POKÉMON — CÓMO INSTALARLO
       (o "Abrir en Terminal").
    b) Pegá esta línea y apretá Enter:
       Get-ChildItem -Recurse -Force | Unblock-File
-   c) Cerrá esa ventana y probá de nuevo con "Iniciar Monitor Pokemon.vbs".
+   c) Cerrá esa ventana y probá de nuevo con "Iniciar Monitor Pokemon.bat".
 
-4. Abrí "Iniciar Monitor Pokemon.vbs". Se te va a abrir una pestaña del
-   navegador pidiéndote tu token de Discord — seguí las instrucciones ahí.
+4. Abrí "Iniciar Monitor Pokemon.bat". A los pocos segundos se te va a abrir
+   el navegador pidiéndote tu token de Discord — seguí las instrucciones ahí.
+
+   ¿No se abrió nada? Va a aparecer un archivo nuevo llamado
+   "Abrir configuración.url" en la misma carpeta — hacele doble clic para
+   abrir la página vos mismo.
 
 5. Si por error lo abrís dos veces, no pasa nada — el programa detecta que
    ya está abierto y no abre una copia extra.
+
+6. ¿Querés cambiar el token o agregar la API key de Google Drive más
+   adelante? Abrí el archivo ".env" con el Bloc de notas y editalo ahí
+   directamente, después volvé a abrir el programa.
 
 ¿Algo no funciona? Avisale a quien te lo pasó.

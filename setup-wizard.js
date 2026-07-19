@@ -4,6 +4,7 @@ const http = require('http');
 const { exec } = require('child_process');
 
 const ENV_PATH = path.join(__dirname, '.env');
+const ACCESO_DIRECTO_PATH = path.join(__dirname, 'Abrir configuración.url');
 
 function leerEnvExistente() {
     if (!fs.existsSync(ENV_PATH)) return {};
@@ -36,12 +37,25 @@ function logoBase64() {
     }
 }
 
+const NAVEGADORES_WINDOWS = [
+    `${process.env['ProgramFiles']}\\Google\\Chrome\\Application\\chrome.exe`,
+    `${process.env['ProgramFiles(x86)']}\\Google\\Chrome\\Application\\chrome.exe`,
+    `${process.env['LOCALAPPDATA']}\\Google\\Chrome\\Application\\chrome.exe`,
+    `${process.env['ProgramFiles(x86)']}\\Microsoft\\Edge\\Application\\msedge.exe`,
+    `${process.env['ProgramFiles']}\\Microsoft\\Edge\\Application\\msedge.exe`
+];
+
 function abrirNavegador(url) {
-    const comando = process.platform === 'win32'
-        ? `start "" "${url}"`
-        : process.platform === 'darwin'
-            ? `open "${url}"`
-            : `xdg-open "${url}"`;
+    if (process.platform === 'win32') {
+        const navegador = NAVEGADORES_WINDOWS.find((ruta) => ruta && fs.existsSync(ruta));
+        if (navegador) {
+            exec(`"${navegador}" --new-window "${url}"`, () => {});
+            return;
+        }
+        exec(`start "" "${url}"`, () => {});
+        return;
+    }
+    const comando = process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;
     exec(comando, () => {});
 }
 
@@ -79,76 +93,70 @@ body {
   color: var(--ink);
   font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   display: flex; align-items: center; justify-content: center; padding: 40px 16px;
-  position: relative; overflow: hidden;
 }
-.bg-logo { position: fixed; width: 620px; height: 620px; right: -160px; bottom: -160px;
-  background-image: url(data:image/png;base64,__LOGO_B64__); background-size: contain; background-repeat: no-repeat;
-  opacity: 0.05; pointer-events: none; z-index: 0; filter: grayscale(1); }
-.wizard { position: relative; z-index: 1; width: 100%; max-width: 460px; background: var(--panel); border: 1px solid var(--panel-border);
+.wizard { width: 100%; max-width: 440px; background: var(--panel); border: 1px solid var(--panel-border);
   border-radius: 20px; box-shadow: 0 24px 60px -20px var(--panel-shadow); overflow: hidden; }
-.wizard__head { padding: 28px 30px 22px; border-bottom: 1px solid var(--divider); display: flex; align-items: center; gap: 14px; }
-.wizard__mark { width: 42px; height: 42px; border-radius: 12px; background: linear-gradient(155deg, var(--accent), var(--accent-strong));
+.wizard__head { padding: 24px 26px 18px; border-bottom: 1px solid var(--divider); display: flex; align-items: center; gap: 14px; }
+.wizard__mark { width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(155deg, var(--accent), var(--accent-strong));
   display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 6px 16px -6px var(--accent-strong); overflow: hidden; }
 .wizard__mark img { width: 100%; height: 100%; object-fit: contain; padding: 6px; }
-.wizard__title { font-weight: 800; font-size: 18px; letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+.wizard__title { font-weight: 800; font-size: 17px; letter-spacing: -0.01em; margin: 0; }
 .wizard__subtitle { margin: 3px 0 0; font-size: 13px; color: var(--ink-muted); }
-.wizard__body { padding: 26px 30px 8px; display: flex; flex-direction: column; gap: 22px; }
-.field { display: flex; flex-direction: column; gap: 8px; }
+.wizard__body { padding: 20px 26px 6px; display: flex; flex-direction: column; gap: 16px; }
+.field { display: flex; flex-direction: column; gap: 7px; }
 .field__label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.field__label { font-weight: 700; font-size: 13.5px; }
-.pill { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
-.pill--required { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.field__label { font-weight: 700; font-size: 13px; }
+.pill { font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+.pill--required { color: var(--danger); background: rgba(193,67,63,0.14); }
 .pill--optional { color: var(--ink-muted); background: var(--divider); }
-.field__help { font-size: 12.5px; line-height: 1.5; color: var(--ink-muted); margin: -2px 0 0; }
+.field__help { font-size: 12px; line-height: 1.5; color: var(--ink-muted); margin: -2px 0 0; }
 .input-shell { position: relative; display: flex; align-items: center; background: var(--field-bg);
   border: 1.5px solid var(--field-border); border-radius: 11px; transition: border-color 0.15s ease; }
 .input-shell:focus-within { border-color: var(--accent); }
 .input-shell input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--ink);
-  font: 13.5px/1.4 ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace; letter-spacing: 0.01em; padding: 11px 12px; }
+  font: 13px/1.4 ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace; letter-spacing: 0.01em; padding: 10px 12px; }
 .input-shell input::placeholder { color: var(--ink-faint); font-family: -apple-system, "Segoe UI", sans-serif; }
 .eye-btn { border: 0; background: transparent; color: var(--ink-faint); cursor: pointer; padding: 8px 10px; display: flex; align-items: center; border-radius: 8px; }
 .eye-btn:hover { color: var(--ink-muted); }
-.eye-btn svg { width: 17px; height: 17px; }
-.field__status { display: flex; align-items: center; gap: 6px; font-size: 12px; min-height: 16px; color: var(--ink-faint); }
+.eye-btn svg { width: 16px; height: 16px; }
+.field__status { display: flex; align-items: center; gap: 6px; font-size: 11.5px; min-height: 16px; color: var(--ink-faint); }
 .field__status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); flex-shrink: 0; }
 .field__status.is-good { color: var(--good); } .field__status.is-good .dot { background: var(--good); }
 .field__status.is-bad { color: var(--danger); } .field__status.is-bad .dot { background: var(--danger); }
-.divider-line { height: 1px; background: var(--divider); margin: 2px 0 4px; }
-.toggle-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px 15px; border-radius: 13px;
-  background: var(--field-bg); border: 1.5px solid var(--field-border); transition: opacity 0.2s ease, border-color 0.2s ease; }
+.toggle-card { display: flex; align-items: flex-start; gap: 12px; padding: 12px 13px; border-radius: 12px;
+  background: var(--field-bg); border: 1.5px solid var(--field-border); transition: opacity 0.2s ease, border-color 0.2s ease, background 0.2s ease; }
 .toggle-card.is-locked { opacity: 0.55; }
-.toggle-card.is-active { border-color: color-mix(in srgb, var(--good) 45%, var(--field-border)); background: var(--good-soft); }
+.toggle-card.is-active { border-color: rgba(24,145,107,0.4); background: var(--good-soft); }
 .toggle-card__text { flex: 1; min-width: 0; }
-.toggle-card__title { font-weight: 600; font-size: 13px; margin: 0 0 2px; }
-.toggle-card__desc { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink-muted); }
-.switch { position: relative; width: 40px; height: 23px; border-radius: 999px; background: var(--track-off);
+.toggle-card__title { font-weight: 600; font-size: 12.5px; margin: 0 0 2px; }
+.toggle-card__desc { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--ink-muted); }
+.switch { position: relative; width: 38px; height: 22px; border-radius: 999px; background: var(--track-off);
   flex-shrink: 0; cursor: pointer; border: none; padding: 0; margin-top: 1px; transition: background 0.2s ease; }
-.switch::after { content: ''; position: absolute; top: 2.5px; left: 2.5px; width: 18px; height: 18px; border-radius: 50%;
+.switch::after { content: ''; position: absolute; top: 2.5px; left: 2.5px; width: 17px; height: 17px; border-radius: 50%;
   background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3); transition: transform 0.2s ease; }
-.switch.on { background: var(--good); } .switch.on::after { transform: translateX(17px); }
+.switch.on { background: var(--good); } .switch.on::after { transform: translateX(16px); }
 .switch:disabled { cursor: not-allowed; }
-.wizard__foot { padding: 22px 30px 28px; display: flex; flex-direction: column; gap: 12px; }
-.btn-primary { border: none; border-radius: 12px; padding: 13px 18px; font-weight: 700; font-size: 14.5px;
+.wizard__foot { padding: 18px 26px 24px; display: flex; flex-direction: column; gap: 10px; }
+.btn-primary { border: none; border-radius: 12px; padding: 12px 18px; font-weight: 700; font-size: 14px;
   color: var(--accent-ink); background: linear-gradient(155deg, var(--accent), var(--accent-strong)); cursor: pointer;
   box-shadow: 0 10px 24px -10px var(--accent-strong); transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease; }
 .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 14px 28px -10px var(--accent-strong); }
 .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
-.foot-note { margin: 0; text-align: center; font-size: 11.5px; line-height: 1.5; color: var(--ink-faint); }
+.foot-note { margin: 0; text-align: center; font-size: 11px; line-height: 1.5; color: var(--ink-faint); }
 .foot-note b { color: var(--ink-muted); }
-.error-banner { display: none; background: color-mix(in srgb, var(--danger) 12%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-  color: var(--danger); font-size: 12.5px; padding: 10px 13px; border-radius: 10px; }
+.error-banner { display: none; background: rgba(193,67,63,0.12); border: 1px solid rgba(193,67,63,0.35);
+  color: var(--danger); font-size: 12px; padding: 9px 12px; border-radius: 10px; }
 .error-banner.show { display: block; }
-.success-screen { display: none; flex-direction: column; align-items: center; text-align: center; padding: 52px 30px; gap: 14px; }
+.success-screen { display: none; flex-direction: column; align-items: center; text-align: center; padding: 48px 26px; gap: 12px; }
 .success-screen.show { display: flex; }
-.success-icon { width: 56px; height: 56px; border-radius: 50%; background: var(--good-soft); display: flex; align-items: center; justify-content: center; }
-.success-icon svg { width: 28px; height: 28px; color: var(--good); }
-.success-title { font-weight: 800; font-size: 17px; margin: 0; }
-.success-desc { margin: 0; font-size: 13px; color: var(--ink-muted); line-height: 1.5; max-width: 320px; }
+.success-icon { width: 52px; height: 52px; border-radius: 50%; background: var(--good-soft); display: flex; align-items: center; justify-content: center; }
+.success-icon svg { width: 26px; height: 26px; color: var(--good); }
+.success-title { font-weight: 800; font-size: 16px; margin: 0; }
+.success-desc { margin: 0; font-size: 12.5px; color: var(--ink-muted); line-height: 1.5; max-width: 300px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
-<div class="bg-logo"></div>
 <div class="wizard" id="wizard">
   <div class="wizard__head">
     <div class="wizard__mark">
@@ -179,8 +187,6 @@ body {
         <div class="field__status" id="tokenStatus"><span class="dot"></span><span>Sin conectar todavía</span></div>
       </div>
 
-      <div class="divider-line"></div>
-
       <div class="field">
         <div class="field__label-row">
           <span class="field__label">API key de Google Drive</span>
@@ -199,7 +205,7 @@ body {
       <div class="toggle-card is-locked" id="hdCard">
         <div class="toggle-card__text">
           <p class="toggle-card__title">Guardar las imágenes en alta definición en tu PC</p>
-          <p class="toggle-card__desc" id="hdCardDesc">Se activa al pegar una API key válida arriba. Ocupan espacio en disco (~3 MB por carta — puede sumar varios cientos de MB con el uso).</p>
+          <p class="toggle-card__desc" id="hdCardDesc">Se activa al pegar una API key válida arriba. Ocupan espacio en disco (~3 MB por carta).</p>
         </div>
         <button class="switch" id="hdSwitch" type="button" onclick="toggleHd()" disabled></button>
       </div>
@@ -242,12 +248,12 @@ document.getElementById('driveInput').addEventListener('input', () => {
     status.innerHTML = '<span class="dot"></span><span>Clave detectada — alta definición activada</span>';
     if (!hdEnabled) { hdEnabled = true; hdSwitch.classList.add('on'); }
     hdCard.classList.toggle('is-active', hdEnabled);
-    hdCardDesc.textContent = 'Activado — las cartas se van a ver en alta definición (~3 MB por carta, puede sumar varios cientos de MB con el uso).';
+    hdCardDesc.textContent = 'Activado — las cartas se van a ver en alta definición.';
   } else {
     status.classList.remove('is-good');
     status.innerHTML = '<span class="dot"></span><span>No conectado — se usará calidad normal</span>';
     hdEnabled = false; hdSwitch.classList.remove('on'); hdCard.classList.remove('is-active');
-    hdCardDesc.textContent = 'Se activa al pegar una API key válida arriba. Ocupan espacio en disco (~3 MB por carta — puede sumar varios cientos de MB con el uso).';
+    hdCardDesc.textContent = 'Se activa al pegar una API key válida arriba. Ocupan espacio en disco (~3 MB por carta).';
   }
 });
 
@@ -260,8 +266,8 @@ function toggleHd() {
   hdSwitch.classList.toggle('on', hdEnabled);
   hdCard.classList.toggle('is-active', hdEnabled);
   hdCardDesc.textContent = hdEnabled
-    ? 'Activado — las cartas se van a ver en alta definición (~3 MB por carta, puede sumar varios cientos de MB con el uso).'
-    : 'Desactivado — se va a usar la calidad normal para ahorrar espacio en disco, aunque tengas la API key puesta.';
+    ? 'Activado — las cartas se van a ver en alta definición.'
+    : 'Desactivado — se va a usar la calidad normal para ahorrar espacio en disco.';
 }
 
 document.getElementById('tokenInput').addEventListener('input', () => {
@@ -354,6 +360,7 @@ function ejecutarWizard() {
 
                         setTimeout(() => {
                             server.close();
+                            try { fs.unlinkSync(ACCESO_DIRECTO_PATH); } catch (e) {}
                             resolve();
                         }, 400);
                     } catch (e) {
@@ -375,6 +382,15 @@ function ejecutarWizard() {
             console.log('🌐 Abriendo configuración en el navegador...');
             console.log('   Si no se abre solo, entrá manualmente a:', url);
             console.log('');
+
+            // Acceso directo real como respaldo: si el intento automático de abrir
+            // el navegador no se ve en pantalla, la persona puede hacerle doble
+            // clic a este archivo (un acceso directo .url es un mecanismo nativo
+            // de Windows, mucho más confiable que forzar la apertura por código).
+            try {
+                fs.writeFileSync(ACCESO_DIRECTO_PATH, `[InternetShortcut]\r\nURL=${url}\r\n`, 'utf8');
+            } catch (e) {}
+
             abrirNavegador(url);
         });
     });

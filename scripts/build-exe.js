@@ -56,8 +56,8 @@ function copiarAssets() {
 
 function copiarLanzador() {
     fs.copyFileSync(
-        path.join(RAIZ, 'Iniciar Monitor Pokemon.vbs'),
-        path.join(DIST, 'Iniciar Monitor Pokemon.vbs')
+        path.join(RAIZ, 'Iniciar Monitor Pokemon.bat'),
+        path.join(DIST, 'Iniciar Monitor Pokemon.bat')
     );
     fs.copyFileSync(
         path.join(RAIZ, 'Desbloquear.bat'),
@@ -130,10 +130,10 @@ async function main() {
     empaquetarSea();
 
     console.log('5/5 — Generando el .zip de distribución...');
-    // No se ocultan archivos acá: si alguien "abre" el zip para mirar en vez de
-    // extraerlo, el explorador respeta el atributo oculto y se pierden archivos
-    // en el camino. El .vbs se encarga de ocultar todo recién después de que ya
-    // está todo extraído de verdad.
+    // Todo queda visible siempre (ni en el zip ni después de abrirlo se oculta
+    // nada) — ocultar archivos generaba confusión real: con "mostrar ocultos"
+    // apagado (la config por defecto de Windows), parecía que el programa había
+    // borrado sus propios archivos.
     const zipPath = generarZip();
 
     console.log('');

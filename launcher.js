@@ -1,4 +1,4 @@
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { necesitaConfiguracion, ejecutarWizard } = require('./setup-wizard.js');
@@ -24,6 +24,15 @@ function yaHayUnaCopiaAbierta() {
     const pidGuardado = parseInt(fs.readFileSync(LOCK_PATH, 'utf8').trim(), 10);
     if (!pidGuardado || !procesoExiste(pidGuardado)) return false;
     return true;
+}
+
+function avisarYaAbierto() {
+    // Se usa un MessageBox de .NET vía PowerShell en vez de mshta.exe: mshta es
+    // una herramienta vieja de Windows que Defender/EDR suele cerrar sola por
+    // ser muy usada históricamente en malware — nada confiable para esto.
+    const mensaje = 'Monitor Pokemon ya esta corriendo en segundo plano. No hace falta abrirlo de nuevo.';
+    const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${mensaje}', 'Monitor Pokemon')`;
+    exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script}"`, () => {});
 }
 
 function tomarLock() {
@@ -158,13 +167,17 @@ function cerrarTodo() {
 async function main() {
     if (yaHayUnaCopiaAbierta()) {
         logLinea('⚠️ Monitor Pokémon ya está abierto — no se abre una segunda copia.');
+        avisarYaAbierto();
         process.exit(0);
         return;
     }
     tomarLock();
 
-    if (necesitaConfiguracion()) {
+    while (necesitaConfiguracion()) {
         await ejecutarWizard();
+        if (necesitaConfiguracion()) {
+            logLinea('⚠️ La configuración se cerró sin guardar el token — se vuelve a abrir.');
+        }
     }
 
     logLinea('🚀 Monitor Pokémon — iniciando bot, trading y heartbeat...');
