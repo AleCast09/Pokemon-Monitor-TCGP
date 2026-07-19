@@ -12,6 +12,14 @@ MONITOR POKÉMON — CÓMO INSTALARLO
    - Abrí primero "Desbloquear.bat" (dejalo terminar, se cierra solo).
    - Después probá de nuevo con "Iniciar Monitor Pokemon.vbs".
 
+   SI "Desbloquear.bat" TAMBIÉN TE SALE BLOQUEADO:
+   a) Adentro de la carpeta (en un espacio vacío), mantené apretado SHIFT
+      y hacé click derecho → "Abrir la ventana de PowerShell aquí"
+      (o "Abrir en Terminal").
+   b) Pegá esta línea y apretá Enter:
+      Get-ChildItem -Recurse -Force | Unblock-File
+   c) Cerrá esa ventana y probá de nuevo con "Iniciar Monitor Pokemon.vbs".
+
 4. Abrí "Iniciar Monitor Pokemon.vbs". Se te va a abrir una pestaña del
    navegador pidiéndote tu token de Discord — seguí las instrucciones ahí.
 
