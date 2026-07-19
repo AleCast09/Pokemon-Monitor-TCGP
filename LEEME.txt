@@ -31,7 +31,8 @@ MONITOR POKÉMON — CÓMO INSTALARLO
    ya está abierto y no abre una copia extra.
 
 6. ¿Querés cambiar el token o agregar la API key de Google Drive más
-   adelante? Abrí el archivo ".env" con el Bloc de notas y editalo ahí
-   directamente, después volvé a abrir el programa.
+   adelante? Abrí "Configurar de nuevo.bat" — funciona aunque el programa
+   ya esté corriendo, y se abre en el mismo navegador con el mismo
+   respaldo de acceso directo si hace falta.
 
 ¿Algo no funciona? Avisale a quien te lo pasó.

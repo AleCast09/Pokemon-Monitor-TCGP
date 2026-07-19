@@ -92,6 +92,11 @@ async function descargarActualizacion(remota) {
         respuesta.data.on('error', reject);
     });
 
+    // Sin esto, version.json local nunca cambia y el bot cree para siempre que
+    // sigue en la versión vieja, avisando de la "misma" actualización sin parar
+    // aunque el .exe ya se haya reemplazado correctamente.
+    fs.writeFileSync(VERSION_PATH, JSON.stringify(remota, null, 2));
+
     fs.writeFileSync(PENDING_UPDATE_PATH, JSON.stringify({ version: remota.version, listoEn: Date.now() }));
 }
 

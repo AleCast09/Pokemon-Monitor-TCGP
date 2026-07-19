@@ -64,6 +64,10 @@ function copiarLanzador() {
         path.join(DIST, 'Desbloquear.bat')
     );
     fs.copyFileSync(
+        path.join(RAIZ, 'Configurar de nuevo.bat'),
+        path.join(DIST, 'Configurar de nuevo.bat')
+    );
+    fs.copyFileSync(
         path.join(RAIZ, 'LEEME.txt'),
         path.join(DIST, 'LEEME.txt')
     );

@@ -30,3 +30,5 @@ logs/
 _actualizar.bat
 MonitorPokemon.new.exe
 .monitor.lock
+.reconfigurar.lock
+Abrir configuración.url
