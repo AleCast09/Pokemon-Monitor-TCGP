@@ -29,3 +29,4 @@ logs/
 .pending_update.json
 _actualizar.bat
 MonitorPokemon.new.exe
+.monitor.lock

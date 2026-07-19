@@ -8,6 +8,31 @@ try { esSea = require('node:sea').isSea(); } catch (e) { esSea = false; }
 
 const ENTRY_PATH = path.join(__dirname, 'entry.js');
 const PENDING_UPDATE_PATH = path.join(__dirname, '.pending_update.json');
+const LOCK_PATH = path.join(__dirname, '.monitor.lock');
+
+function procesoExiste(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function yaHayUnaCopiaAbierta() {
+    if (!fs.existsSync(LOCK_PATH)) return false;
+    const pidGuardado = parseInt(fs.readFileSync(LOCK_PATH, 'utf8').trim(), 10);
+    if (!pidGuardado || !procesoExiste(pidGuardado)) return false;
+    return true;
+}
+
+function tomarLock() {
+    fs.writeFileSync(LOCK_PATH, String(process.pid));
+}
+
+function liberarLock() {
+    try { fs.unlinkSync(LOCK_PATH); } catch (e) {}
+}
 
 const LOGS_DIR = path.join(__dirname, 'logs');
 fs.mkdirSync(LOGS_DIR, { recursive: true });
@@ -126,10 +151,18 @@ function cerrarTodo() {
     for (const def of PROCESOS) {
         if (def.instancia && !def.instancia.killed) def.instancia.kill();
     }
+    liberarLock();
     process.exit(0);
 }
 
 async function main() {
+    if (yaHayUnaCopiaAbierta()) {
+        logLinea('⚠️ Monitor Pokémon ya está abierto — no se abre una segunda copia.');
+        process.exit(0);
+        return;
+    }
+    tomarLock();
+
     if (necesitaConfiguracion()) {
         await ejecutarWizard();
     }
