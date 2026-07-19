@@ -1,7 +1,9 @@
 {
-  "version": "1.1.1",
+  "version": "1.1.2",
   "notes": [
-    "Corrige un bug donde abrir el programa dos veces por error generaba decenas de procesos trabados sin parar."
+    "El zip ya no oculta archivos por dentro (evita que se pierdan al extraer mal).",
+    "Nuevo Desbloquear.bat para cuando Windows bloquea el programa por venir de internet.",
+    "Incluye un LEEME.txt con los pasos de instalación."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe"
 }

@@ -59,6 +59,14 @@ function copiarLanzador() {
         path.join(RAIZ, 'Iniciar Monitor Pokemon.vbs'),
         path.join(DIST, 'Iniciar Monitor Pokemon.vbs')
     );
+    fs.copyFileSync(
+        path.join(RAIZ, 'Desbloquear.bat'),
+        path.join(DIST, 'Desbloquear.bat')
+    );
+    fs.copyFileSync(
+        path.join(RAIZ, 'LEEME.txt'),
+        path.join(DIST, 'LEEME.txt')
+    );
 }
 
 function empaquetarSea() {
@@ -79,22 +87,6 @@ function empaquetarSea() {
 
     fs.rmSync(seaConfigPath, { force: true });
     fs.rmSync(path.join(DIST, 'sea-prep.blob'), { force: true });
-}
-
-function ocultarArchivosSoporte() {
-    // El usuario final solo debe ver "Iniciar Monitor Pokemon.vbs" en la carpeta —
-    // todo lo demás (el .exe, sus dependencias, los assets) queda oculto para no confundir.
-    const rutas = [
-        EXE_PATH,
-        BUNDLE_PATH,
-        path.join(DIST, 'node_modules'),
-        path.join(DIST, 'assets')
-    ];
-    for (const ruta of rutas) {
-        if (fs.existsSync(ruta)) {
-            execSync(`attrib +h "${ruta}"`);
-        }
-    }
 }
 
 function generarZip() {
@@ -120,27 +112,28 @@ function generarZip() {
 async function main() {
     console.log('📦 Empaquetando Monitor Pokémon...');
     console.log('');
-    console.log('1/6 — Compilando bundle con esbuild...');
+    console.log('1/5 — Compilando bundle con esbuild...');
     await bundlear();
 
-    console.log('2/6 — Copiando dependencias nativas (sharp)...');
+    console.log('2/5 — Copiando dependencias nativas (sharp)...');
     copiarDependenciaNativa('sharp');
     copiarDependenciaNativa('@img/colour');
     copiarDependenciaNativa('@img/sharp-win32-x64');
     copiarDependenciaNativa('detect-libc');
     copiarDependenciaNativa('semver');
 
-    console.log('3/6 — Copiando assets y lanzador...');
+    console.log('3/5 — Copiando assets y lanzador...');
     copiarAssets();
     copiarLanzador();
 
-    console.log('4/6 — Generando el ejecutable...');
+    console.log('4/5 — Generando el ejecutable...');
     empaquetarSea();
 
-    console.log('5/6 — Ocultando archivos de soporte...');
-    ocultarArchivosSoporte();
-
-    console.log('6/6 — Generando el .zip de distribución...');
+    console.log('5/5 — Generando el .zip de distribución...');
+    // No se ocultan archivos acá: si alguien "abre" el zip para mirar en vez de
+    // extraerlo, el explorador respeta el atributo oculto y se pierden archivos
+    // en el camino. El .vbs se encarga de ocultar todo recién después de que ya
+    // está todo extraído de verdad.
     const zipPath = generarZip();
 
     console.log('');
