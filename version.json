@@ -1,9 +1,9 @@
 {
-  "version": "1.1.2",
+  "version": "1.2.0",
   "notes": [
-    "El zip ya no oculta archivos por dentro (evita que se pierdan al extraer mal).",
-    "Nuevo Desbloquear.bat para cuando Windows bloquea el programa por venir de internet.",
-    "Incluye un LEEME.txt con los pasos de instalación."
+    "El lanzador ahora es un .bat (antes .vbs) — funciona en más PCs.",
+    "El asistente abre Chrome/Edge directamente, más confiable.",
+    "Si el navegador no se abre solo, se crea un acceso directo de respaldo."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe"
 }
