@@ -73,14 +73,16 @@ function iniciarProceso(def) {
     def.instancia = hijo;
 }
 
-function iniciarActualizacion() {
+async function iniciarActualizacion() {
     if (cerrando) return;
     cerrando = true;
     logLinea('🔄 Actualización lista — reemplazando el programa...');
 
-    for (const def of PROCESOS) {
-        if (def.instancia && !def.instancia.killed) def.instancia.kill();
-    }
+    await Promise.all(PROCESOS.map((def) => new Promise((resolve) => {
+        if (!def.instancia || def.instancia.killed || def.instancia.exitCode !== null) return resolve();
+        def.instancia.once('exit', resolve);
+        def.instancia.kill();
+    })));
 
     try { fs.unlinkSync(PENDING_UPDATE_PATH); } catch (e) {}
 
@@ -93,13 +95,16 @@ function iniciarActualizacion() {
     const rutaExe = process.execPath;
     const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
     const rutaBat = path.join(__dirname, '_actualizar.bat');
+    // Nota: "timeout" de Windows depende de tener una consola/stdin real y falla
+    // (o se saltea) cuando corre sin ventana, como en nuestro caso — por eso las
+    // esperas usan "ping" a localhost, el truco clásico que funciona sin consola.
     const contenidoBat = [
         '@echo off',
-        'timeout /t 2 /nobreak >nul',
+        'ping 127.0.0.1 -n 4 >nul',
         ':retry',
         `del "${rutaExe}" 2>nul`,
         `if exist "${rutaExe}" (`,
-        '  timeout /t 1 /nobreak >nul',
+        '  ping 127.0.0.1 -n 2 >nul',
         '  goto retry',
         ')',
         `move /y "${rutaNueva}" "${rutaExe}"`,
