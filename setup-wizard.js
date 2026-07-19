@@ -28,6 +28,14 @@ function necesitaConfiguracion() {
     return !valores.DISCORD_BOT_TOKEN || valores.DISCORD_BOT_TOKEN.trim() === '';
 }
 
+function logoBase64() {
+    try {
+        return fs.readFileSync(path.join(__dirname, 'assets', 'embeds', 'symbol.png')).toString('base64');
+    } catch (e) {
+        return '';
+    }
+}
+
 function abrirNavegador(url) {
     const comando = process.platform === 'win32'
         ? `start "" "${url}"`
@@ -71,13 +79,17 @@ body {
   color: var(--ink);
   font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   display: flex; align-items: center; justify-content: center; padding: 40px 16px;
+  position: relative; overflow: hidden;
 }
-.wizard { width: 100%; max-width: 460px; background: var(--panel); border: 1px solid var(--panel-border);
+.bg-logo { position: fixed; width: 620px; height: 620px; right: -160px; bottom: -160px;
+  background-image: url(data:image/png;base64,__LOGO_B64__); background-size: contain; background-repeat: no-repeat;
+  opacity: 0.05; pointer-events: none; z-index: 0; filter: grayscale(1); }
+.wizard { position: relative; z-index: 1; width: 100%; max-width: 460px; background: var(--panel); border: 1px solid var(--panel-border);
   border-radius: 20px; box-shadow: 0 24px 60px -20px var(--panel-shadow); overflow: hidden; }
 .wizard__head { padding: 28px 30px 22px; border-bottom: 1px solid var(--divider); display: flex; align-items: center; gap: 14px; }
 .wizard__mark { width: 42px; height: 42px; border-radius: 12px; background: linear-gradient(155deg, var(--accent), var(--accent-strong));
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 6px 16px -6px var(--accent-strong); }
-.wizard__mark svg { width: 22px; height: 22px; }
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 6px 16px -6px var(--accent-strong); overflow: hidden; }
+.wizard__mark img { width: 100%; height: 100%; object-fit: contain; padding: 6px; }
 .wizard__title { font-weight: 800; font-size: 18px; letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
 .wizard__subtitle { margin: 3px 0 0; font-size: 13px; color: var(--ink-muted); }
 .wizard__body { padding: 26px 30px 8px; display: flex; flex-direction: column; gap: 22px; }
@@ -136,10 +148,11 @@ body {
 </style>
 </head>
 <body>
+<div class="bg-logo"></div>
 <div class="wizard" id="wizard">
   <div class="wizard__head">
     <div class="wizard__mark">
-      <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#201404" stroke-width="1.6"/><path d="M3 12h18" stroke="#201404" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="#201404"/></svg>
+      <img src="data:image/png;base64,__LOGO_B64__" alt="Monitor Pokémon">
     </div>
     <div>
       <p class="wizard__title">Configurar Monitor Pokémon</p>
@@ -182,6 +195,14 @@ body {
         </div>
         <div class="field__status" id="driveStatus"><span class="dot"></span><span>No conectado — se usará calidad normal</span></div>
       </div>
+
+      <div class="toggle-card is-locked" id="hdCard">
+        <div class="toggle-card__text">
+          <p class="toggle-card__title">Guardar las imágenes en alta definición en tu PC</p>
+          <p class="toggle-card__desc" id="hdCardDesc">Se activa al pegar una API key válida arriba. Ocupan espacio en disco (~3 MB por carta — puede sumar varios cientos de MB con el uso).</p>
+        </div>
+        <button class="switch" id="hdSwitch" type="button" onclick="toggleHd()" disabled></button>
+      </div>
     </div>
 
     <div class="wizard__foot">
@@ -203,17 +224,45 @@ function toggleVis(id) {
   el.type = el.type === 'password' ? 'text' : 'password';
 }
 
+let hdEnabled = false;
+
 document.getElementById('driveInput').addEventListener('input', () => {
   const val = document.getElementById('driveInput').value.trim();
   const status = document.getElementById('driveStatus');
-  if (val.length > 0) {
+  const hdCard = document.getElementById('hdCard');
+  const hdSwitch = document.getElementById('hdSwitch');
+  const hdCardDesc = document.getElementById('hdCardDesc');
+  const hasKey = val.length > 0;
+
+  hdSwitch.disabled = !hasKey;
+  hdCard.classList.toggle('is-locked', !hasKey);
+
+  if (hasKey) {
     status.classList.add('is-good');
     status.innerHTML = '<span class="dot"></span><span>Clave detectada — alta definición activada</span>';
+    if (!hdEnabled) { hdEnabled = true; hdSwitch.classList.add('on'); }
+    hdCard.classList.toggle('is-active', hdEnabled);
+    hdCardDesc.textContent = 'Activado — las cartas se van a ver en alta definición (~3 MB por carta, puede sumar varios cientos de MB con el uso).';
   } else {
     status.classList.remove('is-good');
     status.innerHTML = '<span class="dot"></span><span>No conectado — se usará calidad normal</span>';
+    hdEnabled = false; hdSwitch.classList.remove('on'); hdCard.classList.remove('is-active');
+    hdCardDesc.textContent = 'Se activa al pegar una API key válida arriba. Ocupan espacio en disco (~3 MB por carta — puede sumar varios cientos de MB con el uso).';
   }
 });
+
+function toggleHd() {
+  const hdSwitch = document.getElementById('hdSwitch');
+  const hdCard = document.getElementById('hdCard');
+  const hdCardDesc = document.getElementById('hdCardDesc');
+  if (hdSwitch.disabled) return;
+  hdEnabled = !hdEnabled;
+  hdSwitch.classList.toggle('on', hdEnabled);
+  hdCard.classList.toggle('is-active', hdEnabled);
+  hdCardDesc.textContent = hdEnabled
+    ? 'Activado — las cartas se van a ver en alta definición (~3 MB por carta, puede sumar varios cientos de MB con el uso).'
+    : 'Desactivado — se va a usar la calidad normal para ahorrar espacio en disco, aunque tengas la API key puesta.';
+}
 
 document.getElementById('tokenInput').addEventListener('input', () => {
   const val = document.getElementById('tokenInput').value.trim();
@@ -250,7 +299,7 @@ async function guardar() {
     const resp = await fetch('/guardar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, driveKey })
+      body: JSON.stringify({ token, driveKey, hdEnabled })
     });
     if (!resp.ok) throw new Error('fallo');
 
@@ -275,7 +324,7 @@ function ejecutarWizard() {
         const server = http.createServer((req, res) => {
             if (req.method === 'GET' && (req.url === '/' || req.url === '')) {
                 res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end(paginaHtml());
+                res.end(paginaHtml().split('__LOGO_B64__').join(logoBase64()));
                 return;
             }
 
@@ -287,6 +336,7 @@ function ejecutarWizard() {
                         const datos = JSON.parse(cuerpo);
                         const token = String(datos.token || '').trim();
                         const driveKey = String(datos.driveKey || '').trim();
+                        const hdEnabled = !!datos.hdEnabled;
 
                         if (!token) {
                             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -296,6 +346,7 @@ function ejecutarWizard() {
 
                         valores.DISCORD_BOT_TOKEN = token;
                         valores.GOOGLE_DRIVE_API_KEY = driveKey;
+                        valores.GOOGLE_DRIVE_HD_ENABLED = driveKey ? String(hdEnabled) : 'false';
                         guardarEnv(valores);
 
                         res.writeHead(200, { 'Content-Type': 'application/json' });

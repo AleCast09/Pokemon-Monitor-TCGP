@@ -577,6 +577,7 @@ function encontrarImagenPorIllustration(rutaMaster, illustrationId) {
 // key, sin internet, o la expansión todavía no subió), devuelve null y el que
 // llama cae a encontrarImagenPorIllustration().
 const GOOGLE_DRIVE_API_KEY_BOT = process.env.GOOGLE_DRIVE_API_KEY || '';
+const GOOGLE_DRIVE_HD_ENABLED_BOT = process.env.GOOGLE_DRIVE_HD_ENABLED !== 'false';
 const DRIVE_ROOT_FOLDER_ID_BOT = '1-JIeAcBXoRn1r_SFgoqO8ZG2KPp2ss9U';
 const DRIVE_CACHE_DIR_BOT = path.join(__dirname, 'assets', 'drive_cache');
 const DRIVE_FOLDER_MAP_PATH_BOT = path.join(__dirname, 'assets', 'drive_folder_map.json');
@@ -616,7 +617,7 @@ async function obtenerMapaCarpetasDriveBot() {
 
 async function obtenerImagenHDBot(cardMap, cartaId) {
     const info = cardMap?.[cartaId];
-    if (!info?.ExpansionID || !info?.CollectionNumber || !GOOGLE_DRIVE_API_KEY_BOT) return null;
+    if (!info?.ExpansionID || !info?.CollectionNumber || !GOOGLE_DRIVE_API_KEY_BOT || !GOOGLE_DRIVE_HD_ENABLED_BOT) return null;
 
     const localId = String(info.CollectionNumber).padStart(3, '0');
     const dirCache = path.join(DRIVE_CACHE_DIR_BOT, info.ExpansionID);

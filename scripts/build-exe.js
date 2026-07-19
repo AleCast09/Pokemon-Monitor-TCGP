@@ -51,6 +51,7 @@ function copiarAssets() {
     if (fs.existsSync(path.join(RAIZ, 'cardmap.json'))) {
         fs.cpSync(path.join(RAIZ, 'cardmap.json'), path.join(DIST, 'cardmap.json'));
     }
+    fs.copyFileSync(path.join(RAIZ, 'version.json'), path.join(DIST, 'version.json'));
 }
 
 function copiarLanzador() {
@@ -75,30 +76,70 @@ function empaquetarSea() {
 
     const postjectBin = path.join(RAIZ, 'node_modules', '.bin', 'postject.cmd');
     execSync(`"${postjectBin}" "${EXE_PATH}" NODE_SEA_BLOB "${path.join(DIST, 'sea-prep.blob')}" --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2`, { stdio: 'inherit' });
+
+    fs.rmSync(seaConfigPath, { force: true });
+    fs.rmSync(path.join(DIST, 'sea-prep.blob'), { force: true });
+}
+
+function ocultarArchivosSoporte() {
+    // El usuario final solo debe ver "Iniciar Monitor Pokemon.vbs" en la carpeta —
+    // todo lo demás (el .exe, sus dependencias, los assets) queda oculto para no confundir.
+    const rutas = [
+        EXE_PATH,
+        BUNDLE_PATH,
+        path.join(DIST, 'node_modules'),
+        path.join(DIST, 'assets')
+    ];
+    for (const ruta of rutas) {
+        if (fs.existsSync(ruta)) {
+            execSync(`attrib +h "${ruta}"`);
+        }
+    }
+}
+
+function generarZip() {
+    // Compress-Archive de PowerShell no incluye archivos con el atributo "oculto"
+    // (los deja afuera en silencio) — por eso se arma el zip con la clase de .NET,
+    // que sí toma todo sin importar el atributo.
+    const zipPath = path.join(RAIZ, 'MonitorPokemon.zip');
+    if (fs.existsSync(zipPath)) fs.rmSync(zipPath);
+    execSync(
+        `powershell -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; ` +
+        `[System.IO.Compression.ZipFile]::CreateFromDirectory('${DIST}', '${zipPath}', ` +
+        `[System.IO.Compression.CompressionLevel]::Optimal, $false)"`
+    );
+    return zipPath;
 }
 
 async function main() {
     console.log('📦 Empaquetando Monitor Pokémon...');
     console.log('');
-    console.log('1/4 — Compilando bundle con esbuild...');
+    console.log('1/6 — Compilando bundle con esbuild...');
     await bundlear();
 
-    console.log('2/4 — Copiando dependencias nativas (sharp)...');
+    console.log('2/6 — Copiando dependencias nativas (sharp)...');
     copiarDependenciaNativa('sharp');
     copiarDependenciaNativa('@img/colour');
     copiarDependenciaNativa('@img/sharp-win32-x64');
     copiarDependenciaNativa('detect-libc');
     copiarDependenciaNativa('semver');
 
-    console.log('3/4 — Copiando assets y lanzador...');
+    console.log('3/6 — Copiando assets y lanzador...');
     copiarAssets();
     copiarLanzador();
 
-    console.log('4/4 — Generando el ejecutable...');
+    console.log('4/6 — Generando el ejecutable...');
     empaquetarSea();
+
+    console.log('5/6 — Ocultando archivos de soporte...');
+    ocultarArchivosSoporte();
+
+    console.log('6/6 — Generando el .zip de distribución...');
+    const zipPath = generarZip();
 
     console.log('');
     console.log('✅ Listo:', EXE_PATH);
+    console.log('✅ Zip:', zipPath);
 }
 
 main().catch(err => {

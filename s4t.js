@@ -615,6 +615,7 @@ function buscarCartaPorNombreYRareza(cartasPorCodigo, nombre, rareza) {
 // carta; si falla (sin API key, sin internet, o la expansión todavía no subió)
 // se devuelve null y el que llama cae a la caché local del juego (275x384).
 const GOOGLE_DRIVE_API_KEY = process.env.GOOGLE_DRIVE_API_KEY || '';
+const GOOGLE_DRIVE_HD_ENABLED = process.env.GOOGLE_DRIVE_HD_ENABLED !== 'false';
 const DRIVE_ROOT_FOLDER_ID = '1-JIeAcBXoRn1r_SFgoqO8ZG2KPp2ss9U';
 const DRIVE_CACHE_DIR = path.join(__dirname, 'assets', 'drive_cache');
 const DRIVE_FOLDER_MAP_PATH = path.join(__dirname, 'assets', 'drive_folder_map.json');
@@ -654,7 +655,7 @@ async function obtenerMapaCarpetasDrive() {
 }
 
 async function obtenerImagenHD(cardMap, code) {
-    if (!code || !cardMap || !cardMap[code] || !GOOGLE_DRIVE_API_KEY) return null;
+    if (!code || !cardMap || !cardMap[code] || !GOOGLE_DRIVE_API_KEY || !GOOGLE_DRIVE_HD_ENABLED) return null;
     const { ExpansionID, CollectionNumber } = cardMap[code];
     if (!ExpansionID || !CollectionNumber) return null;
 

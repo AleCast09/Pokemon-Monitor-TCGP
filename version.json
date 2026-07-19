@@ -1,7 +1,9 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "notes": [
-    "Primera versión pública de Monitor Pokémon."
+    "Nueva opción para elegir si guardar las imágenes en alta definición en tu PC.",
+    "Logo de Monitor Pokémon en la pantalla de configuración.",
+    "La carpeta del programa queda más limpia (los archivos internos ya no se ven)."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe"
 }

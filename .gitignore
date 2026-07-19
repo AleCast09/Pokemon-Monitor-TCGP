@@ -9,8 +9,9 @@
 # Dependencias (se reinstalan con npm install)
 node_modules/
 
-# Carpeta de salida del empaquetado .exe (se regenera con el build)
+# Carpeta y zip de salida del empaquetado .exe (se regeneran con el build)
 dist/
+MonitorPokemon.zip
 
 # Bases de datos locales
 *.db
