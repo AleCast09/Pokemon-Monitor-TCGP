@@ -1,11 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { execSync } = require('child_process');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('./database.js');
 
 const VERSION_PATH = path.join(__dirname, 'version.json');
 const PENDING_UPDATE_PATH = path.join(__dirname, '.pending_update.json');
+const ASSETS_ZIP_TEMP_PATH = path.join(__dirname, 'assets-actualizacion.zip');
 const VERSION_URL_REMOTA = 'https://raw.githubusercontent.com/AleCast09/Pokemon-Monitor-TCGP/main/version.json';
 
 function obtenerVersionLocal() {
@@ -80,6 +82,36 @@ async function chequearActualizaciones(client) {
     }
 }
 
+// A diferencia del .exe (bloqueado por Windows mientras el proceso corre y
+// por eso necesita el paso de _actualizar.bat en launcher.js), la carpeta
+// assets/ no está en uso exclusivo — se puede sobrescribir en caliente, sin
+// esperar a que el programa se reinicie. Si falla (sin assetsUrl en una
+// versión vieja, sin internet, etc.) se ignora en silencio: el .exe se sigue
+// actualizando igual, y assets/ se queda como estaba.
+async function descargarYExtraerAssets(remota) {
+    if (!remota.assetsUrl) return;
+    try {
+        const respuesta = await axios.get(remota.assetsUrl, { responseType: 'stream', timeout: 120000 });
+        await new Promise((resolve, reject) => {
+            const archivo = fs.createWriteStream(ASSETS_ZIP_TEMP_PATH);
+            respuesta.data.pipe(archivo);
+            archivo.on('finish', resolve);
+            archivo.on('error', reject);
+            respuesta.data.on('error', reject);
+        });
+
+        // Expand-Archive sobrescribe los archivos que ya existen y agrega los
+        // nuevos, pero no borra los que ya no vienen en el zip — alcanza para
+        // el caso de uso real (sumar assets nuevos), no hace falta más.
+        const script = `Expand-Archive -Path '${ASSETS_ZIP_TEMP_PATH}' -DestinationPath '${__dirname}' -Force`;
+        execSync(`powershell -NoProfile -Command "${script}"`, { stdio: 'ignore' });
+    } catch (e) {
+        console.error('DEBUG: error actualizando assets/:', e?.message || e);
+    } finally {
+        try { fs.unlinkSync(ASSETS_ZIP_TEMP_PATH); } catch (e) { /* nada que limpiar */ }
+    }
+}
+
 async function descargarActualizacion(remota) {
     const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
     const respuesta = await axios.get(remota.downloadUrl, { responseType: 'stream', timeout: 120000 });
@@ -91,6 +123,8 @@ async function descargarActualizacion(remota) {
         archivo.on('error', reject);
         respuesta.data.on('error', reject);
     });
+
+    await descargarYExtraerAssets(remota);
 
     // Sin esto, version.json local nunca cambia y el bot cree para siempre que
     // sigue en la versión vieja, avisando de la "misma" actualización sin parar

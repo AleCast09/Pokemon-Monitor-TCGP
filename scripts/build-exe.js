@@ -103,6 +103,27 @@ function empaquetarSea() {
     fs.rmSync(path.join(DIST, 'sea-prep.blob'), { force: true });
 }
 
+function generarAssetsZip() {
+    // Zip aparte, solo con la carpeta assets/ — el auto-update lo descarga y
+    // descomprime encima de la carpeta local además de reemplazar el .exe, así
+    // los usuarios que ya tienen el programa instalado también reciben archivos
+    // nuevos (emojis, logos, etc.) sin tener que volver a bajar el zip completo.
+    const zipPath = path.join(RAIZ, 'MonitorPokemon-assets.zip');
+    if (fs.existsSync(zipPath)) fs.rmSync(zipPath);
+    const assetsDir = path.join(DIST, 'assets');
+    const script = [
+        `Add-Type -AssemblyName System.IO.Compression.FileSystem`,
+        `$zip = [System.IO.Compression.ZipFile]::Open('${zipPath}', 'Create')`,
+        `Get-ChildItem -Path '${assetsDir}' -Force -Recurse | Where-Object { -not $_.PSIsContainer } | ForEach-Object {`,
+        `    $relativePath = $_.FullName.Substring((Resolve-Path '${assetsDir}').Path.Length + 1)`,
+        `    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, ('assets\\' + $relativePath), [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null`,
+        `}`,
+        `$zip.Dispose()`
+    ].join('; ');
+    execSync(`powershell -Command "${script}"`);
+    return zipPath;
+}
+
 function generarZip() {
     // Compress-Archive de PowerShell no incluye archivos con el atributo "oculto"
     // (los deja afuera en silencio) — por eso se arma el zip entrada por entrada
@@ -143,16 +164,18 @@ async function main() {
     console.log('4/5 — Generando el ejecutable...');
     empaquetarSea();
 
-    console.log('5/5 — Generando el .zip de distribución...');
+    console.log('5/5 — Generando los .zip de distribución...');
     // Todo queda visible siempre (ni en el zip ni después de abrirlo se oculta
     // nada) — ocultar archivos generaba confusión real: con "mostrar ocultos"
     // apagado (la config por defecto de Windows), parecía que el programa había
     // borrado sus propios archivos.
     const zipPath = generarZip();
+    const assetsZipPath = generarAssetsZip();
 
     console.log('');
     console.log('✅ Listo:', EXE_PATH);
     console.log('✅ Zip:', zipPath);
+    console.log('✅ Assets zip:', assetsZipPath);
 }
 
 main().catch(err => {

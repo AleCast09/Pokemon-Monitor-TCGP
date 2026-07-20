@@ -12,6 +12,7 @@ node_modules/
 # Carpeta y zip de salida del empaquetado .exe (se regeneran con el build)
 dist/
 MonitorPokemon.zip
+MonitorPokemon-assets.zip
 
 # Bases de datos locales
 *.db
@@ -29,6 +30,7 @@ logs/
 .pending_update.json
 _actualizar.bat
 MonitorPokemon.new.exe
+assets-actualizacion.zip
 .monitor.lock
 .reconfigurar.lock
 Abrir configuración.url

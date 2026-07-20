@@ -1,7 +1,8 @@
 {
-  "version": "1.2.5",
+  "version": "1.2.6",
   "notes": [
-    "Los emojis de tipo y rareza (agua, fuego, diamante, corona, etc.) ahora se ven bien en cualquier servidor, no solo en el original."
+    "El auto-update ahora también trae archivos nuevos de la carpeta assets (emojis, logos, etc.), no solo el .exe."
   ],
-  "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe"
+  "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe",
+  "assetsUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip"
 }
