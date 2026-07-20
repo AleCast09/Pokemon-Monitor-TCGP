@@ -28,10 +28,10 @@ assets/drive_folder_map.json
 automation/Logs/
 logs/
 .pending_update.json
-_actualizar.bat
+_update.bat
 MonitorPokemon.new.exe
 assets-actualizacion.zip
 .monitor.lock
 .reconfigurar.lock
-Abrir configuración.url
-Cambiar token o API key.lnk
+Open configuration.url
+Change token or API key.lnk

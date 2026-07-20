@@ -32,16 +32,16 @@ function esVersionMasNueva(remota, local) {
 
 function construirPayloadActualizacion(local, remota) {
     const embed = new EmbedBuilder()
-        .setTitle('🔔 Hay una actualización disponible')
+        .setTitle('🔔 An update is available')
         .setColor(0xF0A93A)
         .setDescription(
             `**${local.version}** → **${remota.version}**\n\n` +
-            `**Qué hay de nuevo:**\n` +
+            `**What's new:**\n` +
             (remota.notes || []).map(n => `• ${n}`).join('\n')
         );
     const fila = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('actualizacion_ahora').setLabel('Actualizar ahora').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('actualizacion_luego').setLabel('Más tarde').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('actualizacion_ahora').setLabel('Update now').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('actualizacion_luego').setLabel('Later').setStyle(ButtonStyle.Secondary)
     );
     return { embeds: [embed.toJSON()], components: [fila.toJSON()] };
 }

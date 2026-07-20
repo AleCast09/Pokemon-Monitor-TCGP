@@ -1,6 +1,6 @@
 @echo off
-echo Desbloqueando los archivos de Monitor Pokemon...
+echo Unblocking Monitor Pokemon files...
 powershell -NoProfile -Command "Get-ChildItem -Path '%~dp0' -Recurse -Force | Unblock-File"
 echo.
-echo Listo. Ya podes abrir "Iniciar Monitor Pokemon.vbs"
+echo Done. You can now open "Start Monitor Pokemon.bat"
 pause

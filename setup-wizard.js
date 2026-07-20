@@ -4,7 +4,7 @@ const http = require('http');
 const { exec } = require('child_process');
 
 const ENV_PATH = path.join(__dirname, '.env');
-const ACCESO_DIRECTO_PATH = path.join(__dirname, 'Abrir configuración.url');
+const ACCESO_DIRECTO_PATH = path.join(__dirname, 'Open configuration.url');
 
 function leerEnvExistente() {
     if (!fs.existsSync(ENV_PATH)) return {};
@@ -61,11 +61,11 @@ function abrirNavegador(url) {
 
 function paginaHtml() {
     return `<!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Configurar Monitor Pokémon</title>
+<title>Configure Monitor Pokémon</title>
 <style>
 :root {
   --bg: #eef0f7; --bg-a: #f6f3ff; --bg-b: #e7ecff;
@@ -172,8 +172,8 @@ body {
       <img src="data:image/png;base64,__LOGO_B64__" alt="Monitor Pokémon">
     </div>
     <div>
-      <p class="wizard__title">Configurar Monitor Pokémon</p>
-      <p class="wizard__subtitle">Conecta tu bot antes de empezar</p>
+      <p class="wizard__title">Configure Monitor Pokémon</p>
+      <p class="wizard__subtitle">Connect your bot before you start</p>
     </div>
   </div>
 
@@ -183,70 +183,70 @@ body {
 
       <div class="field">
         <div class="field__label-row">
-          <span class="field__label">Token del bot de Discord</span>
-          <span class="pill pill--required">Obligatorio</span>
+          <span class="field__label">Discord bot token</span>
+          <span class="pill pill--required">Required</span>
         </div>
-        <p class="field__help">Developer Portal de Discord → tu aplicación → Bot → Reset Token.</p>
+        <p class="field__help">Discord Developer Portal → your application → Bot → Reset Token.</p>
         <div class="connected-shell hidden" id="tokenConnectedView">
-          <span class="connected-shell__text">✓ Token conectado</span>
+          <span class="connected-shell__text">✓ Token connected</span>
           <div class="connected-shell__actions">
-            <button class="link-btn" type="button" onclick="mostrarEdicionToken()">Reemplazar</button>
+            <button class="link-btn" type="button" onclick="mostrarEdicionToken()">Replace</button>
           </div>
         </div>
         <div id="tokenEditView">
           <div class="input-shell">
-            <input id="tokenInput" type="password" placeholder="Pega aquí tu token..." autocomplete="off">
+            <input id="tokenInput" type="password" placeholder="Paste your token here..." autocomplete="off">
             <button class="eye-btn" onclick="toggleVis('tokenInput')" type="button">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
           </div>
-          <div class="field__status" id="tokenStatus"><span class="dot"></span><span>Sin conectar todavía</span></div>
+          <div class="field__status" id="tokenStatus"><span class="dot"></span><span>Not connected yet</span></div>
         </div>
       </div>
 
       <div class="field">
         <div class="field__label-row">
-          <span class="field__label">API key de Google Drive</span>
-          <span class="pill pill--optional">Opcional</span>
+          <span class="field__label">Google Drive API key</span>
+          <span class="pill pill--optional">Optional</span>
         </div>
-        <p class="field__help">Solo si quieres que las cartas se vean en alta definición. Sin esto, el bot funciona igual con calidad normal.</p>
+        <p class="field__help">Only if you want cards to show in high definition. Without this, the bot works the same at normal quality.</p>
         <div class="connected-shell hidden" id="driveConnectedView">
-          <span class="connected-shell__text">✓ Conectado</span>
+          <span class="connected-shell__text">✓ Connected</span>
           <div class="connected-shell__actions">
-            <button class="link-btn" type="button" onclick="mostrarEdicionDrive()">Reemplazar</button>
-            <button class="link-btn link-btn--danger" type="button" onclick="quitarDrive()">Quitar</button>
+            <button class="link-btn" type="button" onclick="mostrarEdicionDrive()">Replace</button>
+            <button class="link-btn link-btn--danger" type="button" onclick="quitarDrive()">Remove</button>
           </div>
         </div>
         <div id="driveEditView">
           <div class="input-shell">
-            <input id="driveInput" type="password" placeholder="AIzaSy... (déjalo vacío para omitir)" autocomplete="off">
+            <input id="driveInput" type="password" placeholder="AIzaSy... (leave empty to skip)" autocomplete="off">
             <button class="eye-btn" onclick="toggleVis('driveInput')" type="button">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
           </div>
-          <div class="field__status" id="driveStatus"><span class="dot"></span><span>No conectado — se usará calidad normal</span></div>
+          <div class="field__status" id="driveStatus"><span class="dot"></span><span>Not connected — normal quality will be used</span></div>
         </div>
       </div>
 
       <div class="toggle-card is-locked" id="hdCard">
         <div class="toggle-card__text">
-          <p class="toggle-card__title">Guardar las imágenes en alta definición en tu PC</p>
-          <p class="toggle-card__desc" id="hdCardDesc">Se activa al pegar una API key válida arriba. Ocupan espacio en disco (~3 MB por carta).</p>
+          <p class="toggle-card__title">Save high-definition images on your PC</p>
+          <p class="toggle-card__desc" id="hdCardDesc">Turns on once you paste a valid API key above. Uses disk space (~3 MB per card).</p>
         </div>
         <button class="switch" id="hdSwitch" type="button" onclick="toggleHd()" disabled></button>
       </div>
     </div>
 
     <div class="wizard__foot">
-      <button class="btn-primary" id="btnGuardar" type="button" onclick="guardar()">Guardar y continuar</button>
-      <p class="foot-note">Todo se guarda en tu <b>propia PC</b>, en un archivo local. Nada se envía a servidores externos salvo Discord y, si la activas, Google Drive.</p>
+      <button class="btn-primary" id="btnGuardar" type="button" onclick="guardar()">Save and continue</button>
+      <p class="foot-note">Everything is saved on your <b>own PC</b>, in a local file. Nothing is sent to external servers except Discord and, if you turn it on, Google Drive.</p>
     </div>
   </div>
 
   <div class="success-screen" id="successView">
     <div class="success-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
-    <p class="success-title">¡Listo!</p>
-    <p class="success-desc">Monitor Pokémon está iniciando. Ya puedes cerrar esta pestaña.</p>
+    <p class="success-title">Done!</p>
+    <p class="success-desc">Monitor Pokémon is starting up. You can close this tab now.</p>
   </div>
 </div>
 
@@ -300,8 +300,8 @@ if (DRIVE_CONECTADO) {
   hdSwitch.classList.toggle('on', hdEnabled);
   hdCard.classList.toggle('is-active', hdEnabled);
   hdCardDesc.textContent = hdEnabled
-    ? 'Activado — las cartas se van a ver en alta definición.'
-    : 'Desactivado — se va a usar la calidad normal para ahorrar espacio en disco.';
+    ? 'On — cards will show in high definition.'
+    : 'Off — normal quality will be used to save disk space.';
 }
 
 document.getElementById('driveInput').addEventListener('input', () => {
@@ -317,15 +317,15 @@ document.getElementById('driveInput').addEventListener('input', () => {
 
   if (hasKey) {
     status.classList.add('is-good');
-    status.innerHTML = '<span class="dot"></span><span>Clave detectada — alta definición activada</span>';
+    status.innerHTML = '<span class="dot"></span><span>Key detected — high definition turned on</span>';
     if (!hdEnabled) { hdEnabled = true; hdSwitch.classList.add('on'); }
     hdCard.classList.toggle('is-active', hdEnabled);
-    hdCardDesc.textContent = 'Activado — las cartas se van a ver en alta definición.';
+    hdCardDesc.textContent = 'On — cards will show in high definition.';
   } else {
     status.classList.remove('is-good');
-    status.innerHTML = '<span class="dot"></span><span>No conectado — se usará calidad normal</span>';
+    status.innerHTML = '<span class="dot"></span><span>Not connected — normal quality will be used</span>';
     hdEnabled = false; hdSwitch.classList.remove('on'); hdCard.classList.remove('is-active');
-    hdCardDesc.textContent = 'Se activa al pegar una API key válida arriba. Ocupan espacio en disco (~3 MB por carta).';
+    hdCardDesc.textContent = 'Turns on once you paste a valid API key above. Uses disk space (~3 MB per card).';
   }
 });
 
@@ -338,8 +338,8 @@ function toggleHd() {
   hdSwitch.classList.toggle('on', hdEnabled);
   hdCard.classList.toggle('is-active', hdEnabled);
   hdCardDesc.textContent = hdEnabled
-    ? 'Activado — las cartas se van a ver en alta definición.'
-    : 'Desactivado — se va a usar la calidad normal para ahorrar espacio en disco.';
+    ? 'On — cards will show in high definition.'
+    : 'Off — normal quality will be used to save disk space.';
 }
 
 document.getElementById('tokenInput').addEventListener('input', () => {
@@ -349,10 +349,10 @@ document.getElementById('tokenInput').addEventListener('input', () => {
   if (val.length > 0) {
     status.classList.remove('is-bad');
     status.classList.add('is-good');
-    status.innerHTML = '<span class="dot"></span><span>Se ve como un token válido</span>';
+    status.innerHTML = '<span class="dot"></span><span>Looks like a valid token</span>';
   } else {
     status.classList.remove('is-good');
-    status.innerHTML = '<span class="dot"></span><span>Sin conectar todavía</span>';
+    status.innerHTML = '<span class="dot"></span><span>Not connected yet</span>';
   }
 });
 
@@ -366,10 +366,10 @@ async function guardar() {
   if (tokenEditando) {
     token = document.getElementById('tokenInput').value.trim();
     if (!token) {
-      errorBanner.textContent = 'Falta el token del bot — es obligatorio para continuar.';
+      errorBanner.textContent = 'Bot token is missing — it is required to continue.';
       errorBanner.classList.add('show');
       document.getElementById('tokenStatus').classList.add('is-bad');
-      document.getElementById('tokenStatus').innerHTML = '<span class="dot"></span><span>Falta el token</span>';
+      document.getElementById('tokenStatus').innerHTML = '<span class="dot"></span><span>Token missing</span>';
       return;
     }
   }
@@ -382,7 +382,7 @@ async function guardar() {
   }
 
   btn.disabled = true;
-  btn.textContent = 'Guardando...';
+  btn.textContent = 'Saving...';
 
   try {
     const resp = await fetch('/guardar', {
@@ -395,10 +395,10 @@ async function guardar() {
     document.getElementById('formView').style.display = 'none';
     document.getElementById('successView').classList.add('show');
   } catch (e) {
-    errorBanner.textContent = 'No se pudo guardar la configuración. Prueba de nuevo.';
+    errorBanner.textContent = 'Could not save the configuration. Try again.';
     errorBanner.classList.add('show');
     btn.disabled = false;
-    btn.textContent = 'Guardar y continuar';
+    btn.textContent = 'Save and continue';
   }
 }
 </script>
@@ -486,8 +486,8 @@ function ejecutarWizard() {
             const puerto = server.address().port;
             const url = `http://127.0.0.1:${puerto}/`;
             console.log('');
-            console.log('🌐 Abriendo configuración en el navegador...');
-            console.log('   Si no se abre solo, entra manualmente a:', url);
+            console.log('🌐 Opening configuration in your browser...');
+            console.log('   If it does not open automatically, go to:', url);
             console.log('');
 
             // Acceso directo real como respaldo: si el intento automático de abrir

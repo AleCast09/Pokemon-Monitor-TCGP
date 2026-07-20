@@ -1,9 +1,8 @@
 {
-  "version": "1.2.8",
+  "version": "1.3.0",
   "notes": [
-    "El auto-update ahora también trae archivos nuevos de la carpeta assets (emojis, logos, etc.), no solo el .exe.",
-    "El programa ahora se prende solo cada vez que inicias Windows, sin tener que reabrirlo a mano.",
-    "Nuevo canal /feedback para mandar sugerencias o reportar problemas."
+    "The whole bot is now in English — commands, embeds, buttons, the setup wizard and the installer files.",
+    "Launcher files were renamed to English (Start Monitor Pokemon.bat, Reconfigure.bat, Unblock.bat, README.txt)."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe",
   "assetsUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip"

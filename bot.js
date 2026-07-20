@@ -21,7 +21,7 @@ const { obtenerMapaEmojisGuild } = require('./guild-emojis.js');
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID || null;
 if (!TOKEN) {
-    console.error('❌ DISCORD_BOT_TOKEN no está definido. Crea un archivo .env con DISCORD_BOT_TOKEN o configura la variable de entorno.');
+    console.error('❌ DISCORD_BOT_TOKEN is not set. Create a .env file with DISCORD_BOT_TOKEN or set the environment variable.');
     process.exit(1);
 }
 
@@ -43,22 +43,22 @@ function tienePermisosGestion(interaction) {
 }
 
 const COMANDO_CONFIG = {
-    card_all: { tipo: 'cmd_card_all', label: 'All Cards', titulo: '⚡ All Cards', descripcion: 'Canal exclusivo para /card.' },
-    card_wishlist: { tipo: 'cmd_card_wishlist', label: 'Cards Wishlist', titulo: '💖 Cards Wishlist', descripcion: 'Canal exclusivo para /wishlist.' },
-    extract_xlm: { tipo: 'cmd_extract_xlm', label: 'Extract XLM', titulo: '📄 Extract XLM', descripcion: 'Canal exclusivo para /extract xlm.' },
-    run_instance: { tipo: 'cmd_run_instance', label: 'Run MumuPlayer', titulo: '🎮 Run MumuPlayer', descripcion: 'Canal exclusivo para /run instance.' }
+    card_all: { tipo: 'cmd_card_all', label: 'All Cards', titulo: '⚡ All Cards', descripcion: 'Exclusive channel for /card.' },
+    card_wishlist: { tipo: 'cmd_card_wishlist', label: 'Cards Wishlist', titulo: '💖 Cards Wishlist', descripcion: 'Exclusive channel for /wishlist.' },
+    extract_xlm: { tipo: 'cmd_extract_xlm', label: 'Extract XLM', titulo: '📄 Extract XLM', descripcion: 'Exclusive channel for /extract xlm.' },
+    run_instance: { tipo: 'cmd_run_instance', label: 'Run MumuPlayer', titulo: '🎮 Run MumuPlayer', descripcion: 'Exclusive channel for /run instance.' }
 };
 
 const ETIQUETAS_TIPO_WEBHOOK = {
     's4t': 'S4T (General)',
-    '3-diamond': '3 Diamantes',
-    '4-diamond': '4 Diamantes',
-    '1-star': '1 Estrella',
-    '1-star-shiny': '1 Estrella Shiny',
-    '2-star-trainer': '2 Estrellas Trainer',
-    '2-star-rainbow': '2 Estrellas Rainbow',
-    '2-star-full-art': '2 Estrellas Full Art',
-    '2-star-shiny': '2 Estrellas Shiny',
+    '3-diamond': '3 Diamonds',
+    '4-diamond': '4 Diamonds',
+    '1-star': '1 Star',
+    '1-star-shiny': '1 Star Shiny',
+    '2-star-trainer': '2 Star Trainer',
+    '2-star-rainbow': '2 Star Rainbow',
+    '2-star-full-art': '2 Star Full Art',
+    '2-star-shiny': '2 Star Shiny',
     'immersive': 'Immersive',
     'crown-rare': 'Crown Rare',
     'wishlist': 'Wishlist',
@@ -66,8 +66,8 @@ const ETIQUETAS_TIPO_WEBHOOK = {
     'godpack-alive': 'God Pack Alive',
     'godpack-dead': 'God Pack Dead',
     'heartbeat': 'Heartbeat',
-    'actualizaciones': 'Actualizaciones',
-    'apoyo': 'Apoya mi trabajo',
+    'actualizaciones': 'Updates',
+    'apoyo': 'Support my work',
     'cmd_setup': 'Settings',
     'cmd_build_embed': 'Build Embed',
     'cmd_build_webhooks': 'Build Webhooks'
@@ -91,19 +91,19 @@ async function obtenerWebhooksReales(userId) {
 async function construirPanelListaWebhooks(userId) {
     const filas = await obtenerWebhooksReales(userId);
     const embed = new EmbedBuilder()
-        .setTitle('🔗 Webhooks configurados')
+        .setTitle('🔗 Configured Webhooks')
         .setColor(0x5865F2)
         .setDescription(
             filas.length
                 ? filas.map(f => `🔹 **${etiquetaTipoWebhook(f.tipo)}** — <#${f.canal_id}>`).join('\n')
-                : 'No hay webhooks sincronizados todavía. Usá "Sincronizar Canales" en /setup primero.'
+                : 'No webhooks synced yet. Use "Sync Channels" in /setup first.'
         );
 
     const componentes = [];
     if (filas.length) {
         const menu = new StringSelectMenuBuilder()
             .setCustomId('webhook_seleccionar')
-            .setPlaceholder('Selecciona un webhook para editar')
+            .setPlaceholder('Select a webhook to edit')
             .addOptions(filas.slice(0, 25).map(f => ({
                 label: `Webhook - ${etiquetaTipoWebhook(f.tipo)}`.slice(0, 100),
                 value: f.tipo
@@ -133,15 +133,15 @@ async function construirPanelDetalleWebhook(userId, tipo, opciones = {}) {
         .setTitle(`🔗 Webhook - ${etiquetaTipoWebhook(tipo)}`)
         .setColor(opciones.guardado ? 0x2ECC71 : 0x5865F2)
         .setDescription(
-            (opciones.guardado ? '✅ **Guardado.**\n\n' : '') +
+            (opciones.guardado ? '✅ **Saved.**\n\n' : '') +
             (opciones.error ? `❌ **${opciones.error}**\n\n` : '') +
-            `**Canal:** <#${fila.canal_id}>\n**Nombre actual:** ${nombreActual}`
+            `**Channel:** <#${fila.canal_id}>\n**Current name:** ${nombreActual}`
         );
     if (avatarUrl) embed.setThumbnail(avatarUrl);
 
     const filaBotones = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`webhook_modificar::${tipo}`).setLabel('✏️ Modificar nombre/avatar').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('webhook_volver').setLabel('🔙 Volver').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`webhook_modificar::${tipo}`).setLabel('✏️ Edit name/avatar').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('webhook_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary)
     );
 
     return { embeds: [embed], components: [filaBotones] };
@@ -176,7 +176,7 @@ function construirEmbedComando(commandKey, user) {
     return new EmbedBuilder()
         .setColor(commandKey === 'wishlist' ? 0xE91E63 : 0x3498DB)
         .setTitle(cfg.titulo)
-        .setDescription(`Comando ejecutado por <@${user.id}>.`)
+        .setDescription(`Command run by <@${user.id}>.`)
         .setTimestamp();
 }
 
@@ -184,19 +184,19 @@ const WISHLIST_POR_PAGINA = 15;
 
 function construirEmbedWishlistInicio(user) {
     return new EmbedBuilder()
-        .setTitle('🔍 | Buscador de Cartas Wishlist:')
+        .setTitle('🔍 | Wishlist Card Search:')
         .setDescription(
-            `Tu lista de deseos esta aqui!!  <@${user.id}>.\n\n` +
-            `Presiona el botón para ver la lista completa de tu wishlist guardada. <:icono_wishlist:1526794552575262820>\n\n`+
-            `Detalles: \n\n` +
-            `1- Ver todas las expanciones!\n` +
-            `2- Buscar cartas por expansion!\n` +
-            `3- Buscar cartas por nombre!\n` +
-            `4- Ver detalles de cada carta!\n` +
-            `5- Ver imagen de cada carta!\n` 
+            `Your wishlist is right here!!  <@${user.id}>.\n\n` +
+            `Press the button to see the full list of your saved wishlist. <:icono_wishlist:1526794552575262820>\n\n`+
+            `Details: \n\n` +
+            `1- View all expansions!\n` +
+            `2- Search cards by expansion!\n` +
+            `3- Search cards by name!\n` +
+            `4- View details of each card!\n` +
+            `5- View image of each card!\n`
         )
         .setColor(0xE91E63)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • Control Remoto PTCGPB" })
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • PTCGPB Remote Control" })
         .setTimestamp();
 }
 
@@ -238,7 +238,7 @@ function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
         const nameKey = cardmaster?.[id]?.Name;
         const nombre = normalizarNombreExBot((nameKey && en_US?.[nameKey]) ? en_US[nameKey] : id);
         const expansionId = cardMap?.[id]?.ExpansionID;
-        const expansion = expansionId ? (expansiones[expansionId] || expansionId) : 'Sin expansión';
+        const expansion = expansionId ? (expansiones[expansionId] || expansionId) : 'No expansion';
         const categoria = categoriaDesdeInfo(cardmaster?.[id]);
         const tipoRareza = tipoRarezaDesdeInfo(cardmaster?.[id]);
         return { id, nombre, expansion, categoria, tipoRareza };
@@ -262,7 +262,7 @@ function obtenerTodasLasCartas(rutaMasterCfg) {
         const info = cardmaster[id];
         const nombre = normalizarNombreExBot((info?.Name && en_US?.[info.Name]) ? en_US[info.Name] : id);
         const expansionId = cardMap?.[id]?.ExpansionID;
-        const expansion = expansionId ? (expansiones[expansionId] || expansionId) : 'Sin expansión';
+        const expansion = expansionId ? (expansiones[expansionId] || expansionId) : 'No expansion';
         const categoria = categoriaDesdeInfo(info);
         const tipoRareza = tipoRarezaDesdeInfo(info);
         return { id, nombre, expansion, categoria, tipoRareza };
@@ -289,16 +289,16 @@ async function obtenerTodasLasCartasCacheadas() {
 
 function construirEmbedAllCardsInicio(user) {
     return new EmbedBuilder()
-        .setTitle('⚡ Libreria Pokemon TCGP ⚡')
+        .setTitle('⚡ Pokemon TCGP Library ⚡')
         .setDescription(
-            `**Comando ejecutado por <@${user.id}>.\n\n**` +
-            `__Selecciona una opción abajo:__\n\n` +
-            `1-› Panel de Expansiónes de TCGP.\n`+
-            `2-› Categoría de cada carta por rareza.\n`+
-            `3-› Visualización de cada carta, cantidad & XLM.\n` 
+            `**Command run by <@${user.id}>.\n\n**` +
+            `__Select an option below:__\n\n` +
+            `1-› TCGP Expansions Panel.\n`+
+            `2-› Category of each card by rarity.\n`+
+            `3-› View each card, quantity & XLM.\n`
         )
         .setColor(0x3498DB)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • Control Remoto PTCGPB" })
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • PTCGPB Remote Control" })
         .setTimestamp();
 }
 
@@ -310,19 +310,19 @@ function construirEmbedResumenExpansiones(cartas, opciones = {}) {
     for (const c of cartas) conteo[c.expansion] = (conteo[c.expansion] || 0) + 1;
     const expansiones = Object.keys(conteo).sort((a, b) => a.localeCompare(b));
 
-    const lineas = expansiones.map((exp, i) => `${i + 1}. **${exp}** — ${conteo[exp]} cartas`);
+    const lineas = expansiones.map((exp, i) => `${i + 1}. **${exp}** — ${conteo[exp]} cards`);
 
     const embed = new EmbedBuilder()
-        .setTitle('📋 Todas las Expansiones')
-        .setDescription((lineas.join('\n') || 'No se encontraron expansiones.') + '\n\n🔎 **Selecciona una expansión abajo:**')
+        .setTitle('📋 All Expansions')
+        .setDescription((lineas.join('\n') || 'No expansions found.') + '\n\n🔎 **Select an expansion below:**')
         .setColor(0x3498DB)
-        .setFooter({ text: `${expansiones.length} expansiones • ${cartas.length} cartas en total` });
+        .setFooter({ text: `${expansiones.length} expansions • ${cartas.length} total cards` });
 
     const componentes = [];
     if (expansiones.length) {
         const menu = new StringSelectMenuBuilder()
             .setCustomId(`${prefijo}_expansion_seleccion`)
-            .setPlaceholder('Selecciona una expansión')
+            .setPlaceholder('Select an expansion')
             .addOptions(expansiones.slice(0, 25).map(exp => ({ label: exp.slice(0, 100), value: exp })));
         componentes.push(new ActionRowBuilder().addComponents(menu));
     }
@@ -339,8 +339,8 @@ function construirEmbedResumenExpansiones(cartas, opciones = {}) {
 
 function construirEmbedListaCartas(cartas, pagina, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
-    const titulo = opciones.titulo || '📋 Tu Wishlist';
-    const vacioTexto = opciones.vacioTexto || 'No hay cartas guardadas en tu wishlist.';
+    const titulo = opciones.titulo || '📋 Your Wishlist';
+    const vacioTexto = opciones.vacioTexto || 'No cards saved in your wishlist.';
     const mapaEmojis = opciones.mapaEmojis || {};
 
     const totalPaginas = Math.max(1, Math.ceil(cartas.length / WISHLIST_POR_PAGINA));
@@ -368,13 +368,13 @@ function construirEmbedListaCartas(cartas, pagina, opciones = {}) {
 
     const embed = new EmbedBuilder()
         .setTitle(titulo)
-        .setDescription(listaTexto + (items.length ? '\n\n🔎 **Buscar carta:** selecciona una expansión abajo.' : ''))
+        .setDescription(listaTexto + (items.length ? '\n\n🔎 **Search card:** select an expansion below.' : ''))
         .setColor(0xE91E63)
-        .setFooter({ text: `Página ${paginaSegura + 1} de ${totalPaginas} • ${cartas.length} cartas` });
+        .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas} • ${cartas.length} cards` });
 
     const fila = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`${prefijo}_pagina_${paginaSegura - 1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
-        new ButtonBuilder().setCustomId(`${prefijo}_pagina_${paginaSegura + 1}`).setLabel('Siguiente ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
+        new ButtonBuilder().setCustomId(`${prefijo}_pagina_${paginaSegura - 1}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
+        new ButtonBuilder().setCustomId(`${prefijo}_pagina_${paginaSegura + 1}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
     );
 
     const componentes = [fila];
@@ -382,7 +382,7 @@ function construirEmbedListaCartas(cartas, pagina, opciones = {}) {
     if (expansiones.length) {
         const menu = new StringSelectMenuBuilder()
             .setCustomId(`${prefijo}_expansion_seleccion`)
-            .setPlaceholder('Selecciona una expansión')
+            .setPlaceholder('Select an expansion')
             .addOptions(expansiones.slice(0, 25).map(exp => ({ label: exp.slice(0, 100), value: exp })));
         componentes.push(new ActionRowBuilder().addComponents(menu));
     }
@@ -422,7 +422,7 @@ const ORDEN_RAREZA = [
 // lista enorme de entrada — a pedido del usuario.
 function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
-    const contexto = opciones.contexto || 'tu wishlist';
+    const contexto = opciones.contexto || 'your wishlist';
     const mapaEmojis = opciones.mapaEmojis || {};
     const filtradas = cartas.filter(c => c.expansion === expansion);
 
@@ -442,20 +442,20 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
 
     const lineas = categorias.map(cat => {
         const emojiTexto = formatearCategoriaConIcono(tipoPorCategoria[cat], mapaEmojis) || textoSinEmoji(cat);
-        return `${emojiTexto} — ${conteo[cat]} cartas`;
+        return `${emojiTexto} — ${conteo[cat]} cards`;
     });
 
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${expansion}`)
-        .setDescription((lineas.join('\n') || 'No se encontraron cartas.') + `\n\n🔎 **Selecciona una categoría** \n(${filtradas.length} cartas en ${contexto}):`)
+        .setDescription((lineas.join('\n') || 'No cards found.') + `\n\n🔎 **Select a category** \n(${filtradas.length} cards in ${contexto}):`)
         .setColor(0xE91E63)
-        .setFooter({ text: `${categorias.length} categoría(s)` });
+        .setFooter({ text: `${categorias.length} category(s)` });
 
     const componentes = [];
     if (categorias.length) {
         const menu = new StringSelectMenuBuilder()
             .setCustomId(`${prefijo}_categoria_seleccion`)
-            .setPlaceholder('Selecciona una categoría')
+            .setPlaceholder('Select a category')
             .addOptions(categorias.slice(0, 25).map(cat => {
                 const opcion = {
                     label: `${textoSinEmoji(cat)} (${conteo[cat]})`.slice(0, 100),
@@ -468,7 +468,7 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
         componentes.push(new ActionRowBuilder().addComponents(menu));
     }
     componentes.push(new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`${prefijo}_volver_expansiones`).setLabel('🔙 Volver').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`${prefijo}_volver_expansiones`).setLabel('🔙 Back').setStyle(ButtonStyle.Secondary)
     ));
 
     const payload = { embeds: [embed], components: componentes };
@@ -488,7 +488,7 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
 
 function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pagina = 0, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
-    const contexto = opciones.contexto || 'tu wishlist';
+    const contexto = opciones.contexto || 'your wishlist';
     const mapaEmojisCartas = opciones.mapaEmojis || {};
 
     const filtradas = cartas.filter(c => c.expansion === expansion && c.categoria === categoria);
@@ -508,13 +508,13 @@ function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pagina =
     const categoriaConEmoji = (filtradas[0] && formatearCategoriaConIcono(filtradas[0].tipoRareza, mapaEmojisCartas)) || textoSinEmoji(categoria);
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${expansion}`)
-        .setDescription(`${categoriaConEmoji}\n\n${listaTexto}\n\n🔎 **Selecciona una carta que buscas** \n(${filtradas.length} cartas en ${contexto}):`)
+        .setDescription(`${categoriaConEmoji}\n\n${listaTexto}\n\n🔎 **Select the card you're looking for** \n(${filtradas.length} cards in ${contexto}):`)
         .setColor(0xE91E63)
-        .setFooter({ text: `Página ${paginaSegura + 1} de ${totalPaginas}` });
+        .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas}` });
 
     const menu = new StringSelectMenuBuilder()
         .setCustomId(`${prefijo}_carta_seleccion::${expansion}::${categoria}::${paginaSegura}`)
-        .setPlaceholder('Selecciona una carta')
+        .setPlaceholder('Select a card')
         .addOptions(items.map((c, i) => {
             const opcion = {
                 label: `${inicio + i + 1}. ${c.nombre}`.slice(0, 100),
@@ -529,12 +529,12 @@ function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pagina =
     const componentes = [new ActionRowBuilder().addComponents(menu)];
 
     const filaNavegacion = [
-        new ButtonBuilder().setCustomId(`${prefijo}_volver_categorias::${expansion}`).setLabel('🔙 Volver').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`${prefijo}_volver_categorias::${expansion}`).setLabel('🔙 Back').setStyle(ButtonStyle.Secondary)
     ];
     if (totalPaginas > 1) {
         filaNavegacion.push(
-            new ButtonBuilder().setCustomId(`${prefijo}_expansion_pagina_${paginaSegura - 1}::${expansion}::${categoria}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
-            new ButtonBuilder().setCustomId(`${prefijo}_expansion_pagina_${paginaSegura + 1}::${expansion}::${categoria}`).setLabel('Siguiente ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
+            new ButtonBuilder().setCustomId(`${prefijo}_expansion_pagina_${paginaSegura - 1}::${expansion}::${categoria}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
+            new ButtonBuilder().setCustomId(`${prefijo}_expansion_pagina_${paginaSegura + 1}::${expansion}::${categoria}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
         );
     }
     componentes.push(new ActionRowBuilder().addComponents(...filaNavegacion));
@@ -666,24 +666,24 @@ async function obtenerImagenHDBot(cardMap, cartaId) {
 }
 
 const RAREZA_POR_CODIGO = {
-    100: '🔹 1 Diamante',
-    200: '🔸 2 Diamantes',
-    300: '🔷 3 Diamantes',
-    400: '💠 4 Diamantes',
-    500: '⭐ 1 Estrella',
-    600: '🌈 2 Estrellas Rainbow',
-    830: '🌟 1 Estrella Shiny',
-    860: '✨ 2 Estrellas Shiny',
+    100: '🔹 1 Diamond',
+    200: '🔸 2 Diamonds',
+    300: '🔷 3 Diamonds',
+    400: '💠 4 Diamonds',
+    500: '⭐ 1 Star',
+    600: '🌈 2 Star Rainbow',
+    830: '🌟 1 Star Shiny',
+    860: '✨ 2 Star Shiny',
     800: '🌌 Immersive',
-    900: '👑 Corona'
+    900: '👑 Crown'
 };
 
 function categoriaDesdeInfo(info) {
-    if (!info) return 'Desconocida';
+    if (!info) return 'Unknown';
     if (info.Rarity === 700) {
-        return info.TrainerType !== undefined ? '⭐⭐ 2 Estrellas Trainer' : '🎨 2 Estrellas Full Art';
+        return info.TrainerType !== undefined ? '⭐⭐ 2 Star Trainer' : '🎨 2 Star Full Art';
     }
-    return RAREZA_POR_CODIGO[info.Rarity] || 'Desconocida';
+    return RAREZA_POR_CODIGO[info.Rarity] || 'Unknown';
 }
 
 function tipoRarezaDesdeInfo(info) {
@@ -698,17 +698,17 @@ function tipoRarezaDesdeInfo(info) {
 }
 
 const RAREZA_ICONOS_CARTAS = {
-    '1-diamond': { emoji: 'rareza_diamante', cantidad: 1, etiqueta: '1 Diamante', pipe: true },
-    '2-diamond': { emoji: 'rareza_diamante', cantidad: 2, etiqueta: '2 Diamantes', pipe: true },
-    '3-diamond': { emoji: 'rareza_diamante', cantidad: 3, etiqueta: '3 Diamantes', pipe: true },
-    '4-diamond': { emoji: 'rareza_diamante', cantidad: 4, etiqueta: '4 Diamantes', pipe: true },
-    '1-star': { emoji: 'rareza_estrella', cantidad: 1, etiqueta: '1 Estrella', pipe: false },
-    '1-star-shiny': { emoji: 'rareza_brillante', cantidad: 1, etiqueta: '1 Estrella Shiny', pipe: true },
+    '1-diamond': { emoji: 'rareza_diamante', cantidad: 1, etiqueta: '1 Diamond', pipe: true },
+    '2-diamond': { emoji: 'rareza_diamante', cantidad: 2, etiqueta: '2 Diamonds', pipe: true },
+    '3-diamond': { emoji: 'rareza_diamante', cantidad: 3, etiqueta: '3 Diamonds', pipe: true },
+    '4-diamond': { emoji: 'rareza_diamante', cantidad: 4, etiqueta: '4 Diamonds', pipe: true },
+    '1-star': { emoji: 'rareza_estrella', cantidad: 1, etiqueta: '1 Star', pipe: false },
+    '1-star-shiny': { emoji: 'rareza_brillante', cantidad: 1, etiqueta: '1 Star Shiny', pipe: true },
     '2-star-trainer': { emoji: 'rareza_estrella', cantidad: 2, etiqueta: 'Trainer', pipe: true },
     '2-star-rainbow': { emoji: 'rareza_estrella', cantidad: 2, etiqueta: 'Rainbow', pipe: true, distintivo: '🌈' },
     '2-star-full-art': { emoji: 'rareza_estrella', cantidad: 2, etiqueta: 'Full Art', pipe: true, distintivo: '🎨' },
     '2-star-shiny': { emoji: 'rareza_brillante', cantidad: 2, etiqueta: 'Shiny', pipe: true },
-    'crown-rare': { emoji: 'rareza_corona', cantidad: 1, etiqueta: 'Corona', pipe: false },
+    'crown-rare': { emoji: 'rareza_corona', cantidad: 1, etiqueta: 'Crown', pipe: false },
     'immersive': { emoji: 'rareza_estrella', cantidad: 3, etiqueta: 'Immersive', pipe: true, distintivo: '🌌' }
 };
 
@@ -734,13 +734,13 @@ function categoriaFormateadaDesdeInfo(info, mapaEmojis) {
 }
 
 function resolverCategoriaCarta(cartaId, rutaMasterPath) {
-    if (!rutaMasterPath) return 'Desconocida';
+    if (!rutaMasterPath) return 'Unknown';
     const cardmaster = leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json'));
     return categoriaDesdeInfo(cardmaster?.[cartaId]);
 }
 
 function resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis) {
-    if (!rutaMasterPath) return 'Desconocida';
+    if (!rutaMasterPath) return 'Unknown';
     const cardmaster = leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json'));
     return categoriaFormateadaDesdeInfo(cardmaster?.[cartaId], mapaEmojis);
 }
@@ -751,17 +751,17 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const en_US = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json')) : null;
     const info = cardMap?.[cartaId];
     const expansiones = construirMapaExpansiones(en_US);
-    const expansionNombre = info?.ExpansionID ? (expansiones[info.ExpansionID] || info.ExpansionID) : 'Desconocida';
+    const expansionNombre = info?.ExpansionID ? (expansiones[info.ExpansionID] || info.ExpansionID) : 'Unknown';
     const categoria = resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis);
     const imagenPath = (await obtenerImagenHDBot(cardMap, cartaId)) || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID);
 
     const tipoIngles = cargarCardTypesBot()[nombre.toLowerCase()];
     const tagElemento = tipoIngles ? tagTipoBot(`type_${tipoIngles.toLowerCase()}`, mapaEmojis) : '';
-    const elemento = tagElemento ? `${tagElemento} ${tipoIngles}` : 'Desconocido';
+    const elemento = tagElemento ? `${tagElemento} ${tipoIngles}` : 'Unknown';
 
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${nombre}`)
-        .setDescription(`**Expansión:** ${expansionNombre}\n**Nombre:** ${nombre}\n**Elemento:** ${elemento}\n**Categoría:** ${categoria}\n**ID:** \`${cartaId}\``)
+        .setDescription(`**Expansion:** ${expansionNombre}\n**Name:** ${nombre}\n**Element:** ${elemento}\n**Category:** ${categoria}\n**ID:** \`${cartaId}\``)
         .setColor(0xE91E63);
 
     const botones = [new ButtonBuilder().setCustomId(`wishlist_xlm::${cartaId}::0`).setLabel('💠 XLM').setStyle(ButtonStyle.Success)];
@@ -772,7 +772,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         botones.push(
             new ButtonBuilder()
                 .setCustomId(`${volver.prefijo}_volver_carta_lista::${volver.expansion}::${volver.categoria}::${volver.pagina}`)
-                .setLabel('🔙 Volver')
+                .setLabel('🔙 Back')
                 .setStyle(ButtonStyle.Secondary)
         );
     }
@@ -782,7 +782,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     botones.push(
         new ButtonBuilder()
             .setCustomId(`${volver?.prefijo || 'allcards'}_volver_expansiones`)
-            .setLabel('🏠 Inicio')
+            .setLabel('🏠 Home')
             .setStyle(ButtonStyle.Secondary)
     );
     const filaXlm = new ActionRowBuilder().addComponents(...botones);
@@ -805,11 +805,11 @@ function construirEmbedExtractXlmInicio(user) {
     return new EmbedBuilder()
         .setTitle('📄 Extract XLM')
         .setDescription(
-            `Comando ejecutado por <@${user.id}>.\n\n` +
-            `Presiona el botón y pega el nombre del archivo XLM (ej. \`134P_20260120113013_2(BXR).xml\`) para que el bot te lo envíe.`
+            `Command run by <@${user.id}>.\n\n` +
+            `Press the button and paste the XLM file name (e.g. \`134P_20260120113013_2(BXR).xml\`) for the bot to send it to you.`
         )
         .setColor(0x3498DB)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • Control Remoto PTCGPB" })
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • PTCGPB Remote Control" })
         .setTimestamp();
 }
 
@@ -817,11 +817,11 @@ function construirEmbedRunInstanceInicio(user) {
     return new EmbedBuilder()
         .setTitle('🎮 Run MumuPlayer')
         .setDescription(
-            `Comando ejecutado por <@${user.id}>.\n\n` +
-            `Presiona el botón para ver tus instancias de MuMuPlayer y abrir la que necesites.`
+            `Command run by <@${user.id}>.\n\n` +
+            `Press the button to see your MuMuPlayer instances and open the one you need.`
         )
         .setColor(0x2ECC71)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • Control Remoto PTCGPB" })
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • PTCGPB Remote Control" })
         .setTimestamp();
 }
 
@@ -862,23 +862,23 @@ function lanzarInstanciaMuMu(index) {
 
 function construirEmbedInstanciasMuMu(instancias, seleccion = null) {
     const listaTexto = instancias.length
-        ? instancias.map(i => `**${i.index}.** ${i.name} — ${i.is_android_started ? '🟢 Encendida' : '🔴 Apagada'}`).join('\n')
-        : 'No se encontraron instancias.';
+        ? instancias.map(i => `**${i.index}.** ${i.name} — ${i.is_android_started ? '🟢 On' : '🔴 Off'}`).join('\n')
+        : 'No instances found.';
 
     const embed = new EmbedBuilder()
-        .setTitle('🎮 Instancias de MuMuPlayer')
+        .setTitle('🎮 MuMuPlayer Instances')
         .setDescription(listaTexto)
         .setColor(0x2ECC71)
-        .setFooter({ text: `${instancias.length} instancia(s)` });
+        .setFooter({ text: `${instancias.length} instance(s)` });
 
     const componentes = [];
     if (instancias.length) {
         const menu = new StringSelectMenuBuilder()
             .setCustomId('mumu_instancia_seleccion')
-            .setPlaceholder('Selecciona una instancia')
+            .setPlaceholder('Select an instance')
             .addOptions(instancias.slice(0, 25).map(i => ({
                 label: `${i.index}. ${i.name}`.slice(0, 100),
-                description: i.is_android_started ? 'Encendida' : 'Apagada',
+                description: i.is_android_started ? 'On' : 'Off',
                 value: `${i.index}::${i.name}`,
                 default: !!seleccion && String(seleccion.index) === String(i.index)
             })));
@@ -886,18 +886,18 @@ function construirEmbedInstanciasMuMu(instancias, seleccion = null) {
     }
 
     if (seleccion) {
-        embed.addFields({ name: '🖱️ Seleccionada', value: `**${seleccion.index}. ${seleccion.name}** — ${seleccion.encendida ? '🟢 Encendida' : '🔴 Apagada'}` });
+        embed.addFields({ name: '🖱️ Selected', value: `**${seleccion.index}. ${seleccion.name}** — ${seleccion.encendida ? '🟢 On' : '🔴 Off'}` });
 
         componentes.push(new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId(`mumu_encender_${seleccion.index}::${seleccion.name}`)
-                .setLabel(seleccion.encendida ? '✅ Encendida' : '🟢 Encender')
+                .setLabel(seleccion.encendida ? '✅ On' : '🟢 Turn On')
                 .setStyle(seleccion.encendida ? ButtonStyle.Secondary : ButtonStyle.Success)
                 .setDisabled(!!seleccion.encendida)
         ));
 
         componentes.push(new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`mumu_friendid_${seleccion.index}::${seleccion.name}`).setLabel('🆔 Agregar Friend').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`mumu_friendid_${seleccion.index}::${seleccion.name}`).setLabel('🆔 Add Friend').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId(`mumu_xlm_${seleccion.index}::${seleccion.name}`).setLabel('💠 XLM').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId(`mumu_status_${seleccion.index}::${seleccion.name}`).setLabel('📊 Status').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`mumu_ejecutar_${seleccion.index}::${seleccion.name}`).setLabel('✅ Submit').setStyle(ButtonStyle.Danger)
@@ -988,22 +988,22 @@ function construirEmbedStatusInstancia(index, name) {
     const friends = parsearListaFriends();
 
     const listaFriends = friends.length > 0
-        ? friends.map((f, i) => `**${i + 1}.** ${f.label || '(sin nombre)'} — \`${f.id}\``).join('\n')
-        : '_Ninguno agregado._';
+        ? friends.map((f, i) => `**${i + 1}.** ${f.label || '(no name)'} — \`${f.id}\``).join('\n')
+        : '_None added._';
 
     const xlmCoincide = (datos.winTitle || '').trim() === name && !!(datos.selectedFilePath || '').trim();
     const xlmTexto = (datos.selectedFilePath || '').trim()
-        ? `📄 \`${datos.fileName || ''}\`\n📁 \`${datos.selectedFilePath}\`\n🎯 Instancia guardada: **${datos.winTitle || '(vacío)'}** ${xlmCoincide ? '✅ coincide con esta instancia' : '⚠️ NO coincide con esta instancia'}`
-        : '_Ningún XLM seleccionado._';
+        ? `📄 \`${datos.fileName || ''}\`\n📁 \`${datos.selectedFilePath}\`\n🎯 Saved instance: **${datos.winTitle || '(empty)'}** ${xlmCoincide ? '✅ matches this instance' : '⚠️ does NOT match this instance'}`
+        : '_No XLM selected._';
 
-    const enviarSolicitud = datos.sendFriendRequestAfterInject === '1' ? '✅ Sí' : '❌ No';
+    const enviarSolicitud = datos.sendFriendRequestAfterInject === '1' ? '✅ Yes' : '❌ No';
 
     const embed = new EmbedBuilder()
-        .setTitle(`📊 Status — Instancia ${index}. ${name}`)
+        .setTitle(`📊 Status — Instance ${index}. ${name}`)
         .addFields(
-            { name: `🆔 Friends guardados (${friends.length}/10)`, value: listaFriends },
-            { name: '💠 XLM para inyección', value: xlmTexto },
-            { name: '📨 Enviar solicitud tras inyectar', value: enviarSolicitud, inline: true }
+            { name: `🆔 Saved friends (${friends.length}/10)`, value: listaFriends },
+            { name: '💠 XLM for injection', value: xlmTexto },
+            { name: '📨 Send request after injecting', value: enviarSolicitud, inline: true }
         )
         .setColor(0x3498DB);
 
@@ -1185,12 +1185,12 @@ function construirEmbedXlm(resultados, nombreCarta, cartaId, pagina = 0) {
         .setColor(0xE91E63);
 
     if (resultados === null) {
-        embed.setDescription('❌ No se encontró la carpeta de **Ruta JSON Cuentas** configurada.');
+        embed.setDescription('❌ Could not find the configured **JSON Accounts Path** folder.');
         return { embeds: [embed] };
     }
 
     if (resultados.length === 0) {
-        embed.setDescription('No se encontró esta carta en ninguna cuenta XLM.');
+        embed.setDescription('This card was not found in any XLM account.');
         return { embeds: [embed] };
     }
 
@@ -1199,17 +1199,17 @@ function construirEmbedXlm(resultados, nombreCarta, cartaId, pagina = 0) {
     const inicio = paginaSegura * XLM_POR_PAGINA;
     const items = resultados.slice(inicio, inicio + XLM_POR_PAGINA);
 
-    const descripcion = items.map(r => `\`${r.fileName}\` — x${r.cantidad} UND`).join('\n');
+    const descripcion = items.map(r => `\`${r.fileName}\` — x${r.cantidad} UNITS`).join('\n');
 
     embed.setDescription(descripcion)
-        .setFooter({ text: `Página ${paginaSegura + 1} de ${totalPaginas} • ${resultados.length} cuenta(s) encontrada(s)` });
+        .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas} • ${resultados.length} account(s) found` });
 
     if (totalPaginas > 1) {
         return {
             embeds: [embed],
             components: [new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`wishlist_xlm::${cartaId}::${paginaSegura - 1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
-                new ButtonBuilder().setCustomId(`wishlist_xlm::${cartaId}::${paginaSegura + 1}`).setLabel('Siguiente ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
+                new ButtonBuilder().setCustomId(`wishlist_xlm::${cartaId}::${paginaSegura - 1}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
+                new ButtonBuilder().setCustomId(`wishlist_xlm::${cartaId}::${paginaSegura + 1}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
             )]
         };
     }
@@ -1219,23 +1219,23 @@ function construirEmbedXlm(resultados, nombreCarta, cartaId, pagina = 0) {
 
 function construirSlashCommands() {
     return [
-        new SlashCommandBuilder().setName('setup').setDescription('Abre el panel de control del bot'),
-        new SlashCommandBuilder().setName('embed').setDescription('Configura qué se muestra en el embed de S4T'),
-        new SlashCommandBuilder().setName('webhook').setDescription('Administra el nombre y avatar de los webhooks de cada canal'),
-        new SlashCommandBuilder().setName('card').setDescription('Ejecuta el flujo de All Cards')
-            .addStringOption(opt => opt.setName('expansion').setDescription('Filtra por expansión antes de elegir el nombre (opcional)').setAutocomplete(true).setRequired(false))
-            .addStringOption(opt => opt.setName('nombre').setDescription('Buscar una carta directo por nombre (opcional)').setAutocomplete(true).setRequired(false)),
-        new SlashCommandBuilder().setName('wishlist').setDescription('Ejecuta el flujo de Cards Wishlist')
-            .addStringOption(opt => opt.setName('nombre').setDescription('Buscar una carta de tu wishlist directo por nombre (opcional)').setAutocomplete(true).setRequired(false)),
+        new SlashCommandBuilder().setName('setup').setDescription('Opens the bot control panel'),
+        new SlashCommandBuilder().setName('embed').setDescription('Configures what is shown in the S4T embed'),
+        new SlashCommandBuilder().setName('webhook').setDescription('Manages the name and avatar of each channel\'s webhooks'),
+        new SlashCommandBuilder().setName('card').setDescription('Runs the All Cards flow')
+            .addStringOption(opt => opt.setName('expansion').setDescription('Filter by expansion before picking the name (optional)').setAutocomplete(true).setRequired(false))
+            .addStringOption(opt => opt.setName('nombre').setDescription('Search for a card directly by name (optional)').setAutocomplete(true).setRequired(false)),
+        new SlashCommandBuilder().setName('wishlist').setDescription('Runs the Cards Wishlist flow')
+            .addStringOption(opt => opt.setName('nombre').setDescription('Search for a card in your wishlist directly by name (optional)').setAutocomplete(true).setRequired(false)),
         new SlashCommandBuilder()
             .setName('extract')
-            .setDescription('Ejecuta Extract XLM')
-            .addSubcommand(subcommand => subcommand.setName('xlm').setDescription('Extraer XLM en el canal seleccionado')),
+            .setDescription('Runs Extract XLM')
+            .addSubcommand(subcommand => subcommand.setName('xlm').setDescription('Extract XLM in the selected channel')),
         new SlashCommandBuilder()
             .setName('run')
-            .setDescription('Ejecuta Run MumuPlayer')
-            .addSubcommand(subcommand => subcommand.setName('instance').setDescription('Abrir instancia')),
-        new SlashCommandBuilder().setName('feedback').setDescription('Manda una sugerencia o reporta un problema con el bot')
+            .setDescription('Runs Run MumuPlayer')
+            .addSubcommand(subcommand => subcommand.setName('instance').setDescription('Open instance')),
+        new SlashCommandBuilder().setName('feedback').setDescription('Send a suggestion or report a problem with the bot')
     ].map(cmd => cmd.toJSON());
 }
 
@@ -1249,7 +1249,7 @@ async function obtenerGuildIdsRegistrables() {
             });
             if (response.data?.guild_id) guildIds.add(response.data.guild_id);
         } catch (error) {
-            console.error('❌ No se pudo leer el canal de categoría para registrar comandos:', row.canal_id, error?.response?.status || error?.message || error);
+            console.error('❌ Could not read the category channel to register commands:', row.canal_id, error?.response?.status || error?.message || error);
         }
     }
     return [...guildIds];
@@ -1263,18 +1263,18 @@ async function registrarSlashCommands() {
     const applicationId = CLIENT_ID || client.user?.id;
 
     if (!applicationId) {
-        console.log('⚠️ No se pudo resolver el applicationId para registrar slash commands.');
+        console.log('⚠️ Could not resolve the applicationId to register slash commands.');
         return;
     }
 
     if (!guildIds.size) {
-        console.log('⚠️ No se encontraron guilds registrables para publicar slash commands.');
+        console.log('⚠️ No registerable guilds found to publish slash commands.');
         return;
     }
 
     for (const guildId of guildIds) {
         await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: commands });
-        console.log(`✅ Slash commands registrados en guild ${guildId}`);
+        console.log(`✅ Slash commands registered in guild ${guildId}`);
     }
 }
 
@@ -1323,7 +1323,7 @@ async function enviarComandoAlCanal(commandKey, user, row) {
     if (commandKey === 'card_wishlist') {
         const embed = construirEmbedWishlistInicio(user);
         const fila = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('wishlist_ver').setLabel('📋 Ver mi Wishlist').setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('wishlist_ver').setLabel('📋 View my Wishlist').setStyle(ButtonStyle.Primary)
         );
 
         const bannerPath = path.join(__dirname, 'assets', 'embeds', 'wishlist_banner.png');
@@ -1343,7 +1343,7 @@ async function enviarComandoAlCanal(commandKey, user, row) {
     if (commandKey === 'card_all') {
         const embed = construirEmbedAllCardsInicio(user);
         const fila = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('allcards_ver_expansiones').setLabel('📋 Ver Todas las Expansiones').setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('allcards_ver_expansiones').setLabel('📋 View All Expansions').setStyle(ButtonStyle.Primary)
         );
 
         const bannerPath = path.join(__dirname, 'assets', 'embeds', 'card_banner.png');
@@ -1363,7 +1363,7 @@ async function enviarComandoAlCanal(commandKey, user, row) {
     if (commandKey === 'extract_xlm') {
         const embed = construirEmbedExtractXlmInicio(user);
         const fila = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('extract_xlm_abrir').setLabel('📋 Pegar XLM').setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('extract_xlm_abrir').setLabel('📋 Paste XLM').setStyle(ButtonStyle.Primary)
         );
         await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] });
         return;
@@ -1371,7 +1371,7 @@ async function enviarComandoAlCanal(commandKey, user, row) {
     if (commandKey === 'run_instance') {
         const embed = construirEmbedRunInstanceInicio(user);
         const fila = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('mumu_ver_instancias').setLabel('🎮 Ver Instancias').setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('mumu_ver_instancias').setLabel('🎮 View Instances').setStyle(ButtonStyle.Primary)
         );
         await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] });
         return;
@@ -1385,14 +1385,14 @@ async function ejecutarComandoEnCanal(interaction, commandKey) {
     const row = await obtenerCanalComando(interaction.user.id, cfg.tipo);
     if (!row) {
         return interaction.reply({
-            content: `❌ No hay canal sincronizado para **${cfg.label}**. Usa **Sincronizar Canales** primero.`,
+            content: `❌ No channel synced for **${cfg.label}**. Use **Sync Channels** first.`,
             ephemeral: true
         });
     }
 
     if (interaction.channelId !== row.canal_id) {
         return interaction.reply({
-            content: `❌ Este comando solo funciona en <#${row.canal_id}>.`,
+            content: `❌ This command only works in <#${row.canal_id}>.`,
             ephemeral: true
         });
     }
@@ -1400,10 +1400,10 @@ async function ejecutarComandoEnCanal(interaction, commandKey) {
     await interaction.deferReply({ ephemeral: true });
     try {
         await enviarComandoAlCanal(commandKey, interaction.user, row);
-        return await interaction.editReply({ content: `✅ **${cfg.label}** enviado correctamente.` });
+        return await interaction.editReply({ content: `✅ **${cfg.label}** sent successfully.` });
     } catch (error) {
         console.error(`Error enviando ${commandKey}:`, error?.response?.data || error?.message || error);
-        return await interaction.editReply({ content: `❌ No se pudo enviar **${cfg.label}**.` });
+        return await interaction.editReply({ content: `❌ Could not send **${cfg.label}**.` });
     }
 }
 
@@ -1472,12 +1472,12 @@ async function tieneConfiguracion(userId, tipoModulo) {
 }
 
 const BUILD_EMBED_OPCIONES = [
-    { clave: 'mostrar_tipo', label: 'Tipo y nombre del Pokémon', ejemplo: (mapaEmojis) => `${tagTipoBot('type_psychic', mapaEmojis)} Slowbro`.trim() },
-    { clave: 'mostrar_logo', label: 'Logo de expansión', ejemplo: () => 'Logo arriba de la imagen' },
-    { clave: 'mostrar_archivo', label: 'Archivo de la cuenta', ejemplo: () => '📁 Archivo de la cuenta' },
-    { clave: 'mostrar_categoria', label: 'Categoría de la carta', ejemplo: (mapaEmojis) => formatearRarezaPreview('1-star-shiny', mapaEmojis) },
-    { clave: 'mostrar_instancia', label: 'Instancia', ejemplo: () => '🖥️ Instancia' },
-    { clave: 'mostrar_sobre', label: 'Nombre del sobre', ejemplo: () => '📦 Sobre' }
+    { clave: 'mostrar_tipo', label: 'Pokémon type and name', ejemplo: (mapaEmojis) => `${tagTipoBot('type_psychic', mapaEmojis)} Slowbro`.trim() },
+    { clave: 'mostrar_logo', label: 'Expansion logo', ejemplo: () => 'Logo above the image' },
+    { clave: 'mostrar_archivo', label: 'Account file', ejemplo: () => '📁 Account file' },
+    { clave: 'mostrar_categoria', label: 'Card category', ejemplo: (mapaEmojis) => formatearRarezaPreview('1-star-shiny', mapaEmojis) },
+    { clave: 'mostrar_instancia', label: 'Instance', ejemplo: () => '🖥️ Instance' },
+    { clave: 'mostrar_sobre', label: 'Pack name', ejemplo: () => '📦 Pack' }
 ];
 
 async function obtenerConfigBuildEmbed(userId) {
@@ -1519,8 +1519,8 @@ const RAREZA_PREVIEW_CONFIG = {
     '2-star-rainbow': { emoji: 'rareza_estrella', modo: 'prefijo', cantidad: 2, extra: '🌈', texto: 'Rainbow' },
     '2-star-full-art': { emoji: 'rareza_estrella', modo: 'prefijo', cantidad: 2, extra: '🎨', texto: 'Full Art' },
     '2-star-shiny': { emoji: 'rareza_brillante', modo: 'prefijo', cantidad: 2, texto: 'Shiny' },
-    '3-diamond': { emoji: 'rareza_diamante', modo: 'prefijo', cantidad: 3, sinSeparador: true, texto: '3 Diamantes (x1)' },
-    '4-diamond': { emoji: 'rareza_diamante', modo: 'prefijo', cantidad: 4, sinSeparador: true, texto: '4 Diamantes (x1)' },
+    '3-diamond': { emoji: 'rareza_diamante', modo: 'prefijo', cantidad: 3, sinSeparador: true, texto: '3 Diamonds (x1)' },
+    '4-diamond': { emoji: 'rareza_diamante', modo: 'prefijo', cantidad: 4, sinSeparador: true, texto: '4 Diamonds (x1)' },
     'immersive': { emoji: 'rareza_estrella', modo: 'prefijo', cantidad: 3, extra: '🌌', texto: 'Immersive' }
 };
 
@@ -1735,10 +1735,10 @@ function lineaCartaPreview(estados, carta, mapaEmojis) {
 
 function construirCamposPreview(estados, valorPrincipal, sobreTexto) {
     const campos = [];
-    if (estados.mostrar_instancia) campos.push({ name: '🖥️ Instancia', value: `\`${BUILD_EMBED_EJEMPLO.instancia}\``, inline: true });
-    if (estados.mostrar_sobre) campos.push({ name: '📦 Sobre', value: `\`${sobreTexto}\``, inline: true });
+    if (estados.mostrar_instancia) campos.push({ name: '🖥️ Instance', value: `\`${BUILD_EMBED_EJEMPLO.instancia}\``, inline: true });
+    if (estados.mostrar_sobre) campos.push({ name: '📦 Pack', value: `\`${sobreTexto}\``, inline: true });
     let valor = valorPrincipal;
-    if (estados.mostrar_archivo) valor += `\n\n📁 **Archivo de la cuenta**\n\`${BUILD_EMBED_EJEMPLO.archivo}\``;
+    if (estados.mostrar_archivo) valor += `\n\n📁 **Account file**\n\`${BUILD_EMBED_EJEMPLO.archivo}\``;
     campos.push({ name: '​', value: valor, inline: false });
     return campos;
 }
@@ -1787,14 +1787,14 @@ async function generarEmbedGeneral(estados, cartas, sobreTexto, rutaLogo, cardMa
     const campos = construirCamposPreview(estados, valorPrincipal, sobreTexto);
 
     const embed = new EmbedBuilder()
-        .setTitle('🌟 ¡NUEVA CARTA VALIOSA ENCONTRADA! 🌟')
+        .setTitle('🌟 NEW VALUABLE CARD FOUND! 🌟')
         .setDescription(
-            '**Se ha detectado un tradeo excelente.**\nGuardado en la base de datos de S4T.\n\n' +
-            '*Vista previa — canal general de S4T (todas las cartas del sobre juntas).*'
+            '**An excellent trade has been detected.**\nSaved to the S4T database.\n\n' +
+            '*Preview — S4T general channel (all cards from the pack together).*'
         )
         .setColor(0xF1C40F)
         .addFields(campos)
-        .setFooter({ text: `Data saved ${new Date().toLocaleString()} • Vista previa (canal general)` });
+        .setFooter({ text: `Data saved ${new Date().toLocaleString()} • Preview (general channel)` });
 
     const files = [];
     try {
@@ -1821,14 +1821,14 @@ async function generarEmbedRareza(estados, carta, sobreTexto, rutaLogo, cardMap,
     const campos = construirCamposPreview(estados, valorPrincipal, sobreTexto);
 
     const embed = new EmbedBuilder()
-        .setTitle('🌟 ¡NUEVA CARTA VALIOSA ENCONTRADA! 🌟')
+        .setTitle('🌟 NEW VALUABLE CARD FOUND! 🌟')
         .setDescription(
-            '**Se ha detectado un tradeo excelente.**\nGuardado en la base de datos de S4T.\n\n' +
-            '*Vista previa — canal por rareza (una carta individual).*'
+            '**An excellent trade has been detected.**\nSaved to the S4T database.\n\n' +
+            '*Preview — rarity channel (a single card).*'
         )
         .setColor(0xF1C40F)
         .addFields(campos)
-        .setFooter({ text: `Data saved ${new Date().toLocaleString()} • Vista previa (canal de rareza)` });
+        .setFooter({ text: `Data saved ${new Date().toLocaleString()} • Preview (rarity channel)` });
 
     const files = [];
     const bufferImagen = await prepararImagenCartaPreview(estados, carta, rutaLogo, cardMap);
@@ -1847,17 +1847,17 @@ async function generarEmbedWishlist(estados, carta, sobreTexto, rutaLogo, cardMa
     const idWishlist = mapaEmojis?.['icono_wishlist'];
     const tagWishlist = idWishlist ? `<:icono_wishlist:${idWishlist}>` : '💖';
     const cuerpo = lineaRareza ? `${lineaRareza}\n> ${lineaNombre}` : lineaNombre;
-    const valorPrincipal = `> ${tagWishlist} › Wishlist encontrada:\n> ${cuerpo}`;
+    const valorPrincipal = `> ${tagWishlist} › Wishlist match found:\n> ${cuerpo}`;
     const campos = construirCamposPreview(estados, valorPrincipal, sobreTexto);
 
     const embed = new EmbedBuilder()
         .setDescription(
-            '**Se ha detectado una carta del wishlist.**\nGuardado en la base de datos de S4T.\n\n' +
-            '*Vista previa — canal wishlist.*'
+            '**A wishlist card has been detected.**\nSaved to the S4T database.\n\n' +
+            '*Preview — wishlist channel.*'
         )
         .setColor(0xE91E63)
         .addFields(campos)
-        .setFooter({ text: `Data saved ${new Date().toLocaleString()} • Vista previa (canal wishlist)` });
+        .setFooter({ text: `Data saved ${new Date().toLocaleString()} • Preview (wishlist channel)` });
 
     const files = [];
     const bufferImagen = await prepararImagenCartaPreview(estados, carta, rutaLogo, cardMap);
@@ -1874,8 +1874,8 @@ async function generarPanelBuildEmbed(userId, guild = null) {
     const mapaEmojis = await obtenerMapaEmojisGuild(guild);
 
     const embedConfig = new EmbedBuilder()
-        .setTitle('🔧 Build Embed — Configuración de S4T')
-        .setDescription('Activa o desactiva qué se muestra en el embed de cartas encontradas.')
+        .setTitle('🔧 Build Embed — S4T Configuration')
+        .setDescription('Turn on or off what is shown in the embed for found cards.')
         .setColor(0xF1C40F)
         .addFields(BUILD_EMBED_OPCIONES.map(opcion => ({
             name: `${estados[opcion.clave] ? '✅' : '❌'} ${opcion.label}`,
@@ -1895,7 +1895,7 @@ async function generarPanelBuildEmbed(userId, guild = null) {
     }
 
     filas.push(new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('build_guardar').setLabel('💾 Guardar').setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('build_guardar').setLabel('💾 Save').setStyle(ButtonStyle.Success)
     ));
 
     const eleccion = await elegirExpansionYCartasPreview(4);
@@ -1920,53 +1920,53 @@ async function generarPanelControl(userId) {
     let estadoS4T = await verificarEstadoPM2('trading', 's4t.js');
     let estadoHB = await verificarEstadoPM2('heartbeat', 'heartbeat.js');
 
-    if (estadoS4T === '🟢 ONLINE' && !(await tieneConfiguracion(userId, 's4t'))) estadoS4T = '🔴 OFFLINE (Falta Configurar)';
-    if (estadoHB === '🟢 ONLINE' && !(await tieneConfiguracion(userId, 'heartbeat'))) estadoHB = '🔴 OFFLINE (Falta Configurar)';
+    if (estadoS4T === '🟢 ONLINE' && !(await tieneConfiguracion(userId, 's4t'))) estadoS4T = '🔴 OFFLINE (Setup Needed)';
+    if (estadoHB === '🟢 ONLINE' && !(await tieneConfiguracion(userId, 'heartbeat'))) estadoHB = '🔴 OFFLINE (Setup Needed)';
 
     const embed = new EmbedBuilder()
-        .setTitle(' 👑  ¡Pokemon Home PTCGPB!  👑​')
+        .setTitle(' 👑  Pokemon Home PTCGPB!  👑​')
         .setDescription(
-            `¡Hola! Con este bot podras monitorear tus instancias de una forma mas ordenada, remota y en tiempo real.\n\n` +
-            `**🔥​ PANEL DE CONTROL DE PROCESOS 🔥**\n\n` +
-            `⚡ **Estado de la Infraestructura Básica:**\n` +
-            `• 🚀 **Módulo S4T:** \`${estadoS4T}\`\n` +
-            `• 💓 **Módulo Heartbeat:** \`${estadoHB}\`\n\n` +
-            `**🎴 Funciones disponibles:**\n` +
-            `• 💖 **Cards Wishlist** — consulta y busca las cartas de tu wishlist.\n` +
-            `• ⚡ **All Cards** — explora el catálogo completo de cartas del juego.\n` +
-            `• 📄 **Extraer XLM** — pega el nombre de una cuenta y recibe su XML + JSON.\n` +
-            `• 🔄 **Tradeo Automático** — abre una instancia de MuMu e inyecta, agrega amigos y ejecuta trades sin tocar nada manualmente.\n\n` +
-            `*Presiona los botones para interactuar con el ecosistema del bot.*`
+            `Hello! With this bot you can monitor your instances in a more organized, remote, and real-time way.\n\n` +
+            `**🔥​ PROCESS CONTROL PANEL 🔥**\n\n` +
+            `⚡ **Basic Infrastructure Status:**\n` +
+            `• 🚀 **S4T Module:** \`${estadoS4T}\`\n` +
+            `• 💓 **Heartbeat Module:** \`${estadoHB}\`\n\n` +
+            `**🎴 Available Features:**\n` +
+            `• 💖 **Cards Wishlist** — check and search the cards in your wishlist.\n` +
+            `• ⚡ **All Cards** — browse the full catalog of cards in the game.\n` +
+            `• 📄 **Extract XLM** — paste an account name and get its XML + JSON.\n` +
+            `• 🔄 **Auto Trade** — open a MuMu instance and inject, add friends, and run trades without touching anything manually.\n\n` +
+            `*Press the buttons to interact with the bot's ecosystem.*`
         )
         .setColor(0x9B59B6)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • Control Remoto PTCGPB" })
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • PTCGPB Remote Control" })
         .setTimestamp();
 
     const filaSistema = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('toggle_trading').setLabel('🚀 S4T On/Off').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('toggle_heartbeat').setLabel('💓 Heartbeat On/Off').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('btn_crear_canales_menu').setLabel('🏗️ Sincronizar Canales').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('btn_crear_canales_menu').setLabel('🏗️ Sync Channels').setStyle(ButtonStyle.Secondary)
     );
 
     const filaGestion = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('btn_status').setLabel('📊 Status').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('btn_config_canales').setLabel('⚙️ Configuración').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('btn_ruta_raiz').setLabel('📂 Ruta Principal').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('btn_config_canales').setLabel('⚙️ Configuration').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('btn_ruta_raiz').setLabel('📂 Main Path').setStyle(ButtonStyle.Secondary)
     );
 
     const filaPeligro = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('btn_reset_total').setLabel('🗑️ Reset Total').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('btn_borrar_todo').setLabel('🗑️ Borrar Canales').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId('btn_borrar_todo').setLabel('🗑️ Delete Channels').setStyle(ButtonStyle.Danger)
     );
 
     const filaCartas = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('panel_wishlist').setLabel('💖 Cards Wishlist').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('panel_allcards').setLabel('⚡ All Cards').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('panel_extract_xlm').setLabel('📄 Extraer XLM').setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId('panel_extract_xlm').setLabel('📄 Extract XLM').setStyle(ButtonStyle.Primary)
     );
 
     const filaTrade = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('panel_run_instance').setLabel('🔄 Tradeo Automático').setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('panel_run_instance').setLabel('🔄 Auto Trade').setStyle(ButtonStyle.Success)
     );
 
     return { embeds: [embed], components: [filaSistema, filaGestion, filaPeligro, filaCartas, filaTrade] };
@@ -1974,10 +1974,10 @@ async function generarPanelControl(userId) {
 
 const FUENTES_CARTAS = {
     wishlist: {
-        tituloLista: '📋 Tu Wishlist',
-        vacioTexto: 'No hay cartas guardadas en tu wishlist.',
-        contexto: 'tu wishlist',
-        errorSinDatos: '❌ No se encontró el archivo de wishlist. Verifica la **Ruta Wishlist** configurada en el panel.',
+        tituloLista: '📋 Your Wishlist',
+        vacioTexto: 'No cards saved in your wishlist.',
+        contexto: 'your wishlist',
+        errorSinDatos: '❌ Wishlist file not found. Check the **Wishlist Path** configured in the panel.',
         obtenerCartas: async () => {
             const rutaWishlistCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_wishlist'`);
             const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
@@ -1985,10 +1985,10 @@ const FUENTES_CARTAS = {
         }
     },
     allcards: {
-        tituloLista: '📋 Todas las Cartas',
-        vacioTexto: 'No se encontraron cartas.',
-        contexto: 'el catálogo',
-        errorSinDatos: '❌ No se encontró cardmaster.json. Verifica la **Ruta Data Master** configurada en el panel.',
+        tituloLista: '📋 All Cards',
+        vacioTexto: 'No cards found.',
+        contexto: 'the catalog',
+        errorSinDatos: '❌ cardmaster.json not found. Check the **Data Master Path** configured in the panel.',
         obtenerCartas: obtenerTodasLasCartasCacheadas
     }
 };
@@ -2029,15 +2029,15 @@ client.on('interactionCreate', async interaction => {
         const cartaId = interaction.options.getString('nombre');
         const rowCardAll = await obtenerCanalComando(interaction.user.id, 'cmd_card_all');
         if (!rowCardAll) {
-            return await interaction.reply({ content: `❌ No hay canal sincronizado para **All Cards**. Usa **Sincronizar Canales** primero.`, ephemeral: true });
+            return await interaction.reply({ content: `❌ No channel synced for **All Cards**. Use **Sync Channels** first.`, ephemeral: true });
         }
         if (interaction.channelId !== rowCardAll.canal_id) {
-            return await interaction.reply({ content: `❌ Este comando solo funciona en <#${rowCardAll.canal_id}>.`, ephemeral: true });
+            return await interaction.reply({ content: `❌ This command only works in <#${rowCardAll.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply({ ephemeral: true });
         const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
         const carta = (cartas || []).find(c => c.id === cartaId);
-        if (!carta) return await interaction.editReply({ content: '❌ No se encontró esa carta.' });
+        if (!carta) return await interaction.editReply({ content: '❌ Card not found.' });
         const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
         return await interaction.editReply(payload);
     }
@@ -2058,15 +2058,15 @@ client.on('interactionCreate', async interaction => {
         const cartaId = interaction.options.getString('nombre');
         const rowWishlist = await obtenerCanalComando(interaction.user.id, 'cmd_card_wishlist');
         if (!rowWishlist) {
-            return await interaction.reply({ content: `❌ No hay canal sincronizado para **Cards Wishlist**. Usa **Sincronizar Canales** primero.`, ephemeral: true });
+            return await interaction.reply({ content: `❌ No channel synced for **Cards Wishlist**. Use **Sync Channels** first.`, ephemeral: true });
         }
         if (interaction.channelId !== rowWishlist.canal_id) {
-            return await interaction.reply({ content: `❌ Este comando solo funciona en <#${rowWishlist.canal_id}>.`, ephemeral: true });
+            return await interaction.reply({ content: `❌ This command only works in <#${rowWishlist.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply({ ephemeral: true });
         const { cartas, rutaMasterPath } = await FUENTES_CARTAS.wishlist.obtenerCartas();
         const carta = (cartas || []).find(c => c.id === cartaId);
-        if (!carta) return await interaction.editReply({ content: '❌ No se encontró esa carta en tu wishlist.' });
+        if (!carta) return await interaction.editReply({ content: '❌ Card not found in your wishlist.' });
         const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
         return await interaction.editReply(payload);
     }
@@ -2079,11 +2079,11 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
         if (!tienePermisosGestion(interaction)) {
-            return await interaction.reply({ content: '❌ Solo administradores o usuarios con permiso Gestionar Servidor pueden usar este panel.', ephemeral: true });
+            return await interaction.reply({ content: '❌ Only administrators or users with the Manage Server permission can use this panel.', ephemeral: true });
         }
         const rowSetup = await obtenerCanalComando(interaction.user.id, 'cmd_setup');
         if (rowSetup && interaction.channelId !== rowSetup.canal_id) {
-            return await interaction.reply({ content: `❌ Este comando solo funciona en <#${rowSetup.canal_id}>.`, ephemeral: true });
+            return await interaction.reply({ content: `❌ This command only works in <#${rowSetup.canal_id}>.`, ephemeral: true });
         }
         const panel = await generarPanelControl(interaction.user.id);
         if (rowSetup) {
@@ -2091,7 +2091,7 @@ client.on('interactionCreate', async interaction => {
             // nuevo cada vez que alguien corre /setup de nuevo.
             await interaction.deferReply({ ephemeral: true });
             await enviarOEditarInterfaz(interaction.user.id, 'setup', rowSetup.webhook_url, panel);
-            return await interaction.editReply({ content: '✅ Panel actualizado.' });
+            return await interaction.editReply({ content: '✅ Panel updated.' });
         }
         await interaction.deferReply();
         return await interaction.editReply(panel);
@@ -2099,11 +2099,11 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'embed') {
         if (!tienePermisosGestion(interaction)) {
-            return await interaction.reply({ content: '❌ Solo administradores o usuarios con permiso Gestionar Servidor pueden usar este panel.', ephemeral: true });
+            return await interaction.reply({ content: '❌ Only administrators or users with the Manage Server permission can use this panel.', ephemeral: true });
         }
         const rowBuild = await obtenerCanalComando(interaction.user.id, 'cmd_build_embed');
         if (rowBuild && interaction.channelId !== rowBuild.canal_id) {
-            return await interaction.reply({ content: `❌ Este comando solo funciona en <#${rowBuild.canal_id}>.`, ephemeral: true });
+            return await interaction.reply({ content: `❌ This command only works in <#${rowBuild.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply({ ephemeral: true });
         const panelBuild = await generarPanelBuildEmbed(interaction.user.id, interaction.guild);
@@ -2127,18 +2127,18 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isButton() && interaction.customId === 'build_guardar') {
         return await interaction.reply({
-            content: '✅ Configuración guardada. A partir de ahora los embeds de S4T se van a mostrar así.',
+            content: '✅ Configuration saved. From now on the S4T embeds will look like this.',
             ephemeral: true
         });
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'webhook') {
         if (!tienePermisosGestion(interaction)) {
-            return await interaction.reply({ content: '❌ Solo administradores o usuarios con permiso Gestionar Servidor pueden usar este panel.', ephemeral: true });
+            return await interaction.reply({ content: '❌ Only administrators or users with the Manage Server permission can use this panel.', ephemeral: true });
         }
         const rowWebhook = await obtenerCanalComando(interaction.user.id, 'cmd_build_webhooks');
         if (rowWebhook && interaction.channelId !== rowWebhook.canal_id) {
-            return await interaction.reply({ content: `❌ Este comando solo funciona en <#${rowWebhook.canal_id}>.`, ephemeral: true });
+            return await interaction.reply({ content: `❌ This command only works in <#${rowWebhook.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply({ ephemeral: true });
         const panel = await construirPanelListaWebhooks(interaction.user.id);
@@ -2148,11 +2148,11 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand() && interaction.commandName === 'feedback') {
         const rowFeedback = await obtenerCanalComando(interaction.user.id, 'cmd_feedback');
         if (rowFeedback && interaction.channelId !== rowFeedback.canal_id) {
-            return await interaction.reply({ content: `❌ Este comando solo funciona en <#${rowFeedback.canal_id}>.`, ephemeral: true });
+            return await interaction.reply({ content: `❌ This command only works in <#${rowFeedback.canal_id}>.`, ephemeral: true });
         }
-        const modalFeedback = new ModalBuilder().setCustomId('modal_feedback').setTitle('Feedback sobre el bot')
+        const modalFeedback = new ModalBuilder().setCustomId('modal_feedback').setTitle('Feedback about the bot')
             .addComponents(new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('input_feedback_texto').setLabel('¿Qué opinas? ¿Qué le falta o qué falló?')
+                new TextInputBuilder().setCustomId('input_feedback_texto').setLabel('What do you think? What\'s missing or what failed?')
                     .setStyle(TextInputStyle.Paragraph).setMinLength(10).setMaxLength(1000)
             ));
         return await interaction.showModal(modalFeedback);
@@ -2162,7 +2162,7 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferUpdate();
         const tipo = interaction.values[0];
         const panel = await construirPanelDetalleWebhook(interaction.user.id, tipo);
-        if (!panel) return await interaction.editReply({ content: '❌ No se encontró ese webhook.', embeds: [], components: [] });
+        if (!panel) return await interaction.editReply({ content: '❌ Webhook not found.', embeds: [], components: [] });
         return await interaction.editReply(panel);
     }
 
@@ -2175,7 +2175,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isButton() && interaction.customId.startsWith('webhook_modificar::')) {
         const tipo = interaction.customId.split('::')[1];
         const fila = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
-        if (!fila) return await interaction.reply({ content: '❌ No se encontró ese webhook.', ephemeral: true });
+        if (!fila) return await interaction.reply({ content: '❌ Webhook not found.', ephemeral: true });
 
         let nombreActual = '';
         try {
@@ -2185,13 +2185,13 @@ client.on('interactionCreate', async interaction => {
 
         const modal = new ModalBuilder()
             .setCustomId(`modal_webhook_editar::${tipo}`)
-            .setTitle(`Editar - ${etiquetaTipoWebhook(tipo)}`.slice(0, 45))
+            .setTitle(`Edit - ${etiquetaTipoWebhook(tipo)}`.slice(0, 45))
             .addComponents(
                 new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('input_webhook_nombre').setLabel('Nombre del webhook').setStyle(TextInputStyle.Short).setValue(nombreActual).setRequired(false)
+                    new TextInputBuilder().setCustomId('input_webhook_nombre').setLabel('Webhook name').setStyle(TextInputStyle.Short).setValue(nombreActual).setRequired(false)
                 ),
                 new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('input_webhook_avatar').setLabel('URL de imagen de perfil (opcional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Dejar vacío para no cambiar')
+                    new TextInputBuilder().setCustomId('input_webhook_avatar').setLabel('Profile picture URL (optional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Leave empty to not change')
                 )
             );
         return await interaction.showModal(modal);
@@ -2204,7 +2204,7 @@ client.on('interactionCreate', async interaction => {
             const restanteMs = FEEDBACK_COOLDOWN_MS - (Date.now() - ultimoEnvio);
             if (restanteMs > 0) {
                 const minutos = Math.ceil(restanteMs / 60000);
-                return await interaction.reply({ content: `⏳ Ya mandaste feedback hace poco — esperá ${minutos} minuto(s) antes de mandar otro.`, ephemeral: true });
+                return await interaction.reply({ content: `⏳ You already sent feedback recently — wait ${minutos} minute(s) before sending another.`, ephemeral: true });
             }
 
             await interaction.deferReply({ ephemeral: true });
@@ -2213,12 +2213,12 @@ client.on('interactionCreate', async interaction => {
             try {
                 await axios.post(`${FEEDBACK_WEBHOOK_URL}?wait=true`, {
                     embeds: [{
-                        title: '📝 Nuevo feedback',
+                        title: '📝 New feedback',
                         description: texto,
                         color: 0x5865F2,
                         fields: [
-                            { name: 'De', value: `${interaction.user.tag} (\`${interaction.user.id}\`)`, inline: true },
-                            { name: 'Servidor', value: `${interaction.guild?.name || 'Desconocido'} (\`${interaction.guildId}\`)`, inline: true }
+                            { name: 'From', value: `${interaction.user.tag} (\`${interaction.user.id}\`)`, inline: true },
+                            { name: 'Server', value: `${interaction.guild?.name || 'Unknown'} (\`${interaction.guildId}\`)`, inline: true }
                         ],
                         timestamp: new Date().toISOString()
                     }]
@@ -2229,10 +2229,10 @@ client.on('interactionCreate', async interaction => {
                     [interaction.user.id, String(Date.now()), String(Date.now())]
                 );
 
-                return await interaction.editReply({ content: '✅ ¡Gracias! Tu feedback fue enviado.' });
+                return await interaction.editReply({ content: '✅ Thanks! Your feedback was sent.' });
             } catch (e) {
                 console.error('❌ Error mandando feedback:', e?.response?.data || e?.message || e);
-                return await interaction.editReply({ content: '❌ No se pudo enviar el feedback. Prueba de nuevo más tarde.' });
+                return await interaction.editReply({ content: '❌ Could not send the feedback. Try again later.' });
             }
         }
 
@@ -2242,7 +2242,7 @@ client.on('interactionCreate', async interaction => {
             const friendId = interaction.fields.getTextInputValue('input_friend_id').trim();
 
             if (!/^\d{16}$/.test(friendId)) {
-                return await interaction.reply({ content: '❌ El Friend ID debe tener exactamente 16 dígitos numéricos.', ephemeral: true });
+                return await interaction.reply({ content: '❌ The Friend ID must be exactly 16 numeric digits.', ephemeral: true });
             }
 
             await interaction.deferReply({ ephemeral: true });
@@ -2250,18 +2250,18 @@ client.on('interactionCreate', async interaction => {
             try {
                 resultado = agregarFriend(friendLabel, friendId);
             } catch (e) {
-                return await interaction.editReply({ content: '❌ No se pudo guardar el amigo en InjectAccount.ini.' });
+                return await interaction.editReply({ content: '❌ Could not save the friend to InjectAccount.ini.' });
             }
 
             if (!resultado.ok && resultado.motivo === 'lleno') {
-                return await interaction.editReply({ content: '❌ Ya tienes 10 amigos agregados (máximo permitido por inyección).' });
+                return await interaction.editReply({ content: '❌ You already have 10 friends added (maximum allowed for injection).' });
             }
             if (!resultado.ok && resultado.motivo === 'duplicado') {
-                return await interaction.editReply({ content: `⚠️ El Friend ID **${friendId}** ya estaba agregado.` });
+                return await interaction.editReply({ content: `⚠️ Friend ID **${friendId}** was already added.` });
             }
 
             return await interaction.editReply({
-                content: `✅ Agregado **${friendLabel || 'Sin nombre'}** (${friendId}). Llevas **${resultado.total}/10** amigos para esta inyección.\nPresiona **🆔 Agregar Friend** de nuevo para sumar otro, o **✅ Submit** cuando termines.`
+                content: `✅ Added **${friendLabel || 'No name'}** (${friendId}). You have **${resultado.total}/10** friends for this injection.\nPress **🆔 Add Friend** again to add another, or **✅ Submit** when you're done.`
             });
         }
 
@@ -2274,16 +2274,16 @@ client.on('interactionCreate', async interaction => {
             const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, nombreBuscado);
 
             if (!archivo) {
-                return await interaction.editReply({ content: `❌ No se encontró el archivo \`${nombreBuscado}\`. Verifica la **Ruta XML Cuentas** configurada.` });
+                return await interaction.editReply({ content: `❌ File \`${nombreBuscado}\` not found. Check the configured **XML Accounts Path**.` });
             }
 
             try {
                 guardarXlmParaInyeccion(nombre, archivo);
             } catch (e) {
-                return await interaction.editReply({ content: '❌ No se pudo guardar la selección en InjectAccount.ini.' });
+                return await interaction.editReply({ content: '❌ Could not save the selection to InjectAccount.ini.' });
             }
 
-            return await interaction.editReply({ content: `✅ Se guardó \`${path.basename(archivo)}\` para inyectar en la instancia **${nombre}**. Listo para usarse en Inject XLM.` });
+            return await interaction.editReply({ content: `✅ Saved \`${path.basename(archivo)}\` to inject into instance **${nombre}**. Ready to use in Inject XLM.` });
         }
 
         if (interaction.customId === 'modal_extract_xlm') {
@@ -2293,11 +2293,11 @@ client.on('interactionCreate', async interaction => {
             const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, nombreBuscado);
 
             if (!archivo) {
-                return await interaction.editReply({ content: `❌ No se encontró el archivo \`${nombreBuscado}\`. Verifica la **Ruta XML Cuentas** configurada.` });
+                return await interaction.editReply({ content: `❌ File \`${nombreBuscado}\` not found. Check the configured **XML Accounts Path**.` });
             }
 
             await interaction.editReply({
-                content: `✅ Encontrado: \`${path.basename(archivo)}\``,
+                content: `✅ Found: \`${path.basename(archivo)}\``,
                 files: [new AttachmentBuilder(archivo)]
             });
 
@@ -2313,7 +2313,7 @@ client.on('interactionCreate', async interaction => {
                     });
                 } else {
                     await interaction.followUp({
-                        content: `⚠️ No se encontró el JSON de la cuenta (\`${deviceAccount}.json\`). Verifica la **Ruta JSON Cuentas** configurada.`,
+                        content: `⚠️ Account JSON not found (\`${deviceAccount}.json\`). Check the configured **JSON Accounts Path**.`,
                         ephemeral: true
                     });
                 }
@@ -2322,7 +2322,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (!tienePermisosGestion(interaction)) {
-            return await interaction.reply({ content: '❌ No tienes permisos para cambiar configuraciones del bot.', ephemeral: true });
+            return await interaction.reply({ content: "❌ You don't have permission to change the bot's settings.", ephemeral: true });
         }
 
         if (interaction.customId.startsWith('modal_webhook_editar::')) {
@@ -2332,10 +2332,10 @@ client.on('interactionCreate', async interaction => {
 
             await interaction.deferUpdate();
             const fila = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
-            if (!fila) return await interaction.editReply({ content: '❌ No se encontró ese webhook.', embeds: [], components: [] });
+            if (!fila) return await interaction.editReply({ content: '❌ Webhook not found.', embeds: [], components: [] });
 
             if (!nuevoNombre && !nuevaAvatarUrl) {
-                return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'No ingresaste ningún cambio.' }));
+                return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'You didn\'t enter any changes.' }));
             }
 
             const payload = {};
@@ -2352,18 +2352,18 @@ client.on('interactionCreate', async interaction => {
                     });
                     const mime = img.headers['content-type'] || '';
                     if (!mime.startsWith('image/')) {
-                        return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Esa URL no es una imagen. Prueba con otra.' }));
+                        return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'That URL isn\'t an image. Try another one.' }));
                     }
                     payload.avatar = `data:${mime};base64,${Buffer.from(img.data).toString('base64')}`;
                 } catch (e) {
-                    return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'No se pudo descargar esa imagen de perfil. Prueba con otra URL.' }));
+                    return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Could not download that profile picture. Try another URL.' }));
                 }
             }
 
             try {
                 await axios.patch(fila.webhook_url, payload);
             } catch (e) {
-                return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Discord rechazó el cambio. Prueba de nuevo.' }));
+                return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Discord rejected the change. Try again.' }));
             }
 
             return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { guardado: true }));
@@ -2374,7 +2374,7 @@ client.on('interactionCreate', async interaction => {
             const raiz = interaction.fields.getTextInputValue('input_ruta').trim();
 
             if (!fs.existsSync(raiz)) {
-                return await interaction.editReply({ content: `❌ No se encontró la carpeta \`${raiz}\`. Verifica que la ruta exista.` });
+                return await interaction.editReply({ content: `❌ Folder \`${raiz}\` not found. Check that the path exists.` });
             }
 
             const derivadas = derivarRutasDesdeRaiz(raiz);
@@ -2391,7 +2391,7 @@ client.on('interactionCreate', async interaction => {
             }
 
             return await interaction.editReply({
-                content: `✅ Ruta Principal guardada: \`${raiz}\`\n\nSe detectaron automáticamente:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Cuentas: \`${derivadas.xml}\`\n📂 JSON Cuentas: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\``
+                content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\``
             });
         }
 
@@ -2449,7 +2449,7 @@ client.on('interactionCreate', async interaction => {
         const [index, nombre] = interaction.values[0].split('::');
         const instancias = obtenerInstanciasMuMu();
         if (instancias === null) {
-            return await interaction.reply({ content: '❌ No se encontró MuMuManager.exe. Verifica que MuMuPlayer esté instalado.', ephemeral: true });
+            return await interaction.reply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', ephemeral: true });
         }
         const instanciaInfo = instancias.find(i => String(i.index) === String(index));
         const payload = construirEmbedInstanciasMuMu(instancias, { index, name: nombre, encendida: !!instanciaInfo?.is_android_started });
@@ -2458,7 +2458,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isChannelSelectMenu() || (interaction.isStringSelectMenu() && interaction.customId === 'select_reset_modulo')) {
         if (!tienePermisosGestion(interaction)) {
-            return await interaction.reply({ content: '❌ No tienes permisos para cambiar configuraciones del bot.', ephemeral: true });
+            return await interaction.reply({ content: "❌ You don't have permission to change the bot's settings.", ephemeral: true });
         }
         return await configScript.manejarMenuCanales(interaction);
     }
@@ -2470,19 +2470,19 @@ client.on('interactionCreate', async interaction => {
             const row = await obtenerCanalComando(interaction.user.id, cfg.tipo);
 
             if (!row) {
-                return await interaction.reply({ content: `❌ No hay canal sincronizado para **${cfg.label}**. Usa **Sincronizar Canales** primero.`, ephemeral: true });
+                return await interaction.reply({ content: `❌ No channel synced for **${cfg.label}**. Use **Sync Channels** first.`, ephemeral: true });
             }
 
             await interaction.deferReply({ ephemeral: true });
             try {
                 await enviarComandoAlCanal(commandKey, interaction.user, row);
                 const filaIr = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setLabel('➡️ Ir al canal').setStyle(ButtonStyle.Link).setURL(`https://discord.com/channels/${interaction.guildId}/${row.canal_id}`)
+                    new ButtonBuilder().setLabel('➡️ Go to channel').setStyle(ButtonStyle.Link).setURL(`https://discord.com/channels/${interaction.guildId}/${row.canal_id}`)
                 );
-                return await interaction.editReply({ content: `✅ **${cfg.label}** enviado a <#${row.canal_id}>.`, components: [filaIr] });
+                return await interaction.editReply({ content: `✅ **${cfg.label}** sent to <#${row.canal_id}>.`, components: [filaIr] });
             } catch (error) {
                 console.error(`Error enviando ${commandKey}:`, error?.response?.data || error?.message || error);
-                return await interaction.editReply({ content: `❌ No se pudo enviar **${cfg.label}**.` });
+                return await interaction.editReply({ content: `❌ Could not send **${cfg.label}**.` });
             }
         }
 
@@ -2553,9 +2553,9 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.customId === 'extract_xlm_abrir') {
-            const modalExtract = new ModalBuilder().setCustomId('modal_extract_xlm').setTitle('Extraer XLM')
+            const modalExtract = new ModalBuilder().setCustomId('modal_extract_xlm').setTitle('Extract XLM')
                 .addComponents(new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('input_xlm_nombre').setLabel('Nombre del archivo XLM').setStyle(TextInputStyle.Short)
+                    new TextInputBuilder().setCustomId('input_xlm_nombre').setLabel('XLM file name').setStyle(TextInputStyle.Short)
                 ));
             return await interaction.showModal(modalExtract);
         }
@@ -2563,7 +2563,7 @@ client.on('interactionCreate', async interaction => {
         if (interaction.customId === 'mumu_ver_instancias') {
             const instancias = obtenerInstanciasMuMu();
             if (instancias === null) {
-                return await interaction.reply({ content: '❌ No se encontró MuMuManager.exe. Verifica que MuMuPlayer esté instalado.', ephemeral: true });
+                return await interaction.reply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', ephemeral: true });
             }
             const payload = construirEmbedInstanciasMuMu(instancias);
             return await interaction.reply({ ...payload, ephemeral: true });
@@ -2575,7 +2575,7 @@ client.on('interactionCreate', async interaction => {
             const ok = lanzarInstanciaMuMu(index);
             const instancias = obtenerInstanciasMuMu();
             if (instancias === null) {
-                return await interaction.editReply({ content: '❌ No se encontró MuMuManager.exe. Verifica que MuMuPlayer esté instalado.', embeds: [], components: [] });
+                return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', embeds: [], components: [] });
             }
             const instanciaInfo = instancias.find(i => String(i.index) === String(index));
             const payload = construirEmbedInstanciasMuMu(instancias, { index, name: nombre, encendida: ok && !!instanciaInfo?.is_android_started });
@@ -2584,13 +2584,13 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId.startsWith('mumu_friendid_')) {
             const [index, nombre] = interaction.customId.replace('mumu_friendid_', '').split('::');
-            const modalFriend = new ModalBuilder().setCustomId(`modal_mumu_friendid::${index}::${nombre}`).setTitle('Agregar Friend (máx. 10)')
+            const modalFriend = new ModalBuilder().setCustomId(`modal_mumu_friendid::${index}::${nombre}`).setTitle('Add Friend (max. 10)')
                 .addComponents(
                     new ActionRowBuilder().addComponents(
-                        new TextInputBuilder().setCustomId('input_friend_nombre').setLabel('Nombre').setStyle(TextInputStyle.Short).setRequired(false)
+                        new TextInputBuilder().setCustomId('input_friend_nombre').setLabel('Name').setStyle(TextInputStyle.Short).setRequired(false)
                     ),
                     new ActionRowBuilder().addComponents(
-                        new TextInputBuilder().setCustomId('input_friend_id').setLabel('Friend ID (16 dígitos)').setStyle(TextInputStyle.Short).setMinLength(16).setMaxLength(16)
+                        new TextInputBuilder().setCustomId('input_friend_id').setLabel('Friend ID (16 digits)').setStyle(TextInputStyle.Short).setMinLength(16).setMaxLength(16)
                     )
                 );
             return await interaction.showModal(modalFriend);
@@ -2602,21 +2602,21 @@ client.on('interactionCreate', async interaction => {
 
             const datosIni = leerIniInject();
             if ((datosIni.winTitle || '').trim() !== nombre || !(datosIni.selectedFilePath || '').trim()) {
-                return await interaction.editReply({ content: `❌ Primero selecciona el XLM con el botón 💠 XLM para la instancia **${nombre}**.` });
+                return await interaction.editReply({ content: `❌ First select the XLM with the 💠 XLM button for instance **${nombre}**.` });
             }
 
-            await interaction.editReply({ content: `🔄 Ejecutando inyección en la instancia **${nombre}**... esto CERRARÁ la sesión actual y puede tardar varios minutos.` });
+            await interaction.editReply({ content: `🔄 Running injection on instance **${nombre}**... this WILL CLOSE the current session and may take several minutes.` });
 
             ejecutarInyeccionHeadless(async (ok, detalle) => {
                 try {
                     if (!ok) {
-                        return await interaction.followUp({ content: `❌ La inyección falló (${detalle}).`, ephemeral: true });
+                        return await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true });
                     }
                     const filaNext = new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId(`mumu_nexttrade_${index}::${nombre}`).setLabel('▶️ Next Trade').setStyle(ButtonStyle.Success)
                     );
                     await interaction.followUp({
-                        content: `✅ Inyección completada en la instancia **${nombre}**.\n\nCuando el amigo haya aceptado la solicitud, presiona **▶️ Next Trade** para ofrecerle la carta de su wishlist.`,
+                        content: `✅ Injection completed on instance **${nombre}**.\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist.`,
                         components: [filaNext],
                         ephemeral: true
                     });
@@ -2628,18 +2628,18 @@ client.on('interactionCreate', async interaction => {
         if (interaction.customId.startsWith('mumu_nexttrade_')) {
             const [index, nombre] = interaction.customId.replace('mumu_nexttrade_', '').split('::');
             await interaction.deferReply({ ephemeral: true });
-            await interaction.editReply({ content: `🔄 Ofreciendo la carta de la wishlist a tu amigo en la instancia **${nombre}**...` });
+            await interaction.editReply({ content: `🔄 Offering the wishlist card to your friend on instance **${nombre}**...` });
 
             ejecutarSendTradeCard(nombre, async (ok, detalle) => {
                 try {
                     if (!ok) {
-                        return await interaction.followUp({ content: `❌ No se pudo ofrecer la carta (${detalle}). Revisa que el amigo ya haya aceptado y esté disponible en "Select a Friend".`, ephemeral: true });
+                        return await interaction.followUp({ content: `❌ Could not offer the card (${detalle}). Check that your friend has already accepted and is available in "Select a Friend".`, ephemeral: true });
                     }
                     const filaFinalize = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`mumu_finalizetrade_${index}::${nombre}`).setLabel('🔄 Finalizar Trade').setStyle(ButtonStyle.Success)
+                        new ButtonBuilder().setCustomId(`mumu_finalizetrade_${index}::${nombre}`).setLabel('🔄 Finalize Trade').setStyle(ButtonStyle.Success)
                     );
                     await interaction.followUp({
-                        content: `✅ Carta ofrecida en la instancia **${nombre}**, esperando respuesta del compañero.\n\nCuando tu amigo ya haya ofrecido su carta, presiona **🔄 Finalizar Trade**.`,
+                        content: `✅ Card offered on instance **${nombre}**, waiting for your partner's response.\n\nOnce your friend has offered their card, press **🔄 Finalize Trade**.`,
                         components: [filaFinalize],
                         ephemeral: true
                     });
@@ -2651,14 +2651,14 @@ client.on('interactionCreate', async interaction => {
         if (interaction.customId.startsWith('mumu_finalizetrade_')) {
             const [index, nombre] = interaction.customId.replace('mumu_finalizetrade_', '').split('::');
             await interaction.deferReply({ ephemeral: true });
-            await interaction.editReply({ content: `🔄 Finalizando el trade en la instancia **${nombre}**... la instancia se apagará al terminar.` });
+            await interaction.editReply({ content: `🔄 Finalizing the trade on instance **${nombre}**... the instance will shut down when done.` });
 
             ejecutarFinalizeTradeCard(nombre, index, async (ok, detalle) => {
                 try {
                     await interaction.followUp({
                         content: ok
-                            ? `✅ Trade finalizado en la instancia **${nombre}**. La instancia se está apagando.`
-                            : `❌ No se pudo finalizar el trade (${detalle}).`,
+                            ? `✅ Trade finalized on instance **${nombre}**. The instance is shutting down.`
+                            : `❌ Could not finalize the trade (${detalle}).`,
                         ephemeral: true
                     });
                 } catch (e) {}
@@ -2674,9 +2674,9 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId.startsWith('mumu_xlm_')) {
             const [index, nombre] = interaction.customId.replace('mumu_xlm_', '').split('::');
-            const modalXlm = new ModalBuilder().setCustomId(`modal_mumu_xlm::${index}::${nombre}`).setTitle('Preparar Inyección de XLM')
+            const modalXlm = new ModalBuilder().setCustomId(`modal_mumu_xlm::${index}::${nombre}`).setTitle('Prepare XLM Injection')
                 .addComponents(new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('input_xlm_nombre').setLabel('Nombre del archivo XLM').setStyle(TextInputStyle.Short)
+                    new TextInputBuilder().setCustomId('input_xlm_nombre').setLabel('XLM file name').setStyle(TextInputStyle.Short)
                 ));
             return await interaction.showModal(modalXlm);
         }
@@ -2700,25 +2700,25 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.customId === 'actualizacion_luego') {
-            return await interaction.update({ content: '👍 Te vuelvo a avisar la próxima vez que abras el bot.', embeds: [], components: [] });
+            return await interaction.update({ content: "👍 I'll remind you again next time you open the bot.", embeds: [], components: [] });
         }
 
         if (interaction.customId === 'actualizacion_ahora') {
-            await interaction.update({ content: '⏳ Descargando la actualización...', embeds: [], components: [] });
+            await interaction.update({ content: '⏳ Downloading the update...', embeds: [], components: [] });
             try {
                 const remota = await obtenerVersionRemota();
                 await descargarActualizacion(remota);
-                await interaction.editReply({ content: `✅ Actualización lista. Reiniciando con la versión **${remota.version}**...` });
+                await interaction.editReply({ content: `✅ Update ready. Restarting with version **${remota.version}**...` });
                 setTimeout(() => process.exit(0), 1500);
             } catch (e) {
                 console.error('DEBUG: error descargando actualización:', e?.message || e);
-                await interaction.editReply({ content: '❌ No se pudo descargar la actualización. Prueba de nuevo más tarde.' });
+                await interaction.editReply({ content: '❌ Could not download the update. Try again later.' });
             }
             return;
         }
 
         if (!tienePermisosGestion(interaction)) {
-            return await interaction.reply({ content: '❌ No tienes permisos para ejecutar acciones de control.', ephemeral: true });
+            return await interaction.reply({ content: "❌ You don't have permission to run control actions.", ephemeral: true });
         }
         switch (interaction.customId) {
             case 'btn_reset_total':
@@ -2742,20 +2742,20 @@ client.on('interactionCreate', async interaction => {
                     await db.run(`DELETE FROM configs_canales WHERE discord_id = ?`, [interaction.user.id]);
 
                     const mensajeFinal = canalesConWebhook.length > 0
-                        ? `✅ **Base de datos reseteada.**\n🧹 Se limpiaron webhooks antiguos de: ${canalesConWebhook.join(', ')}`
-                        : '✅ **Base de datos reseteada.**';
+                        ? `✅ **Database reset.**\n🧹 Cleaned up old webhooks from: ${canalesConWebhook.join(', ')}`
+                        : '✅ **Database reset.**';
 
                     await interaction.editReply({ content: mensajeFinal });
                 } catch (e) {
-                    await interaction.editReply({ content: '❌ Error al intentar resetear todo.' });
+                    await interaction.editReply({ content: '❌ Error trying to reset everything.' });
                 }
                 break;
-            
+
             case 'btn_borrar_todo':
                 await interaction.deferReply({ ephemeral: true });
                 try {
                     const categoria = interaction.guild.channels.cache.find(c => c.name === '📦 PTCG POCKET DROPS' && c.type === ChannelType.GuildCategory);
-                    if (!categoria) return await interaction.editReply({ content: '❌ No se encontró la categoría de canales.' });
+                    if (!categoria) return await interaction.editReply({ content: '❌ Channel category not found.' });
 
                     const canalesConWebhook = [];
                     for (const channel of categoria.children.cache.values()) {
@@ -2775,33 +2775,33 @@ client.on('interactionCreate', async interaction => {
                     await db.run(`DELETE FROM configs_canales WHERE discord_id = ?`, [interaction.user.id]);
 
                     const mensajeFinal = canalesConWebhook.length > 0
-                        ? `✅ **Estructura borrada exitosamente.**\n🧹 Se limpiaron webhooks antiguos de: ${canalesConWebhook.join(', ')}`
-                        : '✅ **Estructura borrada exitosamente.**';
+                        ? `✅ **Structure deleted successfully.**\n🧹 Cleaned up old webhooks from: ${canalesConWebhook.join(', ')}`
+                        : '✅ **Structure deleted successfully.**';
 
                     await interaction.editReply({ content: mensajeFinal });
                 } catch (e) {
-                    await interaction.editReply({ content: '❌ Error al intentar borrar los canales.' });
+                    await interaction.editReply({ content: '❌ Error trying to delete the channels.' });
                 }
                 break;
 
-            case 'btn_status': 
+            case 'btn_status':
                 await interaction.deferReply({ ephemeral: true });
                 const configs = await db.all(`SELECT tipo, canal_id, webhook_url FROM configs_canales WHERE discord_id = ?`, [interaction.user.id]);
-                let s4tStatus = '🔴 Sin asignar', hbStatus = '🔴 Sin asignar', rutaRaizStatus = '🔴 Sin asignar', crearStatus = '🔴 Sin asignar';
+                let s4tStatus = '🔴 Not assigned', hbStatus = '🔴 Not assigned', rutaRaizStatus = '🔴 Not assigned', crearStatus = '🔴 Not assigned';
 
                 if (configs) {
                     configs.forEach(r => {
                         const canalMencion = (r.canal_id !== 'local' && r.canal_id !== 'N/A') ? `<#${r.canal_id}>` : '';
-                        const webhookTxt = (r.webhook_url && r.webhook_url !== 'N/A') ? `\n🔗 Webhook: configurado` : '';
-                        if (r.tipo === 's4t') s4tStatus = `✅ Canal: ${canalMencion}${webhookTxt}`;
-                        if (r.tipo === 'heartbeat') hbStatus = `✅ Canal: ${canalMencion}${webhookTxt}`;
-                        if (r.tipo === 'crear_canales') crearStatus = `✅ ID Categoría: \`${r.canal_id}\``;
-                        if (r.tipo === 'ruta_raiz') rutaRaizStatus = `✅ Ruta:\n\`${r.webhook_url}\``;
+                        const webhookTxt = (r.webhook_url && r.webhook_url !== 'N/A') ? `\n🔗 Webhook: configured` : '';
+                        if (r.tipo === 's4t') s4tStatus = `✅ Channel: ${canalMencion}${webhookTxt}`;
+                        if (r.tipo === 'heartbeat') hbStatus = `✅ Channel: ${canalMencion}${webhookTxt}`;
+                        if (r.tipo === 'crear_canales') crearStatus = `✅ Category ID: \`${r.canal_id}\``;
+                        if (r.tipo === 'ruta_raiz') rutaRaizStatus = `✅ Path:\n\`${r.webhook_url}\``;
                     });
                 }
                 const embedStatus = new EmbedBuilder()
-                    .setTitle('📊 Reporte de Configuraciones Guardadas')
-                    .setDescription(`**🚀 S4T:**\n${s4tStatus}\n\n**💓 Heartbeat:**\n${hbStatus}\n\n**🏗️ Crear Canales:**\n${crearStatus}\n\n**📂 Ruta Principal:**\n${rutaRaizStatus}`)
+                    .setTitle('📊 Saved Configuration Report')
+                    .setDescription(`**🚀 S4T:**\n${s4tStatus}\n\n**💓 Heartbeat:**\n${hbStatus}\n\n**🏗️ Create Channels:**\n${crearStatus}\n\n**📂 Main Path:**\n${rutaRaizStatus}`)
                     .setColor(0xF1C40F);
                 await interaction.editReply({ embeds: [embedStatus] });
                 break;
@@ -2811,11 +2811,11 @@ client.on('interactionCreate', async interaction => {
                 try {
                     const grupos = [
                         {
-                            categoria: '🔔 ACTUALIZACIONES 🔔',
+                            categoria: '🔔 UPDATES 🔔',
                             tipoCategoria: 'actualizaciones_categoria',
                             canales: [
-                                { tipo: 'actualizaciones', name: '🔔-actualizaciones' },
-                                { tipo: 'apoyo', name: '💝-apoya-mi-trabajo' }
+                                { tipo: 'actualizaciones', name: '🔔-updates' },
+                                { tipo: 'apoyo', name: '💝-support-my-work' }
                             ]
                         },
                         {
@@ -2881,32 +2881,32 @@ client.on('interactionCreate', async interaction => {
                     ];
 
                     const EMBEDS_BIENVENIDA_POR_TIPO = {
-                        actualizaciones: { title: '🔔 Actualizaciones', description: 'Acá vas a recibir un aviso cuando haya una actualización nueva del bot, con un botón para instalarla al toque.' },
-                        apoyo: { title: '💝 Apoya este proyecto', description: 'Si este bot te resultó útil, se agradece cualquier apoyo para seguir mejorándolo. ¡Gracias por usarlo! 💛' },
-                        cmd_setup: { title: '⚙ Settings', description: 'Acá se usa `/setup` — abre el panel de control del bot (armar canales, etc).' },
-                        cmd_build_embed: { title: '🔧 Build Embed', description: 'Acá se usa `/embed` para configurar qué información se muestra en los embeds de los hallazgos.' },
-                        cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'Acá se usa `/webhook` para cambiar el nombre y el avatar de los webhooks de cada canal.' },
-                        cmd_feedback: { title: '📝 Feedback', description: 'Acá se usa `/feedback` para mandar sugerencias, reportar problemas o contar qué te parece el bot.' },
-                        heartbeat: { title: '💓 Heartbeat', description: 'Acá el bot reporta que sigue con vida y funcionando — el mensaje se actualiza solo, no hace falta hacer nada.' },
-                        s4t: { title: '🤖 S4T', description: 'Acá se postean todos los hallazgos apenas se detectan, antes de clasificarlos por rareza.' },
-                        '3-diamond': { title: '🔷 3 Diamond', description: 'Cartas de rareza 3-diamond encontradas se postean automáticamente acá.' },
-                        '4-diamond': { title: '💠 4 Diamond', description: 'Cartas de rareza 4-diamond encontradas se postean automáticamente acá.' },
-                        '1-star': { title: '⭐ 1 Star', description: 'Cartas de rareza 1-star encontradas se postean automáticamente acá.' },
-                        '1-star-shiny': { title: '🌟 1 Star Shiny', description: 'Cartas de rareza 1-star shiny encontradas se postean automáticamente acá.' },
-                        '2-star-trainer': { title: '⭐⭐ 2 Star Trainer', description: 'Cartas de entrenador de rareza 2-star encontradas se postean automáticamente acá.' },
-                        '2-star-rainbow': { title: '🌈 2 Star Rainbow', description: 'Cartas de rareza 2-star rainbow encontradas se postean automáticamente acá.' },
-                        '2-star-full-art': { title: '🎨 2 Star Full Art', description: 'Cartas de rareza 2-star full art encontradas se postean automáticamente acá.' },
-                        '2-star-shiny': { title: '✨ 2 Star Shiny', description: 'Cartas de rareza 2-star shiny encontradas se postean automáticamente acá.' },
-                        immersive: { title: '🌌 Immersive', description: 'Cartas de rareza immersive encontradas se postean automáticamente acá.' },
-                        'crown-rare': { title: '👑 Crown Rare', description: 'Cartas de rareza crown rare encontradas se postean automáticamente acá.' },
-                        wishlist: { title: '💖 Wishlist', description: 'Acá se postean los hallazgos que coinciden con alguna carta marcada en una wishlist.' },
-                        'godpack-general': { title: '📦 God Pack General', description: 'Todo sobre detectado como God Pack se reporta acá, sea alive o dead — es el canal de auditoría completa.' },
-                        'godpack-alive': { title: '👼 God Pack Alive', description: 'God Packs cuyas cartas son TODAS de rareza baja/estándar (1-star, 2-star-trainer, 2-star-full-art o 2-star-rainbow) — los de mayor valor comunitario.' },
-                        'godpack-dead': { title: '☠️ God Pack Dead', description: 'God Packs que incluyen alguna carta fuera de esas rarezas (shiny, crown, immersive, etc.) — pierden la clasificación de "alive".' },
-                        cmd_card_wishlist: { title: '💖 Cards Wishlist', description: 'Acá se usa `/wishlist` para buscar y ver las cartas de tu lista de deseados.' },
-                        cmd_card_all: { title: '⚡ All Cards', description: 'Acá se usa `/card` para buscar y ver cualquier carta del juego.' },
-                        cmd_extract_xlm: { title: '📄 Extract XLM', description: 'Acá se usa `/extract xlm` para extraer XLM en este canal.' },
-                        cmd_run_instance: { title: '🎮 Run MumuPlayer', description: 'Acá se usa `/run instance` para abrir una instancia de MuMu Player.' }
+                        actualizaciones: { title: '🔔 Updates', description: 'You\'ll get notified here whenever there\'s a new bot update, with a button to install it right away.' },
+                        apoyo: { title: '💝 Support this project', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
+                        cmd_setup: { title: '⚙ Settings', description: 'This is where you use `/setup` — opens the bot control panel (build channels, etc).' },
+                        cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
+                        cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
+                        cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot.' },
+                        heartbeat: { title: '💓 Heartbeat', description: 'This is where the bot reports that it\'s still alive and running — the message updates itself, no action needed.' },
+                        s4t: { title: '🤖 S4T', description: 'Every find is posted here as soon as it\'s detected, before being classified by rarity.' },
+                        '3-diamond': { title: '🔷 3 Diamond', description: '3-diamond rarity cards found are posted here automatically.' },
+                        '4-diamond': { title: '💠 4 Diamond', description: '4-diamond rarity cards found are posted here automatically.' },
+                        '1-star': { title: '⭐ 1 Star', description: '1-star rarity cards found are posted here automatically.' },
+                        '1-star-shiny': { title: '🌟 1 Star Shiny', description: '1-star shiny rarity cards found are posted here automatically.' },
+                        '2-star-trainer': { title: '⭐⭐ 2 Star Trainer', description: '2-star trainer rarity cards found are posted here automatically.' },
+                        '2-star-rainbow': { title: '🌈 2 Star Rainbow', description: '2-star rainbow rarity cards found are posted here automatically.' },
+                        '2-star-full-art': { title: '🎨 2 Star Full Art', description: '2-star full art rarity cards found are posted here automatically.' },
+                        '2-star-shiny': { title: '✨ 2 Star Shiny', description: '2-star shiny rarity cards found are posted here automatically.' },
+                        immersive: { title: '🌌 Immersive', description: 'Immersive rarity cards found are posted here automatically.' },
+                        'crown-rare': { title: '👑 Crown Rare', description: 'Crown rare rarity cards found are posted here automatically.' },
+                        wishlist: { title: '💖 Wishlist', description: 'Finds that match a card marked in a wishlist are posted here.' },
+                        'godpack-general': { title: '📦 God Pack General', description: 'Everything detected as a God Pack is reported here, whether alive or dead — this is the full audit channel.' },
+                        'godpack-alive': { title: '👼 God Pack Alive', description: 'God Packs whose cards are ALL low/standard rarity (1-star, 2-star-trainer, 2-star-full-art, or 2-star-rainbow) — the ones with the highest community value.' },
+                        'godpack-dead': { title: '☠️ God Pack Dead', description: 'God Packs that include a card outside those rarities (shiny, crown, immersive, etc.) — they lose the "alive" classification.' },
+                        cmd_card_wishlist: { title: '💖 Cards Wishlist', description: 'This is where you use `/wishlist` to search for and view the cards in your wishlist.' },
+                        cmd_card_all: { title: '⚡ All Cards', description: 'This is where you use `/card` to search for and view any card in the game.' },
+                        cmd_extract_xlm: { title: '📄 Extract XLM', description: 'This is where you use `/extract xlm` to extract XLM in this channel.' },
+                        cmd_run_instance: { title: '🎮 Run MumuPlayer', description: 'This is where you use `/run instance` to open a MuMu Player instance.' }
                     };
 
                     const crearCategoriaSiNoExiste = async (nombreCategoria) => {
@@ -2989,21 +2989,21 @@ client.on('interactionCreate', async interaction => {
                     ];
                     await interaction.client.rest.patch(Routes.guildChannels(interaction.guildId), { body: posicionesCategorias }).catch(console.error);
 
-                    await interaction.editReply({ content: `✅ **¡Canales sincronizados exitosamente!**\n\n${reportePartes.join('\n')}` });
-                } catch (e) { 
+                    await interaction.editReply({ content: `✅ **Channels synced successfully!**\n\n${reportePartes.join('\n')}` });
+                } catch (e) {
                     console.error(e);
-                    await interaction.editReply({ content: '❌ Error al sincronizar los canales. Verifica los permisos del bot.' }); 
+                    await interaction.editReply({ content: "❌ Error syncing channels. Check the bot's permissions." });
                 }
                 break;
-                
-            case 'toggle_trading': 
+
+            case 'toggle_trading':
                 await interaction.deferUpdate();
                 const estadoS4T = await verificarEstadoPM2('trading', 's4t.js');
                 if (estadoS4T === '🟢 ONLINE') {
                     await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('trading', 'offline')`);
                     exec('pm2 stop trading', { windowsHide: true }, () => {});
                 } else {
-                    if (!(await tieneConfiguracion(interaction.user.id, 's4t'))) return await interaction.followUp({ content: '❌ Primero configura el Webhook de S4T en el panel.', ephemeral: true });
+                    if (!(await tieneConfiguracion(interaction.user.id, 's4t'))) return await interaction.followUp({ content: '❌ First configure the S4T Webhook in the panel.', ephemeral: true });
                     await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('trading', 'online')`);
                     ejecutarPM2Start('trading', 's4t.js');
                 }
@@ -3017,7 +3017,7 @@ client.on('interactionCreate', async interaction => {
                     await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('heartbeat', 'offline')`);
                     exec('pm2 stop heartbeat');
                 } else {
-                    if (!(await tieneConfiguracion(interaction.user.id, 'heartbeat'))) return await interaction.followUp({ content: '❌ Primero configura el Webhook de Heartbeat en el panel.', ephemeral: true });
+                    if (!(await tieneConfiguracion(interaction.user.id, 'heartbeat'))) return await interaction.followUp({ content: '❌ First configure the Heartbeat Webhook in the panel.', ephemeral: true });
                     await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('heartbeat', 'online')`);
                     exec('pm2 start heartbeat.js --name "heartbeat"');
                 }
@@ -3027,8 +3027,8 @@ client.on('interactionCreate', async interaction => {
             case 'btn_config_canales': await configScript.ejecutar(interaction); break;
             
             case 'btn_ruta_raiz':
-                const modalRaiz = new ModalBuilder().setCustomId('modal_ruta_raiz').setTitle('Ruta Principal')
-                    .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('input_ruta').setLabel('Ruta de la carpeta principal:').setStyle(TextInputStyle.Short).setPlaceholder('C:\\POKEMON\\PTCGPB-ALE')));
+                const modalRaiz = new ModalBuilder().setCustomId('modal_ruta_raiz').setTitle('Main Path')
+                    .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('input_ruta').setLabel('Main folder path:').setStyle(TextInputStyle.Short).setPlaceholder('C:\\POKEMON\\PTCGPB-ALE')));
                 await interaction.showModal(modalRaiz);
                 break;
         }
@@ -3055,14 +3055,14 @@ async function autorizarGuildNueva(guildId) {
 }
 
 async function rechazarGuildNoAutorizado(guild) {
-    console.warn(`⚠️ Servidor no autorizado detectado (${guild.name} / ${guild.id}) — saliendo automáticamente.`);
+    console.warn(`⚠️ Unauthorized server detected (${guild.name} / ${guild.id}) — leaving automatically.`);
     try { await guild.leave(); } catch (e) { console.error('❌ Error al salir del servidor no autorizado:', e); }
 }
 
 client.once('ready', async () => {
     try {
         await registrarSlashCommands();
-        console.log(`🤖 Bot listo como ${client.user.tag}`);
+        console.log(`🤖 Bot ready as ${client.user.tag}`);
 
         // Primera vez que corre esta versión: se adopta como autorizado TODO servidor
         // donde el bot ya estaba (no se expulsa nada retroactivamente). De acá en más,
@@ -3088,7 +3088,7 @@ client.on('guildCreate', async (guild) => {
     if (guildsAutorizados.includes(guild.id)) return;
     if (guildsAutorizados.length === 0) {
         await autorizarGuildNueva(guild.id);
-        console.log(`✅ Servidor autorizado automáticamente: ${guild.name} (${guild.id})`);
+        console.log(`✅ Server automatically authorized: ${guild.name} (${guild.id})`);
         return;
     }
     await rechazarGuildNoAutorizado(guild);

@@ -55,7 +55,7 @@ let statsCache = {};
 if (fs.existsSync(RUTA_CACHE)) {
     try {
         statsCache = JSON.parse(fs.readFileSync(RUTA_CACHE, 'utf8'));
-    } catch (e) { console.log("Error cargando cache, iniciando vacío."); }
+    } catch (e) { console.log("Error loading cache, starting empty."); }
 }
 
 function guardarCache() {
@@ -115,7 +115,7 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                 const match = contenido.match(/(\d+)/);
                 return match ? parseInt(match[1], 10) : 0;
             }
-        } catch (e) { console.log("Error balance:", e); }
+        } catch (e) { console.log("Balance error:", e); }
         return 0;
     }
 
@@ -166,7 +166,7 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                 rutaConfig = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_local' AND webhook_url NOT IN ('N/A', 'local') ORDER BY rowid DESC LIMIT 1`);
             }
 
-            if (!hbConfig || !hbConfig.canal_id) return res.status(400).send("Falta configuración de canal heartbeat en la BD");
+            if (!hbConfig || !hbConfig.canal_id) return res.status(400).send("Missing heartbeat channel configuration in the DB");
             console.log(`[HB-DEBUG] Config seleccionada canal=${hbConfig.canal_id} webhook=${redactarValor(hbConfig.webhook_url)}`);
 
             // If webhook_url is missing or marked N/A/local, try to recreate it
@@ -178,7 +178,7 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
             }
 
             if (!hbConfig.webhook_url || !rutaConfig || !rutaConfig.webhook_url) {
-                return res.status(400).send("Falta configuración en la BD");
+                return res.status(400).send("Missing configuration in the DB");
             }
 
             // DEBUG: Log the received body to see what data is arriving
@@ -337,7 +337,7 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
             console.log(`[HB-DEBUG] Total instances found: Online=${onlineInstancesList.length}, Offline=${offlineInstancesList.length}, Total=${onlineInstancesList.length + offlineInstancesList.length}`);
 
             let colorFinal = offlineInstancesList.length > 0 ? 0xED4245 : 0x57F287;
-            let alerta = (offlineInstancesList.length > 0) ? "🔴 **ALERTA: Se detectaron instancias caídas.**\n\n" : "";
+            let alerta = (offlineInstancesList.length > 0) ? "🔴 **ALERT: Offline instances detected.**\n\n" : "";
 
             let singleEmbedDescription = `**Data bot:**`;
             singleEmbedDescription += `\n🏷️ | Version: ${versionBot}`;
@@ -434,11 +434,11 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
             }
 
             res.status(200).send("OK");
-        } catch (err) { console.error("Error en monitor:", err); res.status(500).send("Error"); }
+        } catch (err) { console.error("Error in monitor:", err); res.status(500).send("Error"); }
     });
 
     // Mismo criterio que s4t.js: todo lo que le manda datos corre en la misma PC.
-    app.listen(PORT, '127.0.0.1', () => console.log(`🚀 Monitor de Producción Encendido en puerto ${PORT}`));
+    app.listen(PORT, '127.0.0.1', () => console.log(`🚀 Production Monitor Online on port ${PORT}`));
 }
 
 // =====================================================================
@@ -453,16 +453,16 @@ else {
                 const rowRuta = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = 'ruta_local' AND webhook_url NOT IN ('N/A', 'local') ORDER BY rowid DESC LIMIT 1`, [userId]);
                 
                 if (!rowHb || !rowHb.webhook_url || rowHb.webhook_url === 'N/A') {
-                    return await interaction.reply({ content: "❌ **Primero configura el Webhook de Heartbeat en el panel.**", ephemeral: true });
+                    return await interaction.reply({ content: "❌ **First configure the Heartbeat Webhook in the panel.**", ephemeral: true });
                 }
                 if (!rowRuta || !rowRuta.webhook_url || rowRuta.webhook_url === 'local' || rowRuta.webhook_url === 'N/A') {
-                    return await interaction.reply({ content: "❌ **Primero configura la Ruta Local en el panel.**", ephemeral: true });
+                    return await interaction.reply({ content: "❌ **First configure the Local Path in the panel.**", ephemeral: true });
                 }
 
                 await interaction.deferUpdate(); 
 
                 exec('pm2 jlist', { windowsHide: true }, async (err, stdout) => {
-                    if (err) return console.error("Error leyendo PM2:", err);
+                    if (err) return console.error("Error reading PM2:", err);
                     try {
                         const procesos = JSON.parse(stdout);
                         const proc = procesos.find(p => p.name === 'heartbeat');
@@ -478,16 +478,16 @@ else {
                                         let embedCongelado = mensajeActual.data.embeds[0];
                                         let desc = embedCongelado.description;
                                         if (desc.includes('🟢 **ONLINE**')) {
-                                            desc = desc.replace('🟢 **ONLINE**', '🔴 **ESTADO: OFFLINE**');
-                                        } else if (!desc.includes('🔴 **ESTADO: OFFLINE**')) {
-                                            desc = desc.replace('# Data instances:', '🔴 **ESTADO: OFFLINE**\n\n# Data instances:');
+                                            desc = desc.replace('🟢 **ONLINE**', '🔴 **STATUS: OFFLINE**');
+                                        } else if (!desc.includes('🔴 **STATUS: OFFLINE**')) {
+                                            desc = desc.replace('# Data instances:', '🔴 **STATUS: OFFLINE**\n\n# Data instances:');
                                         }
                                         embedCongelado.description = desc;
-                                        embedCongelado.color = 0xED4245; 
+                                        embedCongelado.color = 0xED4245;
                                         await axios.patch(`${rowHb.webhook_url}/messages/${idMensaje}`, { embeds: [embedCongelado] });
                                     }
                                 }
-                            } catch(e) { console.log("Error visual offline:", e.message); }
+                            } catch(e) { console.log("Visual error offline:", e.message); }
                             exec('pm2 stop heartbeat', { windowsHide: true });
                         } else {
                             try {
@@ -498,26 +498,26 @@ else {
                                     if (mensajeActual.data && mensajeActual.data.embeds && mensajeActual.data.embeds.length > 0) {
                                         let embedCongelado = mensajeActual.data.embeds[0];
                                         let desc = embedCongelado.description;
-                                        if (desc.includes('🔴 **ESTADO: OFFLINE**')) {
-                                            desc = desc.replace('🔴 **ESTADO: OFFLINE**', '🟢 **ONLINE**');
+                                        if (desc.includes('🔴 **STATUS: OFFLINE**')) {
+                                            desc = desc.replace('🔴 **STATUS: OFFLINE**', '🟢 **ONLINE**');
                                         } else if (!desc.includes('🟢 **ONLINE**')) {
                                             desc = desc.replace('# Data instances:', '🟢 **ONLINE**\n\n# Data instances:');
                                         }
                                         embedCongelado.description = desc;
-                                        embedCongelado.color = 0x57F287; 
+                                        embedCongelado.color = 0x57F287;
                                         await axios.patch(`${rowHb.webhook_url}/messages/${idMensaje}`, { embeds: [embedCongelado] });
                                     }
                                 }
-                            } catch(e) { console.log("Error visual online:", e.message); }
+                            } catch(e) { console.log("Visual error online:", e.message); }
                             exec('pm2 start heartbeat.js --name "heartbeat"', { windowsHide: true });
                         }
                         setTimeout(async () => {
                             const nuevoPanel = await generarPanelControl(userId);
                             await interaction.editReply(nuevoPanel);
                         }, 1000);
-                    } catch (e) { console.error("Error al procesar PM2:", e); }
+                    } catch (e) { console.error("Error processing PM2:", e); }
                 });
-            } catch (error) { console.error("Error en el módulo Heartbeat:", error); }
+            } catch (error) { console.error("Error in Heartbeat module:", error); }
         }
     };
 }

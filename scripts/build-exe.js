@@ -66,20 +66,20 @@ function copiarAssets() {
 
 function copiarLanzador() {
     fs.copyFileSync(
-        path.join(RAIZ, 'Iniciar Monitor Pokemon.bat'),
-        path.join(DIST, 'Iniciar Monitor Pokemon.bat')
+        path.join(RAIZ, 'Start Monitor Pokemon.bat'),
+        path.join(DIST, 'Start Monitor Pokemon.bat')
     );
     fs.copyFileSync(
-        path.join(RAIZ, 'Desbloquear.bat'),
-        path.join(DIST, 'Desbloquear.bat')
+        path.join(RAIZ, 'Unblock.bat'),
+        path.join(DIST, 'Unblock.bat')
     );
     fs.copyFileSync(
-        path.join(RAIZ, 'Configurar de nuevo.bat'),
-        path.join(DIST, 'Configurar de nuevo.bat')
+        path.join(RAIZ, 'Reconfigure.bat'),
+        path.join(DIST, 'Reconfigure.bat')
     );
     fs.copyFileSync(
-        path.join(RAIZ, 'LEEME.txt'),
-        path.join(DIST, 'LEEME.txt')
+        path.join(RAIZ, 'README.txt'),
+        path.join(DIST, 'README.txt')
     );
 }
 

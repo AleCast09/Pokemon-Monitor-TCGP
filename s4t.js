@@ -164,16 +164,16 @@ function cargarMapaTiposCarta() {
 }
 
 const TIPO_LABELS = {
-    grass: { emoji: 'type_grass', label: 'Planta' },
-    fire: { emoji: 'type_fire', label: 'Fuego' },
-    water: { emoji: 'type_water', label: 'Agua' },
-    lightning: { emoji: 'type_lightning', label: 'Eléctrico' },
-    psychic: { emoji: 'type_psychic', label: 'Psíquico' },
-    fighting: { emoji: 'type_fighting', label: 'Lucha' },
-    darkness: { emoji: 'type_darkness', label: 'Oscuridad' },
-    metal: { emoji: 'type_metal', label: 'Metálico' },
-    dragon: { emoji: 'type_dragon', label: 'Dragón' },
-    colorless: { emoji: 'type_colorless', label: 'Incoloro' }
+    grass: { emoji: 'type_grass', label: 'Grass' },
+    fire: { emoji: 'type_fire', label: 'Fire' },
+    water: { emoji: 'type_water', label: 'Water' },
+    lightning: { emoji: 'type_lightning', label: 'Lightning' },
+    psychic: { emoji: 'type_psychic', label: 'Psychic' },
+    fighting: { emoji: 'type_fighting', label: 'Fighting' },
+    darkness: { emoji: 'type_darkness', label: 'Darkness' },
+    metal: { emoji: 'type_metal', label: 'Metal' },
+    dragon: { emoji: 'type_dragon', label: 'Dragon' },
+    colorless: { emoji: 'type_colorless', label: 'Colorless' }
 };
 
 const BUILD_EMBED_CLAVES = ['mostrar_tipo', 'mostrar_logo', 'mostrar_archivo', 'mostrar_categoria', 'mostrar_instancia', 'mostrar_sobre'];
@@ -326,8 +326,8 @@ const RAREZA_ICONOS = {
     '2-star-rainbow': { modo: 'prefijo', emoji: 'rareza_estrella', cantidad: 2, pipe: true, emojiExtra: '🌈', etiqueta: 'Rainbow' },
     '2-star-full-art': { modo: 'prefijo', emoji: 'rareza_estrella', cantidad: 2, pipe: true, emojiExtra: '🎨', etiqueta: 'Full Art' },
     '2-star-shiny': { modo: 'prefijo', emoji: 'rareza_brillante', cantidad: 2, pipe: true, etiqueta: 'Shiny' },
-    '3-diamond': { modo: 'prefijo', emoji: 'rareza_diamante', cantidad: 3, pipe: false, etiqueta: '3 Diamantes (x1)' },
-    '4-diamond': { modo: 'prefijo', emoji: 'rareza_diamante', cantidad: 4, pipe: false, etiqueta: '4 Diamantes (x1)' },
+    '3-diamond': { modo: 'prefijo', emoji: 'rareza_diamante', cantidad: 3, pipe: false, etiqueta: '3 Diamonds (x1)' },
+    '4-diamond': { modo: 'prefijo', emoji: 'rareza_diamante', cantidad: 4, pipe: false, etiqueta: '4 Diamonds (x1)' },
     'immersive': { modo: 'prefijo', emoji: 'rareza_estrella', cantidad: 3, pipe: true, emojiExtra: '🌌', etiqueta: 'Immersive' }
 };
 
@@ -919,7 +919,7 @@ app.post('/', upload.any(), async (req, res) => {
 
         let cartas = [];
         let instancia = 'N/A';
-        let sobre = 'Desconocido';
+        let sobre = 'Unknown';
         let archivo = 'N/A';
         for (let i = 0; i < lineas.length; i++) {
             if (lineas[i].includes('Instance:')) {
@@ -1155,7 +1155,7 @@ app.post('/', upload.any(), async (req, res) => {
                     return lineaRareza ? `${lineaRareza}\n> ${lineaNombre}` : lineaNombre;
                 })
                 .join('\n> ');
-            const displayWishlist = `> ${iconoWishlist()} › Wishlist encontrada:\n> ${listaNombres}`;
+            const displayWishlist = `> ${iconoWishlist()} › Wishlist found:\n> ${listaNombres}`;
             // Un solo envío con todas las cartas de wishlist juntas (mismo mensaje,
             // collage de imágenes si hay más de una) en vez de un mensaje separado
             // por carta — a pedido del usuario, para que quede más ordenado.
@@ -1171,7 +1171,7 @@ app.post('/', upload.any(), async (req, res) => {
                 const lineaNombre = `${tipoPrefijo}**${c.nombre}**`;
                 return lineaRareza ? `${lineaRareza}\n> ${lineaNombre}` : lineaNombre;
             }).filter(Boolean).join('\n> ');
-            const resumenGodPack = `> 🎁 God Pack detectado:\n> ${nombresGodPack}`;
+            const resumenGodPack = `> 🎁 God Pack detected:\n> ${nombresGodPack}`;
             // Todas las cartas del pack (no solo la primera), para mandar un collage
             // con todas las imágenes juntas — igual que hace el canal general de S4T.
             const cartasGodPack = cartas.map(c => c.matchedCard || c);
@@ -1200,18 +1200,18 @@ app.post('/', upload.any(), async (req, res) => {
             const formEmbed = new FormData();
 
             const camposFinales = [];
-            if (configEmbed.mostrar_instancia) camposFinales.push({ name: '🖥️ Instancia', value: `\`${instancia}\``, inline: true });
-            if (configEmbed.mostrar_sobre) camposFinales.push({ name: '📦 Sobre', value: `\`${sobre}\``, inline: true });
+            if (configEmbed.mostrar_instancia) camposFinales.push({ name: '🖥️ Instance', value: `\`${instancia}\``, inline: true });
+            if (configEmbed.mostrar_sobre) camposFinales.push({ name: '📦 Pack', value: `\`${sobre}\``, inline: true });
             let valorPrincipal = data.display;
-            if (configEmbed.mostrar_archivo) valorPrincipal += `\n\n📁 **Archivo de la cuenta**\n\`${archivo}\``;
+            if (configEmbed.mostrar_archivo) valorPrincipal += `\n\n📁 **Account file**\n\`${archivo}\``;
             camposFinales.push({ name: CAMPO_INVISIBLE, value: valorPrincipal, inline: false });
 
             const embedPayload = {
                 embeds: [{
                     color: data.tipoCanal === 'wishlist' ? 0xE91E63 : 0xF1C40F,
                     description: data.tipoCanal === 'wishlist'
-                        ? '**Se ha detectado una carta del wishlist.**\nGuardado en la base de datos de S4T.'
-                        : '🌟 **¡NUEVA CARTA VALIOSA ENCONTRADA!** 🌟\n\n**Se ha detectado un tradeo excelente.**\nGuardado en la base de datos de S4T.',
+                        ? '**A wishlist card has been detected.**\nSaved in the S4T database.'
+                        : '🌟 **NEW VALUABLE CARD FOUND!** 🌟\n\n**An excellent trade has been detected.**\nSaved in the S4T database.',
                     fields: camposFinales,
                     footer: { text: `Data saved ${new Date().toLocaleString()}` }
                 }]
@@ -1294,4 +1294,4 @@ app.post('/', upload.any(), async (req, res) => {
 // Puerto configurable solo para poder correr una segunda copia de prueba en
 // la misma PC sin chocar con la real — en uso normal no hace falta tocarlo.
 const S4T_PORT = Number(process.env.S4T_PORT) || 3000;
-app.listen(S4T_PORT, '127.0.0.1', () => console.log(`🚀 S4T Online (puerto ${S4T_PORT})`));
+app.listen(S4T_PORT, '127.0.0.1', () => console.log(`🚀 S4T Online (port ${S4T_PORT})`));

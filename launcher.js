@@ -30,16 +30,16 @@ function avisarYaAbierto() {
     // Se usa un MessageBox de .NET vía PowerShell en vez de mshta.exe: mshta es
     // una herramienta vieja de Windows que Defender/EDR suele cerrar sola por
     // ser muy usada históricamente en malware — nada confiable para esto.
-    const mensaje = 'Monitor Pokemon ya esta corriendo en segundo plano. No hace falta abrirlo de nuevo.\n\nSi quieres cambiar el token o agregar la API key de Google Drive, abre "Configurar de nuevo.bat" en la misma carpeta.';
+    const mensaje = 'Monitor Pokemon is already running in the background. No need to open it again.\n\nIf you want to change the token or add the Google Drive API key, open "Reconfigure.bat" in the same folder.';
     const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${mensaje}', 'Monitor Pokemon')`;
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script}"`, () => {});
 }
 
-const ACCESO_CONFIGURAR_PATH = path.join(__dirname, 'Cambiar token o API key.lnk');
+const ACCESO_CONFIGURAR_PATH = path.join(__dirname, 'Change token or API key.lnk');
 
 function crearAccesoDirectoConfigurar() {
     if (fs.existsSync(ACCESO_CONFIGURAR_PATH)) return;
-    const destino = path.join(__dirname, 'Configurar de nuevo.bat');
+    const destino = path.join(__dirname, 'Reconfigure.bat');
     if (!fs.existsSync(destino)) return;
     const script = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${ACCESO_CONFIGURAR_PATH.replace(/'/g, "''")}'); $s.TargetPath = '${destino.replace(/'/g, "''")}'; $s.WorkingDirectory = '${__dirname.replace(/'/g, "''")}'; $s.Save()`;
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
@@ -59,7 +59,7 @@ function crearAccesoDirectoInicioAutomatico() {
     if (!carpeta) return;
     const rutaAcceso = path.join(carpeta, 'Monitor Pokemon.lnk');
     if (fs.existsSync(rutaAcceso)) return;
-    const destino = path.join(__dirname, 'Iniciar Monitor Pokemon.bat');
+    const destino = path.join(__dirname, 'Start Monitor Pokemon.bat');
     if (!fs.existsSync(destino)) return;
     // WindowStyle 7 = minimizado, para que ni siquiera se alcance a ver el
     // parpadeo de la ventana de cmd del .bat al arrancar Windows.
@@ -85,9 +85,9 @@ function logLinea(texto) {
 }
 
 logLinea('');
-logLinea('======== Nueva sesión ========');
-logLinea('Esta ventana es Monitor Pokémon corriendo — normalmente queda oculta,');
-logLinea('si la ves, la puedes minimizar tranquilo. Cerrarla con la X apaga el bot.');
+logLinea('======== New session ========');
+logLinea('This window is Monitor Pokémon running — it normally stays hidden,');
+logLinea('if you see it, you can safely minimize it. Closing it with X shuts down the bot.');
 
 const PROCESOS = [
     { nombre: 'bot', rol: 'bot' },
@@ -120,7 +120,7 @@ function iniciarProceso(def) {
     });
 
     conectarSalida(hijo, def.nombre);
-    logLinea(`🟢 [${def.nombre}] iniciado (pid ${hijo.pid})`);
+    logLinea(`🟢 [${def.nombre}] started (pid ${hijo.pid})`);
 
     hijo.on('exit', (code, signal) => {
         if (cerrando) return;
@@ -130,7 +130,7 @@ function iniciarProceso(def) {
             return;
         }
 
-        logLinea(`🔴 [${def.nombre}] se detuvo (code=${code} signal=${signal}) — reiniciando en ${REINTENTO_MS / 1000}s...`);
+        logLinea(`🔴 [${def.nombre}] stopped (code=${code} signal=${signal}) — restarting in ${REINTENTO_MS / 1000}s...`);
         setTimeout(() => iniciarProceso(def), REINTENTO_MS);
     });
 
@@ -144,7 +144,7 @@ function iniciarProceso(def) {
 async function iniciarActualizacion() {
     if (cerrando) return;
     cerrando = true;
-    logLinea('🔄 Actualización lista — reemplazando el programa...');
+    logLinea('🔄 Update ready — replacing the program...');
 
     await Promise.all(PROCESOS.map((def) => new Promise((resolve) => {
         if (!def.instancia || def.instancia.killed || def.instancia.exitCode !== null) return resolve();
@@ -155,14 +155,14 @@ async function iniciarActualizacion() {
     try { fs.unlinkSync(PENDING_UPDATE_PATH); } catch (e) {}
 
     if (!esSea) {
-        logLinea('⚠️ La auto-actualización solo aplica al .exe empaquetado — se omite en modo desarrollo.');
+        logLinea('⚠️ Auto-update only applies to the packaged .exe — skipped in development mode.');
         process.exit(0);
         return;
     }
 
     const rutaExe = process.execPath;
     const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
-    const rutaBat = path.join(__dirname, '_actualizar.bat');
+    const rutaBat = path.join(__dirname, '_update.bat');
     // Nota: "timeout" de Windows depende de tener una consola/stdin real y falla
     // (o se saltea) cuando corre sin ventana, como en nuestro caso — por eso las
     // esperas usan "ping" a localhost, el truco clásico que funciona sin consola.
@@ -190,7 +190,7 @@ async function iniciarActualizacion() {
 
 function cerrarTodo() {
     cerrando = true;
-    logLinea('🛑 Cerrando Monitor Pokémon...');
+    logLinea('🛑 Shutting down Monitor Pokémon...');
     for (const def of PROCESOS) {
         if (def.instancia && !def.instancia.killed) def.instancia.kill();
     }
@@ -200,7 +200,7 @@ function cerrarTodo() {
 
 async function main() {
     if (yaHayUnaCopiaAbierta()) {
-        logLinea('⚠️ Monitor Pokémon ya está abierto — no se abre una segunda copia.');
+        logLinea('⚠️ Monitor Pokémon is already open — not opening a second copy.');
         avisarYaAbierto();
         process.exit(0);
         return;
@@ -210,13 +210,13 @@ async function main() {
     while (necesitaConfiguracion()) {
         await ejecutarWizard();
         if (necesitaConfiguracion()) {
-            logLinea('⚠️ La configuración se cerró sin guardar el token — se vuelve a abrir.');
+            logLinea('⚠️ Configuration was closed without saving the token — reopening it.');
         }
     }
     crearAccesoDirectoConfigurar();
     crearAccesoDirectoInicioAutomatico();
 
-    logLinea('🚀 Monitor Pokémon — iniciando bot, trading y heartbeat...');
+    logLinea('🚀 Monitor Pokémon — starting bot, trading and heartbeat...');
     for (const def of PROCESOS) {
         iniciarProceso(def);
     }

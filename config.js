@@ -1,37 +1,37 @@
 const { EmbedBuilder, ActionRowBuilder, ChannelSelectMenuBuilder, StringSelectMenuBuilder, ChannelType, ModalBuilder, TextInputBuilder, TextInputStyle, ButtonBuilder, ButtonStyle } = require('discord.js');
-const db = require('./database.js'); 
+const db = require('./database.js');
 
 // 1️⃣ FUNCIÓN PRINCIPAL: Muestra el panel de configuración simplificado
 async function ejecutar(interaction) {
     await interaction.deferReply({ ephemeral: true });
-    
+
     const userId = interaction.user.id;
     const configs = await db.all(`SELECT tipo, canal_id FROM configs_canales WHERE discord_id = ?`, [userId]);
-    
+
     const guardados = {};
     if (configs) {
         configs.forEach(row => { guardados[row.tipo] = row.canal_id; });
     }
 
     const embedConfig = new EmbedBuilder()
-        .setTitle('⚙️ Panel de Configuración de Destinos')
+        .setTitle('⚙️ Destination Settings Panel')
         .setDescription(
-            'Asigna un canal para cada módulo. Si deseas **cambiar** uno, simplemente vuelve a seleccionarlo.\n\n' +
-            '**Tus vinculaciones actuales:**\n' +
-            `🚀 **S4T:** ${guardados['s4t'] ? `<#${guardados['s4t']}>` : '🔴 Sin asignar'}\n` +
-            `💓 **Heartbeat:** ${guardados['heartbeat'] ? `<#${guardados['heartbeat']}>` : '🔴 Sin asignar'}`
+            'Assign a channel for each module. If you want to **change** one, just select it again.\n\n' +
+            '**Your current links:**\n' +
+            `🚀 **S4T:** ${guardados['s4t'] ? `<#${guardados['s4t']}>` : '🔴 Not assigned'}\n` +
+            `💓 **Heartbeat:** ${guardados['heartbeat'] ? `<#${guardados['heartbeat']}>` : '🔴 Not assigned'}`
         ).setColor(0x2ECC71);
 
     const buildMenu = (id, placeholder, tipo) => {
         const menu = new ChannelSelectMenuBuilder()
             .setCustomId(id)
             .addChannelTypes(ChannelType.GuildText);
-            
+
         if (guardados[tipo]) {
-            menu.setPlaceholder(`✅ Asignado (Toca solo si deseas cambiarlo)`);
-            try { 
+            menu.setPlaceholder(`✅ Assigned (tap only if you want to change it)`);
+            try {
                 if(guardados[tipo] !== 'local' && guardados[tipo] !== 'N/A') {
-                    menu.setDefaultChannels(guardados[tipo]); 
+                    menu.setDefaultChannels(guardados[tipo]);
                 }
             } catch(e) {}
         } else {
@@ -42,20 +42,20 @@ async function ejecutar(interaction) {
     };
 
     const components = [
-        buildMenu('select_canal_s4t', 'Seleccione canal para: Módulo S4T', 's4t'),
-        buildMenu('select_canal_heartbeat', 'Seleccione canal para: Módulo Heartbeat', 'heartbeat')
+        buildMenu('select_canal_s4t', 'Select channel for: S4T Module', 's4t'),
+        buildMenu('select_canal_heartbeat', 'Select channel for: Heartbeat Module', 'heartbeat')
     ];
 
     const rowReset = new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder().setCustomId('select_reset_modulo').setPlaceholder('🗑️ Desvincular...')
+        new StringSelectMenuBuilder().setCustomId('select_reset_modulo').setPlaceholder('🗑️ Unlink...')
             .addOptions([
-                { label: 'Desvincular S4T', value: 's4t' },
-                { label: 'Desvincular Heartbeat', value: 'heartbeat' }
+                { label: 'Unlink S4T', value: 's4t' },
+                { label: 'Unlink Heartbeat', value: 'heartbeat' }
             ])
     );
 
     await interaction.editReply({ embeds: [embedConfig], components: components });
-    await interaction.followUp({ content: '**Opciones de limpieza:**', components: [rowReset], ephemeral: true });
+    await interaction.followUp({ content: '**Cleanup options:**', components: [rowReset], ephemeral: true });
 }
 
 // 2️⃣ FUNCIÓN QUE PROCESA LOS MENÚS Y BOTONES
@@ -70,7 +70,7 @@ async function manejarMenuCanales(interaction) {
 
         const tipo = mapaTipos[interaction.customId];
         const canal = interaction.channels.first();
-        
+
         try {
             const webhooks = await canal.fetchWebhooks();
             const webhookExistente = webhooks.first();
@@ -81,21 +81,21 @@ async function manejarMenuCanales(interaction) {
                      ON CONFLICT(discord_id, tipo) DO UPDATE SET canal_id = ?, webhook_url = ?`,
                     [interaction.user.id, tipo, canal.id, webhookExistente.url, canal.id, webhookExistente.url]
                 );
-                return await interaction.editReply({ content: `✅ ¡Detectado! Se vinculó el webhook existente del canal <#${canal.id}> a **${tipo}**.` });
+                return await interaction.editReply({ content: `✅ Detected! Linked the existing webhook from channel <#${canal.id}> to **${tipo}**.` });
             } else {
                 const botonManual = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
                         .setCustomId(`manual_webhook_${tipo}_${canal.id}`)
-                        .setLabel('✏️ Ingresar URL manualmente')
+                        .setLabel('✏️ Enter URL manually')
                         .setStyle(ButtonStyle.Primary)
                 );
-                return await interaction.editReply({ 
-                    content: `⚠️ No se detectó un webhook en <#${canal.id}>. Puedes crearlo manualmente en los ajustes del canal o presionar el botón para pegar la URL:`,
+                return await interaction.editReply({
+                    content: `⚠️ No webhook detected in <#${canal.id}>. You can create one manually in the channel settings, or press the button to paste the URL:`,
                     components: [botonManual]
                 });
             }
         } catch (e) {
-            return await interaction.editReply({ content: '❌ Error al intentar leer los webhooks.' });
+            return await interaction.editReply({ content: '❌ Error trying to read the webhooks.' });
         }
     }
 
@@ -103,15 +103,15 @@ async function manejarMenuCanales(interaction) {
         const partes = interaction.customId.split('_');
         const tipo = partes[2];
         const canalId = partes[3];
-        
+
         const modal = new ModalBuilder()
             .setCustomId(`modal_webhook_${tipo}_${canalId}`)
-            .setTitle(`Webhook para ${tipo.toUpperCase()}`);
+            .setTitle(`Webhook for ${tipo.toUpperCase()}`);
 
         modal.addComponents(new ActionRowBuilder().addComponents(
             new TextInputBuilder()
                 .setCustomId('input_url')
-                .setLabel('Pega la URL del Webhook:')
+                .setLabel('Paste the webhook URL:')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true)
         ));
@@ -122,14 +122,14 @@ async function manejarMenuCanales(interaction) {
         await interaction.deferReply({ ephemeral: true });
         const tipo = interaction.values[0];
         await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
-        return await interaction.editReply({ content: `🗑️ Vinculación de **${tipo}** eliminada.` });
+        return await interaction.editReply({ content: `🗑️ **${tipo}** link removed.` });
     }
 }
 
 async function manejarModal(interaction) {
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_webhook_')) {
         await interaction.deferReply({ ephemeral: true });
-        
+
         const partes = interaction.customId.split('_');
         const tipo = partes[2];
         const canalId = partes[3];
@@ -141,9 +141,9 @@ async function manejarModal(interaction) {
                  ON CONFLICT(discord_id, tipo) DO UPDATE SET canal_id = ?, webhook_url = ?`,
                 [interaction.user.id, tipo, canalId, webhookUrl, canalId, webhookUrl]
             );
-            return await interaction.editReply({ content: `✅ ¡Perfecto! Canal <#${canalId}> y Webhook vinculados correctamente a **${tipo}**.` });
+            return await interaction.editReply({ content: `✅ Done! Channel <#${canalId}> and webhook successfully linked to **${tipo}**.` });
         } catch (error) {
-            return await interaction.editReply({ content: '❌ Ocurrió un error al guardar en la base de datos.' });
+            return await interaction.editReply({ content: '❌ An error occurred while saving to the database.' });
         }
     }
 }
