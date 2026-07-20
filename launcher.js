@@ -45,6 +45,28 @@ function crearAccesoDirectoConfigurar() {
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
 }
 
+// Carpeta de Inicio de Windows: cualquier acceso directo ahí arranca solo al
+// iniciar sesión, sin necesitar permisos de administrador ni una Tarea
+// Programada — a diferencia del Programador de Tareas, esto funciona igual
+// para cualquier usuario que descargue el programa, no solo en esta PC.
+function carpetaInicioWindows() {
+    if (!process.env.APPDATA) return null;
+    return path.join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+}
+
+function crearAccesoDirectoInicioAutomatico() {
+    const carpeta = carpetaInicioWindows();
+    if (!carpeta) return;
+    const rutaAcceso = path.join(carpeta, 'Monitor Pokemon.lnk');
+    if (fs.existsSync(rutaAcceso)) return;
+    const destino = path.join(__dirname, 'Iniciar Monitor Pokemon.bat');
+    if (!fs.existsSync(destino)) return;
+    // WindowStyle 7 = minimizado, para que ni siquiera se alcance a ver el
+    // parpadeo de la ventana de cmd del .bat al arrancar Windows.
+    const script = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${rutaAcceso.replace(/'/g, "''")}'); $s.TargetPath = '${destino.replace(/'/g, "''")}'; $s.WorkingDirectory = '${__dirname.replace(/'/g, "''")}'; $s.WindowStyle = 7; $s.Save()`;
+    exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
+}
+
 function tomarLock() {
     fs.writeFileSync(LOCK_PATH, String(process.pid));
 }
@@ -192,6 +214,7 @@ async function main() {
         }
     }
     crearAccesoDirectoConfigurar();
+    crearAccesoDirectoInicioAutomatico();
 
     logLinea('🚀 Monitor Pokémon — iniciando bot, trading y heartbeat...');
     for (const def of PROCESOS) {

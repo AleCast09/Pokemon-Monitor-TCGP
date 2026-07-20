@@ -35,4 +35,8 @@ MONITOR POKÉMON — CÓMO INSTALARLO
    ya esté corriendo, y se abre en el mismo navegador con el mismo
    respaldo de acceso directo si hace falta.
 
+7. Una vez que arranca por primera vez, Monitor Pokémon se registra para
+   iniciar solo cada vez que prendes la PC — no hace falta abrirlo a mano
+   de nuevo, ni siquiera después de reiniciar Windows.
+
 ¿Algo no funciona? Avísale a quien te lo pasó.
