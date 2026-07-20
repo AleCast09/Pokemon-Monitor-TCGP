@@ -3,6 +3,7 @@ const path = require('path');
 const { ejecutarWizard } = require('./setup-wizard.js');
 
 const LOCK_PATH = path.join(__dirname, '.reconfigurar.lock');
+const PENDING_RESTART_PATH = path.join(__dirname, '.pending_restart.json');
 
 function procesoExiste(pid) {
     try {
@@ -29,6 +30,12 @@ async function main() {
     fs.writeFileSync(LOCK_PATH, String(process.pid));
 
     await ejecutarWizard();
+
+    // Le avisa al launcher (proceso aparte, ya corriendo) que tiene que
+    // reiniciar bot/trading/heartbeat para que tomen el .env recién guardado
+    // — si no, siguen con los valores viejos hasta el próximo reinicio manual
+    // (ej. el toggle de HD no se aplicaba hasta cerrar y volver a abrir todo).
+    try { fs.writeFileSync(PENDING_RESTART_PATH, JSON.stringify({ en: Date.now() })); } catch (e) {}
 
     try { fs.unlinkSync(LOCK_PATH); } catch (e) {}
     process.exit(0);

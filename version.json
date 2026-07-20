@@ -1,9 +1,8 @@
 {
-  "version": "1.3.1",
+  "version": "1.3.2",
   "notes": [
-    "S4T and Heartbeat now auto-fallback to the next free port if the default one is busy, instead of failing silently.",
-    "If that happens, a \"Ports in use.txt\" file is created with the real ports to use.",
-    "The /feedback channel now lives under the Updates category."
+    "Fixed: changing settings (like HD) via Reconfigure now takes effect right away — no more closing and reopening the program by hand.",
+    "Security hardening: the feedback webhook is no longer stored as plain text, and the assets auto-update now checks for unsafe file paths before extracting."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe",
   "assetsUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip"

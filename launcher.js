@@ -8,6 +8,7 @@ try { esSea = require('node:sea').isSea(); } catch (e) { esSea = false; }
 
 const ENTRY_PATH = path.join(__dirname, 'entry.js');
 const PENDING_UPDATE_PATH = path.join(__dirname, '.pending_update.json');
+const PENDING_RESTART_PATH = path.join(__dirname, '.pending_restart.json');
 const LOCK_PATH = path.join(__dirname, '.monitor.lock');
 
 function procesoExiste(pid) {
@@ -97,6 +98,7 @@ const PROCESOS = [
 
 const REINTENTO_MS = 3000;
 let cerrando = false;
+let reiniciandoPorConfig = false;
 
 function conectarSalida(hijo, nombre) {
     const manejar = (data, etiqueta) => {
@@ -123,7 +125,7 @@ function iniciarProceso(def) {
     logLinea(`🟢 [${def.nombre}] started (pid ${hijo.pid})`);
 
     hijo.on('exit', (code, signal) => {
-        if (cerrando) return;
+        if (cerrando || reiniciandoPorConfig) return;
 
         if (fs.existsSync(PENDING_UPDATE_PATH)) {
             iniciarActualizacion();
@@ -187,6 +189,35 @@ async function iniciarActualizacion() {
 
     setTimeout(() => process.exit(0), 500);
 }
+
+// "Reconfigure.bat" corre en un proceso aparte (no este launcher), así que no
+// puede reiniciar bot/trading/heartbeat directamente — en vez de eso deja
+// este archivo como señal, y acá se revisa cada 2s. Sin esto, un cambio como
+// activar HD no se aplicaba hasta cerrar y volver a abrir todo el programa a
+// mano, porque cada proceso solo lee el .env una vez, al arrancar.
+async function reiniciarProcesosPorConfig() {
+    if (cerrando || reiniciandoPorConfig) return;
+    reiniciandoPorConfig = true;
+    logLinea('🔄 Configuration changed — restarting bot, trading and heartbeat...');
+
+    await Promise.all(PROCESOS.map((def) => new Promise((resolve) => {
+        if (!def.instancia || def.instancia.killed || def.instancia.exitCode !== null) return resolve();
+        def.instancia.once('exit', resolve);
+        def.instancia.kill();
+    })));
+
+    reiniciandoPorConfig = false;
+    for (const def of PROCESOS) {
+        iniciarProceso(def);
+    }
+}
+
+setInterval(() => {
+    if (cerrando || reiniciandoPorConfig) return;
+    if (!fs.existsSync(PENDING_RESTART_PATH)) return;
+    try { fs.unlinkSync(PENDING_RESTART_PATH); } catch (e) {}
+    reiniciarProcesosPorConfig();
+}, 2000);
 
 function cerrarTodo() {
     cerrando = true;

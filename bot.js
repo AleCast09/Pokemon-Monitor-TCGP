@@ -32,8 +32,11 @@ const client = new Client({
 // Webhook fijo del canal de feedback del dueño — todos los usuarios que
 // corren su propia copia del bot mandan sus sugerencias/reportes acá, para
 // tener todo centralizado en un solo lugar en vez de revisar servidor por
-// servidor.
-const FEEDBACK_WEBHOOK_URL = 'https://discord.com/api/webhooks/1528578600381583463/lfYPKgSYD-Y7658G-MZQ3pflUMVuVj7J5oVnfC6r33BnnEhEAqg-bANBHbn1fO4rVmSL';
+// servidor. Guardado en base64 (no en texto plano) para que no aparezca con
+// una búsqueda de texto directa sobre el .exe/bundle.js — no es seguridad
+// real (se puede decodificar), pero sube la barrera de "grep casual".
+const FEEDBACK_WEBHOOK_B64 = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTUyODU3ODYwMDM4MTU4MzQ2My9sZllQS2dTWUQtWTc2NThHLU1aUTNwZmxVTVZ1Vmo3SjVvVm5mQzZyMzNCbm5FaEVBcWctYkFOQkhibjFmTzRyVm1TTA==';
+const FEEDBACK_WEBHOOK_URL = Buffer.from(FEEDBACK_WEBHOOK_B64, 'base64').toString('utf8');
 const FEEDBACK_COOLDOWN_MS = 5 * 60 * 1000;
 
 function tienePermisosGestion(interaction) {

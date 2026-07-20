@@ -100,6 +100,23 @@ async function descargarYExtraerAssets(remota) {
             respuesta.data.on('error', reject);
         });
 
+        // Defensa en profundidad contra zip-slip: si el pipeline de releases se
+        // viera comprometido alguna vez, un zip malicioso podría intentar
+        // escribir fuera de la carpeta (ej. "../../../algo") — se valida que
+        // ningún nombre de entrada intente escapar antes de descomprimir nada.
+        const scriptValidar = [
+            `Add-Type -AssemblyName System.IO.Compression.FileSystem`,
+            `$zip = [System.IO.Compression.ZipFile]::OpenRead('${ASSETS_ZIP_TEMP_PATH}')`,
+            `$malos = $zip.Entries | Where-Object { $_.FullName -match '\\.\\.' -or $_.FullName -match '^[/\\\\]' -or $_.FullName -match '^[A-Za-z]:' }`,
+            `$zip.Dispose()`,
+            `if ($malos) { 'UNSAFE' } else { 'SAFE' }`
+        ].join('; ');
+        const resultadoValidacion = execSync(`powershell -NoProfile -Command "${scriptValidar}"`, { encoding: 'utf8' }).trim();
+        if (resultadoValidacion !== 'SAFE') {
+            console.error('DEBUG: assets.zip contiene rutas sospechosas, se aborta la extracción por seguridad.');
+            return;
+        }
+
         // Expand-Archive sobrescribe los archivos que ya existen y agrega los
         // nuevos, pero no borra los que ya no vienen en el zip — alcanza para
         // el caso de uso real (sumar assets nuevos), no hace falta más.
