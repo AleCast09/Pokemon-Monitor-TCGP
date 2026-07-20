@@ -1291,4 +1291,7 @@ app.post('/', upload.any(), async (req, res) => {
 
 // Solo escucha en localhost: el bot de Kevin (lector del emulador) corre en la
 // misma PC y le apunta a "localhost:3000" — no hace falta exponerlo a la red.
-app.listen(3000, '127.0.0.1', () => console.log('🚀 S4T Online'));
+// Puerto configurable solo para poder correr una segunda copia de prueba en
+// la misma PC sin chocar con la real — en uso normal no hace falta tocarlo.
+const S4T_PORT = Number(process.env.S4T_PORT) || 3000;
+app.listen(S4T_PORT, '127.0.0.1', () => console.log(`🚀 S4T Online (puerto ${S4T_PORT})`));

@@ -102,7 +102,10 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
     app.use(express.json({ limit: '1mb' }));
     app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-    const PORT = 3003;
+    // Configurable solo para poder correr una segunda copia de prueba en la
+    // misma PC sin chocar de puerto con la real — en uso normal nunca hace
+    // falta tocar esto, cada usuario ya tiene su propio "localhost".
+    const PORT = Number(process.env.HEARTBEAT_PORT) || 3003;
     const TIEMPO_MAXIMO_INACTIVO_MS = 5 * 60 * 1000; 
 
     function obtenerBalanceDesdeArchivo(rutaBalance) {
@@ -436,7 +439,7 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
 
     // Mismo criterio que s4t.js: todo lo que le manda datos corre en la misma PC.
     app.listen(PORT, '127.0.0.1', () => console.log(`🚀 Monitor de Producción Encendido en puerto ${PORT}`));
-} 
+}
 
 // =====================================================================
 // 🕹️ MODO COMANDOS DISCORD

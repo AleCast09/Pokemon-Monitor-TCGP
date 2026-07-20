@@ -29,6 +29,13 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
+// Webhook fijo del canal de feedback del dueño — todos los usuarios que
+// corren su propia copia del bot mandan sus sugerencias/reportes acá, para
+// tener todo centralizado en un solo lugar en vez de revisar servidor por
+// servidor.
+const FEEDBACK_WEBHOOK_URL = 'https://discord.com/api/webhooks/1528578600381583463/lfYPKgSYD-Y7658G-MZQ3pflUMVuVj7J5oVnfC6r33BnnEhEAqg-bANBHbn1fO4rVmSL';
+const FEEDBACK_COOLDOWN_MS = 5 * 60 * 1000;
+
 function tienePermisosGestion(interaction) {
     if (!interaction || !interaction.guild) return false;
     if (interaction.user?.id && interaction.guild?.ownerId && interaction.user.id === interaction.guild.ownerId) return true;
@@ -1227,7 +1234,8 @@ function construirSlashCommands() {
         new SlashCommandBuilder()
             .setName('run')
             .setDescription('Ejecuta Run MumuPlayer')
-            .addSubcommand(subcommand => subcommand.setName('instance').setDescription('Abrir instancia'))
+            .addSubcommand(subcommand => subcommand.setName('instance').setDescription('Abrir instancia')),
+        new SlashCommandBuilder().setName('feedback').setDescription('Manda una sugerencia o reporta un problema con el bot')
     ].map(cmd => cmd.toJSON());
 }
 
@@ -2137,6 +2145,19 @@ client.on('interactionCreate', async interaction => {
         return await interaction.editReply(panel);
     }
 
+    if (interaction.isChatInputCommand() && interaction.commandName === 'feedback') {
+        const rowFeedback = await obtenerCanalComando(interaction.user.id, 'cmd_feedback');
+        if (rowFeedback && interaction.channelId !== rowFeedback.canal_id) {
+            return await interaction.reply({ content: `❌ Este comando solo funciona en <#${rowFeedback.canal_id}>.`, ephemeral: true });
+        }
+        const modalFeedback = new ModalBuilder().setCustomId('modal_feedback').setTitle('Feedback sobre el bot')
+            .addComponents(new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('input_feedback_texto').setLabel('¿Qué opinas? ¿Qué le falta o qué falló?')
+                    .setStyle(TextInputStyle.Paragraph).setMinLength(10).setMaxLength(1000)
+            ));
+        return await interaction.showModal(modalFeedback);
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId === 'webhook_seleccionar') {
         await interaction.deferUpdate();
         const tipo = interaction.values[0];
@@ -2177,6 +2198,44 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.isModalSubmit()) {
+        if (interaction.customId === 'modal_feedback') {
+            const filaCooldown = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = 'feedback_ultimo_envio'`, [interaction.user.id]);
+            const ultimoEnvio = filaCooldown ? Number(filaCooldown.estado) : 0;
+            const restanteMs = FEEDBACK_COOLDOWN_MS - (Date.now() - ultimoEnvio);
+            if (restanteMs > 0) {
+                const minutos = Math.ceil(restanteMs / 60000);
+                return await interaction.reply({ content: `⏳ Ya mandaste feedback hace poco — esperá ${minutos} minuto(s) antes de mandar otro.`, ephemeral: true });
+            }
+
+            await interaction.deferReply({ ephemeral: true });
+            const texto = interaction.fields.getTextInputValue('input_feedback_texto').trim();
+
+            try {
+                await axios.post(`${FEEDBACK_WEBHOOK_URL}?wait=true`, {
+                    embeds: [{
+                        title: '📝 Nuevo feedback',
+                        description: texto,
+                        color: 0x5865F2,
+                        fields: [
+                            { name: 'De', value: `${interaction.user.tag} (\`${interaction.user.id}\`)`, inline: true },
+                            { name: 'Servidor', value: `${interaction.guild?.name || 'Desconocido'} (\`${interaction.guildId}\`)`, inline: true }
+                        ],
+                        timestamp: new Date().toISOString()
+                    }]
+                }, { timeout: 10000 });
+
+                await db.run(
+                    `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, 'feedback_ultimo_envio', ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
+                    [interaction.user.id, String(Date.now()), String(Date.now())]
+                );
+
+                return await interaction.editReply({ content: '✅ ¡Gracias! Tu feedback fue enviado.' });
+            } catch (e) {
+                console.error('❌ Error mandando feedback:', e?.response?.data || e?.message || e);
+                return await interaction.editReply({ content: '❌ No se pudo enviar el feedback. Prueba de nuevo más tarde.' });
+            }
+        }
+
         if (interaction.customId.startsWith('modal_mumu_friendid::')) {
             const [, index, nombre] = interaction.customId.split('::');
             const friendLabel = interaction.fields.getTextInputValue('input_friend_nombre').trim();
@@ -2765,7 +2824,8 @@ client.on('interactionCreate', async interaction => {
                             canales: [
                                 { tipo: 'cmd_setup', name: '⚙-settings' },
                                 { tipo: 'cmd_build_embed', name: '🔧-build-embed' },
-                                { tipo: 'cmd_build_webhooks', name: '🔗-build-webhooks' }
+                                { tipo: 'cmd_build_webhooks', name: '🔗-build-webhooks' },
+                                { tipo: 'cmd_feedback', name: '📝-feedback' }
                             ]
                         },
                         {
@@ -2826,6 +2886,7 @@ client.on('interactionCreate', async interaction => {
                         cmd_setup: { title: '⚙ Settings', description: 'Acá se usa `/setup` — abre el panel de control del bot (armar canales, etc).' },
                         cmd_build_embed: { title: '🔧 Build Embed', description: 'Acá se usa `/embed` para configurar qué información se muestra en los embeds de los hallazgos.' },
                         cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'Acá se usa `/webhook` para cambiar el nombre y el avatar de los webhooks de cada canal.' },
+                        cmd_feedback: { title: '📝 Feedback', description: 'Acá se usa `/feedback` para mandar sugerencias, reportar problemas o contar qué te parece el bot.' },
                         heartbeat: { title: '💓 Heartbeat', description: 'Acá el bot reporta que sigue con vida y funcionando — el mensaje se actualiza solo, no hace falta hacer nada.' },
                         s4t: { title: '🤖 S4T', description: 'Acá se postean todos los hallazgos apenas se detectan, antes de clasificarlos por rareza.' },
                         '3-diamond': { title: '🔷 3 Diamond', description: 'Cartas de rareza 3-diamond encontradas se postean automáticamente acá.' },
