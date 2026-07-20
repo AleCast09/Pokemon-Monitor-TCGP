@@ -2815,7 +2815,8 @@ client.on('interactionCreate', async interaction => {
                             tipoCategoria: 'actualizaciones_categoria',
                             canales: [
                                 { tipo: 'actualizaciones', name: '🔔-updates' },
-                                { tipo: 'apoyo', name: '💝-support-my-work' }
+                                { tipo: 'apoyo', name: '💝-support-my-work' },
+                                { tipo: 'cmd_feedback', name: '📝-feedback' }
                             ]
                         },
                         {
@@ -2824,8 +2825,7 @@ client.on('interactionCreate', async interaction => {
                             canales: [
                                 { tipo: 'cmd_setup', name: '⚙-settings' },
                                 { tipo: 'cmd_build_embed', name: '🔧-build-embed' },
-                                { tipo: 'cmd_build_webhooks', name: '🔗-build-webhooks' },
-                                { tipo: 'cmd_feedback', name: '📝-feedback' }
+                                { tipo: 'cmd_build_webhooks', name: '🔗-build-webhooks' }
                             ]
                         },
                         {

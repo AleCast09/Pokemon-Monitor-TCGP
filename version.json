@@ -1,8 +1,9 @@
 {
-  "version": "1.3.0",
+  "version": "1.3.1",
   "notes": [
-    "The whole bot is now in English — commands, embeds, buttons, the setup wizard and the installer files.",
-    "Launcher files were renamed to English (Start Monitor Pokemon.bat, Reconfigure.bat, Unblock.bat, README.txt)."
+    "S4T and Heartbeat now auto-fallback to the next free port if the default one is busy, instead of failing silently.",
+    "If that happens, a \"Ports in use.txt\" file is created with the real ports to use.",
+    "The /feedback channel now lives under the Updates category."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe",
   "assetsUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip"

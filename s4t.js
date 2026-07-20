@@ -1291,7 +1291,45 @@ app.post('/', upload.any(), async (req, res) => {
 
 // Solo escucha en localhost: el bot de Kevin (lector del emulador) corre en la
 // misma PC y le apunta a "localhost:3000" — no hace falta exponerlo a la red.
-// Puerto configurable solo para poder correr una segunda copia de prueba en
-// la misma PC sin chocar con la real — en uso normal no hace falta tocarlo.
-const S4T_PORT = Number(process.env.S4T_PORT) || 3000;
-app.listen(S4T_PORT, '127.0.0.1', () => console.log(`🚀 S4T Online (port ${S4T_PORT})`));
+// Si ese puerto ya está en uso (ej. una segunda copia de prueba en la misma
+// PC) prueba automáticamente con el siguiente, hasta encontrar uno libre, sin
+// necesitar tocar el .env a mano.
+// Aviso persistente (no un popup, que no se ve de forma confiable con el
+// proceso oculto) cuando el puerto real termina siendo distinto al de
+// siempre — así la persona sabe qué poner en la Webhook URL de "S4T"/
+// "Heartbeat" en el bot lector del emulador (ej. "P BOT" de Kevin). Un
+// archivo de texto queda ahí para consultar cuando quieran, a diferencia de
+// un popup que se puede cerrar sin querer.
+const RUTA_AVISO_PUERTOS = path.join(__dirname, 'Ports in use.txt');
+const ENCABEZADO_AVISO_PUERTOS = [
+    'Some default ports were busy, so these services started on different ones.',
+    'Update the Webhook URL in your reroll tool (P BOT) to match:',
+    ''
+];
+function avisarPuertoCambiado(nombreServicio, puertoReal) {
+    try {
+        const prefijo = `${nombreServicio}: `;
+        const lineaNueva = `${prefijo}http://localhost:${puertoReal}`;
+        const lineasDatos = fs.existsSync(RUTA_AVISO_PUERTOS)
+            ? fs.readFileSync(RUTA_AVISO_PUERTOS, 'utf8').split(/\r?\n/).filter((l) => l.includes(': http://localhost:') && !l.startsWith(prefijo))
+            : [];
+        fs.writeFileSync(RUTA_AVISO_PUERTOS, [...ENCABEZADO_AVISO_PUERTOS, ...lineasDatos, lineaNueva].join('\r\n') + '\r\n', 'utf8');
+    } catch (e) { /* si falla, el puerto real igual queda en el log */ }
+}
+
+const S4T_PORT_BASE = Number(process.env.S4T_PORT) || 3000;
+function iniciarServidorS4T(puerto, intento = 0) {
+    const servidor = app.listen(puerto, '127.0.0.1', () => {
+        console.log(`🚀 S4T Online (port ${puerto})`);
+        if (puerto !== S4T_PORT_BASE) avisarPuertoCambiado('S4T', puerto);
+    });
+    servidor.on('error', (err) => {
+        if (err.code === 'EADDRINUSE' && intento < 10) {
+            console.log(`⚠️ Port ${puerto} is busy, trying ${puerto + 1}...`);
+            iniciarServidorS4T(puerto + 1, intento + 1);
+        } else {
+            console.error(`❌ Could not start S4T: ${err.message}`);
+        }
+    });
+}
+iniciarServidorS4T(S4T_PORT_BASE);

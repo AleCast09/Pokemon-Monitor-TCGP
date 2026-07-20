@@ -437,8 +437,46 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
         } catch (err) { console.error("Error in monitor:", err); res.status(500).send("Error"); }
     });
 
+    // Aviso persistente (no un popup, que no se ve de forma confiable con el
+    // proceso oculto) cuando el puerto real termina siendo distinto al de
+    // siempre — así la persona sabe qué poner en la Webhook URL de "S4T"/
+    // "Heartbeat" en el bot lector del emulador (ej. "P BOT" de Kevin). Un
+    // archivo de texto queda ahí para consultar, a diferencia de un popup
+    // que se puede cerrar sin querer.
+    const RUTA_AVISO_PUERTOS = path.join(__dirname, 'Ports in use.txt');
+    const ENCABEZADO_AVISO_PUERTOS = [
+        'Some default ports were busy, so these services started on different ones.',
+        'Update the Webhook URL in your reroll tool (P BOT) to match:',
+        ''
+    ];
+    function avisarPuertoCambiado(nombreServicio, puertoReal) {
+        try {
+            const prefijo = `${nombreServicio}: `;
+            const lineaNueva = `${prefijo}http://localhost:${puertoReal}`;
+            const lineasDatos = fs.existsSync(RUTA_AVISO_PUERTOS)
+                ? fs.readFileSync(RUTA_AVISO_PUERTOS, 'utf8').split(/\r?\n/).filter((l) => l.includes(': http://localhost:') && !l.startsWith(prefijo))
+                : [];
+            fs.writeFileSync(RUTA_AVISO_PUERTOS, [...ENCABEZADO_AVISO_PUERTOS, ...lineasDatos, lineaNueva].join('\r\n') + '\r\n', 'utf8');
+        } catch (e) { /* si falla, el puerto real igual queda en el log */ }
+    }
+
     // Mismo criterio que s4t.js: todo lo que le manda datos corre en la misma PC.
-    app.listen(PORT, '127.0.0.1', () => console.log(`🚀 Production Monitor Online on port ${PORT}`));
+    // Si el puerto ya está en uso, prueba automáticamente con el siguiente hasta
+    // encontrar uno libre, sin necesitar tocar el .env a mano.
+    (function iniciarServidorHeartbeat(puerto, intento = 0) {
+        const servidor = app.listen(puerto, '127.0.0.1', () => {
+            console.log(`🚀 Production Monitor Online on port ${puerto}`);
+            if (puerto !== PORT) avisarPuertoCambiado('Heartbeat', puerto);
+        });
+        servidor.on('error', (err) => {
+            if (err.code === 'EADDRINUSE' && intento < 10) {
+                console.log(`⚠️ Port ${puerto} is busy, trying ${puerto + 1}...`);
+                iniciarServidorHeartbeat(puerto + 1, intento + 1);
+            } else {
+                console.error(`❌ Could not start heartbeat: ${err.message}`);
+            }
+        });
+    })(PORT);
 }
 
 // =====================================================================
