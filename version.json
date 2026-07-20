@@ -1,8 +1,9 @@
 {
-  "version": "1.2.7",
+  "version": "1.2.8",
   "notes": [
     "El auto-update ahora también trae archivos nuevos de la carpeta assets (emojis, logos, etc.), no solo el .exe.",
-    "El programa ahora se prende solo cada vez que inicias Windows, sin tener que reabrirlo a mano."
+    "El programa ahora se prende solo cada vez que inicias Windows, sin tener que reabrirlo a mano.",
+    "Nuevo canal /feedback para mandar sugerencias o reportar problemas."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe",
   "assetsUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip"
