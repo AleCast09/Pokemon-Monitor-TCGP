@@ -1,6 +1,8 @@
 {
-  "version": "1.4.3",
+  "version": "1.4.4",
   "notes": [
+    "Added a \"Check for Updates\" button to /setup, so you can check right away instead of waiting for the automatic check.",
+    "Fixed: after installing an update, the program reopened in a visible console window instead of staying hidden in the background like normal.",
     "Fixed: the auto-start shortcut could get stuck behind a Windows security prompt on every boot, since the launcher files were still marked as \"downloaded from the internet\". They now unblock themselves automatically the first time you run them.",
     "The bot now also checks for updates periodically while running (not just on startup), so it notices new versions even if you never restart it — without repeating the same notification.",
     "Fixed a critical bug: using /feedback crashed the entire bot (not just that command) because of a text field label that was too long for Discord's limit.",

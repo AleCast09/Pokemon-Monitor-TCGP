@@ -178,7 +178,10 @@ async function iniciarActualizacion() {
         '  goto retry',
         ')',
         `move /y "${rutaNueva}" "${rutaExe}"`,
-        `start "" "${rutaExe}"`,
+        // "start" abre una consola visible por defecto — a diferencia de "Start
+        // Monitor Pokemon.bat", que sí lo lanza oculto. Mismo patrón acá para
+        // que el relanzamiento tras actualizar quede igual de invisible.
+        `powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '${rutaExe.replace(/'/g, "''")}' -WorkingDirectory '${__dirname.replace(/'/g, "''")}' -WindowStyle Hidden"`,
         'del "%~f0"',
         ''
     ].join('\r\n');

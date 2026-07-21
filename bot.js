@@ -16,7 +16,7 @@ const db = require('./database.js');
 
 const heartbeatScript = require('./heartbeat.js');
 const configScript = require('./config.js');
-const { chequearActualizaciones, obtenerVersionRemota, descargarActualizacion } = require('./update-checker.js');
+const { chequearActualizaciones, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion } = require('./update-checker.js');
 const { obtenerMapaEmojisGuild } = require('./guild-emojis.js');
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
@@ -2097,7 +2097,8 @@ async function generarPanelControl(userId) {
     const filaGestion = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('btn_status').setLabel('📊 Status').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('btn_config_canales').setLabel('⚙️ Configuration').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('btn_ruta_raiz').setLabel('📂 Main Path').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('btn_ruta_raiz').setLabel('📂 Main Path').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('btn_check_updates').setLabel('🔄 Check for Updates').setStyle(ButtonStyle.Secondary)
     );
 
     const filaPeligro = new ActionRowBuilder().addComponents(
@@ -2987,7 +2988,34 @@ client.on('interactionCreate', async interaction => {
                     .setColor(0xF1C40F);
                 await interaction.editReply({ embeds: [embedStatus] });
                 break;
-            
+
+            case 'btn_check_updates':
+                await interaction.deferReply({ ephemeral: true });
+                try {
+                    const localVer = obtenerVersionLocal();
+                    const remotaVer = await obtenerVersionRemota();
+                    if (esVersionMasNueva(remotaVer.version, localVer.version)) {
+                        const embedUpdate = new EmbedBuilder()
+                            .setTitle('🔔 An update is available')
+                            .setColor(0xF0A93A)
+                            .setDescription(
+                                `**${localVer.version}** → **${remotaVer.version}**\n\n` +
+                                `**What's new:**\n` +
+                                (remotaVer.notes || []).map(n => `• ${n}`).join('\n')
+                            );
+                        const filaUpdate = new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId('actualizacion_ahora').setLabel('Update now').setStyle(ButtonStyle.Success),
+                            new ButtonBuilder().setCustomId('actualizacion_luego').setLabel('Later').setStyle(ButtonStyle.Secondary)
+                        );
+                        await interaction.editReply({ embeds: [embedUpdate], components: [filaUpdate] });
+                    } else {
+                        await interaction.editReply({ content: `✅ You're on the latest version (**${localVer.version}**).` });
+                    }
+                } catch (e) {
+                    await interaction.editReply({ content: '❌ Could not check for updates right now. Try again later.' });
+                }
+                break;
+
             case 'btn_crear_canales_menu':
                 await interaction.deferReply({ ephemeral: true });
                 try {
