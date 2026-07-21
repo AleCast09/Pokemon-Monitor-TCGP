@@ -1,6 +1,8 @@
 {
-  "version": "1.4.0",
+  "version": "1.4.1",
   "notes": [
+    "Fixed: if you opened the program before inviting the bot to your server, it could automatically leave that server the next time it restarted, thinking it wasn't authorized.",
+    "Fixed: slash commands weren't showing up if the bot joined a server after the program was already running — now they register right away when it joins.",
     "Channels with a real command (Cards, Wishlist, Extract XLM, Auto Trade, Settings) now show the actual working panel as soon as they're created, instead of a generic description.",
     "The setup wizard now shows the S4T and Heartbeat addresses to use in your reroll tool right on the \"Saved\" screen.",
     "Feedback now supports a title, an optional screenshot, and shows your Discord profile.",
