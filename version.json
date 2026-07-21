@@ -1,6 +1,7 @@
 {
-  "version": "1.4.1",
+  "version": "1.4.2",
   "notes": [
+    "Fixed a critical bug: using /feedback crashed the entire bot (not just that command) because of a text field label that was too long for Discord's limit.",
     "Fixed: if you opened the program before inviting the bot to your server, it could automatically leave that server the next time it restarted, thinking it wasn't authorized.",
     "Fixed: slash commands weren't showing up if the bot joined a server after the program was already running — now they register right away when it joins.",
     "Channels with a real command (Cards, Wishlist, Extract XLM, Auto Trade, Settings) now show the actual working panel as soon as they're created, instead of a generic description.",

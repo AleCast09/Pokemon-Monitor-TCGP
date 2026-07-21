@@ -2314,7 +2314,7 @@ client.on('interactionCreate', async interaction => {
                     new TextInputBuilder().setCustomId('input_feedback_titulo').setLabel('Title').setStyle(TextInputStyle.Short).setMinLength(3).setMaxLength(100)
                 ),
                 new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('input_feedback_texto').setLabel('What do you think? What\'s missing or what failed?')
+                    new TextInputBuilder().setCustomId('input_feedback_texto').setLabel('Tell us what happened or what\'s missing')
                         .setStyle(TextInputStyle.Paragraph).setMinLength(10).setMaxLength(1000)
                 )
             );
