@@ -3269,8 +3269,17 @@ client.once('ready', async () => {
         // Primera vez que corre esta versión: se adopta como autorizado TODO servidor
         // donde el bot ya estaba (no se expulsa nada retroactivamente). De acá en más,
         // cualquier servidor nuevo que no esté en esta lista se rechaza solo.
+        //
+        // Importante: una lista vacía cuenta como "todavía no se autorizó nada de
+        // verdad", igual que null — si no, un usuario que prende el .exe ANTES de
+        // invitar al bot guarda [] en el primer ready() (0 servidores todavía), y si
+        // el proceso se reinicia después con el servidor ya agregado (ej. por un
+        // reconfigure, un crash, o el propio auto-update), esa segunda vez cae en la
+        // rama de rechazo y expulsa un servidor que en realidad nunca llegó a
+        // autorizarse — justo el bug real que reportó el usuario probando como
+        // usuario nuevo.
         let guildsAutorizados = await obtenerGuildsAutorizados();
-        if (guildsAutorizados === null) {
+        if (!guildsAutorizados || guildsAutorizados.length === 0) {
             guildsAutorizados = [...client.guilds.cache.keys()];
             await guardarGuildsAutorizados(guildsAutorizados);
         } else {
@@ -3287,13 +3296,30 @@ client.once('ready', async () => {
 
 client.on('guildCreate', async (guild) => {
     const guildsAutorizados = (await obtenerGuildsAutorizados()) || [];
-    if (guildsAutorizados.includes(guild.id)) return;
-    if (guildsAutorizados.length === 0) {
+    if (!guildsAutorizados.includes(guild.id)) {
+        if (guildsAutorizados.length > 0) {
+            await rechazarGuildNoAutorizado(guild);
+            return;
+        }
         await autorizarGuildNueva(guild.id);
         console.log(`✅ Server automatically authorized: ${guild.name} (${guild.id})`);
-        return;
     }
-    await rechazarGuildNoAutorizado(guild);
+
+    // El registro de arranque (registrarSlashCommands, en el ready()) solo
+    // llega a los servidores donde el bot YA estaba en ese momento — si se
+    // invita el bot a un servidor nuevo después de que arrancó (el orden más
+    // común para un usuario real: primero abrir el programa, después generar
+    // el link de invitación), esos comandos nunca se registran ahí sin esto.
+    try {
+        const rest = new REST({ version: '10' }).setToken(TOKEN);
+        const applicationId = CLIENT_ID || client.user?.id;
+        if (applicationId) {
+            await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: construirSlashCommands() });
+            console.log(`✅ Slash commands registered in guild ${guild.id}`);
+        }
+    } catch (error) {
+        console.error('❌ Error registering slash commands on new guild:', error?.response?.data || error?.message || error);
+    }
 });
 
 client.login(TOKEN);
