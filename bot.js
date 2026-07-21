@@ -10,6 +10,7 @@ const FormData = require('form-data');
 const { exec, execSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const sharp = require('./native-require.js')('sharp');
 const db = require('./database.js');
 
@@ -38,6 +39,14 @@ const client = new Client({
 const FEEDBACK_WEBHOOK_B64 = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTUyODU3ODYwMDM4MTU4MzQ2My9sZllQS2dTWUQtWTc2NThHLU1aUTNwZmxVTVZ1Vmo3SjVvVm5mQzZyMzNCbm5FaEVBcWctYkFOQkhibjFmTzRyVm1TTA==';
 const FEEDBACK_WEBHOOK_URL = Buffer.from(FEEDBACK_WEBHOOK_B64, 'base64').toString('utf8');
 const FEEDBACK_COOLDOWN_MS = 5 * 60 * 1000;
+
+// Discord no permite adjuntar archivos dentro de un modal — el adjunto se
+// recibe en la interacción del slash command (antes de abrir el modal) y se
+// guarda acá de paso hasta que llega el submit del modal, que es una
+// interacción distinta. Se limpia solo a los 10 minutos por si el usuario
+// abre el modal y nunca lo manda.
+const imagenFeedbackPendiente = new Map();
+const FEEDBACK_IMAGEN_TTL_MS = 10 * 60 * 1000;
 
 function tienePermisosGestion(interaction) {
     if (!interaction || !interaction.guild) return false;
@@ -1032,18 +1041,122 @@ function agregarFriend(label, friendId) {
     return { ok: true, total: actuales.length };
 }
 
+// Si queda una instancia vieja del mismo script de AHK trabada (ej. esperando
+// un clic en un popup que nadie va a apretar), lanzar una nueva dispara el
+// aviso nativo de AutoHotkey "An older instance is already running — Replace
+// it?" — como no hay nadie ahí para tocar "Sí", esa nueva instancia también
+// queda colgada, y con ella la interacción de Discord que espera su resultado
+// para siempre. Sin poder tocar el .ahk en sí (es privado, no se toca), la
+// única forma de evitarlo desde acá es matar cualquier instancia vieja del
+// mismo script ANTES de lanzar la nueva, para que nunca llegue a chocar.
+function matarInstanciasAhkPrevias(rutaScript) {
+    try {
+        const nombreScript = path.basename(rutaScript).replace(/'/g, "''");
+        const script = `Get-CimInstance Win32_Process -Filter "Name='AutoHotkeyU64.exe' OR Name='AutoHotkeyU32.exe'" | Where-Object { $_.CommandLine -like '*${nombreScript}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`;
+        execSync(`powershell -NoProfile -Command "${script.replace(/"/g, '\\"')}"`, { windowsHide: true, timeout: 8000 });
+    } catch (e) { /* si no había ninguna corriendo, o falla el chequeo, se sigue igual */ }
+}
+
+// Aunque ya no se cuelgue para siempre (ver timeout de spawnAhkConProteccion),
+// mientras corre el script cualquier popup bloqueante suyo (instancia
+// duplicada, "timed out", etc.) SE VE en pantalla — asusta si alguien se
+// conecta por AnyDesk y lo encuentra ahí. Sin tocar el .ahk (privado), se
+// puede ocultar la ventana desde afuera por su título: sigue existiendo y el
+// script sigue corriendo/esperando atrás, solo que nadie la ve.
+const TITULOS_POPUPS_A_OCULTAR = ['_InjectAccount.ahk', 'Send Friend Request'];
+
+function iniciarVigilantePopups(duracionMs) {
+    const patrones = TITULOS_POPUPS_A_OCULTAR.map(t => t.replace(/'/g, "''")).join("','");
+    const script = `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class WinHider {
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+}
+"@
+$patrones = @('${patrones}')
+$limite = (Get-Date).AddMilliseconds(${duracionMs})
+while ((Get-Date) -lt $limite) {
+    [WinHider]::EnumWindows({
+        param($hWnd, $lParam)
+        if ([WinHider]::IsWindowVisible($hWnd)) {
+            $sb = New-Object System.Text.StringBuilder 256
+            [WinHider]::GetWindowText($hWnd, $sb, 256) | Out-Null
+            $titulo = $sb.ToString()
+            foreach ($p in $patrones) {
+                if ($titulo -like "*$p*") { [WinHider]::ShowWindow($hWnd, 0) | Out-Null }
+            }
+        }
+        return $true
+    }, [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 500
+}
+`;
+    const rutaScript = path.join(os.tmpdir(), `hide_popups_${Date.now()}_${Math.random().toString(36).slice(2)}.ps1`);
+    fs.writeFileSync(rutaScript, script, 'utf8');
+    const vigilante = spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', rutaScript], { windowsHide: true });
+    vigilante.on('exit', () => { try { fs.unlinkSync(rutaScript); } catch (e) { /* nada que limpiar */ } });
+    return vigilante;
+}
+
+// Defensa en profundidad ante CUALQUIER otro popup bloqueante que el script
+// pueda mostrar (no solo el de instancia duplicada) — si no termina dentro del
+// tiempo esperado, se lo mata a la fuerza (todo el árbol de procesos, por si
+// abrió alguno hijo) y se reporta como fallo en vez de dejar la interacción
+// de Discord esperando para siempre.
+function spawnAhkConProteccion(ahkExe, args, opciones, timeoutMs, callback) {
+    matarInstanciasAhkPrevias(args[0]);
+    let terminado = false;
+    let proceso;
+    try {
+        proceso = spawn(ahkExe, args, opciones);
+    } catch (e) {
+        return callback(false, 'error_spawn');
+    }
+
+    const vigilante = iniciarVigilantePopups(timeoutMs);
+
+    const temporizador = setTimeout(() => {
+        if (terminado) return;
+        terminado = true;
+        try { vigilante.kill(); } catch (e) { /* nada que limpiar */ }
+        try { execSync(`taskkill /PID ${proceso.pid} /T /F`, { windowsHide: true }); } catch (e) { /* puede que ya haya terminado justo antes */ }
+        callback(false, 'timeout');
+    }, timeoutMs);
+
+    proceso.on('exit', (code) => {
+        if (terminado) return;
+        terminado = true;
+        clearTimeout(temporizador);
+        try { vigilante.kill(); } catch (e) { /* nada que limpiar */ }
+        callback(code === 0, `codigo_${code}`);
+    });
+    proceso.on('error', () => {
+        if (terminado) return;
+        terminado = true;
+        clearTimeout(temporizador);
+        try { vigilante.kill(); } catch (e) { /* nada que limpiar */ }
+        callback(false, 'error_proceso');
+    });
+}
+
 function ejecutarInyeccionHeadless(callback) {
     const ahkExe = rutaAutoHotkey();
     if (!ahkExe || !fs.existsSync(RUTA_INJECT_ACCOUNT_SCRIPT)) {
         return callback(false, 'faltan_archivos');
     }
-    try {
-        const proceso = spawn(ahkExe, [RUTA_INJECT_ACCOUNT_SCRIPT, '--headless'], { windowsHide: false, cwd: path.dirname(RUTA_INJECT_ACCOUNT_SCRIPT) });
-        proceso.on('exit', (code) => callback(code === 0, `codigo_${code}`));
-        proceso.on('error', () => callback(false, 'error_proceso'));
-    } catch (e) {
-        callback(false, 'error_spawn');
-    }
+    spawnAhkConProteccion(
+        ahkExe,
+        [RUTA_INJECT_ACCOUNT_SCRIPT, '--headless'],
+        { windowsHide: false, cwd: path.dirname(RUTA_INJECT_ACCOUNT_SCRIPT) },
+        5 * 60 * 1000,
+        callback
+    );
 }
 
 const RUTA_SEND_TRADE_CARD_SCRIPT = path.join(__dirname, 'automation', '_SendTradeCard.ahk');
@@ -1061,13 +1174,7 @@ function ejecutarSendTradeCard(winTitle, callback) {
     if (!ahkExe || !folderPath || !fs.existsSync(RUTA_SEND_TRADE_CARD_SCRIPT)) {
         return callback(false, 'faltan_archivos');
     }
-    try {
-        const proceso = spawn(ahkExe, [RUTA_SEND_TRADE_CARD_SCRIPT, winTitle, folderPath], { windowsHide: false });
-        proceso.on('exit', (code) => callback(code === 0, `codigo_${code}`));
-        proceso.on('error', () => callback(false, 'error_proceso'));
-    } catch (e) {
-        callback(false, 'error_spawn');
-    }
+    spawnAhkConProteccion(ahkExe, [RUTA_SEND_TRADE_CARD_SCRIPT, winTitle, folderPath], { windowsHide: false }, 3 * 60 * 1000, callback);
 }
 
 function ejecutarFinalizeTradeCard(winTitle, instanceIndex, callback) {
@@ -1076,13 +1183,7 @@ function ejecutarFinalizeTradeCard(winTitle, instanceIndex, callback) {
     if (!ahkExe || !folderPath || !fs.existsSync(RUTA_FINALIZE_TRADE_CARD_SCRIPT)) {
         return callback(false, 'faltan_archivos');
     }
-    try {
-        const proceso = spawn(ahkExe, [RUTA_FINALIZE_TRADE_CARD_SCRIPT, winTitle, folderPath, String(instanceIndex)], { windowsHide: false });
-        proceso.on('exit', (code) => callback(code === 0, `codigo_${code}`));
-        proceso.on('error', () => callback(false, 'error_proceso'));
-    } catch (e) {
-        callback(false, 'error_spawn');
-    }
+    spawnAhkConProteccion(ahkExe, [RUTA_FINALIZE_TRADE_CARD_SCRIPT, winTitle, folderPath, String(instanceIndex)], { windowsHide: false }, 3 * 60 * 1000, callback);
 }
 
 function extraerDeviceAccount(rutaXml) {
@@ -1239,6 +1340,7 @@ function construirSlashCommands() {
             .setDescription('Runs Run MumuPlayer')
             .addSubcommand(subcommand => subcommand.setName('instance').setDescription('Open instance')),
         new SlashCommandBuilder().setName('feedback').setDescription('Send a suggestion or report a problem with the bot')
+            .addAttachmentOption(opt => opt.setName('image').setDescription('Optional screenshot/photo of the problem').setRequired(false))
     ].map(cmd => cmd.toJSON());
 }
 
@@ -1286,10 +1388,42 @@ async function registrarSlashCommands() {
 // uso duplicaba el mensaje público y el canal se llenaba de spam. Guarda el ID del
 // último mensaje en configs_extras (tipo='interfaz_msg_{clave}') y lo EDITA in situ;
 // si ese mensaje ya no existe (lo borraron a mano), recién ahí crea uno nuevo.
-async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, archivos = []) {
+// Con el uso normal del chat, el mensaje del panel (editado in situ, nunca
+// duplicado) se va quedando cada vez más arriba en el historial — quien
+// vuelve después de un rato tiene que scrollear para encontrarlo. Se resuelve
+// ACÁ ADENTRO (no con un chequeo aparte disparado por cada interacción,
+// que corría en paralelo a esta misma función y terminaba compitiendo por el
+// mismo mensaje — dos operaciones a la vez sobre el mismo mensaje es
+// exactamente lo que producía el bug de "aparece duplicado"): si ya pasaron 5
+// minutos desde la última vez que se movió, esta MISMA llamada (la única que
+// va a tocar este mensaje) lo manda de nuevo al final en vez de editarlo donde
+// estaba.
+const BUMP_INTERVALO_MS = 5 * 60 * 1000;
+
+async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, archivos = [], forzarReubicar = false) {
     const claveMsg = `interfaz_msg_${clave}`;
     const filaMsg = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [userId, claveMsg]);
     const msgId = filaMsg?.estado || null;
+
+    if (msgId && !forzarReubicar) {
+        const claveTiempo = `ultimo_bump_${clave}`;
+        const filaTiempo = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [userId, claveTiempo]);
+        const ultimoBump = filaTiempo ? Number(filaTiempo.estado) : 0;
+        if (Date.now() - ultimoBump >= BUMP_INTERVALO_MS) forzarReubicar = true;
+    }
+    if (forzarReubicar) {
+        await db.run(
+            `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, ?, ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
+            [userId, `ultimo_bump_${clave}`, String(Date.now()), String(Date.now())]
+        );
+    }
+
+    // Reubicar = mandarlo de nuevo al final del historial en vez de editarlo
+    // donde ya estaba — hace falta borrar el viejo primero, si no queda uno
+    // parado en el medio del chat y otro nuevo al final (duplicado).
+    if (msgId && forzarReubicar) {
+        try { await axios.delete(`${webhookUrl}/messages/${msgId}`, { timeout: 10000 }); } catch (e) { /* si ya no existe, no pasa nada */ }
+    }
 
     // Un FormData con streams de archivo solo se puede mandar UNA vez — si el
     // PATCH falla (mensaje borrado) y se reintenta con POST reusando el mismo
@@ -1300,11 +1434,17 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
         if (!archivos.length) return { data: payloadJson, headers: undefined };
         const form = new FormData();
         archivos.forEach((a, i) => form.append(`files[${i}]`, fs.createReadStream(a.ruta), { filename: a.filename }));
-        form.append('payload_json', JSON.stringify(payloadJson));
+        // Sin este campo, un PATCH con archivos nuevos no reemplaza los adjuntos
+        // viejos del mensaje — Discord los va acumulando, y el mismo mensaje
+        // termina mostrando la imagen vieja suelta (fuera del embed) junto con
+        // la nueva de adentro del embed. Declarar exactamente estos índices como
+        // "los únicos adjuntos" fuerza a Discord a descartar cualquier otro.
+        const payloadConAdjuntos = { ...payloadJson, attachments: archivos.map((a, i) => ({ id: i })) };
+        form.append('payload_json', JSON.stringify(payloadConAdjuntos));
         return { data: form, headers: form.getHeaders() };
     };
 
-    if (msgId) {
+    if (msgId && !forzarReubicar) {
         try {
             const { data, headers } = construirRequest();
             await axios.patch(`${webhookUrl}/messages/${msgId}`, data, { headers, timeout: 15000 });
@@ -1322,7 +1462,7 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
     );
 }
 
-async function enviarComandoAlCanal(commandKey, user, row) {
+async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = false) {
     if (commandKey === 'card_wishlist') {
         const embed = construirEmbedWishlistInicio(user);
         const fila = new ActionRowBuilder().addComponents(
@@ -1340,7 +1480,7 @@ async function enviarComandoAlCanal(commandKey, user, row) {
             embed.setThumbnail('attachment://wish.png');
             archivos.push({ ruta: thumbPath, filename: 'wish.png' });
         }
-        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos);
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar);
         return;
     }
     if (commandKey === 'card_all') {
@@ -1360,7 +1500,7 @@ async function enviarComandoAlCanal(commandKey, user, row) {
             embed.setThumbnail('attachment://symbol.png');
             archivos.push({ ruta: symbolPath, filename: 'symbol.png' });
         }
-        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos);
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar);
         return;
     }
     if (commandKey === 'extract_xlm') {
@@ -1368,7 +1508,7 @@ async function enviarComandoAlCanal(commandKey, user, row) {
         const fila = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('extract_xlm_abrir').setLabel('📋 Paste XLM').setStyle(ButtonStyle.Primary)
         );
-        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] });
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, [], forzarReubicar);
         return;
     }
     if (commandKey === 'run_instance') {
@@ -1376,11 +1516,11 @@ async function enviarComandoAlCanal(commandKey, user, row) {
         const fila = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('mumu_ver_instancias').setLabel('🎮 View Instances').setStyle(ButtonStyle.Primary)
         );
-        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] });
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, [], forzarReubicar);
         return;
     }
     const embed = construirEmbedComando(commandKey, user);
-    await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed] });
+    await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed] }, [], forzarReubicar);
 }
 
 async function ejecutarComandoEnCanal(interaction, commandKey) {
@@ -1402,7 +1542,10 @@ async function ejecutarComandoEnCanal(interaction, commandKey) {
 
     await interaction.deferReply({ ephemeral: true });
     try {
-        await enviarComandoAlCanal(commandKey, interaction.user, row);
+        // Correr el comando a mano siempre lo manda al final del historial —
+        // no hace falta esperar el chequeo automático de 5 minutos, es una
+        // forma explícita de traerlo de vuelta cuando el usuario lo pide.
+        await enviarComandoAlCanal(commandKey, interaction.user, row, true);
         return await interaction.editReply({ content: `✅ **${cfg.label}** sent successfully.` });
     } catch (error) {
         console.error(`Error enviando ${commandKey}:`, error?.response?.data || error?.message || error);
@@ -2091,9 +2234,11 @@ client.on('interactionCreate', async interaction => {
         const panel = await generarPanelControl(interaction.user.id);
         if (rowSetup) {
             // Un solo panel parado en el canal (se edita in situ), en vez de uno
-            // nuevo cada vez que alguien corre /setup de nuevo.
+            // nuevo cada vez que alguien corre /setup de nuevo — pero correrlo a
+            // mano sí lo manda al final del historial, sin esperar el chequeo
+            // automático de 5 minutos.
             await interaction.deferReply({ ephemeral: true });
-            await enviarOEditarInterfaz(interaction.user.id, 'setup', rowSetup.webhook_url, panel);
+            await enviarOEditarInterfaz(interaction.user.id, 'setup', rowSetup.webhook_url, panel, [], true);
             return await interaction.editReply({ content: '✅ Panel updated.' });
         }
         await interaction.deferReply();
@@ -2153,11 +2298,26 @@ client.on('interactionCreate', async interaction => {
         if (rowFeedback && interaction.channelId !== rowFeedback.canal_id) {
             return await interaction.reply({ content: `❌ This command only works in <#${rowFeedback.canal_id}>.`, ephemeral: true });
         }
+        const imagenAdjunta = interaction.options.getAttachment('image');
+        if (imagenAdjunta) {
+            imagenFeedbackPendiente.set(interaction.user.id, imagenAdjunta.url);
+            setTimeout(() => {
+                if (imagenFeedbackPendiente.get(interaction.user.id) === imagenAdjunta.url) imagenFeedbackPendiente.delete(interaction.user.id);
+            }, FEEDBACK_IMAGEN_TTL_MS);
+        } else {
+            imagenFeedbackPendiente.delete(interaction.user.id);
+        }
+
         const modalFeedback = new ModalBuilder().setCustomId('modal_feedback').setTitle('Feedback about the bot')
-            .addComponents(new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('input_feedback_texto').setLabel('What do you think? What\'s missing or what failed?')
-                    .setStyle(TextInputStyle.Paragraph).setMinLength(10).setMaxLength(1000)
-            ));
+            .addComponents(
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('input_feedback_titulo').setLabel('Title').setStyle(TextInputStyle.Short).setMinLength(3).setMaxLength(100)
+                ),
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('input_feedback_texto').setLabel('What do you think? What\'s missing or what failed?')
+                        .setStyle(TextInputStyle.Paragraph).setMinLength(10).setMaxLength(1000)
+                )
+            );
         return await interaction.showModal(modalFeedback);
     }
 
@@ -2211,14 +2371,19 @@ client.on('interactionCreate', async interaction => {
             }
 
             await interaction.deferReply({ ephemeral: true });
+            const titulo = interaction.fields.getTextInputValue('input_feedback_titulo').trim();
             const texto = interaction.fields.getTextInputValue('input_feedback_texto').trim();
+            const imagenUrl = imagenFeedbackPendiente.get(interaction.user.id);
+            imagenFeedbackPendiente.delete(interaction.user.id);
 
             try {
                 await axios.post(`${FEEDBACK_WEBHOOK_URL}?wait=true`, {
                     embeds: [{
-                        title: '📝 New feedback',
+                        title: `📝 ${titulo}`,
                         description: texto,
                         color: 0x5865F2,
+                        author: { name: interaction.user.tag, icon_url: interaction.user.displayAvatarURL() },
+                        image: imagenUrl ? { url: imagenUrl } : undefined,
                         fields: [
                             { name: 'From', value: `${interaction.user.tag} (\`${interaction.user.id}\`)`, inline: true },
                             { name: 'Server', value: `${interaction.guild?.name || 'Unknown'} (\`${interaction.guildId}\`)`, inline: true }
@@ -2576,11 +2741,25 @@ client.on('interactionCreate', async interaction => {
             const [index, nombre] = interaction.customId.replace('mumu_encender_', '').split('::');
             await interaction.deferUpdate();
             const ok = lanzarInstanciaMuMu(index);
-            const instancias = obtenerInstanciasMuMu();
+
+            // Launch solo pide a MuMu que arranque — el sistema Android adentro tarda
+            // varios segundos más en terminar de bootear. Chequear el estado apenas
+            // se manda el launch siempre da "Off" (MuMu ya abrió la ventana, pero
+            // is_android_started todavía no). Se espera en un loop en vez de mirar
+            // una sola vez, hasta 40s (típico de un boot normal de esta instancia).
+            let instancias = null;
+            let instanciaInfo = null;
+            for (let intento = 0; intento < 20; intento++) {
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+                instancias = obtenerInstanciasMuMu();
+                if (instancias === null) break;
+                instanciaInfo = instancias.find(i => String(i.index) === String(index));
+                if (instanciaInfo?.is_android_started) break;
+            }
+
             if (instancias === null) {
                 return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', embeds: [], components: [] });
             }
-            const instanciaInfo = instancias.find(i => String(i.index) === String(index));
             const payload = construirEmbedInstanciasMuMu(instancias, { index, name: nombre, encendida: ok && !!instanciaInfo?.is_android_started });
             return await interaction.editReply(payload);
         }
@@ -2883,33 +3062,31 @@ client.on('interactionCreate', async interaction => {
                         }
                     ];
 
+                    // Solo canales que tienen un comando real asignado (aunque no se pueda
+                    // "ejecutar" solo, como /embed, /webhook, /feedback) o que explican algo
+                    // que no se repite (Updates/Support) reciben un embed al sincronizar. El
+                    // resto (rareza, godpacks, s4t, heartbeat, wishlist-feed) no tiene ningún
+                    // comando propio — meter un embed ahí es ruido innecesario en canales que
+                    // además reciben cartas todo el tiempo.
                     const EMBEDS_BIENVENIDA_POR_TIPO = {
                         actualizaciones: { title: '🔔 Updates', description: 'You\'ll get notified here whenever there\'s a new bot update, with a button to install it right away.' },
                         apoyo: { title: '💝 Support this project', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
-                        cmd_setup: { title: '⚙ Settings', description: 'This is where you use `/setup` — opens the bot control panel (build channels, etc).' },
                         cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
                         cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
-                        cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot.' },
-                        heartbeat: { title: '💓 Heartbeat', description: 'This is where the bot reports that it\'s still alive and running — the message updates itself, no action needed.' },
-                        s4t: { title: '🤖 S4T', description: 'Every find is posted here as soon as it\'s detected, before being classified by rarity.' },
-                        '3-diamond': { title: '🔷 3 Diamond', description: '3-diamond rarity cards found are posted here automatically.' },
-                        '4-diamond': { title: '💠 4 Diamond', description: '4-diamond rarity cards found are posted here automatically.' },
-                        '1-star': { title: '⭐ 1 Star', description: '1-star rarity cards found are posted here automatically.' },
-                        '1-star-shiny': { title: '🌟 1 Star Shiny', description: '1-star shiny rarity cards found are posted here automatically.' },
-                        '2-star-trainer': { title: '⭐⭐ 2 Star Trainer', description: '2-star trainer rarity cards found are posted here automatically.' },
-                        '2-star-rainbow': { title: '🌈 2 Star Rainbow', description: '2-star rainbow rarity cards found are posted here automatically.' },
-                        '2-star-full-art': { title: '🎨 2 Star Full Art', description: '2-star full art rarity cards found are posted here automatically.' },
-                        '2-star-shiny': { title: '✨ 2 Star Shiny', description: '2-star shiny rarity cards found are posted here automatically.' },
-                        immersive: { title: '🌌 Immersive', description: 'Immersive rarity cards found are posted here automatically.' },
-                        'crown-rare': { title: '👑 Crown Rare', description: 'Crown rare rarity cards found are posted here automatically.' },
-                        wishlist: { title: '💖 Wishlist', description: 'Finds that match a card marked in a wishlist are posted here.' },
-                        'godpack-general': { title: '📦 God Pack General', description: 'Everything detected as a God Pack is reported here, whether alive or dead — this is the full audit channel.' },
-                        'godpack-alive': { title: '👼 God Pack Alive', description: 'God Packs whose cards are ALL low/standard rarity (1-star, 2-star-trainer, 2-star-full-art, or 2-star-rainbow) — the ones with the highest community value.' },
-                        'godpack-dead': { title: '☠️ God Pack Dead', description: 'God Packs that include a card outside those rarities (shiny, crown, immersive, etc.) — they lose the "alive" classification.' },
-                        cmd_card_wishlist: { title: '💖 Cards Wishlist', description: 'This is where you use `/wishlist` to search for and view the cards in your wishlist.' },
-                        cmd_card_all: { title: '⚡ All Cards', description: 'This is where you use `/card` to search for and view any card in the game.' },
-                        cmd_extract_xlm: { title: '📄 Extract XLM', description: 'This is where you use `/extract xlm` to extract XLM in this channel.' },
-                        cmd_run_instance: { title: '🎮 Run MumuPlayer', description: 'This is where you use `/run instance` to open a MuMu Player instance.' }
+                        cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot — you can attach a screenshot too.' }
+                    };
+
+                    // Canales con un comando real y no-efímero asignado: en vez del embed
+                    // genérico de "acá usas /x", se ejecuta el comando de verdad para que el
+                    // usuario vea la interfaz funcionando apenas se crea el canal.
+                    // cmd_build_embed/cmd_build_webhooks/cmd_feedback quedan afuera porque
+                    // esos comandos responden de forma efímera (o abren un modal), así que no
+                    // hay nada persistente que publicar en el canal sin una interacción real.
+                    const COMANDOS_REALES_POR_TIPO = {
+                        cmd_card_wishlist: 'card_wishlist',
+                        cmd_card_all: 'card_all',
+                        cmd_extract_xlm: 'extract_xlm',
+                        cmd_run_instance: 'run_instance'
                     };
 
                     const crearCategoriaSiNoExiste = async (nombreCategoria) => {
@@ -2927,6 +3104,20 @@ client.on('interactionCreate', async interaction => {
                         return categoria;
                     };
 
+                    // Un webhook borrado (por lo que sea, incluso fuera de este bot) sigue
+                    // guardado en la DB con su URL de siempre — Discord no avisa, solo
+                    // empieza a devolver 404 "Unknown Webhook" al usarlo. Sin este chequeo,
+                    // "Sincronizar Canales" nunca se entera y el canal queda roto para
+                    // siempre hasta borrarlo a mano.
+                    const webhookEstaVivo = async (url) => {
+                        try {
+                            await axios.get(url, { timeout: 5000 });
+                            return true;
+                        } catch (e) {
+                            return false;
+                        }
+                    };
+
                     const crearCanalSincronizado = async (categoria, tipo, nombreCanal) => {
                         let canal = interaction.guild.channels.cache.find(ch => ch.name === nombreCanal && ch.parentId === categoria.id);
                         if (!canal) {
@@ -2940,7 +3131,7 @@ client.on('interactionCreate', async interaction => {
                         }
 
                         const filaExistente = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
-                        if (filaExistente && filaExistente.canal_id === canal.id && filaExistente.webhook_url && filaExistente.webhook_url !== 'N/A') {
+                        if (filaExistente && filaExistente.canal_id === canal.id && filaExistente.webhook_url && filaExistente.webhook_url !== 'N/A' && (await webhookEstaVivo(filaExistente.webhook_url))) {
                             return canal;
                         }
 
@@ -2954,9 +3145,17 @@ client.on('interactionCreate', async interaction => {
                         await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
                         await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.user.id, tipo, canal.id, webhook.url]);
 
-                        const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
-                        if (embedBienvenida) {
-                            await enviarOEditarInterfaz(interaction.user.id, tipo, webhook.url, { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] });
+                        const commandKeyReal = COMANDOS_REALES_POR_TIPO[tipo];
+                        if (commandKeyReal) {
+                            await enviarComandoAlCanal(commandKeyReal, interaction.user, { webhook_url: webhook.url, canal_id: canal.id });
+                        } else if (tipo === 'cmd_setup') {
+                            const panel = await generarPanelControl(interaction.user.id);
+                            await enviarOEditarInterfaz(interaction.user.id, 'setup', webhook.url, panel);
+                        } else {
+                            const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
+                            if (embedBienvenida) {
+                                await enviarOEditarInterfaz(interaction.user.id, tipo, webhook.url, { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] });
+                            }
                         }
 
                         return canal;

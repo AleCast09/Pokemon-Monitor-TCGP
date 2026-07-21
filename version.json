@@ -1,8 +1,14 @@
 {
-  "version": "1.3.2",
+  "version": "1.4.0",
   "notes": [
-    "Fixed: changing settings (like HD) via Reconfigure now takes effect right away — no more closing and reopening the program by hand.",
-    "Security hardening: the feedback webhook is no longer stored as plain text, and the assets auto-update now checks for unsafe file paths before extracting."
+    "Channels with a real command (Cards, Wishlist, Extract XLM, Auto Trade, Settings) now show the actual working panel as soon as they're created, instead of a generic description.",
+    "The setup wizard now shows the S4T and Heartbeat addresses to use in your reroll tool right on the \"Saved\" screen.",
+    "Feedback now supports a title, an optional screenshot, and shows your Discord profile.",
+    "Fixed: channel panels sometimes appeared duplicated when editing them.",
+    "Panels now move to the bottom of the channel automatically after 5 minutes of use, and always move there when you run the command by hand.",
+    "Fixed: \"Sync Channels\" now detects and repairs webhooks that stopped working, without needing to delete the channel.",
+    "Fixed: the MuMu \"Turn On\" button now waits for the instance to actually finish starting before reporting its status.",
+    "The trade/injection automation is now protected against stuck confirmation windows, and no longer freezes waiting for a click that never comes."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe",
   "assetsUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip"

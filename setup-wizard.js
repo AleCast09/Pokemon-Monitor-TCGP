@@ -5,6 +5,27 @@ const { exec } = require('child_process');
 
 const ENV_PATH = path.join(__dirname, '.env');
 const ACCESO_DIRECTO_PATH = path.join(__dirname, 'Open configuration.url');
+const PUERTOS_AVISO_PATH = path.join(__dirname, 'Ports in use.txt');
+
+// Puertos que el usuario debe pegar en el bot de Kevin (P BOT): por defecto los
+// de siempre, salvo que "Ports in use.txt" ya haya registrado uno real distinto
+// (auto-fallback por puerto ocupado) o el .env traiga un override manual.
+function obtenerUrlsPBot() {
+    const base = {
+        S4T: Number(process.env.S4T_PORT) || 3000,
+        Heartbeat: Number(process.env.HEARTBEAT_PORT) || 3003
+    };
+    if (fs.existsSync(PUERTOS_AVISO_PATH)) {
+        try {
+            const contenido = fs.readFileSync(PUERTOS_AVISO_PATH, 'utf8');
+            for (const linea of contenido.split(/\r?\n/)) {
+                const match = linea.match(/^(\w+): http:\/\/localhost:(\d+)$/);
+                if (match && base[match[1]] !== undefined) base[match[1]] = Number(match[2]);
+            }
+        } catch (e) { /* si falla la lectura, se usan los valores por defecto */ }
+    }
+    return { s4tUrl: `http://localhost:${base.S4T}`, heartbeatUrl: `http://localhost:${base.Heartbeat}` };
+}
 
 function leerEnvExistente() {
     if (!fs.existsSync(ENV_PATH)) return {};
@@ -158,6 +179,12 @@ body {
 .hidden { display: none !important; }
 .success-screen { display: none; flex-direction: column; align-items: center; text-align: center; padding: 48px 26px; gap: 12px; }
 .success-screen.show { display: flex; }
+.ports-box { margin-top: 8px; width: 100%; max-width: 320px; text-align: left; background: var(--field-bg);
+  border: 1px solid var(--field-border); border-radius: 11px; padding: 12px 14px; }
+.ports-box__title { margin: 0 0 8px; font-size: 11.5px; font-weight: 700; color: var(--ink-muted); }
+.ports-box__row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; padding: 3px 0; }
+.ports-box__row b { color: var(--ink); }
+.ports-box__row code { color: var(--accent-strong); font-weight: 600; }
 .success-icon { width: 52px; height: 52px; border-radius: 50%; background: var(--good-soft); display: flex; align-items: center; justify-content: center; }
 .success-icon svg { width: 26px; height: 26px; color: var(--good); }
 .success-title { font-weight: 800; font-size: 16px; margin: 0; }
@@ -247,6 +274,12 @@ body {
     <div class="success-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
     <p class="success-title">Done!</p>
     <p class="success-desc">Monitor Pokémon is starting up. You can close this tab now.</p>
+    <div class="ports-box">
+      <p class="ports-box__title">Use these addresses in Kevin's bot (P BOT):</p>
+      <div class="ports-box__row"><b>S4T</b> <code>__S4T_URL__</code></div>
+      <div class="ports-box__row"><b>Heartbeat</b> <code>__HEARTBEAT_URL__</code></div>
+    </div>
+    <p class="success-desc">If a port was busy, check "Ports in use.txt" in this same folder for the real ones.</p>
   </div>
 </div>
 
@@ -415,11 +448,14 @@ function ejecutarWizard() {
                 const tokenConectado = !!(valores.DISCORD_BOT_TOKEN && valores.DISCORD_BOT_TOKEN.trim());
                 const driveConectado = !!(valores.GOOGLE_DRIVE_API_KEY && valores.GOOGLE_DRIVE_API_KEY.trim());
                 const hdActual = driveConectado && valores.GOOGLE_DRIVE_HD_ENABLED !== 'false';
+                const { s4tUrl, heartbeatUrl } = obtenerUrlsPBot();
                 const html = paginaHtml()
                     .split('__LOGO_B64__').join(logoBase64())
                     .split('__TOKEN_CONECTADO__').join(String(tokenConectado))
                     .split('__DRIVE_CONECTADO__').join(String(driveConectado))
-                    .split('__HD_ACTUAL__').join(String(hdActual));
+                    .split('__HD_ACTUAL__').join(String(hdActual))
+                    .split('__S4T_URL__').join(s4tUrl)
+                    .split('__HEARTBEAT_URL__').join(heartbeatUrl);
                 res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
                 res.end(html);
                 return;
