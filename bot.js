@@ -3292,6 +3292,12 @@ client.once('ready', async () => {
     }
 
     chequearActualizaciones(client);
+
+    // El bot está pensado para quedarse prendido semanas sin reiniciarse —
+    // si el chequeo de actualización solo corriera acá (una sola vez al
+    // arrancar), alguien que nunca lo reinicia nunca se enteraría de una
+    // versión nueva. Se repite cada 6 horas, sin tocar nada del proceso.
+    setInterval(() => chequearActualizaciones(client), 6 * 60 * 60 * 1000);
 });
 
 client.on('guildCreate', async (guild) => {

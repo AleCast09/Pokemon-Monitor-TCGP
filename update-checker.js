@@ -66,8 +66,18 @@ async function chequearActualizaciones(client) {
         const remota = await obtenerVersionRemota();
         if (!esVersionMasNueva(remota.version, local.version)) return;
 
+        // Este chequeo ahora se repite cada varias horas (para que alguien que
+        // deja el bot prendido sin reiniciar igual se entere) — sin esto,
+        // volvería a mandar el mismo aviso de la misma versión en cada
+        // repetición mientras el usuario no actualice, en vez de avisar una
+        // sola vez por versión nueva.
+        const filaAvisado = await db.get(`SELECT status FROM estados_modulos WHERE nombre = 'version_avisada'`);
+        if (filaAvisado?.status === remota.version) return;
+
         const destino = await obtenerDestinoNotificacion(client);
         if (!destino) return;
+
+        await db.run(`INSERT INTO estados_modulos (nombre, status) VALUES ('version_avisada', ?) ON CONFLICT(nombre) DO UPDATE SET status = excluded.status`, [remota.version]);
 
         const payload = construirPayloadActualizacion(local, remota);
 
