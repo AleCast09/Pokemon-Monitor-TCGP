@@ -416,9 +416,30 @@ public class ControlPanelForm : Form {
         txt.Cursor = Cursors.Hand;
         txt.Click += (s, e) => {
             if (string.IsNullOrEmpty(txt.Text)) return;
-            Clipboard.SetText(txt.Text);
-            tooltipCopiado.Show("Copied!", txt, txt.Width / 2, -20, 1200);
+            if (CopiarAlPortapapelesConReintentos(txt.Text)) {
+                tooltipCopiado.Show("Copied!", txt, txt.Width / 2, -20, 1200);
+            } else {
+                tooltipCopiado.Show("Could not copy, try again", txt, txt.Width / 2, -20, 1500);
+            }
         };
+    }
+
+    // Bug real reportado por un usuario externo: Clipboard.SetText puede
+    // tirar "Requested Clipboard operation did not succeed" si el
+    // portapapeles esta momentaneamente ocupado por otro programa (o el
+    // historial del portapapeles de Windows) - es una condicion de carrera
+    // conocida de la API de Windows, no algo que dependa de nuestro codigo.
+    // Reintentar un par de veces con una espera corta casi siempre alcanza.
+    bool CopiarAlPortapapelesConReintentos(string texto) {
+        for (int intento = 0; intento < 4; intento++) {
+            try {
+                Clipboard.SetText(texto);
+                return true;
+            } catch (System.Runtime.InteropServices.ExternalException) {
+                System.Threading.Thread.Sleep(80);
+            }
+        }
+        return false;
     }
 
     // El cuadro se achica/agranda para que ocupe justo el largo del texto

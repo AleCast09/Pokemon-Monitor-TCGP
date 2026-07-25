@@ -1,6 +1,7 @@
 {
-  "version": "1.5.0",
+  "version": "1.5.1",
   "notes": [
+    "Fixed: clicking the S4T/Heartbeat fields to copy them could show a Windows clipboard error and crash the panel (found by a real user testing it) - it now retries automatically instead of failing.",
     "New: a real control panel window (Start/Stop/Restart, live Token/API status, one-click copy for the S4T/Heartbeat addresses, Discord bot/server/user info, and a Donate/Tutorials shortcut) replaces juggling separate .bat files.",
     "The panel now warns you right there when a new version is out, with a button to download it directly or jump to the Updates channel.",
     "Advanced/rarely-needed files (Start, Reconfigure, Quit, Unblock) moved into an \"Advanced\" folder to keep the main folder clean — the control panel covers all of that day-to-day.",
