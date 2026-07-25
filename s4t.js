@@ -7,6 +7,8 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('./native-require.js')('sharp');
 const db = require('./database.js');
+const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
+iniciarAutoSyncCardTypes();
 
 const INGEST_AUTH_TOKEN = process.env.INGEST_AUTH_TOKEN || '';
 const REQUIRE_INGEST_AUTH = /^true$/i.test(process.env.REQUIRE_INGEST_AUTH || (process.env.NODE_ENV === 'production' ? 'true' : 'false'));
@@ -130,37 +132,41 @@ function detectarRareza(texto) {
     return encontrado ? encontrado.tipo : null;
 }
 
-let _mapaRarezaEmojis = null;
+// bot.js sí tiene un cliente de discord.js y puede subir/leer los emojis
+// reales de CADA servidor (guild-emojis.js, un mapa distinto por instalación
+// de usuario) — vuelca ese mapa ya resuelto acá cada vez que lo arma. s4t.js
+// corre en su propio proceso PM2 sin cliente propio, así que en vez de tener
+// su propia lista fija de IDs (que solo servía para el servidor del dueño
+// original y rompía para cualquier otro usuario), lee este mismo archivo
+// compartido. Se relee del disco en cada llamada (archivo chico, sin costo
+// real) para no necesitar reiniciar "trading" cuando bot.js resuelve/sube
+// emojis nuevos.
+const GUILD_EMOJIS_CACHE_PATH = path.join(__dirname, 'assets', 'guild_emojis_cache.json');
+function cargarMapaEmojisGuildCache() {
+    try {
+        return JSON.parse(fs.readFileSync(GUILD_EMOJIS_CACHE_PATH, 'utf8'));
+    } catch (e) {
+        return {};
+    }
+}
+
 function cargarMapaRarezaEmojis() {
-    if (_mapaRarezaEmojis) return _mapaRarezaEmojis;
-    try {
-        _mapaRarezaEmojis = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'rarity_emojis.json'), 'utf8'));
-    } catch (e) {
-        _mapaRarezaEmojis = {};
-    }
-    return _mapaRarezaEmojis;
+    return cargarMapaEmojisGuildCache();
 }
 
-let _mapaTipoEmojis = null;
 function cargarMapaTipoEmojis() {
-    if (_mapaTipoEmojis) return _mapaTipoEmojis;
-    try {
-        _mapaTipoEmojis = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'type_emojis.json'), 'utf8'));
-    } catch (e) {
-        _mapaTipoEmojis = {};
-    }
-    return _mapaTipoEmojis;
+    return cargarMapaEmojisGuildCache();
 }
 
-let _mapaTiposCarta = null;
+// Sin caché permanente a propósito: card-types-sync.js reescribe este archivo
+// solo cada varias horas (cartas nuevas de una expansión recién salida), y
+// releerlo es barato — así el proceso no necesita reiniciarse para enterarse.
 function cargarMapaTiposCarta() {
-    if (_mapaTiposCarta) return _mapaTiposCarta;
     try {
-        _mapaTiposCarta = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'card_types.json'), 'utf8'));
+        return JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'card_types.json'), 'utf8'));
     } catch (e) {
-        _mapaTiposCarta = {};
+        return {};
     }
-    return _mapaTiposCarta;
 }
 
 const TIPO_LABELS = {
@@ -190,19 +196,39 @@ async function cargarConfigEmbed() {
     return resultado;
 }
 
-function obtenerTagTipoPorNombre(nombreIngles) {
+// Las cartas de Entrenador (Partidario/Objeto/Herramienta) no tienen elemento
+// (Fuego, Agua, etc.) — cardmaster.json las distingue con el campo
+// TrainerType (1=Partidario, 2=Objeto, 3=Herramienta), mismo campo y mapeo
+// que ya usa bot.js para el detalle de carta puntual (trainerTypeDesdeId).
+// Sin esto, las cartas de Entrenador salían sin ningún ícono en los canales
+// de S4T (bug real 2026-07-23), a diferencia de los Pokémon que sí tenían
+// su emoji de tipo.
+const EMOJI_POR_TRAINER_TYPE = { 1: 'card_supporter', 2: 'card_item', 3: 'card_tool' };
+
+function obtenerTagTipoPorNombre(nombreIngles, code, cardmaster) {
     if (!nombreIngles) return null;
+    const mapaEmojis = cargarMapaTipoEmojis();
     const mapaTipos = cargarMapaTiposCarta();
     const tipoIngles = mapaTipos[normalizeText(nombreIngles)];
-    if (!tipoIngles) return null;
 
-    const config = TIPO_LABELS[tipoIngles.toLowerCase()];
-    if (!config) return null;
+    if (tipoIngles) {
+        const config = TIPO_LABELS[tipoIngles.toLowerCase()];
+        if (!config) return null;
+        const idEmoji = mapaEmojis[config.emoji];
+        const tag = idEmoji ? `<:${config.emoji}:${idEmoji}>` : '';
+        return { tag, label: config.label };
+    }
 
-    const mapaEmojis = cargarMapaTipoEmojis();
-    const idEmoji = mapaEmojis[config.emoji];
-    const tag = idEmoji ? `<:${config.emoji}:${idEmoji}>` : '';
-    return { tag, label: config.label };
+    const trainerType = code && cardmaster ? cardmaster[code]?.TrainerType : undefined;
+    if (trainerType !== undefined) {
+        const nombreEmoji = EMOJI_POR_TRAINER_TYPE[trainerType];
+        if (!nombreEmoji) return null;
+        const idEmoji = mapaEmojis[nombreEmoji];
+        const tag = idEmoji ? `<:${nombreEmoji}:${idEmoji}>` : '';
+        return { tag, label: 'Trainer' };
+    }
+
+    return null;
 }
 
 const EXPANSIONS_DIR = path.join(__dirname, 'assets', 'expansions');
@@ -265,28 +291,85 @@ async function componerLogoSobreImagen(bufferCarta, rutaLogo) {
 // Junta 2+ imágenes de carta lado a lado (mismo alto) en una sola imagen, para
 // mandar todas las cartas de wishlist de un mismo sobre en un solo mensaje en
 // vez de un mensaje separado por carta.
-async function componerCollageImagenes(buffers) {
+// Mismo ícono que ya se usa para "icono_wishlist" en otros lados (ver
+// guild-emojis.js) — el bot de Kevin ya marca con un corazón la carta de la
+// captura que corresponde al wishlist; nuestro collage arma sus propias
+// imágenes HD desde el Drive, así que hay que superponer el mismo indicador
+// a mano para no perder esa señal visual (pedido explícito 2026-07-23).
+const WISHLIST_BADGE_PATH = path.join(__dirname, 'assets', 'emojis', 'wishlist.png');
+async function superponerBadgeWishlist(bufferCarta) {
+    if (!fs.existsSync(WISHLIST_BADGE_PATH)) return bufferCarta;
+    try {
+        const metaCarta = await sharp(bufferCarta).metadata();
+        const anchoBadge = Math.round(metaCarta.width * 0.22);
+        const badgeBuffer = await sharp(WISHLIST_BADGE_PATH).resize({ width: anchoBadge }).toBuffer();
+        const metaBadge = await sharp(badgeBuffer).metadata();
+        const margen = Math.round(metaCarta.width * 0.04);
+        return await sharp(bufferCarta)
+            .composite([{ input: badgeBuffer, left: metaCarta.width - metaBadge.width - margen, top: margen }])
+            .toBuffer();
+    } catch (e) {
+        console.log('DEBUG: Error superponiendo badge de wishlist:', e.message);
+        return bufferCarta;
+    }
+}
+
+// Techo de altura por carta en el collage — sin esto, un sobre con muchas
+// cartas HD (10 en el "cuadro completo" del canal general, ver bug real
+// 2026-07-23) arma un PNG de decenas de MB y Discord lo rechaza con 413
+// (Payload Too Large). Con este techo + salida JPEG el collage se mantiene
+// liviano sin importar cuántas cartas tenga el sobre.
+const COLLAGE_ALTURA_MAX = 420;
+// Grilla en vez de una sola tira horizontal (a pedido del usuario, "3 arriba
+// y 2 abajo" para un sobre de 5) — se ajusta solo a cualquier cantidad de
+// cartas (2 packs = 10 cartas → 4 filas de 3/3/3/1, etc).
+const COLLAGE_COLUMNAS = 3;
+
+async function componerCollageImagenes(buffers, esWishlist = []) {
     try {
         const metas = await Promise.all(buffers.map(b => sharp(b).metadata()));
-        const alturaComun = Math.min(...metas.map(m => m.height));
-        const gap = 16;
-        const redimensionadas = await Promise.all(buffers.map((b, i) => {
+        const alturaComun = Math.min(COLLAGE_ALTURA_MAX, ...metas.map(m => m.height));
+        const gap = 12;
+        const redimensionadas = await Promise.all(buffers.map(async (b, i) => {
             const escala = alturaComun / metas[i].height;
-            return sharp(b).resize({ height: alturaComun, width: Math.round(metas[i].width * escala) }).toBuffer();
+            const redimensionada = await sharp(b).resize({ height: alturaComun, width: Math.round(metas[i].width * escala) }).toBuffer();
+            return esWishlist[i] ? superponerBadgeWishlist(redimensionada) : redimensionada;
         }));
         const metasFinal = await Promise.all(redimensionadas.map(b => sharp(b).metadata()));
-        const anchoTotal = metasFinal.reduce((suma, m) => suma + m.width, 0) + gap * (metasFinal.length - 1);
 
-        let left = 0;
+        const filas = [];
+        for (let i = 0; i < redimensionadas.length; i += COLLAGE_COLUMNAS) {
+            filas.push({
+                imagenes: redimensionadas.slice(i, i + COLLAGE_COLUMNAS),
+                metas: metasFinal.slice(i, i + COLLAGE_COLUMNAS)
+            });
+        }
+        const anchoTotal = Math.max(...filas.map(f => f.metas.reduce((suma, m) => suma + m.width, 0) + gap * (f.metas.length - 1)));
+        const altoTotal = filas.length * alturaComun + gap * (filas.length - 1);
+
         const composite = [];
-        for (let i = 0; i < redimensionadas.length; i++) {
-            composite.push({ input: redimensionadas[i], left, top: 0 });
-            left += metasFinal[i].width + gap;
+        let top = 0;
+        for (const fila of filas) {
+            // La última fila puede tener menos cartas que COLLAGE_COLUMNAS (ej.
+            // sobre de 5 → 3 arriba, 2 abajo) — se centra en vez de dejarla pegada
+            // a la izquierda, para no dejar un hueco feo del lado derecho.
+            const anchoFila = fila.metas.reduce((suma, m) => suma + m.width, 0) + gap * (fila.metas.length - 1);
+            let left = Math.round((anchoTotal - anchoFila) / 2);
+            for (let i = 0; i < fila.imagenes.length; i++) {
+                composite.push({ input: fila.imagenes[i], left, top });
+                left += fila.metas[i].width + gap;
+            }
+            top += alturaComun + gap;
         }
 
+        // Fondo transparente (no un color sólido) — con JPEG el hueco de la
+        // última fila incompleta (ej. 3 arriba, 2 abajo) quedaba como un
+        // rectángulo oscuro feo, porque JPEG no tiene canal alfa. El techo de
+        // altura ya mantiene el canvas chico, así que PNG con transparencia
+        // real no debería volver a pasar el límite de Discord.
         return await sharp({
-            create: { width: anchoTotal, height: alturaComun, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
-        }).composite(composite).png().toBuffer();
+            create: { width: anchoTotal, height: altoTotal, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
+        }).composite(composite).png({ compressionLevel: 9 }).toBuffer();
     } catch (e) {
         console.log('DEBUG: Error componiendo collage de imágenes:', e.message);
         return buffers[0];
@@ -933,8 +1016,16 @@ app.post('/', upload.any(), async (req, res) => {
             const textoLinea = lineas[i].toLowerCase().replace(/\s+/g, ' ');
             const rareza = detectarRareza(textoLinea);
             if (rareza && i + 1 < lineas.length) {
-                const nombreCarta = normalizarNombreEx(obtenerNombreCartaDesdeLineas(lineas, i + 1));
-                if (nombreCarta) {
+                const nombreCrudo = obtenerNombreCartaDesdeLineas(lineas, i + 1);
+                // El juego a veces junta 2+ cartas de la MISMA rareza en una sola
+                // línea separadas por coma (ej. rareza "1 Star (x2)" seguida del
+                // nombre "Piplup, Mareanie"), en vez de repetir el bloque
+                // rareza+nombre por cada una. Sin separarlas, "Piplup, Mareanie"
+                // se trataba como el nombre literal de una sola carta inexistente
+                // y resolverImagen() nunca encontraba imagen para ninguna de las
+                // dos (ver bug real 2026-07-23: imgPath=none, matched="none").
+                const nombresIndividuales = (nombreCrudo || '').split(',').map(n => normalizarNombreEx(n.trim())).filter(Boolean);
+                for (const nombreCarta of nombresIndividuales) {
                     console.log(`DEBUG: rareza detectada=${rareza} linea="${textoLinea}" carta="${nombreCarta}"`);
                     const lineaConIcono = formatearLineaRareza(lineas[i], rareza);
                     const displayCarta = configEmbed.mostrar_categoria
@@ -1078,7 +1169,7 @@ app.post('/', upload.any(), async (req, res) => {
         // igual que el emoji de rareza, en vez de un campo aparte.
         cartas.forEach(carta => {
             if (!configEmbed.mostrar_tipo) return;
-            const tipoInfo = obtenerTagTipoPorNombre(carta.nombre);
+            const tipoInfo = obtenerTagTipoPorNombre(carta.nombre, carta.matchedCard?.code, masterData.cardmaster);
             if (tipoInfo && tipoInfo.tag && carta.display) {
                 // Reconstruye la línea del nombre de forma explícita en vez de buscar y
                 // reemplazar texto, para que quede igual de prolijo sin importar el modo
@@ -1133,12 +1224,30 @@ app.post('/', upload.any(), async (req, res) => {
             if (cartas.length > 0) console.log('DEBUG: cartas sintetizadas desde pull wishlist=', cartas.map(c => c.nombre).join(', '));
         }
 
-        if (cartas.length > 0) {
-            const displayGeneral = cartas.map(c => c.display).join('\n\n');
-            // Arte oficial de CardImageCache en vez de la captura de pantalla cruda
-            // del teléfono (baja calidad) — mismo criterio que wishlist/godpack.
-            const cartasGeneral = cartas.map(c => c.matchedCard || c);
+        if (cartas.length > 0 || cartasPull.length > 0) {
+            // El canal general de S4T muestra el texto de la(s) carta(s) NOTABLE(s)
+            // nomás (igual que siempre — el mismo texto corto que ya se manda a los
+            // canales de rareza), pero la FOTO es el sobre completo tal cual salió
+            // (comunes incluidas, con el corazón marcando la carta de wishlist si la
+            // hay) — así queda igual que se veía antes de los cambios de HD, pedido
+            // explícito 2026-07-23. cartasPull tiene todas las cartas del pull real;
+            // si no hay ruta_json_cuentas configurada (o no se encontró el pull), se
+            // cae a mostrar solo las notables como imagen también, como respaldo.
+            const displayGeneral = cartas.length > 0
+                ? cartas.map(c => c.display).join('\n\n')
+                : cartasPull.filter(c => c.isWishlist).map(c => `> **${normalizarNombreEx(c.englishName || c.name)}**`).join('\n\n');
+            const cartasGeneral = cartasPull.length > 0 ? cartasPull : cartas.map(c => c.matchedCard || c);
             envios.push({ tipoCanal: 's4t', display: displayGeneral, cartasGeneral });
+        }
+
+        // Canal aparte "s4t-categoria": el comportamiento VIEJO de "s4t" antes de
+        // este cambio (a pedido del usuario, para no perder esa vista) — solo las
+        // cartas con rareza trackeada (las mismas que se reparten abajo por canal
+        // de categoría), en vez del sobre completo.
+        if (cartas.length > 0) {
+            const displayCategoria = cartas.map(c => c.display).join('\n\n');
+            const cartasCategoria = cartas.map(c => c.matchedCard || c);
+            envios.push({ tipoCanal: 's4t-categoria', display: displayCategoria, cartasGeneral: cartasCategoria });
         }
 
         for (const c of cartas) {
@@ -1148,7 +1257,7 @@ app.post('/', upload.any(), async (req, res) => {
         if (wishlistUnificada.length > 0) {
             const listaNombres = wishlistUnificada
                 .map(w => {
-                    const tipoInfo = configEmbed.mostrar_tipo ? obtenerTagTipoPorNombre(w.nombre) : null;
+                    const tipoInfo = configEmbed.mostrar_tipo ? obtenerTagTipoPorNombre(w.nombre, w.card?.code, masterData.cardmaster) : null;
                     const tipoPrefijo = tipoInfo && tipoInfo.tag ? `${tipoInfo.tag} › ` : '';
                     const lineaRareza = configEmbed.mostrar_categoria ? formatearRarezaWishlist(w.rareza) : '';
                     const lineaNombre = `${tipoPrefijo}**${w.nombre}**`;
@@ -1165,7 +1274,7 @@ app.post('/', upload.any(), async (req, res) => {
         if (esGodPack) {
             const nombresGodPack = cartas.map(c => {
                 if (!c.nombre) return null;
-                const tipoInfo = configEmbed.mostrar_tipo ? obtenerTagTipoPorNombre(c.nombre) : null;
+                const tipoInfo = configEmbed.mostrar_tipo ? obtenerTagTipoPorNombre(c.nombre, c.matchedCard?.code, masterData.cardmaster) : null;
                 const tipoPrefijo = tipoInfo && tipoInfo.tag ? `${tipoInfo.tag} › ` : '';
                 const lineaRareza = configEmbed.mostrar_categoria ? formatearRarezaWishlist(c.rareza) : '';
                 const lineaNombre = `${tipoPrefijo}**${c.nombre}**`;
@@ -1228,14 +1337,20 @@ app.post('/', upload.any(), async (req, res) => {
                 // de la captura de pantalla del teléfono.
                 const listaCartas = data.cartasWishlist || data.cartasGodPack || data.cartasGeneral;
                 const buffers = [];
+                const esWishlist = [];
                 for (const cartaItem of listaCartas) {
                     const imagePath = await resolverImagen(rutaMasterCfg?.webhook_url, cartaItem, cartasPorCodigo, masterData, mapa, cardMap);
-                    if (imagePath) buffers.push(fs.readFileSync(imagePath));
+                    if (imagePath) {
+                        buffers.push(fs.readFileSync(imagePath));
+                        esWishlist.push(!!cartaItem.isWishlist);
+                    }
                 }
                 if (buffers.length === 1) {
-                    bufferImagen = buffers[0];
+                    // Igual que en el collage: marcar con el corazón si esa única carta
+                    // es el match de wishlist (ej. canal general con un sobre chico).
+                    bufferImagen = esWishlist[0] ? await superponerBadgeWishlist(buffers[0]) : buffers[0];
                 } else if (buffers.length > 1) {
-                    bufferImagen = await componerCollageImagenes(buffers);
+                    bufferImagen = await componerCollageImagenes(buffers, esWishlist);
                 }
             } else {
                 imgPath = await resolverImagen(rutaMasterCfg?.webhook_url, data, cartasPorCodigo, masterData, mapa, cardMap);
@@ -1317,11 +1432,31 @@ function avisarPuertoCambiado(nombreServicio, puertoReal) {
     } catch (e) { /* si falla, el puerto real igual queda en el log */ }
 }
 
+// Sin esto, si el conflicto de puertos era pasajero (ej. otra copia de
+// prueba que ya se cerró) y el servicio vuelve a arrancar bien en su puerto
+// de siempre, el archivo se quedaba con el aviso viejo para siempre — el
+// usuario veía un puerto que ya no correspondía a nada real (bug real
+// encontrado 2026-07-24: el panel mostraba localhost:3001 mientras el
+// servicio real ya estaba de vuelta en el 3000).
+function limpiarAvisoPuertoSiVuelveAlDefault(nombreServicio) {
+    try {
+        if (!fs.existsSync(RUTA_AVISO_PUERTOS)) return;
+        const prefijo = `${nombreServicio}: `;
+        const lineasDatos = fs.readFileSync(RUTA_AVISO_PUERTOS, 'utf8').split(/\r?\n/).filter((l) => l.includes(': http://localhost:') && !l.startsWith(prefijo));
+        if (lineasDatos.length === 0) {
+            fs.unlinkSync(RUTA_AVISO_PUERTOS);
+        } else {
+            fs.writeFileSync(RUTA_AVISO_PUERTOS, [...ENCABEZADO_AVISO_PUERTOS, ...lineasDatos].join('\r\n') + '\r\n', 'utf8');
+        }
+    } catch (e) { /* no bloquea el arranque */ }
+}
+
 const S4T_PORT_BASE = Number(process.env.S4T_PORT) || 3000;
 function iniciarServidorS4T(puerto, intento = 0) {
     const servidor = app.listen(puerto, '127.0.0.1', () => {
         console.log(`🚀 S4T Online (port ${puerto})`);
         if (puerto !== S4T_PORT_BASE) avisarPuertoCambiado('S4T', puerto);
+        else limpiarAvisoPuertoSiVuelveAlDefault('S4T');
     });
     servidor.on('error', (err) => {
         if (err.code === 'EADDRINUSE' && intento < 10) {

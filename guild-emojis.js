@@ -25,8 +25,26 @@ const FUENTES_EMOJIS = {
     type_metal: 'element/type_metal.avif',
     type_dragon: 'element/type_dragon.avif',
     type_colorless: 'element/type_colorless.avif',
-    card_supporter: 'element/card_supporter.avif',
-    card_item: 'element/card_item.avif'
+    card_supporter: 'element/card_supporter.png',
+    card_item: 'element/card_item.png',
+    card_tool: 'element/card_tool.png',
+    poke_ball: 'element/Poke_Ball.png',
+    item_poke_ball: 'element/Poké_Ball_EP.png',
+    item_master_ball: 'element/64px-Master_Ball_EP.png',
+    item_ultra_ball: 'element/64px-Ultra_Ball_EP.png',
+    item_polvo_estelar: 'element/64px-Polvo_estelar_EP.png',
+    item_repelente: 'element/64px-Repelente_EP.png',
+    item_tarjeta_roja: 'element/64px-Tarjeta_roja_EP.png',
+    item_mochila_escape: 'element/Mochila_escape_EP.png',
+    item_pokemuneco: 'element/Pokémuñeco_EP.png',
+    carta_profesor_oak: 'element/Carta_del_profesor_Oak_DBPR.png',
+    bolsa_monedas: 'element/coin_bag_3.png',
+    cordon_union: 'element/Cordón_unión_LPA.png',
+    diario: 'element/Diario_DBPR.png',
+    leyenda: 'element/Leyenda.png',
+    paquete: 'element/Paquete_DBPR.png',
+    tarjeta_puntos: 'element/Tarjeta_de_puntos_grande.png',
+    estrella_tienda: 'element/fFIdmpWM6662789b86b3d_1717729435_420x420.png'
 };
 
 // El link de invitación de OAuth2 no es secreto, y cada usuario final corre su
@@ -34,6 +52,22 @@ const FUENTES_EMOJIS = {
 // eso no se puede hardcodear un ID de emoji, hay que subirlos por servidor.
 const cachePorGuild = new Map();
 const promesaEnCursoPorGuild = new Map();
+
+// s4t.js corre en un proceso PM2 aparte, sin cliente de discord.js propio, así
+// que no puede llamar guild.emojis.fetch()/.create() como acá. En vez de
+// duplicar la lógica de subida ahí (y volver a tener IDs fijos por-usuario,
+// el mismo bug que este archivo existe para evitar), bot.js vuelca acá el
+// mapa ya resuelto cada vez que lo arma, y s4t.js simplemente lo lee del
+// disco — funciona automático para cualquier usuario/servidor, sin que
+// s4t.js necesite saber nada de guilds ni tener su propio token de bot.
+const CACHE_DISCO_PATH = path.join(__dirname, 'assets', 'guild_emojis_cache.json');
+function guardarCacheEnDisco(mapa) {
+    try {
+        fs.writeFileSync(CACHE_DISCO_PATH, JSON.stringify(mapa));
+    } catch (e) {
+        console.error('❌ No se pudo guardar la caché de emojis en disco (para s4t.js):', e?.message || e);
+    }
+}
 
 async function subirEmojiFaltante(guild, nombre, rutaRelativa) {
     const rutaAbsoluta = path.join(__dirname, 'assets', rutaRelativa);
@@ -75,6 +109,7 @@ async function obtenerMapaEmojisGuild(guild) {
     const promesa = construirMapaEmojisGuild(guild).then((mapa) => {
         cachePorGuild.set(guild.id, mapa);
         promesaEnCursoPorGuild.delete(guild.id);
+        guardarCacheEnDisco(mapa);
         return mapa;
     }).catch((e) => {
         promesaEnCursoPorGuild.delete(guild.id);

@@ -125,7 +125,7 @@ try {
 
 tap(X, Y) {
     adbClick(X, Y)
-    Sleep, 2800
+    Sleep, 4000
 }
 
 ; ============ Secuencia de la Fase 1 ============
@@ -143,6 +143,7 @@ Sleep, 6000
 tap(146, 423)   ; 6. Trade (intro) -> Trade (boton azul)
 
 tap(211, 177)   ; 7. Select a Friend -> Trade (fila del amigo)
+tap(149, 433)   ; 7a. (nuevo paso agregado por el usuario)
 tap(142, 423)   ; 7b. "Choose a Card to Trade" (aviso/tutorial) -> OK
 tap(50, 350)    ; 8. Choose a Card to Trade -> tap carta favorita (wishlist del amigo)
 tap(145, 458)   ; 9. Choose a Card to Trade -> OK

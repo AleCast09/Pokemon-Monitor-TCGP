@@ -9,32 +9,36 @@ MONITOR POKÉMON — HOW TO INSTALL
 
 3. If Windows shows you a security warning when opening something (SmartScreen
    or "Smart App Control"):
-   - Open "Unblock.bat" first (let it finish, it closes itself).
-   - Then try again with "Start Monitor Pokemon.bat".
+   - Open the "Advanced" folder → "Unblock.bat" (let it finish, it closes
+     itself). Then try again with step 4.
 
    IF "Unblock.bat" IS ALSO BLOCKED:
-   a) Inside the folder (on empty space), hold down SHIFT
+   a) Inside the main folder (on empty space), hold down SHIFT
       and right click → "Open PowerShell window here"
       (or "Open in Terminal").
    b) Paste this line and press Enter:
       Get-ChildItem -Recurse -Force | Unblock-File
-   c) Close that window and try again with "Start Monitor Pokemon.bat".
+   c) Close that window and try again with step 4.
 
-4. Open "Start Monitor Pokemon.bat". After a few seconds your browser will
-   open asking for your Discord token — follow the instructions there.
+4. Open "Open Control Panel.bat". A window called "Monitor Pokemon" opens
+   with buttons — click "Iniciar" (Start). After a few seconds your browser
+   will open asking for your Discord token — follow the instructions there.
 
-   Nothing opened? A new file called "Open configuration.url" will appear
-   in the same folder — double click it to open the page yourself.
+5. If you accidentally open the panel twice, nothing bad happens — it
+   detects it's already open and just brings up the same window again.
 
-5. If you accidentally open it twice, nothing bad happens — the program
-   detects it's already open and won't start a second copy.
-
-6. Want to change the token or add the Google Drive API key later? Open
-   "Reconfigure.bat" — it works even while the program is already running,
-   and opens in the same browser with the same shortcut fallback if needed.
+6. Want to change the token or add the Google Drive API key later? Open the
+   panel and click "Open Api y token change" — it works even while the
+   program is already running.
 
 7. Once it starts for the first time, Monitor Pokémon registers itself to
-   start automatically every time you turn on your PC — no need to open it
-   by hand again, not even after restarting Windows.
+   start automatically every time you turn on your PC — the control panel
+   opens by itself, no need to open anything by hand again.
+
+8. Don't want to use it anymore? Click "Apagar" (Stop) in the panel — it
+   closes everything running in the background without deleting your token
+   or settings. Click "Iniciar" again anytime to use it again. If you want
+   to also turn off the automatic start completely, use the "Advanced"
+   folder → "Quit Monitor Pokemon.bat" instead.
 
 Something not working? Let whoever gave you this know.

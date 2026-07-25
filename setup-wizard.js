@@ -434,6 +434,15 @@ async function guardar() {
     btn.textContent = 'Save and continue';
   }
 }
+
+// Si la persona cierra la pestaña sin guardar, avisa al servidor para que
+// libere el lock al toque — sin esto, quedaba esperando para siempre y el
+// próximo intento de abrir la configuración no hacía nada (ver bug real
+// 2026-07-24: "no me deja abrirla otra vez"). sendBeacon entrega el aviso
+// aunque la página ya se esté cerrando, a diferencia de un fetch normal.
+window.addEventListener('pagehide', () => {
+  navigator.sendBeacon('/cancelar');
+});
 </script>
 </body>
 </html>`;
@@ -511,6 +520,15 @@ function ejecutarWizard() {
                         res.end(JSON.stringify({ error: 'invalido' }));
                     }
                 });
+                return;
+            }
+
+            if (req.method === 'POST' && req.url === '/cancelar') {
+                res.writeHead(200);
+                res.end();
+                server.close();
+                try { fs.unlinkSync(ACCESO_DIRECTO_PATH); } catch (e) {}
+                resolve();
                 return;
             }
 

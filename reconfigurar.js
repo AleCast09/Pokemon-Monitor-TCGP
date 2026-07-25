@@ -14,10 +14,24 @@ function procesoExiste(pid) {
     }
 }
 
+const LOCK_MAX_EDAD_MS = 10 * 60 * 1000;
+
 function yaHayUnaCopiaAbierta() {
     if (!fs.existsSync(LOCK_PATH)) return false;
     const pidGuardado = parseInt(fs.readFileSync(LOCK_PATH, 'utf8').trim(), 10);
     if (!pidGuardado || !procesoExiste(pidGuardado)) return false;
+    // Si el usuario cierra la pestaña del navegador SIN apretar "Save and
+    // continue", ejecutarWizard() se queda esperando para siempre (solo
+    // resuelve cuando llega el POST de guardar) — el proceso viejo nunca
+    // llega a borrar este lock, y sin este chequeo de antigüedad, todos los
+    // próximos clics en "Reconfigurar" se negarían a abrir nada, sin avisar
+    // nada, para siempre. Pasados 10 minutos se considera abandonado: se
+    // mata el proceso zombie y se deja abrir uno nuevo.
+    const antiguedadMs = Date.now() - fs.statSync(LOCK_PATH).mtimeMs;
+    if (antiguedadMs > LOCK_MAX_EDAD_MS) {
+        try { process.kill(pidGuardado); } catch (e) {}
+        return false;
+    }
     return true;
 }
 

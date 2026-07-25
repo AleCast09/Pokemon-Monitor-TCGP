@@ -18,6 +18,8 @@ const heartbeatScript = require('./heartbeat.js');
 const configScript = require('./config.js');
 const { chequearActualizaciones, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion } = require('./update-checker.js');
 const { obtenerMapaEmojisGuild } = require('./guild-emojis.js');
+const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
+iniciarAutoSyncCardTypes();
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID || null;
@@ -57,12 +59,13 @@ function tienePermisosGestion(interaction) {
 const COMANDO_CONFIG = {
     card_all: { tipo: 'cmd_card_all', label: 'All Cards', titulo: '⚡ All Cards', descripcion: 'Exclusive channel for /card.' },
     card_wishlist: { tipo: 'cmd_card_wishlist', label: 'Cards Wishlist', titulo: '💖 Cards Wishlist', descripcion: 'Exclusive channel for /wishlist.' },
-    extract_xlm: { tipo: 'cmd_extract_xlm', label: 'Extract XLM', titulo: '📄 Extract XLM', descripcion: 'Exclusive channel for /extract xlm.' },
+    extract_xlm: { tipo: 'cmd_extract_xlm', label: 'Extract XML', titulo: '📄 Extract XML', descripcion: 'Exclusive channel for /extract xml.' },
     run_instance: { tipo: 'cmd_run_instance', label: 'Run MumuPlayer', titulo: '🎮 Run MumuPlayer', descripcion: 'Exclusive channel for /run instance.' }
 };
 
 const ETIQUETAS_TIPO_WEBHOOK = {
     's4t': 'S4T (General)',
+    's4t-categoria': 'S4T (By Category)',
     '3-diamond': '3 Diamonds',
     '4-diamond': '4 Diamonds',
     '1-star': '1 Star',
@@ -79,7 +82,7 @@ const ETIQUETAS_TIPO_WEBHOOK = {
     'godpack-dead': 'God Pack Dead',
     'heartbeat': 'Heartbeat',
     'actualizaciones': 'Updates',
-    'apoyo': 'Support my work',
+    'apoyo': 'Donate',
     'cmd_setup': 'Settings',
     'cmd_build_embed': 'Build Embed',
     'cmd_build_webhooks': 'Build Webhooks'
@@ -98,6 +101,127 @@ async function obtenerWebhooksReales(userId) {
         `SELECT tipo, canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND webhook_url LIKE 'https://discord.com/api/webhooks/%' ORDER BY tipo`,
         [userId]
     );
+}
+
+// Un webhook borrado (por lo que sea, incluso fuera de este bot) sigue
+// guardado en la DB con su URL de siempre — Discord no avisa, solo empieza a
+// devolver 404 "Unknown Webhook" al usarlo.
+//
+// Bug real encontrado 2026-07-23: este chequeo corre cada 60s contra TODOS
+// los webhooks de TODOS los usuarios (~25-30 por usuario) — cualquier error
+// transitorio (timeout de red, 429 rate limit de Discord, un 5xx puntual) se
+// trataba exactamente igual que un 404 real, así que un simple hipo de red
+// bastaba para reportar un webhook como "caído" cuando en realidad seguía
+// vivo (el usuario no había tocado nada). Ahora solo se considera
+// "confirmado caído" un 404 real; cualquier otro error se ignora (se asume
+// que sigue vivo, se vuelve a chequear en el próximo ciclo).
+async function webhookEstaVivo(url) {
+    try {
+        await axios.get(url, { timeout: 8000 });
+        return true;
+    } catch (e) {
+        if (e?.response?.status === 404) return false;
+        return true; // error transitorio — no lo tratamos como confirmado caído
+    }
+}
+
+// Chequeo periódico proactivo: en vez de esperar a que alguien note un canal
+// roto y corra "Sincronizar Canales" a ciegas, el bot avisa apenas detecta un
+// webhook caído — "acá está roto, corré Sync Channels para repararlo". Solo
+// avisa una vez por webhook caído (no en cada repetición) hasta que se
+// repare; si vuelve a caerse después de reparado, se re-avisa como algo nuevo.
+async function chequearWebhooksCaidos(client) {
+    try {
+        const usuarios = await db.all(`SELECT DISTINCT discord_id FROM configs_canales WHERE webhook_url LIKE 'https://discord.com/api/webhooks/%'`);
+        for (const { discord_id } of usuarios) {
+            const webhooks = await obtenerWebhooksReales(discord_id);
+            const caidos = [];
+            for (const w of webhooks) {
+                if (!(await webhookEstaVivo(w.webhook_url))) caidos.push(w.tipo);
+            }
+
+            const claveReportados = 'webhooks_caidos_reportados';
+            const filaReportados = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [discord_id, claveReportados]);
+            let yaReportados = [];
+            try { yaReportados = filaReportados ? JSON.parse(filaReportados.estado) : []; } catch (e) { yaReportados = []; }
+
+            const nuevosCaidos = caidos.filter(t => !yaReportados.includes(t));
+            if (nuevosCaidos.length > 0) {
+                const etiquetas = nuevosCaidos.map(t => etiquetaTipoWebhook(t)).join(', ');
+                // Además de decir QUÉ está roto, se linkea directo al canal de
+                // Settings — a pedido del usuario, para poder ir con un clic y
+                // correr "Sync Channels" en vez de tener que buscarlo a mano.
+                const filaSetup = await db.get(
+                    `SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'cmd_setup'`,
+                    [discord_id]
+                );
+                const linkCanal = filaSetup?.canal_id ? ` in <#${filaSetup.canal_id}>` : '';
+                const mensaje = { content: `⚠️ **Webhook(s) down:** ${etiquetas}\n\nRun **Sync Channels**${linkCanal} via \`/setup\` to repair automatically — nothing is lost, it just needs to recreate the connection.` };
+
+                // Siempre por DM, nunca al canal de Updates — a pedido explícito
+                // del usuario, ese canal es solo para avisos de actualización del
+                // bot en sí, no para chequeos de salud/errores como este.
+                try {
+                    const usuario = await client.users.fetch(discord_id);
+                    await usuario.send(mensaje);
+                } catch (e) { /* si no se puede DM (el usuario cerró los DMs del bot), se pierde este aviso puntual */ }
+            }
+
+            await db.run(
+                `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, ?, ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
+                [discord_id, claveReportados, JSON.stringify(caidos), JSON.stringify(caidos)]
+            );
+        }
+    } catch (e) {
+        console.error('DEBUG: error chequeando webhooks caídos:', e?.message || e);
+    }
+}
+
+// Cuando un webhook se recrea (porque el guardado murió, o Sync Channels lo
+// reemplaza), Discord genera uno con una URL/ID totalmente nuevos — no hay
+// forma de "revivir" el mismo webhook con su nombre/foto de siempre. Sin este
+// respaldo, cualquier personalización hecha con /webhook (nombre, foto) se
+// perdía cada vez que el webhook subyacente cambiaba, obligando a rehacerla a
+// mano. Se guarda la URL de la foto (no la imagen ya codificada) para no
+// inflar la base de datos — se vuelve a descargar y codificar recién cuando
+// hace falta re-aplicarla.
+async function guardarPersonalizacionWebhook(discordId, tipo, cambios) {
+    const claveEstado = `webhook_custom_${tipo}`;
+    const filaActual = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [discordId, claveEstado]);
+    let actual = {};
+    try { actual = filaActual ? JSON.parse(filaActual.estado) : {}; } catch (e) { actual = {}; }
+    const combinado = { ...actual, ...cambios };
+    await db.run(
+        `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, ?, ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
+        [discordId, claveEstado, JSON.stringify(combinado), JSON.stringify(combinado)]
+    );
+}
+
+async function aplicarPersonalizacionWebhookSiExiste(discordId, tipo, webhookUrl) {
+    try {
+        const fila = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [discordId, `webhook_custom_${tipo}`]);
+        if (!fila) return;
+        const datos = JSON.parse(fila.estado);
+        const payload = {};
+        if (datos.name) payload.name = datos.name;
+        if (datos.avatarUrl?.startsWith('data:')) {
+            // Ya es un data URI listo (viene de /webhook con imagen adjunta
+            // directa) — no hay nada que volver a descargar.
+            payload.avatar = datos.avatarUrl;
+        } else if (datos.avatarUrl) {
+            const img = await axios.get(datos.avatarUrl, {
+                responseType: 'arraybuffer', timeout: 8000,
+                maxContentLength: 8 * 1024 * 1024, maxBodyLength: 8 * 1024 * 1024
+            });
+            const mime = img.headers['content-type'] || '';
+            if (mime.startsWith('image/')) payload.avatar = `data:${mime};base64,${Buffer.from(img.data).toString('base64')}`;
+        }
+        if (Object.keys(payload).length) await axios.patch(webhookUrl, payload);
+    } catch (e) {
+        // Si falla (URL de foto ya no responde, etc.), el webhook nuevo se
+        // queda con el nombre por defecto — no rompe la sincronización por esto.
+        console.error(`DEBUG: no se pudo reaplicar la personalización del webhook (${tipo}):`, e?.message || e);
+    }
 }
 
 async function construirPanelListaWebhooks(userId) {
@@ -122,8 +246,19 @@ async function construirPanelListaWebhooks(userId) {
             })));
         componentes.push(new ActionRowBuilder().addComponents(menu));
     }
+    if (fs.existsSync(rutaTutorialPdf('cmd_build_webhooks'))) {
+        componentes.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('tutorial_pdf::cmd_build_webhooks').setLabel('📄 Tutorial').setStyle(ButtonStyle.Secondary)
+        ));
+    }
 
-    return { embeds: [embed], components: componentes };
+    const archivos = [];
+    if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+        embed.setThumbnail('attachment://symbol.png');
+        archivos.push(new AttachmentBuilder(SYMBOL_EMBEDS_PATH, { name: 'symbol.png' }));
+    }
+
+    return { embeds: [embed], components: componentes, files: archivos };
 }
 
 async function construirPanelDetalleWebhook(userId, tipo, opciones = {}) {
@@ -141,6 +276,16 @@ async function construirPanelDetalleWebhook(userId, tipo, opciones = {}) {
         ? `https://cdn.discordapp.com/avatars/${infoWebhook.id}/${infoWebhook.avatar}.png`
         : null;
 
+    // Ojo: TODO webhook auto-creado ya sale con un avatar de placeholder puesto
+    // desde su creación (ver createWebhook({avatar: 'https://i.imgur.com/...'})),
+    // así que "¿tiene avatar?" es casi siempre true — no alcanza para saber si
+    // el USUARIO lo personalizó a propósito con /webhook. Se chequea contra el
+    // registro real de personalización guardado (guardarPersonalizacionWebhook)
+    // en vez de la sola presencia de un avatar en el webhook en vivo.
+    const filaPersonalizado = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [userId, `webhook_custom_${tipo}`]);
+    let tienePersonalizacion = false;
+    try { tienePersonalizacion = !!(filaPersonalizado && JSON.parse(filaPersonalizado.estado)?.avatarUrl); } catch (e) { tienePersonalizacion = false; }
+
     const embed = new EmbedBuilder()
         .setTitle(`🔗 Webhook - ${etiquetaTipoWebhook(tipo)}`)
         .setColor(opciones.guardado ? 0x2ECC71 : 0x5865F2)
@@ -149,21 +294,39 @@ async function construirPanelDetalleWebhook(userId, tipo, opciones = {}) {
             (opciones.error ? `❌ **${opciones.error}**\n\n` : '') +
             `**Channel:** <#${fila.canal_id}>\n**Current name:** ${nombreActual}`
         );
-    if (avatarUrl) embed.setThumbnail(avatarUrl);
+    // Si el usuario ya personalizó el avatar con /webhook, mostrar ESE (útil
+    // para ver qué foto tiene antes de cambiarla) — el logo genérico de
+    // Pokémon queda solo como respaldo mientras siga con el placeholder
+    // de fábrica.
+    const archivos = [];
+    if (tienePersonalizacion && avatarUrl) {
+        embed.setThumbnail(avatarUrl);
+    } else if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+        embed.setThumbnail('attachment://symbol.png');
+        archivos.push(new AttachmentBuilder(SYMBOL_EMBEDS_PATH, { name: 'symbol.png' }));
+    }
 
     const filaBotones = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`webhook_modificar::${tipo}`).setLabel('✏️ Edit name/avatar').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('webhook_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary)
     );
 
-    return { embeds: [embed], components: [filaBotones] };
+    // "attachments: []" solo hace falta cuando ESTA pantalla no trae ningún
+    // archivo propio — ahí limpia el adjunto viejo que traía la lista de
+    // webhooks (pantalla anterior), que si no se queda pegado suelto. Pero si
+    // SÍ hay un archivo nuevo (el logo de respaldo), no hay que mandarlo:
+    // Discord interpreta "attachments: []" junto con "files" como "no dejar
+    // ningún adjunto", y el logo nuevo termina sin mostrarse.
+    const payload = { embeds: [embed], components: [filaBotones], files: archivos };
+    if (!archivos.length) payload.attachments = [];
+    return payload;
 }
 
 function normalizarComando(interaction) {
     const key = interaction?.commandName?.toLowerCase();
     if (key === 'card') return 'card_all';
     if (key === 'wishlist') return 'card_wishlist';
-    if (key === 'extract') return interaction?.options?.getSubcommand?.(false) === 'xlm' ? 'extract_xlm' : null;
+    if (key === 'extract') return interaction?.options?.getSubcommand?.(false) === 'xml' ? 'extract_xlm' : null;
     if (key === 'run') return interaction?.options?.getSubcommand?.(false) === 'instance' ? 'run_instance' : null;
     return COMANDO_CONFIG[key] ? key : null;
 }
@@ -194,12 +357,13 @@ function construirEmbedComando(commandKey, user) {
 
 const WISHLIST_POR_PAGINA = 15;
 
-function construirEmbedWishlistInicio(user) {
+function construirEmbedWishlistInicio(user, mapaEmojis = {}) {
+    const tagWishlist = tagTipoBot('icono_wishlist', mapaEmojis);
     return new EmbedBuilder()
         .setTitle('🔍 | Wishlist Card Search:')
         .setDescription(
             `Your wishlist is right here!!  <@${user.id}>.\n\n` +
-            `Press the button to see the full list of your saved wishlist. <:icono_wishlist:1526794552575262820>\n\n`+
+            `Press the button to see the full list of your saved wishlist.${tagWishlist ? ' ' + tagWishlist : ''}\n\n`+
             `Details: \n\n` +
             `1- View all expansions!\n` +
             `2- Search cards by expansion!\n` +
@@ -208,7 +372,7 @@ function construirEmbedWishlistInicio(user) {
             `5- View image of each card!\n`
         )
         .setColor(0xE91E63)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • PTCGPB Remote Control" })
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
         .setTimestamp();
 }
 
@@ -307,14 +471,40 @@ function construirEmbedAllCardsInicio(user) {
             `__Select an option below:__\n\n` +
             `1-› TCGP Expansions Panel.\n`+
             `2-› Category of each card by rarity.\n`+
-            `3-› View each card, quantity & XLM.\n`
+            `3-› View each card, quantity & XML.\n`
         )
         .setColor(0x3498DB)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • PTCGPB Remote Control" })
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
         .setTimestamp();
 }
 
 const SYMBOL_EMBEDS_PATH = path.join(__dirname, 'assets', 'embeds', 'symbol.png');
+
+// Un PDF por tipo de canal (mismo criterio que un asset fijo) — se lee del
+// disco recién cuando alguien presiona el botón "Tutorial", nunca queda
+// pegado a un mensaje que se reubica/reenvía solo.
+function rutaTutorialPdf(tipo) {
+    return path.join(__dirname, 'assets', 'tutoriales', `${tipo}.pdf`);
+}
+
+function filaBotonesConTutorial(tipoTutorial, ...botonesPrincipales) {
+    const botones = [...botonesPrincipales];
+    if (fs.existsSync(rutaTutorialPdf(tipoTutorial))) {
+        botones.push(new ButtonBuilder().setCustomId(`tutorial_pdf::${tipoTutorial}`).setLabel('📄 Tutorial').setStyle(ButtonStyle.Secondary));
+    }
+    return new ActionRowBuilder().addComponents(...botones);
+}
+
+// AttachmentBuilder guarda el contenido en .attachment — puede ser un Buffer
+// (imagen generada) o una ruta de archivo en disco (asset fijo). enviarOEditarInterfaz
+// necesita saber cuál de las dos es para armar el FormData.
+function archivosDesdeAttachmentBuilders(files = []) {
+    return files.map(a => (
+        Buffer.isBuffer(a.attachment)
+            ? { buffer: a.attachment, filename: a.name }
+            : { ruta: a.attachment, filename: a.name }
+    ));
+}
 
 function construirEmbedResumenExpansiones(cartas, opciones = {}) {
     const prefijo = opciones.prefijo || 'allcards';
@@ -504,10 +694,27 @@ function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pagina =
     const mapaEmojisCartas = opciones.mapaEmojis || {};
 
     const filtradas = cartas.filter(c => c.expansion === expansion && c.categoria === categoria);
-    const totalPaginas = Math.max(1, Math.ceil(filtradas.length / WISHLIST_EXPANSION_POR_PAGINA));
+
+    // Bug real: en categorías como "4 Diamonds", cada carta repite el tag de
+    // emoji custom 4 veces (uno por diamante) — con 25 cartas por página como
+    // en las demás categorías, el texto del embed supera los 4096 caracteres
+    // que permite Discord y .setDescription() tira una excepción que dejaba
+    // la interacción colgada para siempre ("no carga"). El tamaño de página
+    // ahora se ajusta según cuántas veces se repite el emoji en esta categoría
+    // específica, para que nunca se pase del límite sin importar cuántos
+    // diamantes/estrellas tenga.
+    const cantidadEmoji = RAREZA_ICONOS_CARTAS[filtradas[0]?.tipoRareza]?.cantidad || 1;
+    // ~40 caracteres por cada tag de emoji personalizado repetido, +55 de
+    // margen por nombre/numeración/separadores de cada línea — con 3600
+    // caracteres de presupuesto (dejando ~500 de margen para el encabezado y
+    // el pie del embed sobre el límite real de 4096), nunca se pasa del
+    // límite sin importar la categoría. Nunca sube de 25 tampoco, porque el
+    // menú desplegable de Discord no admite más de 25 opciones.
+    const porPagina = Math.max(10, Math.min(WISHLIST_EXPANSION_POR_PAGINA, Math.floor(3600 / (55 + 40 * cantidadEmoji))));
+    const totalPaginas = Math.max(1, Math.ceil(filtradas.length / porPagina));
     const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
-    const inicio = paginaSegura * WISHLIST_EXPANSION_POR_PAGINA;
-    const items = filtradas.slice(inicio, inicio + WISHLIST_EXPANSION_POR_PAGINA);
+    const inicio = paginaSegura * porPagina;
+    const items = filtradas.slice(inicio, inicio + porPagina);
 
     const listaTexto = items.map((c, i) => {
         const emojiTexto = formatearCategoriaConIcono(c.tipoRareza, mapaEmojisCartas) || textoSinEmoji(c.categoria);
@@ -757,6 +964,19 @@ function resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis) {
     return categoriaFormateadaDesdeInfo(cardmaster?.[cartaId], mapaEmojis);
 }
 
+// Las cartas de Entrenador (Partidario/Objeto/Herramienta/Fósil/Estadio) no
+// tienen elemento (Fuego, Agua, etc.) — cardmaster.json las distingue con el
+// campo TrainerType (1=Partidario, 2=Objeto, 3=Herramienta, 4=Fósil,
+// 5=Estadio), presente sin importar la rareza de la carta. Fósil y Estadio
+// todavía no tienen ícono propio en assets/element, por eso caen al genérico
+// de Trainer (bolsa_monedas) hasta que se agregue uno.
+const EMOJI_POR_TRAINER_TYPE = { 1: 'card_supporter', 2: 'card_item', 3: 'card_tool' };
+function trainerTypeDesdeId(cartaId, rutaMasterPath) {
+    if (!rutaMasterPath) return undefined;
+    const cardmaster = leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json'));
+    return cardmaster?.[cartaId]?.TrainerType;
+}
+
 async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volver = null, guild = null) {
     const mapaEmojis = await obtenerMapaEmojisGuild(guild);
     const cardMap = cargarCardMap(rutaMasterPath);
@@ -767,16 +987,26 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const categoria = resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis);
     const imagenPath = (await obtenerImagenHDBot(cardMap, cartaId)) || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID);
 
-    const tipoIngles = cargarCardTypesBot()[nombre.toLowerCase()];
-    const tagElemento = tipoIngles ? tagTipoBot(`type_${tipoIngles.toLowerCase()}`, mapaEmojis) : '';
-    const elemento = tagElemento ? `${tagElemento} ${tipoIngles}` : 'Unknown';
+    const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombre)];
+    const trainerType = trainerTypeDesdeId(cartaId, rutaMasterPath);
+    let elemento;
+    if (tipoIngles) {
+        const tagElemento = tagTipoBot(`type_${tipoIngles.toLowerCase()}`, mapaEmojis);
+        elemento = tagElemento ? `${tagElemento} ${tipoIngles}` : tipoIngles;
+    } else if (trainerType !== undefined) {
+        const nombreEmoji = EMOJI_POR_TRAINER_TYPE[trainerType] || 'bolsa_monedas';
+        const tagTrainer = tagTipoBot(nombreEmoji, mapaEmojis);
+        elemento = tagTrainer ? `${tagTrainer} Trainer` : 'Trainer';
+    } else {
+        elemento = 'Unknown';
+    }
 
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${nombre}`)
         .setDescription(`**Expansion:** ${expansionNombre}\n**Name:** ${nombre}\n**Element:** ${elemento}\n**Category:** ${categoria}\n**ID:** \`${cartaId}\``)
         .setColor(0xE91E63);
 
-    const botones = [new ButtonBuilder().setCustomId(`wishlist_xlm::${cartaId}::0`).setLabel('💠 XLM').setStyle(ButtonStyle.Success)];
+    const botones = [new ButtonBuilder().setCustomId(`wishlist_xml::${cartaId}::0`).setLabel('💠 XML').setStyle(ButtonStyle.Success)];
     // "volver" solo existe cuando se llegó acá desde la lista de cartas de una
     // expansión+categoría (no desde la búsqueda directa por autocompletado de
     // /card, que no tiene una pantalla anterior a la que volver).
@@ -797,9 +1027,10 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
             .setLabel('🏠 Home')
             .setStyle(ButtonStyle.Secondary)
     );
-    const filaXlm = new ActionRowBuilder().addComponents(...botones);
+    const filaXml = new ActionRowBuilder().addComponents(...botones);
 
-    const payload = { embeds: [embed], components: [filaXlm] };
+    const payload = { embeds: [embed], components: [filaXml] };
+    const archivosPayload = [];
     if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
         // que ya usa s4t.js/el preview de /embed), en vez de una miniatura
@@ -808,20 +1039,27 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         const rutaLogo = buscarLogoExpansionBot(expansionNombre);
         if (rutaLogo) buffer = await componerLogoSobreImagenBot(buffer, rutaLogo);
         embed.setImage('attachment://carta.png');
-        payload.files = [new AttachmentBuilder(buffer, { name: 'carta.png' })];
+        archivosPayload.push(new AttachmentBuilder(buffer, { name: 'carta.png' }));
     }
+    if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+        embed.setThumbnail('attachment://symbol.png');
+        archivosPayload.push(new AttachmentBuilder(SYMBOL_EMBEDS_PATH, { name: 'symbol.png' }));
+    }
+    if (archivosPayload.length) payload.files = archivosPayload;
     return payload;
 }
 
-function construirEmbedExtractXlmInicio(user) {
+function construirEmbedExtractXmlInicio(user, mapaEmojis = {}) {
+    const tagOak = tagTipoBot('carta_profesor_oak', mapaEmojis);
+    const tagPokeBall = tagTipoBot('item_poke_ball', mapaEmojis);
     return new EmbedBuilder()
-        .setTitle('📄 Extract XLM')
+        .setTitle('📄 Extract XML')
         .setDescription(
-            `Command run by <@${user.id}>.\n\n` +
-            `Press the button and paste the XLM file name (e.g. \`134P_20260120113013_2(BXR).xml\`) for the bot to send it to you.`
+            `Command run by <@${user.id}>.${tagOak ? ' ' + tagOak : ''}\n\n` +
+            `Click the button and paste the XML file name (for example, \`134P_20260120113013_2(BXR).xml\`) so the bot can send it to you. It will also send you the .JSON file with all your account data in XML format!${tagPokeBall ? ' ' + tagPokeBall : ''}`
         )
         .setColor(0x3498DB)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • PTCGPB Remote Control" })
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
         .setTimestamp();
 }
 
@@ -833,7 +1071,7 @@ function construirEmbedRunInstanceInicio(user) {
             `Press the button to see your MuMuPlayer instances and open the one you need.`
         )
         .setColor(0x2ECC71)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • PTCGPB Remote Control" })
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
         .setTimestamp();
 }
 
@@ -868,6 +1106,48 @@ function lanzarInstanciaMuMu(index) {
         execSync(`"${managerPath}" control launch -v ${index}`, { windowsHide: true });
         return true;
     } catch (e) {
+        // Antes se tragaba el error en silencio — si MuMuManager rechaza el
+        // comando (índice inválido, instancia ya prendida, etc.) no quedaba
+        // ningún rastro de por qué "Turn On" no hacía nada.
+        console.error(`DEBUG: MuMuManager rechazó "control launch -v ${index}":`, e?.stderr?.toString() || e?.message || e);
+        return false;
+    }
+}
+
+// Usado por el botón "Close Instance" del aviso de heartbeat cuando la
+// instancia ya se quedó sin cuentas de 24h (ver instanciaSinCuentasElegibles
+// en heartbeat.js) — no tiene sentido dejarla prendida consumiendo recursos
+// si no le quedan cuentas para abrir hoy.
+function apagarInstanciaMuMu(index) {
+    const managerPath = rutaMuMuManager();
+    if (!managerPath) return false;
+    try {
+        execSync(`"${managerPath}" control shutdown -v ${index}`, { windowsHide: true });
+        return true;
+    } catch (e) {
+        console.error(`DEBUG: MuMuManager rechazó "control shutdown -v ${index}":`, e?.stderr?.toString() || e?.message || e);
+        return false;
+    }
+}
+
+// Controla la ventana del AHK de UNA instancia puntual (título exacto
+// "{N}.ahk", confirmado en vivo) desde afuera — nunca toca ni lee el
+// contenido de esos scripts, que son de Kevin y no se tocan sin permiso. El
+// script (scripts/ahk-window.ps1, de este proyecto) solo usa EnumWindows para
+// encontrar la ventana y o le manda Shift+F5 (mismo atajo que ya tiene el
+// programa para "Reload") o cierra el proceso — ninguna de las dos cosas
+// edita ningún archivo de Kevin.
+function ejecutarAccionAhkInstancia(index, accion) {
+    const rutaScript = path.join(__dirname, 'scripts', 'ahk-window.ps1');
+    if (!fs.existsSync(rutaScript)) return false;
+    try {
+        const salida = execSync(
+            `powershell -NoProfile -ExecutionPolicy Bypass -File "${rutaScript}" -InstanceId "${index}" -Action "${accion}"`,
+            { windowsHide: true, timeout: 10000 }
+        ).toString().trim();
+        return salida.startsWith('RELOADED:') || salida.startsWith('CLOSED:');
+    } catch (e) {
+        console.error(`DEBUG: error ejecutando acción "${accion}" sobre el AHK de la instancia ${index}:`, e?.stderr?.toString() || e?.message || e);
         return false;
     }
 }
@@ -897,6 +1177,14 @@ function construirEmbedInstanciasMuMu(instancias, seleccion = null) {
         componentes.push(new ActionRowBuilder().addComponents(menu));
     }
 
+    if (!seleccion) {
+        // Sin esto, la única forma de ver si una instancia ya prendió (fuera
+        // de la seleccionada) era volver a abrir "View Instances" desde cero.
+        componentes.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('mumu_refrescar').setLabel('🔄 Refresh').setStyle(ButtonStyle.Secondary)
+        ));
+    }
+
     if (seleccion) {
         embed.addFields({ name: '🖱️ Selected', value: `**${seleccion.index}. ${seleccion.name}** — ${seleccion.encendida ? '🟢 On' : '🔴 Off'}` });
 
@@ -905,12 +1193,16 @@ function construirEmbedInstanciasMuMu(instancias, seleccion = null) {
                 .setCustomId(`mumu_encender_${seleccion.index}::${seleccion.name}`)
                 .setLabel(seleccion.encendida ? '✅ On' : '🟢 Turn On')
                 .setStyle(seleccion.encendida ? ButtonStyle.Secondary : ButtonStyle.Success)
-                .setDisabled(!!seleccion.encendida)
+                .setDisabled(!!seleccion.encendida),
+            new ButtonBuilder()
+                .setCustomId(`mumu_refrescar::${seleccion.index}::${seleccion.name}`)
+                .setLabel('🔄 Refresh')
+                .setStyle(ButtonStyle.Secondary)
         ));
 
         componentes.push(new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`mumu_friendid_${seleccion.index}::${seleccion.name}`).setLabel('🆔 Add Friend').setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId(`mumu_xlm_${seleccion.index}::${seleccion.name}`).setLabel('💠 XLM').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`mumu_xml_${seleccion.index}::${seleccion.name}`).setLabel('💠 XML').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId(`mumu_status_${seleccion.index}::${seleccion.name}`).setLabel('📊 Status').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`mumu_ejecutar_${seleccion.index}::${seleccion.name}`).setLabel('✅ Submit').setStyle(ButtonStyle.Danger)
         ));
@@ -966,7 +1258,7 @@ function actualizarIniInject(cambios) {
     fs.writeFileSync(RUTA_INJECT_INI, salida, 'utf16le');
 }
 
-function guardarXlmParaInyeccion(instanceName, archivoPath) {
+function guardarXmlParaInyeccion(instanceName, archivoPath) {
     const nombreSinExt = path.basename(archivoPath, '.xml');
     actualizarIniInject({
         winTitle: instanceName,
@@ -1003,10 +1295,10 @@ function construirEmbedStatusInstancia(index, name) {
         ? friends.map((f, i) => `**${i + 1}.** ${f.label || '(no name)'} — \`${f.id}\``).join('\n')
         : '_None added._';
 
-    const xlmCoincide = (datos.winTitle || '').trim() === name && !!(datos.selectedFilePath || '').trim();
-    const xlmTexto = (datos.selectedFilePath || '').trim()
-        ? `📄 \`${datos.fileName || ''}\`\n📁 \`${datos.selectedFilePath}\`\n🎯 Saved instance: **${datos.winTitle || '(empty)'}** ${xlmCoincide ? '✅ matches this instance' : '⚠️ does NOT match this instance'}`
-        : '_No XLM selected._';
+    const xmlCoincide = (datos.winTitle || '').trim() === name && !!(datos.selectedFilePath || '').trim();
+    const xmlTexto = (datos.selectedFilePath || '').trim()
+        ? `📄 \`${datos.fileName || ''}\`\n📁 \`${datos.selectedFilePath}\`\n🎯 Saved instance: **${datos.winTitle || '(empty)'}** ${xmlCoincide ? '✅ matches this instance' : '⚠️ does NOT match this instance'}`
+        : '_No XML selected._';
 
     const enviarSolicitud = datos.sendFriendRequestAfterInject === '1' ? '✅ Yes' : '❌ No';
 
@@ -1014,7 +1306,7 @@ function construirEmbedStatusInstancia(index, name) {
         .setTitle(`📊 Status — Instance ${index}. ${name}`)
         .addFields(
             { name: `🆔 Saved friends (${friends.length}/10)`, value: listaFriends },
-            { name: '💠 XLM for injection', value: xlmTexto },
+            { name: '💠 XML for injection', value: xmlTexto },
             { name: '📨 Send request after injecting', value: enviarSolicitud, inline: true }
         )
         .setColor(0x3498DB);
@@ -1255,7 +1547,7 @@ function resolverNombreCarta(cartaId, rutaMasterPath) {
     return (nameKey && en_US?.[nameKey]) ? en_US[nameKey] : cartaId;
 }
 
-function buscarXlmPorCarta(rutaJsonCuentas, cartaId) {
+function buscarXmlPorCarta(rutaJsonCuentas, cartaId) {
     if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
     const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
     const resultados = [];
@@ -1281,27 +1573,33 @@ function buscarXlmPorCarta(rutaJsonCuentas, cartaId) {
     return resultados;
 }
 
-const XLM_POR_PAGINA = 40;
+const XML_POR_PAGINA = 40;
 
-function construirEmbedXlm(resultados, nombreCarta, cartaId, pagina = 0) {
+function construirEmbedXml(resultados, nombreCarta, cartaId, pagina = 0) {
     const embed = new EmbedBuilder()
-        .setTitle(`💠 XLM — ${nombreCarta}`)
+        .setTitle(`💠 XML — ${nombreCarta}`)
         .setColor(0xE91E63);
+
+    const archivosPayload = [];
+    if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+        embed.setThumbnail('attachment://symbol.png');
+        archivosPayload.push(new AttachmentBuilder(SYMBOL_EMBEDS_PATH, { name: 'symbol.png' }));
+    }
 
     if (resultados === null) {
         embed.setDescription('❌ Could not find the configured **JSON Accounts Path** folder.');
-        return { embeds: [embed] };
+        return { embeds: [embed], files: archivosPayload };
     }
 
     if (resultados.length === 0) {
-        embed.setDescription('This card was not found in any XLM account.');
-        return { embeds: [embed] };
+        embed.setDescription('This card was not found in any XML account.');
+        return { embeds: [embed], files: archivosPayload };
     }
 
-    const totalPaginas = Math.max(1, Math.ceil(resultados.length / XLM_POR_PAGINA));
+    const totalPaginas = Math.max(1, Math.ceil(resultados.length / XML_POR_PAGINA));
     const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
-    const inicio = paginaSegura * XLM_POR_PAGINA;
-    const items = resultados.slice(inicio, inicio + XLM_POR_PAGINA);
+    const inicio = paginaSegura * XML_POR_PAGINA;
+    const items = resultados.slice(inicio, inicio + XML_POR_PAGINA);
 
     const descripcion = items.map(r => `\`${r.fileName}\` — x${r.cantidad} UNITS`).join('\n');
 
@@ -1311,30 +1609,64 @@ function construirEmbedXlm(resultados, nombreCarta, cartaId, pagina = 0) {
     if (totalPaginas > 1) {
         return {
             embeds: [embed],
+            files: archivosPayload,
             components: [new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`wishlist_xlm::${cartaId}::${paginaSegura - 1}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
-                new ButtonBuilder().setCustomId(`wishlist_xlm::${cartaId}::${paginaSegura + 1}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
+                new ButtonBuilder().setCustomId(`wishlist_xml::${cartaId}::${paginaSegura - 1}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
+                new ButtonBuilder().setCustomId(`wishlist_xml::${cartaId}::${paginaSegura + 1}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
             )]
         };
     }
 
-    return { embeds: [embed] };
+    return { embeds: [embed], files: archivosPayload };
 }
 
 function construirSlashCommands() {
     return [
         new SlashCommandBuilder().setName('setup').setDescription('Opens the bot control panel'),
         new SlashCommandBuilder().setName('embed').setDescription('Configures what is shown in the S4T embed'),
-        new SlashCommandBuilder().setName('webhook').setDescription('Manages the name and avatar of each channel\'s webhooks'),
+        new SlashCommandBuilder().setName('webhook').setDescription('Manages the name and avatar of each channel\'s webhooks')
+            .addStringOption(opt => opt.setName('type').setDescription('Upload a new avatar directly for this webhook (use together with "image")').setAutocomplete(true).setRequired(false))
+            .addAttachmentOption(opt => opt.setName('image').setDescription('Image to use as the new avatar (use together with "type")').setRequired(false)),
         new SlashCommandBuilder().setName('card').setDescription('Runs the All Cards flow')
             .addStringOption(opt => opt.setName('expansion').setDescription('Filter by expansion before picking the name (optional)').setAutocomplete(true).setRequired(false))
-            .addStringOption(opt => opt.setName('nombre').setDescription('Search for a card directly by name (optional)').setAutocomplete(true).setRequired(false)),
+            .addStringOption(opt => opt.setName('rarity').setDescription('Filter by rarity before picking the name (optional)').setRequired(false)
+                .addChoices(
+                    { name: '1 Diamond', value: '1-diamond' },
+                    { name: '2 Diamond', value: '2-diamond' },
+                    { name: '3 Diamond', value: '3-diamond' },
+                    { name: '4 Diamond', value: '4-diamond' },
+                    { name: '1 Star', value: '1-star' },
+                    { name: '2 Star Trainer', value: '2-star-trainer' },
+                    { name: '2 Star Full Art', value: '2-star-full-art' },
+                    { name: '2 Star Rainbow', value: '2-star-rainbow' },
+                    { name: 'Immersive', value: 'immersive' },
+                    { name: '1 Star Shiny', value: '1-star-shiny' },
+                    { name: '2 Star Shiny', value: '2-star-shiny' },
+                    { name: 'Crown Rare', value: 'crown-rare' }
+                ))
+            .addStringOption(opt => opt.setName('name').setDescription('Search for a card directly by name (optional)').setAutocomplete(true).setRequired(false)),
         new SlashCommandBuilder().setName('wishlist').setDescription('Runs the Cards Wishlist flow')
-            .addStringOption(opt => opt.setName('nombre').setDescription('Search for a card in your wishlist directly by name (optional)').setAutocomplete(true).setRequired(false)),
+            .addStringOption(opt => opt.setName('expansion').setDescription('Filter by expansion before picking the name (optional)').setAutocomplete(true).setRequired(false))
+            .addStringOption(opt => opt.setName('rarity').setDescription('Filter by rarity before picking the name (optional)').setRequired(false)
+                .addChoices(
+                    { name: '1 Diamond', value: '1-diamond' },
+                    { name: '2 Diamond', value: '2-diamond' },
+                    { name: '3 Diamond', value: '3-diamond' },
+                    { name: '4 Diamond', value: '4-diamond' },
+                    { name: '1 Star', value: '1-star' },
+                    { name: '2 Star Trainer', value: '2-star-trainer' },
+                    { name: '2 Star Full Art', value: '2-star-full-art' },
+                    { name: '2 Star Rainbow', value: '2-star-rainbow' },
+                    { name: 'Immersive', value: 'immersive' },
+                    { name: '1 Star Shiny', value: '1-star-shiny' },
+                    { name: '2 Star Shiny', value: '2-star-shiny' },
+                    { name: 'Crown Rare', value: 'crown-rare' }
+                ))
+            .addStringOption(opt => opt.setName('name').setDescription('Search for a card in your wishlist directly by name (optional)').setAutocomplete(true).setRequired(false)),
         new SlashCommandBuilder()
             .setName('extract')
-            .setDescription('Runs Extract XLM')
-            .addSubcommand(subcommand => subcommand.setName('xlm').setDescription('Extract XLM in the selected channel')),
+            .setDescription('Runs Extract XML')
+            .addSubcommand(subcommand => subcommand.setName('xml').setDescription('Extract XML in the selected channel')),
         new SlashCommandBuilder()
             .setName('run')
             .setDescription('Runs Run MumuPlayer')
@@ -1400,7 +1732,7 @@ async function registrarSlashCommands() {
 // estaba.
 const BUMP_INTERVALO_MS = 5 * 60 * 1000;
 
-async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, archivos = [], forzarReubicar = false) {
+async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, archivos = [], forzarReubicar = false, guild = null) {
     const claveMsg = `interfaz_msg_${clave}`;
     const filaMsg = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [userId, claveMsg]);
     const msgId = filaMsg?.estado || null;
@@ -1422,6 +1754,44 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
     // donde ya estaba — hace falta borrar el viejo primero, si no queda uno
     // parado en el medio del chat y otro nuevo al final (duplicado).
     if (msgId && forzarReubicar) {
+        // Si el usuario venía navegando (llegó a una carta puntual) el payload
+        // que llegó acá es siempre la pantalla INICIAL del comando — reubicar
+        // no debe pisarle la búsqueda con eso. En vez de copiar el mensaje
+        // viejo tal cual (su embed apunta a un adjunto que muere en cuanto se
+        // borra ese mensaje, con Discord/Cloudflare cacheando ese 404 de forma
+        // inconsistente), se detecta qué carta puntual estaba abierta a partir
+        // de los botones del mensaje actual y se reconstruye ESA pantalla de
+        // cero — misma función que la armó la primera vez, imagen local
+        // fresca, sin depender de ninguna URL de Discord.
+        try {
+            const actual = await axios.get(`${webhookUrl}/messages/${msgId}`, { timeout: 10000 });
+            const componentesActuales = (actual?.data?.components || []).flatMap(fila => fila.components || []);
+            const botonXml = componentesActuales.find(c => typeof c.custom_id === 'string' && c.custom_id.startsWith('wishlist_xml::'));
+            if (botonXml) {
+                const [, cartaId] = botonXml.custom_id.split('::');
+                const botonHome = componentesActuales.find(c => typeof c.custom_id === 'string' && c.custom_id.endsWith('_volver_expansiones'));
+                const prefijo = botonHome ? botonHome.custom_id.replace('_volver_expansiones', '') : 'wishlist';
+                const botonVolver = componentesActuales.find(c => typeof c.custom_id === 'string' && c.custom_id.includes('_volver_carta_lista::'));
+                let volver = null;
+                if (botonVolver) {
+                    const [, expansion, categoria, pagina] = botonVolver.custom_id.split('::');
+                    volver = { prefijo, expansion, categoria, pagina };
+                }
+                const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+                const rutaMasterPath = rutaMasterCfg?.webhook_url;
+                const nombreCarta = resolverNombreCarta(cartaId, rutaMasterPath);
+                const payloadReconstruido = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterPath, volver, guild);
+                payloadJson = { embeds: payloadReconstruido.embeds, components: payloadReconstruido.components || [] };
+                archivos = archivosDesdeAttachmentBuilders(payloadReconstruido.files);
+            }
+            // Si no era una carta puntual (pantalla inicial, lista de
+            // expansiones/categorías, etc.), no hace falta reconstruir nada:
+            // esas pantallas ya usan siempre archivos locales fijos (banner,
+            // logo de expansión) y el payload inicial que ya venía armado por
+            // el caller sirve tal cual.
+        } catch (e) {
+            console.error(`DEBUG: no se pudo traer el estado actual antes de reubicar "${clave}":`, e?.response?.data || e?.message || e);
+        }
         try { await axios.delete(`${webhookUrl}/messages/${msgId}`, { timeout: 10000 }); } catch (e) { /* si ya no existe, no pasa nada */ }
     }
 
@@ -1433,7 +1803,7 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
     const construirRequest = () => {
         if (!archivos.length) return { data: payloadJson, headers: undefined };
         const form = new FormData();
-        archivos.forEach((a, i) => form.append(`files[${i}]`, fs.createReadStream(a.ruta), { filename: a.filename }));
+        archivos.forEach((a, i) => form.append(`files[${i}]`, a.buffer || fs.createReadStream(a.ruta), { filename: a.filename }));
         // Sin este campo, un PATCH con archivos nuevos no reemplaza los adjuntos
         // viejos del mensaje — Discord los va acumulando, y el mismo mensaje
         // termina mostrando la imagen vieja suelta (fuera del embed) junto con
@@ -1462,30 +1832,30 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
     );
 }
 
-async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = false) {
+async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = false, guild = null) {
     if (commandKey === 'card_wishlist') {
-        const embed = construirEmbedWishlistInicio(user);
-        const fila = new ActionRowBuilder().addComponents(
+        const mapaEmojisWishlist = await obtenerMapaEmojisGuild(guild);
+        const embed = construirEmbedWishlistInicio(user, mapaEmojisWishlist);
+        const fila = filaBotonesConTutorial('cmd_card_wishlist',
             new ButtonBuilder().setCustomId('wishlist_ver').setLabel('📋 View my Wishlist').setStyle(ButtonStyle.Primary)
         );
 
         const bannerPath = path.join(__dirname, 'assets', 'embeds', 'wishlist_banner.png');
-        const thumbPath = path.join(__dirname, 'assets', 'embeds', 'wish.png');
         const archivos = [];
         if (fs.existsSync(bannerPath)) {
             embed.setImage('attachment://wishlist_banner.png');
             archivos.push({ ruta: bannerPath, filename: 'wishlist_banner.png' });
         }
-        if (fs.existsSync(thumbPath)) {
-            embed.setThumbnail('attachment://wish.png');
-            archivos.push({ ruta: thumbPath, filename: 'wish.png' });
+        if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+            embed.setThumbnail('attachment://symbol.png');
+            archivos.push({ ruta: SYMBOL_EMBEDS_PATH, filename: 'symbol.png' });
         }
-        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar);
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar, guild);
         return;
     }
     if (commandKey === 'card_all') {
         const embed = construirEmbedAllCardsInicio(user);
-        const fila = new ActionRowBuilder().addComponents(
+        const fila = filaBotonesConTutorial('cmd_card_all',
             new ButtonBuilder().setCustomId('allcards_ver_expansiones').setLabel('📋 View All Expansions').setStyle(ButtonStyle.Primary)
         );
 
@@ -1500,27 +1870,49 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
             embed.setThumbnail('attachment://symbol.png');
             archivos.push({ ruta: symbolPath, filename: 'symbol.png' });
         }
-        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar);
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar, guild);
         return;
     }
     if (commandKey === 'extract_xlm') {
-        const embed = construirEmbedExtractXlmInicio(user);
-        const fila = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('extract_xlm_abrir').setLabel('📋 Paste XLM').setStyle(ButtonStyle.Primary)
+        const mapaEmojis = await obtenerMapaEmojisGuild(guild);
+        const embed = construirEmbedExtractXmlInicio(user, mapaEmojis);
+        const fila = filaBotonesConTutorial('cmd_extract_xlm',
+            new ButtonBuilder().setCustomId('extract_xml_abrir').setLabel('📋 Paste XML').setStyle(ButtonStyle.Primary)
         );
-        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, [], forzarReubicar);
+
+        const bannerPath = path.join(__dirname, 'assets', 'embeds', 'Extract_xml.png');
+        const archivos = [];
+        if (fs.existsSync(bannerPath)) {
+            embed.setImage('attachment://Extract_xml.png');
+            archivos.push({ ruta: bannerPath, filename: 'Extract_xml.png' });
+        }
+        if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+            embed.setThumbnail('attachment://symbol.png');
+            archivos.push({ ruta: SYMBOL_EMBEDS_PATH, filename: 'symbol.png' });
+        }
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar, guild);
         return;
     }
     if (commandKey === 'run_instance') {
         const embed = construirEmbedRunInstanceInicio(user);
-        const fila = new ActionRowBuilder().addComponents(
+        const fila = filaBotonesConTutorial('cmd_run_instance',
             new ButtonBuilder().setCustomId('mumu_ver_instancias').setLabel('🎮 View Instances').setStyle(ButtonStyle.Primary)
         );
-        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, [], forzarReubicar);
+        const archivos = [];
+        const tradeBannerPath = path.join(__dirname, 'assets', 'embeds', 'Trade_banner.png');
+        if (fs.existsSync(tradeBannerPath)) {
+            embed.setImage('attachment://Trade_banner.png');
+            archivos.push({ ruta: tradeBannerPath, filename: 'Trade_banner.png' });
+        }
+        if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+            embed.setThumbnail('attachment://symbol.png');
+            archivos.push({ ruta: SYMBOL_EMBEDS_PATH, filename: 'symbol.png' });
+        }
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar, guild);
         return;
     }
     const embed = construirEmbedComando(commandKey, user);
-    await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed] }, [], forzarReubicar);
+    await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed] }, [], forzarReubicar, guild);
 }
 
 async function ejecutarComandoEnCanal(interaction, commandKey) {
@@ -1545,7 +1937,7 @@ async function ejecutarComandoEnCanal(interaction, commandKey) {
         // Correr el comando a mano siempre lo manda al final del historial —
         // no hace falta esperar el chequeo automático de 5 minutos, es una
         // forma explícita de traerlo de vuelta cuando el usuario lo pide.
-        await enviarComandoAlCanal(commandKey, interaction.user, row, true);
+        await enviarComandoAlCanal(commandKey, interaction.user, row, true, interaction.guild);
         return await interaction.editReply({ content: `✅ **${cfg.label}** sent successfully.` });
     } catch (error) {
         console.error(`Error enviando ${commandKey}:`, error?.response?.data || error?.message || error);
@@ -1553,10 +1945,28 @@ async function ejecutarComandoEnCanal(interaction, commandKey) {
     }
 }
 
+// Bug real encontrado 2026-07-25 probando con un usuario real (no PM2, .exe
+// empaquetado con launcher.js): "pm2 jlist" siempre falla ahi (no tiene PM2
+// instalado), asi que esto devolvia OFFLINE sin importar que heartbeat.js
+// estuviera corriendo perfecto - el boton "Heartbeat On/Off" nunca reflejaba
+// bien el estado, y el usuario no podia saber si de verdad estaba prendido.
+// Cuando "pm2 jlist" no responde, se usa la MISMA bandera que heartbeat.js ya
+// chequea internamente en cada request (tabla estados_modulos) - esa es la
+// fuente de verdad real sin importar quien supervise los procesos (PM2 o
+// launcher.js).
 function verificarEstadoPM2(nombreProceso, script = null) {
     return new Promise((resolve) => {
-        exec('pm2 jlist', { windowsHide: true }, (err, stdout) => {
-            if (err) return resolve('🔴 OFFLINE');
+        exec('pm2 jlist', { windowsHide: true }, async (err, stdout) => {
+            if (err) {
+                try {
+                    const fila = await db.get(`SELECT status FROM estados_modulos WHERE nombre = ?`, [nombreProceso]);
+                    // Sin fila guardada = nunca se toco el toggle = arranca online
+                    // por defecto, mismo criterio que ya usa heartbeat.js.
+                    return resolve((!fila || fila.status === 'online') ? '🟢 ONLINE' : '🔴 OFFLINE');
+                } catch (e) {
+                    return resolve('🟢 ONLINE');
+                }
+            }
             try {
                 const procesos = JSON.parse(stdout);
                 const matches = procesos.filter(p => p.name === nombreProceso);
@@ -1693,15 +2103,25 @@ function mapearRarezaNumericaPreview(rarityNum, code) {
     return RAREZA_NUMERICA_PREVIEW[num] || null;
 }
 
-let _cardTypesCacheBot = null;
+// Sin caché permanente a propósito: card-types-sync.js reescribe este archivo
+// solo cada varias horas (cartas nuevas de una expansión recién salida), y
+// releerlo es barato — así el proceso no necesita reiniciarse para enterarse.
 function cargarCardTypesBot() {
-    if (_cardTypesCacheBot) return _cardTypesCacheBot;
     try {
-        _cardTypesCacheBot = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'card_types.json'), 'utf8'));
+        return JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'card_types.json'), 'utf8'));
     } catch (e) {
-        _cardTypesCacheBot = {};
+        return {};
     }
-    return _cardTypesCacheBot;
+}
+
+// Los nombres "Alolan X"/"Galarian X" etc. en en_US.json vienen con un
+// carácter de espacio angosto de Unicode (ej. U+2005) entre el prefijo
+// regional y el nombre, en vez de un espacio normal — sin esto, la búsqueda
+// en card_types.json (que sí usa espacio normal) no matchea y esas cartas
+// quedan como "Unknown" en el campo Element. Mismo problema con "Farfetch’d"
+// (comilla tipográfica ’ U+2019 en vez de la recta ' que tiene card_types.json).
+function clavenormalizadaTipoCarta(nombre) {
+    return nombre ? nombre.toLowerCase().replace(/\s+/g, ' ').replace(/[‘’]/g, "'") : '';
 }
 
 // Mismo criterio que buscarLogoExpansion()/normalizarNombreExpansion() en s4t.js:
@@ -1773,7 +2193,7 @@ function construirCandidatosPreview(rutaMaster) {
         if (!buscarLogoExpansionBot(nombreExpansion)) continue; // sin logo no sirve para la vista previa
 
         const nombre = normalizarNombreExBot(nombres[entry.Name] || entry.Name);
-        const tipoIngles = cardTypes[nombre.toLowerCase()];
+        const tipoIngles = cardTypes[clavenormalizadaTipoCarta(nombre)];
         const carta = {
             nombre,
             rarezaClave,
@@ -2040,9 +2460,11 @@ async function generarPanelBuildEmbed(userId, guild = null) {
         ));
     }
 
-    filas.push(new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('build_guardar').setLabel('💾 Save').setStyle(ButtonStyle.Success)
-    ));
+    const botonesGuardar = [new ButtonBuilder().setCustomId('build_guardar').setLabel('💾 Save').setStyle(ButtonStyle.Success)];
+    if (fs.existsSync(rutaTutorialPdf('cmd_build_embed'))) {
+        botonesGuardar.push(new ButtonBuilder().setCustomId('tutorial_pdf::cmd_build_embed').setLabel('📄 Tutorial').setStyle(ButtonStyle.Secondary));
+    }
+    filas.push(new ActionRowBuilder().addComponents(...botonesGuardar));
 
     const eleccion = await elegirExpansionYCartasPreview(4);
     const cartasElegidas = eleccion?.cartas || [];
@@ -2080,12 +2502,12 @@ async function generarPanelControl(userId) {
             `**🎴 Available Features:**\n` +
             `• 💖 **Cards Wishlist** — check and search the cards in your wishlist.\n` +
             `• ⚡ **All Cards** — browse the full catalog of cards in the game.\n` +
-            `• 📄 **Extract XLM** — paste an account name and get its XML + JSON.\n` +
+            `• 📄 **Extract XML** — paste an account name and get its XML + JSON.\n` +
             `• 🔄 **Auto Trade** — open a MuMu instance and inject, add friends, and run trades without touching anything manually.\n\n` +
             `*Press the buttons to interact with the bot's ecosystem.*`
         )
         .setColor(0x9B59B6)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧ • PTCGPB Remote Control" })
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
         .setTimestamp();
 
     const filaSistema = new ActionRowBuilder().addComponents(
@@ -2094,12 +2516,16 @@ async function generarPanelControl(userId) {
         new ButtonBuilder().setCustomId('btn_crear_canales_menu').setLabel('🏗️ Sync Channels').setStyle(ButtonStyle.Secondary)
     );
 
-    const filaGestion = new ActionRowBuilder().addComponents(
+    const botonesGestion = [
         new ButtonBuilder().setCustomId('btn_status').setLabel('📊 Status').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('btn_config_canales').setLabel('⚙️ Configuration').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('btn_ruta_raiz').setLabel('📂 Main Path').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('btn_check_updates').setLabel('🔄 Check for Updates').setStyle(ButtonStyle.Secondary)
-    );
+    ];
+    if (fs.existsSync(rutaTutorialPdf('cmd_setup'))) {
+        botonesGestion.push(new ButtonBuilder().setCustomId('tutorial_pdf::cmd_setup').setLabel('📄 Tutorial').setStyle(ButtonStyle.Secondary));
+    }
+    const filaGestion = new ActionRowBuilder().addComponents(...botonesGestion);
 
     const filaPeligro = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('btn_reset_total').setLabel('🗑️ Reset Total').setStyle(ButtonStyle.Danger),
@@ -2109,14 +2535,20 @@ async function generarPanelControl(userId) {
     const filaCartas = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('panel_wishlist').setLabel('💖 Cards Wishlist').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('panel_allcards').setLabel('⚡ All Cards').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('panel_extract_xlm').setLabel('📄 Extract XLM').setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId('panel_extract_xml').setLabel('📄 Extract XML').setStyle(ButtonStyle.Primary)
     );
 
     const filaTrade = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('panel_run_instance').setLabel('🔄 Auto Trade').setStyle(ButtonStyle.Success)
     );
 
-    return { embeds: [embed], components: [filaSistema, filaGestion, filaPeligro, filaCartas, filaTrade] };
+    const archivos = [];
+    if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+        embed.setThumbnail('attachment://symbol.png');
+        archivos.push({ ruta: SYMBOL_EMBEDS_PATH, filename: 'symbol.png' });
+    }
+
+    return { embeds: [embed], components: [filaSistema, filaGestion, filaPeligro, filaCartas, filaTrade], archivos };
 }
 
 const FUENTES_CARTAS = {
@@ -2159,11 +2591,13 @@ client.on('interactionCreate', async interaction => {
             return interaction.respond(coincidencias).catch(() => {});
         }
 
-        // Campo "nombre": si ya se eligió una expansión, filtra solo dentro de
-        // esa expansión primero (a pedido del usuario, para desambiguar cartas
-        // con el mismo nombre repetidas en varios sets).
+        // Campo "name": si ya se eligió una expansión y/o rareza, filtra solo
+        // dentro de esas primero (a pedido del usuario, para desambiguar
+        // cartas con el mismo nombre repetidas en varios sets/categorías).
         const expansionElegida = interaction.options.getString('expansion');
-        const porExpansion = expansionElegida ? base.filter(c => c.expansion === expansionElegida) : base;
+        const rarezaElegida = interaction.options.getString('rarity');
+        let porExpansion = expansionElegida ? base.filter(c => c.expansion === expansionElegida) : base;
+        if (rarezaElegida) porExpansion = porExpansion.filter(c => c.tipoRareza === rarezaElegida);
         const coincidencias = (focused ? porExpansion.filter(c => c.nombre.toLowerCase().includes(focused)) : porExpansion)
             .slice(0, 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
@@ -2172,8 +2606,8 @@ client.on('interactionCreate', async interaction => {
 
     // Búsqueda directa por nombre vía autocompletado de /card, sin pasar por
     // el banner+botón de "All Cards" — mismo canal/permiso que ese flujo.
-    if (interaction.isChatInputCommand() && interaction.commandName === 'card' && interaction.options.getString('nombre')) {
-        const cartaId = interaction.options.getString('nombre');
+    if (interaction.isChatInputCommand() && interaction.commandName === 'card' && interaction.options.getString('name')) {
+        const cartaId = interaction.options.getString('name');
         const rowCardAll = await obtenerCanalComando(interaction.user.id, 'cmd_card_all');
         if (!rowCardAll) {
             return await interaction.reply({ content: `❌ No channel synced for **All Cards**. Use **Sync Channels** first.`, ephemeral: true });
@@ -2181,19 +2615,49 @@ client.on('interactionCreate', async interaction => {
         if (interaction.channelId !== rowCardAll.canal_id) {
             return await interaction.reply({ content: `❌ This command only works in <#${rowCardAll.canal_id}>.`, ephemeral: true });
         }
-        await interaction.deferReply({ ephemeral: true });
+        // Pública (no ephemeral): un mensaje ephemeral solo se entrega en vivo a
+        // la sesión que estaba conectada en ese momento — no queda guardado en
+        // el historial, así que en otro dispositivo (el celular, por ejemplo)
+        // nunca llega a aparecer, ni refrescando.
+        await interaction.deferReply();
         const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
         const carta = (cartas || []).find(c => c.id === cartaId);
         if (!carta) return await interaction.editReply({ content: '❌ Card not found.' });
         const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
-        return await interaction.editReply(payload);
+        await interaction.editReply(payload);
+        // El resultado de la búsqueda queda como mensaje público aparte (nunca se
+        // toca) — pero sin esto el panel del canal se va quedando enterrado
+        // arriba a medida que se acumulan búsquedas. Se reubica (borra+reenvía)
+        // al final para que quede siempre cerca de la última actividad.
+        try {
+            await enviarComandoAlCanal('card_all', interaction.user, rowCardAll, true, interaction.guild);
+        } catch (e) {
+            console.error('DEBUG: no se pudo reubicar el panel de cmd_card_all tras una búsqueda:', e?.message || e);
+        }
+        return;
     }
 
     if (interaction.isAutocomplete() && interaction.commandName === 'wishlist') {
-        const focused = interaction.options.getFocused().trim().toLowerCase();
+        const campoFocus = interaction.options.getFocused(true);
+        const focused = campoFocus.value.trim().toLowerCase();
         const { cartas } = await FUENTES_CARTAS.wishlist.obtenerCartas();
         const base = cartas || [];
-        const coincidencias = (focused ? base.filter(c => c.nombre.toLowerCase().includes(focused)) : base)
+
+        if (campoFocus.name === 'expansion') {
+            const expansiones = [...new Set(base.map(c => c.expansion))].sort((a, b) => a.localeCompare(b));
+            const coincidencias = (focused ? expansiones.filter(e => e.toLowerCase().includes(focused)) : expansiones)
+                .slice(0, 25)
+                .map(e => ({ name: e.slice(0, 100), value: e }));
+            return interaction.respond(coincidencias).catch(() => {});
+        }
+
+        // Campo "name": mismo criterio que /card - si ya se eligio expansion
+        // y/o rareza, filtra dentro de esas primero.
+        const expansionElegida = interaction.options.getString('expansion');
+        const rarezaElegida = interaction.options.getString('rarity');
+        let porExpansion = expansionElegida ? base.filter(c => c.expansion === expansionElegida) : base;
+        if (rarezaElegida) porExpansion = porExpansion.filter(c => c.tipoRareza === rarezaElegida);
+        const coincidencias = (focused ? porExpansion.filter(c => c.nombre.toLowerCase().includes(focused)) : porExpansion)
             .slice(0, 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
         return interaction.respond(coincidencias).catch(() => {});
@@ -2201,8 +2665,8 @@ client.on('interactionCreate', async interaction => {
 
     // Búsqueda directa por nombre vía autocompletado de /wishlist, sin pasar por
     // el banner+botón de "Cards Wishlist" — mismo canal/permiso que ese flujo.
-    if (interaction.isChatInputCommand() && interaction.commandName === 'wishlist' && interaction.options.getString('nombre')) {
-        const cartaId = interaction.options.getString('nombre');
+    if (interaction.isChatInputCommand() && interaction.commandName === 'wishlist' && interaction.options.getString('name')) {
+        const cartaId = interaction.options.getString('name');
         const rowWishlist = await obtenerCanalComando(interaction.user.id, 'cmd_card_wishlist');
         if (!rowWishlist) {
             return await interaction.reply({ content: `❌ No channel synced for **Cards Wishlist**. Use **Sync Channels** first.`, ephemeral: true });
@@ -2210,12 +2674,20 @@ client.on('interactionCreate', async interaction => {
         if (interaction.channelId !== rowWishlist.canal_id) {
             return await interaction.reply({ content: `❌ This command only works in <#${rowWishlist.canal_id}>.`, ephemeral: true });
         }
-        await interaction.deferReply({ ephemeral: true });
+        // Pública (no ephemeral) por el mismo motivo que en /card: un ephemeral
+        // no queda en el historial y no se ve en otro dispositivo.
+        await interaction.deferReply();
         const { cartas, rutaMasterPath } = await FUENTES_CARTAS.wishlist.obtenerCartas();
         const carta = (cartas || []).find(c => c.id === cartaId);
         if (!carta) return await interaction.editReply({ content: '❌ Card not found in your wishlist.' });
         const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
-        return await interaction.editReply(payload);
+        await interaction.editReply(payload);
+        try {
+            await enviarComandoAlCanal('card_wishlist', interaction.user, rowWishlist, true, interaction.guild);
+        } catch (e) {
+            console.error('DEBUG: no se pudo reubicar el panel de cmd_card_wishlist tras una búsqueda:', e?.message || e);
+        }
+        return;
     }
 
     const comandoGuiado = normalizarComando(interaction);
@@ -2229,21 +2701,76 @@ client.on('interactionCreate', async interaction => {
             return await interaction.reply({ content: '❌ Only administrators or users with the Manage Server permission can use this panel.', ephemeral: true });
         }
         const rowSetup = await obtenerCanalComando(interaction.user.id, 'cmd_setup');
-        if (rowSetup && interaction.channelId !== rowSetup.canal_id) {
-            return await interaction.reply({ content: `❌ This command only works in <#${rowSetup.canal_id}>.`, ephemeral: true });
+        const enCanalSetup = rowSetup && interaction.channelId === rowSetup.canal_id;
+
+        if (rowSetup && !enCanalSetup) {
+            // Se permite correr /setup fuera de su canal de siempre, PERO SOLO si
+            // el canal actual no tiene otro comando propio asignado — así, si el
+            // canal de Settings se rompe (ej. queda borrado o inaccesible), sigue
+            // habiendo una forma de correr /setup desde cualquier otro lado (un
+            // canal de rareza, general, etc.) para reparar/sincronizar, en vez de
+            // quedar sin ninguna salida. No se permite en los canales de
+            // Cards/Wishlist/Extract XML/Auto Trade/etc. para no mezclarlos.
+            const filaOtroComando = await db.get(
+                `SELECT tipo FROM configs_canales WHERE discord_id = ? AND canal_id = ? AND tipo LIKE 'cmd_%' AND tipo != 'cmd_setup'`,
+                [interaction.user.id, interaction.channelId]
+            );
+            if (filaOtroComando) {
+                return await interaction.reply({ content: `❌ This command only works in <#${rowSetup.canal_id}>, or in a channel without its own assigned command.`, ephemeral: true });
+            }
         }
-        const panel = await generarPanelControl(interaction.user.id);
-        if (rowSetup) {
+
+        // "archivos" se separa acá y no viaja dentro de "panel" — enviarOEditarInterfaz
+        // lo necesita como argumento aparte, y si quedara mezclado en el mismo
+        // objeto terminaría colándose como un campo extra dentro del payload_json
+        // real que se manda a Discord.
+        const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.user.id);
+        if (enCanalSetup) {
             // Un solo panel parado en el canal (se edita in situ), en vez de uno
             // nuevo cada vez que alguien corre /setup de nuevo — pero correrlo a
             // mano sí lo manda al final del historial, sin esperar el chequeo
             // automático de 5 minutos.
             await interaction.deferReply({ ephemeral: true });
-            await enviarOEditarInterfaz(interaction.user.id, 'setup', rowSetup.webhook_url, panel, [], true);
-            return await interaction.editReply({ content: '✅ Panel updated.' });
+            try {
+                await enviarOEditarInterfaz(interaction.user.id, 'setup', rowSetup.webhook_url, panel, archivosPanel || [], true);
+                return await interaction.editReply({ content: '✅ Panel updated.' });
+            } catch (error) {
+                // El webhook guardado murió (ej. borrado en Discord) — se repara
+                // solo acá mismo, en vez de dejar la interacción colgada o el
+                // panel roto hasta la próxima "Sincronizar Canales".
+                console.error('DEBUG: webhook de setup muerto, recreando:', error?.response?.data || error?.message || error);
+                try {
+                    const canal = await interaction.guild.channels.fetch(rowSetup.canal_id);
+                    const webhooksViejos = await canal.fetchWebhooks();
+                    for (const w of webhooksViejos.filter(w => w.name === 'Bot cmd_setup').values()) {
+                        await w.delete('Recreating invalid webhook').catch(() => {});
+                    }
+                    const webhookNuevo = await canal.createWebhook({ name: 'Bot cmd_setup', avatar: 'https://i.imgur.com/gK1q9yS.png' });
+                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, 'cmd_setup']);
+                    await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.user.id, 'cmd_setup', rowSetup.canal_id, webhookNuevo.url]);
+                    await db.run(`DELETE FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, 'interfaz_msg_setup']);
+                    await aplicarPersonalizacionWebhookSiExiste(interaction.user.id, 'cmd_setup', webhookNuevo.url);
+                    await enviarOEditarInterfaz(interaction.user.id, 'setup', webhookNuevo.url, panel, archivosPanel || []);
+                    return await interaction.editReply({ content: '✅ Panel updated (had to repair a broken webhook first).' });
+                } catch (error2) {
+                    console.error('DEBUG: no se pudo reparar el webhook de setup:', error2?.response?.data || error2?.message || error2);
+                    return await interaction.editReply({ content: '❌ Could not update the panel. Try running **Sync Channels** again.' });
+                }
+            }
         }
+
+        const filesPanel = (archivosPanel || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename }));
+
+        if (rowSetup) {
+            // Corrido fuera del canal de Settings (para reparar, ver arriba) —
+            // se responde acá mismo, en privado, sin tocar el webhook del canal
+            // real de Settings (que puede estar roto).
+            await interaction.deferReply({ ephemeral: true });
+            return await interaction.editReply({ ...panel, files: filesPanel });
+        }
+
         await interaction.deferReply();
-        return await interaction.editReply(panel);
+        return await interaction.editReply({ ...panel, files: filesPanel });
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'embed') {
@@ -2254,8 +2781,29 @@ client.on('interactionCreate', async interaction => {
         if (rowBuild && interaction.channelId !== rowBuild.canal_id) {
             return await interaction.reply({ content: `❌ This command only works in <#${rowBuild.canal_id}>.`, ephemeral: true });
         }
+        // Se difiere ANTES de armar el panel (generarPanelBuildEmbed hace
+        // trabajo pesado — imágenes, collage, HD desde Drive — que puede
+        // tardar más de los 3s que Discord da para confirmar la interacción).
         await interaction.deferReply({ ephemeral: true });
         const panelBuild = await generarPanelBuildEmbed(interaction.user.id, interaction.guild);
+
+        if (rowBuild) {
+            // Igual que /setup: un solo panel público parado en el canal
+            // (editado in situ), en vez de una respuesta efímera que
+            // "desaparece" al recargar Discord o cambiar de dispositivo.
+            try {
+                await enviarOEditarInterfaz(
+                    interaction.user.id, 'build_embed', rowBuild.webhook_url,
+                    { embeds: panelBuild.embeds, components: panelBuild.components },
+                    archivosDesdeAttachmentBuilders(panelBuild.files), true, interaction.guild
+                );
+                return await interaction.editReply({ content: '✅ Panel updated.' });
+            } catch (error) {
+                console.error('DEBUG: error actualizando panel de build embed:', error?.response?.data || error?.message || error);
+                return await interaction.editReply({ content: '❌ Could not update the panel. Try running **Sync Channels** again.' });
+            }
+        }
+
         return await interaction.editReply(panelBuild);
     }
 
@@ -2281,6 +2829,16 @@ client.on('interactionCreate', async interaction => {
         });
     }
 
+    if (interaction.isAutocomplete() && interaction.commandName === 'webhook') {
+        const focused = interaction.options.getFocused().trim().toLowerCase();
+        const webhooksReales = await obtenerWebhooksReales(interaction.user.id);
+        const coincidencias = webhooksReales
+            .filter(w => !focused || etiquetaTipoWebhook(w.tipo).toLowerCase().includes(focused))
+            .slice(0, 25)
+            .map(w => ({ name: etiquetaTipoWebhook(w.tipo).slice(0, 100), value: w.tipo }));
+        return interaction.respond(coincidencias).catch(() => {});
+    }
+
     if (interaction.isChatInputCommand() && interaction.commandName === 'webhook') {
         if (!tienePermisosGestion(interaction)) {
             return await interaction.reply({ content: '❌ Only administrators or users with the Manage Server permission can use this panel.', ephemeral: true });
@@ -2289,8 +2847,63 @@ client.on('interactionCreate', async interaction => {
         if (rowWebhook && interaction.channelId !== rowWebhook.canal_id) {
             return await interaction.reply({ content: `❌ This command only works in <#${rowWebhook.canal_id}>.`, ephemeral: true });
         }
+
+        // Subida directa: /webhook type:X image:Y — evita el modal (Discord no
+        // permite adjuntar archivos dentro de un modal, solo texto), pegando la
+        // URL sigue andando igual para quien lo prefiera así.
+        const tipoSubida = interaction.options.getString('type');
+        const imagenSubida = interaction.options.getAttachment('image');
+        if (tipoSubida || imagenSubida) {
+            if (!tipoSubida || !imagenSubida) {
+                return await interaction.reply({ content: '❌ To upload an avatar directly, fill in both "type" and "image".', ephemeral: true });
+            }
+            await interaction.deferReply({ ephemeral: true });
+            const filaWebhook = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipoSubida]);
+            if (!filaWebhook) return await interaction.editReply({ content: '❌ Webhook not found.' });
+
+            if (!(imagenSubida.contentType || '').startsWith('image/')) {
+                return await interaction.editReply({ content: '❌ That attachment isn\'t an image.' });
+            }
+            try {
+                const img = await axios.get(imagenSubida.url, {
+                    responseType: 'arraybuffer', timeout: 8000,
+                    maxContentLength: 8 * 1024 * 1024, maxBodyLength: 8 * 1024 * 1024
+                });
+                const avatarDataUri = `data:${imagenSubida.contentType};base64,${Buffer.from(img.data).toString('base64')}`;
+                await axios.patch(filaWebhook.webhook_url, { avatar: avatarDataUri });
+                // OJO: acá se guarda el data URI ya descargado, no la URL del
+                // adjunto de Discord tal cual — esa URL es firmada/temporal (el
+                // mismo problema de CDN que ya vimos con las imágenes del
+                // reubicar) y para cuando haga falta reaplicarla ya habría
+                // vencido. aplicarPersonalizacionWebhookSiExiste sabe usar este
+                // data URI directo sin necesidad de volver a descargarlo.
+                await guardarPersonalizacionWebhook(interaction.user.id, tipoSubida, { avatarUrl: avatarDataUri });
+                return await interaction.editReply({ content: `✅ Avatar updated for **${etiquetaTipoWebhook(tipoSubida)}**.` });
+            } catch (e) {
+                console.error('DEBUG: error subiendo avatar directo por adjunto:', e?.response?.data || e?.message || e);
+                return await interaction.editReply({ content: '❌ Could not apply that image. Try again.' });
+            }
+        }
+
         await interaction.deferReply({ ephemeral: true });
         const panel = await construirPanelListaWebhooks(interaction.user.id);
+
+        if (rowWebhook) {
+            // Mismo criterio que /setup y /embed: panel público editado in
+            // situ, no una respuesta efímera que se pierde al recargar Discord.
+            try {
+                await enviarOEditarInterfaz(
+                    interaction.user.id, 'build_webhooks', rowWebhook.webhook_url,
+                    { embeds: panel.embeds, components: panel.components },
+                    archivosDesdeAttachmentBuilders(panel.files), true
+                );
+                return await interaction.editReply({ content: '✅ Panel updated.' });
+            } catch (error) {
+                console.error('DEBUG: error actualizando panel de webhooks:', error?.response?.data || error?.message || error);
+                return await interaction.editReply({ content: '❌ Could not update the panel. Try running **Sync Channels** again.' });
+            }
+        }
+
         return await interaction.editReply(panel);
     }
 
@@ -2434,9 +3047,9 @@ client.on('interactionCreate', async interaction => {
             });
         }
 
-        if (interaction.customId.startsWith('modal_mumu_xlm::')) {
+        if (interaction.customId.startsWith('modal_mumu_xml::')) {
             const [, , nombre] = interaction.customId.split('::');
-            const nombreBuscado = interaction.fields.getTextInputValue('input_xlm_nombre');
+            const nombreBuscado = interaction.fields.getTextInputValue('input_xml_nombre');
 
             await interaction.deferReply({ ephemeral: true });
             const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
@@ -2447,17 +3060,17 @@ client.on('interactionCreate', async interaction => {
             }
 
             try {
-                guardarXlmParaInyeccion(nombre, archivo);
+                guardarXmlParaInyeccion(nombre, archivo);
             } catch (e) {
                 return await interaction.editReply({ content: '❌ Could not save the selection to InjectAccount.ini.' });
             }
 
-            return await interaction.editReply({ content: `✅ Saved \`${path.basename(archivo)}\` to inject into instance **${nombre}**. Ready to use in Inject XLM.` });
+            return await interaction.editReply({ content: `✅ Saved \`${path.basename(archivo)}\` to inject into instance **${nombre}**. Ready to use in Inject XML.` });
         }
 
-        if (interaction.customId === 'modal_extract_xlm') {
+        if (interaction.customId === 'modal_extract_xml') {
             await interaction.deferReply({ ephemeral: true });
-            const nombreBuscado = interaction.fields.getTextInputValue('input_xlm_nombre');
+            const nombreBuscado = interaction.fields.getTextInputValue('input_xml_nombre');
             const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
             const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, nombreBuscado);
 
@@ -2535,6 +3148,13 @@ client.on('interactionCreate', async interaction => {
                 return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Discord rejected the change. Try again.' }));
             }
 
+            // Guardado aparte para poder reaplicar este mismo nombre/foto si el
+            // webhook alguna vez se recrea (ver guardarPersonalizacionWebhook).
+            const cambiosGuardar = {};
+            if (nuevoNombre) cambiosGuardar.name = nuevoNombre;
+            if (nuevaAvatarUrl) cambiosGuardar.avatarUrl = nuevaAvatarUrl;
+            await guardarPersonalizacionWebhook(interaction.user.id, tipo, cambiosGuardar);
+
             return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { guardado: true }));
         }
 
@@ -2580,15 +3200,23 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_categoria_seleccion' || interaction.customId === 'allcards_categoria_seleccion')) {
         await interaction.deferUpdate();
-        const prefijo = prefijoDeCartas(interaction.customId);
-        const fuente = FUENTES_CARTAS[prefijo];
-        const separador = interaction.values[0].indexOf('::');
-        const expansion = interaction.values[0].slice(0, separador);
-        const categoria = interaction.values[0].slice(separador + 2);
-        const { cartas } = await fuente.obtenerCartas();
-        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-        const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, 0, { prefijo, contexto: fuente.contexto, mapaEmojis });
-        return await interaction.editReply(payload);
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const separador = interaction.values[0].indexOf('::');
+            const expansion = interaction.values[0].slice(0, separador);
+            const categoria = interaction.values[0].slice(separador + 2);
+            const { cartas } = await fuente.obtenerCartas();
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, 0, { prefijo, contexto: fuente.contexto, mapaEmojis });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            // Red de seguridad: si algo similar al bug de "4 Diamonds" (texto
+            // del embed pasado de largo) vuelve a pasar por otro motivo, que
+            // avise en vez de dejar la interacción colgada para siempre.
+            console.error('DEBUG: error mostrando cartas de la categoría:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this category. Try again.', embeds: [], components: [] });
+        }
     }
 
     if (interaction.isStringSelectMenu() && (interaction.customId.startsWith('wishlist_carta_seleccion::') || interaction.customId.startsWith('allcards_carta_seleccion::'))) {
@@ -2633,8 +3261,8 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.isButton()) {
-        if (['panel_wishlist', 'panel_allcards', 'panel_extract_xlm', 'panel_run_instance'].includes(interaction.customId)) {
-            const commandKey = { panel_wishlist: 'card_wishlist', panel_allcards: 'card_all', panel_extract_xlm: 'extract_xlm', panel_run_instance: 'run_instance' }[interaction.customId];
+        if (['panel_wishlist', 'panel_allcards', 'panel_extract_xml', 'panel_run_instance'].includes(interaction.customId)) {
+            const commandKey = { panel_wishlist: 'card_wishlist', panel_allcards: 'card_all', panel_extract_xml: 'extract_xlm', panel_run_instance: 'run_instance' }[interaction.customId];
             const cfg = COMANDO_CONFIG[commandKey];
             const row = await obtenerCanalComando(interaction.user.id, cfg.tipo);
 
@@ -2644,7 +3272,7 @@ client.on('interactionCreate', async interaction => {
 
             await interaction.deferReply({ ephemeral: true });
             try {
-                await enviarComandoAlCanal(commandKey, interaction.user, row);
+                await enviarComandoAlCanal(commandKey, interaction.user, row, false, interaction.guild);
                 const filaIr = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setLabel('➡️ Go to channel').setStyle(ButtonStyle.Link).setURL(`https://discord.com/channels/${interaction.guildId}/${row.canal_id}`)
                 );
@@ -2656,7 +3284,11 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.customId === 'allcards_ver_expansiones') {
-            await interaction.deferReply({ ephemeral: true });
+            // Pública (no ephemeral): toda esta navegación (expansión › categoría
+            // › carta) se encadena editando esta misma respuesta — si arranca
+            // ephemeral, se queda ephemeral para siempre y solo se ve en el
+            // dispositivo que estaba conectado en el momento del click.
+            await interaction.deferReply();
             const { cartas } = await FUENTES_CARTAS.allcards.obtenerCartas();
             if (cartas === null) {
                 return await interaction.editReply({ content: FUENTES_CARTAS.allcards.errorSinDatos });
@@ -2674,13 +3306,14 @@ client.on('interactionCreate', async interaction => {
             const { cartas } = await fuente.obtenerCartas();
 
             if (cartas === null) {
-                if (esPrimeraVez) return await interaction.reply({ content: fuente.errorSinDatos, ephemeral: true });
+                if (esPrimeraVez) return await interaction.reply({ content: fuente.errorSinDatos });
                 return await interaction.update({ content: fuente.errorSinDatos, embeds: [], components: [] });
             }
 
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
             const payload = construirEmbedListaCartas(cartas, pagina, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis });
-            if (esPrimeraVez) return await interaction.reply({ ...payload, ephemeral: true });
+            // Pública, mismo motivo que en allcards_ver_expansiones.
+            if (esPrimeraVez) return await interaction.reply({ ...payload });
             return await interaction.update(payload);
         }
 
@@ -2721,12 +3354,88 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply(payload);
         }
 
-        if (interaction.customId === 'extract_xlm_abrir') {
-            const modalExtract = new ModalBuilder().setCustomId('modal_extract_xlm').setTitle('Extract XLM')
+        if (interaction.customId.startsWith('tutorial_pdf::')) {
+            const [, tipo] = interaction.customId.split('::');
+            const ruta = rutaTutorialPdf(tipo);
+            if (!fs.existsSync(ruta)) {
+                return await interaction.reply({ content: '❌ No tutorial available for this channel yet.', ephemeral: true });
+            }
+            return await interaction.reply({ files: [new AttachmentBuilder(ruta, { name: `${tipo}.pdf` })], ephemeral: true });
+        }
+
+        if (interaction.customId === 'extract_xml_abrir') {
+            const modalExtract = new ModalBuilder().setCustomId('modal_extract_xml').setTitle('Extract XML')
                 .addComponents(new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('input_xlm_nombre').setLabel('XLM file name').setStyle(TextInputStyle.Short)
+                    new TextInputBuilder().setCustomId('input_xml_nombre').setLabel('XML file name').setStyle(TextInputStyle.Short)
                 ));
             return await interaction.showModal(modalExtract);
+        }
+
+        if (interaction.customId.startsWith('heartbeat_reload_ahk::')) {
+            // Botón del aviso de heartbeat cuando una instancia lleva varios
+            // minutos sin abrir sobres Y el log local NO dice "sin cuentas" —
+            // el usuario aclaró que en ese caso lo que se congela es el AHK,
+            // no necesariamente MuMu, así que hay que recargar el script (el
+            // mismo Reload/Shift+F5 que ya tiene) en vez de reiniciar MuMu.
+            if (!tienePermisosGestion(interaction)) {
+                return await interaction.reply({ content: "❌ You don't have permission to run control actions.", ephemeral: true });
+            }
+            const index = interaction.customId.split('::')[1];
+            await interaction.deferUpdate();
+            const ok = ejecutarAccionAhkInstancia(index, 'reload');
+            if (ok) {
+                // A pedido del usuario: una vez reparada, el aviso se borra
+                // solo — si no, se van acumulando y terminan enterrando el
+                // panel principal de heartbeat (que se edita in situ, en su
+                // posición original, y no se reubica solo como los paneles de
+                // comando).
+                return await interaction.deleteReply().catch(() => {});
+            }
+            const embedOriginal = interaction.message?.embeds?.[0];
+            const embedActualizado = embedOriginal ? EmbedBuilder.from(embedOriginal) : new EmbedBuilder();
+            embedActualizado.setColor(0xE74C3C);
+            embedActualizado.setDescription(
+                `❌ Could not reload the AHK for **Instance ${index}** — its window wasn't found (maybe it's already closed).\n\n${embedOriginal?.description || ''}`
+            );
+            return await interaction.editReply({ embeds: [embedActualizado] });
+        }
+
+        if (interaction.customId.startsWith('heartbeat_cerrar::')) {
+            // Botón del aviso de heartbeat cuando el log local de la instancia
+            // dice que ya no le quedan cuentas de 24h elegibles — no tiene
+            // sentido dejarla prendida consumiendo recursos, así que cierra
+            // MuMu Y el AHK de esa instancia puntual.
+            if (!tienePermisosGestion(interaction)) {
+                return await interaction.reply({ content: "❌ You don't have permission to run control actions.", ephemeral: true });
+            }
+            const index = interaction.customId.split('::')[1];
+            await interaction.deferUpdate();
+            const mumuOk = apagarInstanciaMuMu(index);
+            const ahkOk = ejecutarAccionAhkInstancia(index, 'close');
+            // Si el AHK quedó realmente colgado por dentro (no solo esperando
+            // cuentas), la señal 0x500 se queda en cola y el script no la
+            // procesa hasta que "respira" de nuevo — confirmado en vivo que
+            // reabrir el MuMu lo destraba (probablemente por el fallo de ADB
+            // al reconectar). Por eso, como respaldo, reabrimos y volvemos a
+            // cerrar el MuMu unos segundos después: si el AHK ya cerró solo
+            // esto no hace nada malo (solo prende y apaga MuMu de nuevo), y si
+            // seguía colgado, esto lo fuerza a cerrar también.
+            setTimeout(() => {
+                lanzarInstanciaMuMu(index);
+                setTimeout(() => {
+                    apagarInstanciaMuMu(index);
+                }, 15000);
+            }, 20000);
+            if (mumuOk || ahkOk) {
+                return await interaction.deleteReply().catch(() => {});
+            }
+            const embedOriginal = interaction.message?.embeds?.[0];
+            const embedActualizado = embedOriginal ? EmbedBuilder.from(embedOriginal) : new EmbedBuilder();
+            embedActualizado.setColor(0xE74C3C);
+            embedActualizado.setDescription(
+                `❌ Could not close **Instance ${index}** — MuMuManager.exe not found and its AHK window wasn't found either.\n\n${embedOriginal?.description || ''}`
+            );
+            return await interaction.editReply({ embeds: [embedActualizado] });
         }
 
         if (interaction.customId === 'mumu_ver_instancias') {
@@ -2735,12 +3444,44 @@ client.on('interactionCreate', async interaction => {
                 return await interaction.reply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', ephemeral: true });
             }
             const payload = construirEmbedInstanciasMuMu(instancias);
-            return await interaction.reply({ ...payload, ephemeral: true });
+            // Pública, mismo motivo que en allcards_ver_expansiones.
+            return await interaction.reply({ ...payload });
+        }
+
+        if (interaction.customId === 'mumu_refrescar' || interaction.customId.startsWith('mumu_refrescar::')) {
+            await interaction.deferUpdate();
+            const partes = interaction.customId.split('::');
+            const index = partes[1];
+            const nombre = partes[2];
+            const instancias = obtenerInstanciasMuMu();
+            if (instancias === null) {
+                return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', embeds: [], components: [] });
+            }
+            const instanciaInfo = index ? instancias.find(i => String(i.index) === String(index)) : null;
+            const seleccion = index ? { index, name: nombre, encendida: !!instanciaInfo?.is_android_started } : null;
+            return await interaction.editReply(construirEmbedInstanciasMuMu(instancias, seleccion));
         }
 
         if (interaction.customId.startsWith('mumu_encender_')) {
             const [index, nombre] = interaction.customId.replace('mumu_encender_', '').split('::');
             await interaction.deferUpdate();
+
+            // El usuario pidió limitar esto a una sola instancia prendida a la
+            // vez — tener varias abiertas al mismo tiempo "se altera" (la
+            // automatización de clicks/coordenadas no está pensada para correr
+            // contra más de una instancia en simultáneo). "Main" queda exenta
+            // de esta restricción a pedido explícito del usuario: sí se puede
+            // prender aunque haya otra instancia ya encendida.
+            const esMain = nombre.trim().toLowerCase() === 'main';
+            const instanciasActuales = obtenerInstanciasMuMu();
+            const otraEncendida = !esMain && instanciasActuales?.find(i => String(i.index) !== String(index) && i.is_android_started);
+            if (otraEncendida) {
+                const payloadBloqueado = construirEmbedInstanciasMuMu(instanciasActuales, { index, name: nombre, encendida: false });
+                const embedBloqueado = payloadBloqueado.embeds[0];
+                embedBloqueado.setDescription(`⚠️ **${otraEncendida.name}** (instance ${otraEncendida.index}) is already on. Turn it off before opening another one.\n\n${embedBloqueado.data.description}`);
+                return await interaction.editReply(payloadBloqueado);
+            }
+
             const ok = lanzarInstanciaMuMu(index);
 
             // Launch solo pide a MuMu que arranque — el sistema Android adentro tarda
@@ -2785,7 +3526,7 @@ client.on('interactionCreate', async interaction => {
 
             const datosIni = leerIniInject();
             if ((datosIni.winTitle || '').trim() !== nombre || !(datosIni.selectedFilePath || '').trim()) {
-                return await interaction.editReply({ content: `❌ First select the XLM with the 💠 XLM button for instance **${nombre}**.` });
+                return await interaction.editReply({ content: `❌ First select the XML with the 💠 XML button for instance **${nombre}**.` });
             }
 
             await interaction.editReply({ content: `🔄 Running injection on instance **${nombre}**... this WILL CLOSE the current session and may take several minutes.` });
@@ -2855,31 +3596,51 @@ client.on('interactionCreate', async interaction => {
             return await interaction.reply({ ...payload, ephemeral: true });
         }
 
-        if (interaction.customId.startsWith('mumu_xlm_')) {
-            const [index, nombre] = interaction.customId.replace('mumu_xlm_', '').split('::');
-            const modalXlm = new ModalBuilder().setCustomId(`modal_mumu_xlm::${index}::${nombre}`).setTitle('Prepare XLM Injection')
+        if (interaction.customId.startsWith('mumu_xml_')) {
+            const [index, nombre] = interaction.customId.replace('mumu_xml_', '').split('::');
+            const modalXml = new ModalBuilder().setCustomId(`modal_mumu_xml::${index}::${nombre}`).setTitle('Prepare XML Injection')
                 .addComponents(new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('input_xlm_nombre').setLabel('XLM file name').setStyle(TextInputStyle.Short)
+                    new TextInputBuilder().setCustomId('input_xml_nombre').setLabel('XML file name').setStyle(TextInputStyle.Short)
                 ));
-            return await interaction.showModal(modalXlm);
+            return await interaction.showModal(modalXml);
         }
 
-        if (interaction.customId.startsWith('wishlist_xlm::')) {
+        if (interaction.customId.startsWith('wishlist_xml::')) {
             // El mismo customId sirve para el botón inicial (viene del detalle de
-            // carta, mensaje nuevo) y para paginar (edita el mensaje de XLM que ya
+            // carta, mensaje nuevo) y para paginar (edita el mensaje de XML que ya
             // está abierto) — se distingue mirando de qué embed vino el click.
-            const yaEsVistaXlm = interaction.message?.embeds?.[0]?.title?.startsWith('💠 XLM');
-            if (yaEsVistaXlm) await interaction.deferUpdate();
-            else await interaction.deferReply({ ephemeral: true });
+            const yaEsVistaXml = interaction.message?.embeds?.[0]?.title?.startsWith('💠 XML');
+            // Pública, mismo motivo que en allcards_ver_expansiones.
+            if (yaEsVistaXml) await interaction.deferUpdate();
+            else await interaction.deferReply();
 
             const [, cartaId, paginaTexto] = interaction.customId.split('::');
             const pagina = parseInt(paginaTexto, 10) || 0;
             const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
             const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
             const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
-            const resultados = buscarXlmPorCarta(rutaJsonCfg?.webhook_url, cartaId);
-            const payload = construirEmbedXlm(resultados, nombreCarta, cartaId, pagina);
-            return await interaction.editReply(payload);
+            const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId);
+            const payload = construirEmbedXml(resultados, nombreCarta, cartaId, pagina);
+            await interaction.editReply(payload);
+            if (!yaEsVistaXml) {
+                // Mensaje nuevo (no una paginación in-place) — mismo motivo que en
+                // /card y /wishlist: reubicar el panel del canal para que no quede
+                // enterrado. No sabemos acá si el canal es cmd_card_all o
+                // cmd_card_wishlist (el botón es el mismo en los dos flujos), así
+                // que se prueban los dos y se reubica el que coincida con el canal.
+                try {
+                    const rowAll = await obtenerCanalComando(interaction.user.id, 'cmd_card_all');
+                    const rowWishlist = await obtenerCanalComando(interaction.user.id, 'cmd_card_wishlist');
+                    if (rowAll && interaction.channelId === rowAll.canal_id) {
+                        await enviarComandoAlCanal('card_all', interaction.user, rowAll, true, interaction.guild);
+                    } else if (rowWishlist && interaction.channelId === rowWishlist.canal_id) {
+                        await enviarComandoAlCanal('card_wishlist', interaction.user, rowWishlist, true, interaction.guild);
+                    }
+                } catch (e) {
+                    console.error('DEBUG: no se pudo reubicar el panel tras abrir XML:', e?.message || e);
+                }
+            }
+            return;
         }
 
         if (interaction.customId === 'actualizacion_luego') {
@@ -3025,7 +3786,7 @@ client.on('interactionCreate', async interaction => {
                             tipoCategoria: 'actualizaciones_categoria',
                             canales: [
                                 { tipo: 'actualizaciones', name: '🔔-updates' },
-                                { tipo: 'apoyo', name: '💝-support-my-work' },
+                                { tipo: 'apoyo', name: '☕-donate' },
                                 { tipo: 'cmd_feedback', name: '📝-feedback' }
                             ]
                         },
@@ -3050,6 +3811,7 @@ client.on('interactionCreate', async interaction => {
                             tipoCategoria: 'crear_canales',
                             canales: [
                                 { tipo: 's4t', name: '🤖-s4t' },
+                                { tipo: 's4t-categoria', name: '📊-s4t-categoria' },
                                 { tipo: '3-diamond', name: '🔷-3-diamond' },
                                 { tipo: '4-diamond', name: '💠-4-diamond' },
                                 { tipo: '1-star', name: '⭐-1-star' },
@@ -3078,7 +3840,7 @@ client.on('interactionCreate', async interaction => {
                             canales: [
                                 { tipo: 'cmd_card_wishlist', name: '💖-cards-wishlist' },
                                 { tipo: 'cmd_card_all', name: '⚡-all-cards' },
-                                { tipo: 'cmd_extract_xlm', name: '📄-extract-xlm' }
+                                { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' }
                             ]
                         },
                         {
@@ -3098,7 +3860,7 @@ client.on('interactionCreate', async interaction => {
                     // además reciben cartas todo el tiempo.
                     const EMBEDS_BIENVENIDA_POR_TIPO = {
                         actualizaciones: { title: '🔔 Updates', description: 'You\'ll get notified here whenever there\'s a new bot update, with a button to install it right away.' },
-                        apoyo: { title: '💝 Support this project', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
+                        apoyo: { title: '☕ Donate', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
                         cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
                         cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
                         cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot — you can attach a screenshot too.' }
@@ -3132,19 +3894,6 @@ client.on('interactionCreate', async interaction => {
                         return categoria;
                     };
 
-                    // Un webhook borrado (por lo que sea, incluso fuera de este bot) sigue
-                    // guardado en la DB con su URL de siempre — Discord no avisa, solo
-                    // empieza a devolver 404 "Unknown Webhook" al usarlo. Sin este chequeo,
-                    // "Sincronizar Canales" nunca se entera y el canal queda roto para
-                    // siempre hasta borrarlo a mano.
-                    const webhookEstaVivo = async (url) => {
-                        try {
-                            await axios.get(url, { timeout: 5000 });
-                            return true;
-                        } catch (e) {
-                            return false;
-                        }
-                    };
 
                     const crearCanalSincronizado = async (categoria, tipo, nombreCanal) => {
                         let canal = interaction.guild.channels.cache.find(ch => ch.name === nombreCanal && ch.parentId === categoria.id);
@@ -3172,17 +3921,32 @@ client.on('interactionCreate', async interaction => {
                         const webhook = await canal.createWebhook({ name: `Bot ${tipo}`, avatar: 'https://i.imgur.com/gK1q9yS.png' });
                         await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
                         await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.user.id, tipo, canal.id, webhook.url]);
+                        // Si el usuario ya le había puesto nombre/foto propia a este webhook
+                        // con /webhook, se la reaplica al nuevo — si no, se queda con el
+                        // nombre/foto por defecto (nada que reaplicar).
+                        await aplicarPersonalizacionWebhookSiExiste(interaction.user.id, tipo, webhook.url);
 
                         const commandKeyReal = COMANDOS_REALES_POR_TIPO[tipo];
                         if (commandKeyReal) {
-                            await enviarComandoAlCanal(commandKeyReal, interaction.user, { webhook_url: webhook.url, canal_id: canal.id });
+                            await enviarComandoAlCanal(commandKeyReal, interaction.user, { webhook_url: webhook.url, canal_id: canal.id }, false, interaction.guild);
                         } else if (tipo === 'cmd_setup') {
-                            const panel = await generarPanelControl(interaction.user.id);
-                            await enviarOEditarInterfaz(interaction.user.id, 'setup', webhook.url, panel);
+                            const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.user.id);
+                            await enviarOEditarInterfaz(interaction.user.id, 'setup', webhook.url, panel, archivosPanel || []);
                         } else {
                             const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
                             if (embedBienvenida) {
-                                await enviarOEditarInterfaz(interaction.user.id, tipo, webhook.url, { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] });
+                                const payloadBienvenida = { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] };
+                                // Botón de link (style 5) — no requiere que el bot
+                                // maneje ninguna interacción, Discord abre la URL
+                                // directo en el cliente, así que funciona igual
+                                // mandado desde un webhook plano.
+                                if (tipo === 'apoyo') {
+                                    payloadBienvenida.components = [{
+                                        type: 1,
+                                        components: [{ type: 2, style: 5, label: '☕ Donate on Ko-fi', url: 'https://ko-fi.com/alecast' }]
+                                    }];
+                                }
+                                await enviarOEditarInterfaz(interaction.user.id, tipo, webhook.url, payloadBienvenida);
                             }
                         }
 
@@ -3237,7 +4001,10 @@ client.on('interactionCreate', async interaction => {
                     await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('trading', 'online')`);
                     ejecutarPM2Start('trading', 's4t.js');
                 }
-                setTimeout(async () => interaction.editReply(await generarPanelControl(interaction.user.id)), 1500);
+                setTimeout(async () => {
+                    const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.user.id);
+                    await interaction.editReply({ ...panel, files: (archivosPanel || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename })) });
+                }, 1500);
                 break;
 
             case 'toggle_heartbeat': 
@@ -3251,7 +4018,10 @@ client.on('interactionCreate', async interaction => {
                     await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('heartbeat', 'online')`);
                     exec('pm2 start heartbeat.js --name "heartbeat"');
                 }
-                setTimeout(async () => interaction.editReply(await generarPanelControl(interaction.user.id)), 1500);
+                setTimeout(async () => {
+                    const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.user.id);
+                    await interaction.editReply({ ...panel, files: (archivosPanel || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename })) });
+                }, 1500);
                 break;
 
             case 'btn_config_canales': await configScript.ejecutar(interaction); break;
@@ -3324,8 +4094,19 @@ client.once('ready', async () => {
     // El bot está pensado para quedarse prendido semanas sin reiniciarse —
     // si el chequeo de actualización solo corriera acá (una sola vez al
     // arrancar), alguien que nunca lo reinicia nunca se enteraría de una
-    // versión nueva. Se repite cada 6 horas, sin tocar nada del proceso.
-    setInterval(() => chequearActualizaciones(client), 6 * 60 * 60 * 1000);
+    // versión nueva. Se repite cada 15 minutos — es solo un fetch chico a
+    // GitHub, no genera carga real.
+    setInterval(() => chequearActualizaciones(client), 15 * 60 * 1000);
+
+    // Chequeo proactivo de webhooks caídos — avisa solo (no repara solo, eso
+    // sigue requiriendo "Sincronizar Canales" a propósito) para no reparar
+    // sin que el usuario se entere. Antes corría cada 1 minuto contra TODOS
+    // los webhooks de todos los usuarios (~25-30 por usuario) — eso, sumado a
+    // que cualquier error transitorio se contaba como "caído" (ver
+    // webhookEstaVivo), generaba falsas alarmas. Ahora cada 5 minutos alcanza
+    // igual de bien para algo que en la práctica no cambia segundo a segundo.
+    chequearWebhooksCaidos(client);
+    setInterval(() => chequearWebhooksCaidos(client), 5 * 60 * 1000);
 });
 
 client.on('guildCreate', async (guild) => {

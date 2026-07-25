@@ -62,6 +62,85 @@ function guardarCache() {
     fs.writeFileSync(RUTA_CACHE, JSON.stringify(statsCache, null, 2));
 }
 
+// Aviso de instancia congelada (pedido explícito del usuario 2026-07-23):
+// packs estancados durante `tiempoMaximoMs` sin importar si se reporta
+// offline/sleeping o no (el usuario aclaró que también usa ese estado para
+// detectar instancias caídas). `avisado` evita mandar el mismo aviso en cada
+// ciclo de heartbeat mientras sigue congelada; se resetea solo cuando vuelve
+// a avanzar. Además del mensaje en el canal, manda un DM directo — a pedido
+// del usuario, porque las notificaciones de servidores de Discord suelen
+// quedar silenciadas y un DM sí le llega.
+async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, tiempoMaximoMs, canalId, discordUserId, rutaLogsInstancias, cuentasRestantes) {
+    if (!webhookUrl) return;
+    if (statsCache[instId].avisado) return;
+    statsCache[instId].avisado = true;
+    guardarCache();
+    const minutos = Math.round(tiempoMaximoMs / 60000);
+
+    // Señal precisa por instancia (leída del log local de la herramienta de
+    // Kevin, ver instanciaSinCuentasElegibles) — con respaldo al pool global
+    // de cuentas si por algo no hay ruta_raiz configurada.
+    const sinCuentas = instanciaSinCuentasElegibles(rutaLogsInstancias, instId) || cuentasRestantes === 0;
+    const titulo = sinCuentas ? '⚠️ Instance stalled — out of 24h accounts' : '⚠️ Frozen instance detected';
+    const cuerpo = sinCuentas
+        ? `**Instance ${instId}** hasn't opened any new packs in the last ${minutos} minute(s) (stuck at **${packs}** packs) — it's out of eligible 24h accounts, not actually frozen. Closing it saves resources since there's nothing left for it to do today.`
+        : `**Instance ${instId}** hasn't opened any new packs in the last ${minutos} minute(s) (stuck at **${packs}** packs) while others keep progressing. This looks like the AHK script got stuck, not MuMu itself.`;
+    // Dos botones distintos a propósito (pedido explícito del usuario): sin
+    // cuentas → cerrar todo (MuMu + AHK) para no gastar recursos de más; con
+    // cuentas todavía → recargar el AHK (Shift+F5), no reiniciar MuMu.
+    const boton = sinCuentas
+        ? { type: 2, style: 4, custom_id: `heartbeat_cerrar::${instId}`, label: '🔒 Close Instance' }
+        : { type: 2, style: 4, custom_id: `heartbeat_reload_ahk::${instId}`, label: '🔄 Reload AHK' };
+
+    try {
+        await axios.post(`${webhookUrl}?wait=true`, {
+            embeds: [{ title: titulo, description: cuerpo, color: sinCuentas ? 0xF0A93A : 0xE74C3C }],
+            components: [{ type: 1, components: [boton] }]
+        });
+    } catch (e) {
+        console.error(`[HB] Error mandando aviso de instancia congelada (${instId}):`, e?.message || e);
+    }
+
+    const destinoDm = discordUserId || DISCORD_USER_ID;
+    if (DISCORD_TOKEN && destinoDm) {
+        try {
+            const headers = { Authorization: `Bot ${DISCORD_TOKEN}` };
+            const dm = await axios.post('https://discord.com/api/v10/users/@me/channels', { recipient_id: destinoDm }, { headers });
+            const mensajeCanal = canalId ? ` Check <#${canalId}>.` : '';
+            await axios.post(`https://discord.com/api/v10/channels/${dm.data.id}/messages`, {
+                content: `${titulo} — **Instance ${instId}**, stuck at ${packs} packs for ${minutos}+ min.${mensajeCanal}`
+            }, { headers });
+        } catch (e) {
+            console.error(`[HB] Error mandando DM de instancia congelada (${instId}):`, e?.response?.data || e?.message || e);
+        }
+    }
+}
+
+// El texto que llega a Discord nunca dice "sin cuentas elegibles" (confirmado
+// leyendo el payload real), pero la herramienta de Kevin SÍ lo escribe cada
+// minuto en su propio log local (Log_{instId}.txt, en la carpeta Logs de
+// ruta_raiz) — como heartbeat.js corre en la misma PC, se puede leer directo
+// en vez de depender de lo que llega por Discord. Se lee solo la cola del
+// archivo (pueden pesar 1MB+) en vez de todo entero.
+function instanciaSinCuentasElegibles(rutaLogsInstancias, instId) {
+    if (!rutaLogsInstancias) return false;
+    try {
+        const rutaLog = path.join(rutaLogsInstancias, `Log_${instId}.txt`);
+        if (!fs.existsSync(rutaLog)) return false;
+        const stats = fs.statSync(rutaLog);
+        const tamanoLectura = Math.min(stats.size, 2000);
+        const fd = fs.openSync(rutaLog, 'r');
+        const buffer = Buffer.alloc(tamanoLectura);
+        fs.readSync(fd, buffer, 0, tamanoLectura, Math.max(0, stats.size - tamanoLectura));
+        fs.closeSync(fd);
+        const lineas = buffer.toString('utf8').trim().split(/\r?\n/);
+        const ultimaLinea = lineas[lineas.length - 1] || '';
+        return /no eligible accounts/i.test(ultimaLinea);
+    } catch (e) {
+        return false;
+    }
+}
+
 function cargarHeartbeatMsgCache() {
     try {
         if (!fs.existsSync(RUTA_HEARTBEAT_MSG_CACHE)) return {};
@@ -106,7 +185,7 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
     // misma PC sin chocar de puerto con la real — en uso normal nunca hace
     // falta tocar esto, cada usuario ya tiene su propio "localhost".
     const PORT = Number(process.env.HEARTBEAT_PORT) || 3003;
-    const TIEMPO_MAXIMO_INACTIVO_MS = 5 * 60 * 1000; 
+    const TIEMPO_MAXIMO_INACTIVO_MS = 10 * 60 * 1000;
 
     function obtenerBalanceDesdeArchivo(rutaBalance) {
         try {
@@ -149,13 +228,13 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
         try {
             let hbConfig = null;
             if (DISCORD_USER_ID) {
-                hbConfig = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE tipo = 'heartbeat' AND discord_id = ? ORDER BY rowid DESC LIMIT 1`, [DISCORD_USER_ID]);
+                hbConfig = await db.get(`SELECT canal_id, webhook_url, discord_id FROM configs_canales WHERE tipo = 'heartbeat' AND discord_id = ? ORDER BY rowid DESC LIMIT 1`, [DISCORD_USER_ID]);
             }
             if (!hbConfig || !hbConfig.canal_id || !hbConfig.webhook_url || hbConfig.webhook_url === 'N/A' || hbConfig.webhook_url === 'local') {
-                hbConfig = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE tipo = 'heartbeat' AND webhook_url NOT IN ('N/A', 'local') ORDER BY rowid DESC LIMIT 1`);
+                hbConfig = await db.get(`SELECT canal_id, webhook_url, discord_id FROM configs_canales WHERE tipo = 'heartbeat' AND webhook_url NOT IN ('N/A', 'local') ORDER BY rowid DESC LIMIT 1`);
             }
             if (!hbConfig || !hbConfig.canal_id) {
-                hbConfig = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE tipo = 'heartbeat' ORDER BY rowid DESC LIMIT 1`);
+                hbConfig = await db.get(`SELECT canal_id, webhook_url, discord_id FROM configs_canales WHERE tipo = 'heartbeat' ORDER BY rowid DESC LIMIT 1`);
             }
 
             let rutaConfig = null;
@@ -165,6 +244,14 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
             if (!rutaConfig || !rutaConfig.webhook_url) {
                 rutaConfig = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_local' AND webhook_url NOT IN ('N/A', 'local') ORDER BY rowid DESC LIMIT 1`);
             }
+
+            // Carpeta de logs por instancia (Log_1.txt, Log_2.txt, ...) — vive en
+            // disco, en la misma PC donde corre este proceso, así que se puede
+            // leer directo en vez de depender de que el texto llegue a Discord
+            // (confirmado que "No eligible accounts" NUNCA llega al mensaje de
+            // Discord, pero SÍ queda escrito acá cada minuto).
+            let rutaRaizConfig = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_raiz' AND webhook_url NOT IN ('N/A', 'local') ORDER BY rowid DESC LIMIT 1`);
+            const RUTA_LOGS_INSTANCIAS = rutaRaizConfig?.webhook_url ? path.join(rutaRaizConfig.webhook_url, 'Logs') : null;
 
             if (!hbConfig || !hbConfig.canal_id) return res.status(400).send("Missing heartbeat channel configuration in the DB");
             console.log(`[HB-DEBUG] Config seleccionada canal=${hbConfig.canal_id} webhook=${redactarValor(hbConfig.webhook_url)}`);
@@ -247,9 +334,6 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                 globalTime = "190min";
             }
 
-            let offlineMatch = headerText.match(/Offline:\s*([^\n]+)/i);
-            let offlineInstancesStr = offlineMatch ? offlineMatch[1].trim() : "";
-
             let tabla = "";
             let totalPacksGlobal = 0;
             let ppmCombinadoReal = 0; 
@@ -262,7 +346,23 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                 let lineas = instancesText.split('\n');
                 console.log(`[HB-DEBUG] Found ${lineas.length} lines in instancesText`);
                 let counter = 1;
-                
+
+                // Pre-pasada liviana: el texto real que manda el bot de Kevin NO
+                // dice en ningún lado "sin cuentas elegibles" (se confirmó
+                // leyendo el texto crudo en vivo) — la única señal disponible es
+                // esta cuenta de cuántas cuentas de 24h quedan en el pool global.
+                // Se calcula ANTES del aviso de instancia congelada para poder
+                // aclarar "puede que ya no queden cuentas" en vez de asumir que
+                // es un choque real (pedido explícito del usuario 2026-07-23).
+                let totalPacksPrevio = 0;
+                for (const lineaPre of lineas) {
+                    const m = lineaPre.match(/Packs:\s*([0-9]+)/i);
+                    if (m) totalPacksPrevio += parseInt(m[1], 10);
+                }
+                const balanceKevinPrevio = obtenerBalanceDesdeArchivo(RUTA_BALANCE_RESULT);
+                const cuentasAbiertasPrevio = Math.floor(totalPacksPrevio / 2);
+                const cuentasRestantesPrevio = balanceKevinPrevio > 0 ? Math.max(0, balanceKevinPrevio - cuentasAbiertasPrevio) : 0;
+
                 for (let linea of lineas) {
                     let ppmMatch = linea.match(/Avg:\s*([0-9.]+)/i);
                     let packsMatch = linea.match(/Packs:\s*([0-9]+)/i);
@@ -279,8 +379,6 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                                                      linea.toLowerCase().includes("inject") || 
                                                      linea.toLowerCase().includes("eligible");
 
-                        let esOffline = linea.toLowerCase().includes("offline") || offlineInstancesStr.includes(instId);
-
                         if (!statsCache[instId]) {
                             statsCache[instId] = { packs: packs, lastUpdate: currentTime };
                         } else if (statsCache[instId].packs !== packs) {
@@ -293,30 +391,58 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                         guardarCache(); // Guardado persistente
 
                         let estaCongelado = (currentTime - statsCache[instId].lastUpdate) >= TIEMPO_MAXIMO_INACTIVO_MS;
-                        
+                        // Señal en tiempo real leída del log local de la instancia
+                        // (ver instanciaSinCuentasElegibles) — no depende del
+                        // temporizador de 10 min, se muestra apenas el log lo dice.
+                        let sinCuentasInstancia = instanciaSinCuentasElegibles(RUTA_LOGS_INSTANCIAS, instId);
+
                         let idStr = instId.padStart(2, '0');
                         let packsVal = packs.padStart(3, ' ');
-                        let timeVal = globalTime.padStart(4, ' ');
-                        
+
                         let instCuentas = Math.floor(parseInt(packs, 10) / 2);
                         let cuentasVal = instCuentas.toString().padStart(2, ' ');
 
-                        if (esOffline) {
-                            offlineInstancesList.push(counter);
-                            let offlineTexto = " Off ".padStart(5, ' ');
-                            tabla += `> 🖥️ \`${idStr}\` | 🔴 \`${offlineTexto}\` | ⏱️ \`${timeVal}\` | 📦 \`${packsVal}\` | 🔓 \`${cuentasVal}\`\n`;
-                        } else if (estaCongelado && !contieneActividadExtra) {
+                        // El aviso se dispara por packs estancados durante
+                        // TIEMPO_MAXIMO_INACTIVO_MS, sin importar si la instancia
+                        // se reporta como offline/sleeping o no — el usuario aclaró
+                        // que ese estado también lo usa para detectar instancias
+                        // caídas, así que debe avisar en los dos casos por igual.
+                        if (estaCongelado && !contieneActividadExtra) {
+                            avisarInstanciaCongeladaSiHaceFalta(DISCORD_WEBHOOK, instId, packs, TIEMPO_MAXIMO_INACTIVO_MS, hbConfig.canal_id, hbConfig.discord_id, RUTA_LOGS_INSTANCIAS, cuentasRestantesPrevio).catch(() => {});
+                        } else if (statsCache[instId].avisado) {
+                            statsCache[instId].avisado = false;
+                            guardarCache();
+                        }
+
+                        // Rediseñado a pedido explícito del usuario 2026-07-23:
+                        // "Off" ahora es SOLO el temporizador de 10 min sin
+                        // actualizar (antes dependía del texto "offline" del
+                        // propio bot de Kevin); "zzz"/Pause ahora es SOLO la
+                        // lectura en vivo del log local (instancia sin cuentas
+                        // elegibles), no el mismo temporizador de congelamiento.
+                        if (sinCuentasInstancia) {
                             onlineInstancesList.push(counter);
                             let pausaTexto = "Pause".padStart(5, ' ');
-                            tabla += `> 🖥️ \`${idStr}\` | 💤 \`${pausaTexto}\` | ⏱️ \`${timeVal}\` | 📦 \`${packsVal}\` | 🔓 \`${cuentasVal}\`\n`;
+                            tabla += `> 🖥️ \`${idStr}\` | 💤 \`${pausaTexto}\` | 📦 \`${packsVal}\` | 🔓 \`${cuentasVal}\`\n`;
+                        } else if (estaCongelado && !contieneActividadExtra) {
+                            offlineInstancesList.push(counter);
+                            let offlineTexto = " Off ".padStart(5, ' ');
+                            tabla += `> 🖥️ \`${idStr}\` | 🔴 \`${offlineTexto}\` | 📦 \`${packsVal}\` | 🔓 \`${cuentasVal}\`\n`;
                         } else {
                             onlineInstancesList.push(counter);
                             let ppmVal = ppm.padStart(5, ' ');
-                            tabla += `> 🖥️ \`${idStr}\` | ⚡ \`${ppmVal}\` | ⏱️ \`${timeVal}\` | 📦 \`${packsVal}\` | 🔓 \`${cuentasVal}\`\n`;
-                            
+                            tabla += `> 🖥️ \`${idStr}\` | ⚡ \`${ppmVal}\` | 📦 \`${packsVal}\` | 🔓 \`${cuentasVal}\`\n`;
+
                             let ppmNumerico = parseFloat(ppm);
                             if (!isNaN(ppmNumerico)) {
                                 ppmCombinadoReal += ppmNumerico;
+                            }
+                            // Volvió a avanzar (o nunca estuvo congelada) — se
+                            // limpia el flag para que un futuro congelamiento
+                            // real vuelva a avisar.
+                            if (statsCache[instId].avisado) {
+                                statsCache[instId].avisado = false;
+                                guardarCache();
                             }
                         }
                         counter++;
@@ -460,6 +586,23 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
         } catch (e) { /* si falla, el puerto real igual queda en el log */ }
     }
 
+    // Sin esto, si el conflicto de puertos era pasajero y el servicio vuelve
+    // a arrancar bien en su puerto de siempre, el archivo se quedaba con el
+    // aviso viejo para siempre (bug real encontrado 2026-07-24: el panel
+    // mostraba un puerto que ya no correspondía a nada real).
+    function limpiarAvisoPuertoSiVuelveAlDefault(nombreServicio) {
+        try {
+            if (!fs.existsSync(RUTA_AVISO_PUERTOS)) return;
+            const prefijo = `${nombreServicio}: `;
+            const lineasDatos = fs.readFileSync(RUTA_AVISO_PUERTOS, 'utf8').split(/\r?\n/).filter((l) => l.includes(': http://localhost:') && !l.startsWith(prefijo));
+            if (lineasDatos.length === 0) {
+                fs.unlinkSync(RUTA_AVISO_PUERTOS);
+            } else {
+                fs.writeFileSync(RUTA_AVISO_PUERTOS, [...ENCABEZADO_AVISO_PUERTOS, ...lineasDatos].join('\r\n') + '\r\n', 'utf8');
+            }
+        } catch (e) { /* no bloquea el arranque */ }
+    }
+
     // Mismo criterio que s4t.js: todo lo que le manda datos corre en la misma PC.
     // Si el puerto ya está en uso, prueba automáticamente con el siguiente hasta
     // encontrar uno libre, sin necesitar tocar el .env a mano.
@@ -467,6 +610,7 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
         const servidor = app.listen(puerto, '127.0.0.1', () => {
             console.log(`🚀 Production Monitor Online on port ${puerto}`);
             if (puerto !== PORT) avisarPuertoCambiado('Heartbeat', puerto);
+            else limpiarAvisoPuertoSiVuelveAlDefault('Heartbeat');
         });
         servidor.on('error', (err) => {
             if (err.code === 'EADDRINUSE' && intento < 10) {

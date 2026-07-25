@@ -31,7 +31,7 @@ function avisarYaAbierto() {
     // Se usa un MessageBox de .NET vía PowerShell en vez de mshta.exe: mshta es
     // una herramienta vieja de Windows que Defender/EDR suele cerrar sola por
     // ser muy usada históricamente en malware — nada confiable para esto.
-    const mensaje = 'Monitor Pokemon is already running in the background. No need to open it again.\n\nIf you want to change the token or add the Google Drive API key, open "Reconfigure.bat" in the same folder.';
+    const mensaje = 'Monitor Pokemon is already running in the background. No need to open it again.\n\nIf you want to change the token or add the Google Drive API key, open "Monitor Pokemon" (the control panel) and use "Open Api y token change".';
     const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${mensaje}', 'Monitor Pokemon')`;
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script}"`, () => {});
 }
@@ -40,9 +40,24 @@ const ACCESO_CONFIGURAR_PATH = path.join(__dirname, 'Change token or API key.lnk
 
 function crearAccesoDirectoConfigurar() {
     if (fs.existsSync(ACCESO_CONFIGURAR_PATH)) return;
-    const destino = path.join(__dirname, 'Reconfigure.bat');
+    const destino = path.join(__dirname, 'Advanced', 'Reconfigure.bat');
     if (!fs.existsSync(destino)) return;
     const script = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${ACCESO_CONFIGURAR_PATH.replace(/'/g, "''")}'); $s.TargetPath = '${destino.replace(/'/g, "''")}'; $s.WorkingDirectory = '${__dirname.replace(/'/g, "''")}'; $s.Save()`;
+    exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
+}
+
+const ACCESO_PANEL_PATH = path.join(__dirname, 'Monitor Pokemon.lnk');
+
+// Acceso directo con icono propio (no un .bat pelado) para abrir el panel de
+// control — el .bat sigue siendo lo que realmente corre por dentro (hace
+// falta para poner MONITOR_ROLE y lanzar PowerShell), pero lo que el usuario
+// ve y usa es este acceso directo con cara de aplicación real.
+function crearAccesoDirectoPanel() {
+    if (fs.existsSync(ACCESO_PANEL_PATH)) return;
+    const destino = path.join(__dirname, 'Open Control Panel.bat');
+    if (!fs.existsSync(destino)) return;
+    const rutaIcono = path.join(__dirname, 'assets', 'tray_icon.ico');
+    const script = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${ACCESO_PANEL_PATH.replace(/'/g, "''")}'); $s.TargetPath = '${destino.replace(/'/g, "''")}'; $s.WorkingDirectory = '${__dirname.replace(/'/g, "''")}'; $s.IconLocation = '${rutaIcono.replace(/'/g, "''")}'; $s.Save()`;
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
 }
 
@@ -60,10 +75,15 @@ function crearAccesoDirectoInicioAutomatico() {
     if (!carpeta) return;
     const rutaAcceso = path.join(carpeta, 'Monitor Pokemon.lnk');
     if (fs.existsSync(rutaAcceso)) return;
-    const destino = path.join(__dirname, 'Start Monitor Pokemon.bat');
+    // Antes apuntaba directo a "Start Monitor Pokemon.bat" (todo oculto, sin
+    // ninguna ventana visible al arrancar Windows). Ahora apunta al panel de
+    // control — el panel arranca el bot solo si hace falta (mismo resultado
+    // de siempre) pero deja una ventana real con botones en vez de que todo
+    // sea invisible.
+    const destino = path.join(__dirname, 'Open Control Panel.bat');
     if (!fs.existsSync(destino)) return;
-    // WindowStyle 7 = minimizado, para que ni siquiera se alcance a ver el
-    // parpadeo de la ventana de cmd del .bat al arrancar Windows.
+    // WindowStyle 7 = minimizado — la consola del .bat/PowerShell no se ve,
+    // pero la ventana real del panel (WinForms) sí se muestra igual.
     const script = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${rutaAcceso.replace(/'/g, "''")}'); $s.TargetPath = '${destino.replace(/'/g, "''")}'; $s.WorkingDirectory = '${__dirname.replace(/'/g, "''")}'; $s.WindowStyle = 7; $s.Save()`;
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
 }
@@ -222,11 +242,52 @@ setInterval(() => {
     reiniciarProcesosPorConfig();
 }, 2000);
 
+// El panel de control puede descargar una actualización por su cuenta (rol
+// "apply_update", corre aparte y no es hijo de este launcher) — a diferencia
+// del botón de Discord (que dispara esto mismo porque el propio bot.js hace
+// process.exit() tras descargar), acá nadie "sale" para que se note el
+// archivo, así que se revisa cada 2s igual que .pending_restart.json.
+// iniciarActualizacion() ya es segura de llamar de mas (chequea "cerrando"
+// al toque) por si el usuario dispara la misma actualización desde Discord
+// Y desde el panel casi al mismo tiempo.
+setInterval(() => {
+    if (cerrando || reiniciandoPorConfig) return;
+    if (!fs.existsSync(PENDING_UPDATE_PATH)) return;
+    iniciarActualizacion();
+}, 2000);
+
+let procesoBandeja = null;
+
+// Icono en la bandeja del sistema (junto al reloj) — antes el programa corría
+// totalmente invisible (solo una consola oculta), sin ninguna señal de que
+// seguía vivo ni forma rápida de reiniciarlo/salir sin buscar los .bat. Corre
+// como un proceso de PowerShell aparte (mismo patrón ya usado en este archivo
+// para el MessageBox de "ya está abierto"), no forma parte de PROCESOS porque
+// no es parte del bot en sí — es solo la interfaz visual.
+function iniciarBandejaSistema() {
+    const rutaTray = path.join(__dirname, 'tray.ps1');
+    if (!fs.existsSync(rutaTray)) return;
+    try {
+        procesoBandeja = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', rutaTray], {
+            cwd: __dirname,
+            stdio: 'ignore',
+            detached: true
+        });
+        procesoBandeja.on('error', (err) => logLinea(`❌ [tray] error: ${err}`));
+        procesoBandeja.unref();
+    } catch (e) {
+        logLinea(`❌ [tray] no se pudo iniciar el ícono de bandeja: ${e}`);
+    }
+}
+
 function cerrarTodo() {
     cerrando = true;
     logLinea('🛑 Shutting down Monitor Pokémon...');
     for (const def of PROCESOS) {
         if (def.instancia && !def.instancia.killed) def.instancia.kill();
+    }
+    if (procesoBandeja && !procesoBandeja.killed) {
+        try { exec(`taskkill /pid ${procesoBandeja.pid} /T /F`); } catch (e) {}
     }
     liberarLock();
     process.exit(0);
@@ -248,7 +309,9 @@ async function main() {
         }
     }
     crearAccesoDirectoConfigurar();
+    crearAccesoDirectoPanel();
     crearAccesoDirectoInicioAutomatico();
+    iniciarBandejaSistema();
 
     logLinea('🚀 Monitor Pokémon — starting bot, trading and heartbeat...');
     for (const def of PROCESOS) {

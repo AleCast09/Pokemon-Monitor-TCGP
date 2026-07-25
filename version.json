@@ -1,6 +1,12 @@
 {
-  "version": "1.4.4",
+  "version": "1.5.0",
   "notes": [
+    "New: a real control panel window (Start/Stop/Restart, live Token/API status, one-click copy for the S4T/Heartbeat addresses, Discord bot/server/user info, and a Donate/Tutorials shortcut) replaces juggling separate .bat files.",
+    "The panel now warns you right there when a new version is out, with a button to download it directly or jump to the Updates channel.",
+    "Advanced/rarely-needed files (Start, Reconfigure, Quit, Unblock) moved into an \"Advanced\" folder to keep the main folder clean — the control panel covers all of that day-to-day.",
+    "Fixed a real bug: the Heartbeat/S4T status shown in /setup only worked correctly if PM2 was installed — for everyone using the plain .exe, it always showed offline even when everything was running fine.",
+    "/card and /wishlist now have a rarity filter (1-4 Diamond, Star, Trainer, Full Art, Rainbow, Immersive, Shiny, Crown Rare) between expansion and name.",
+    "Renamed a few command options that were still in Spanish (name/type/image) to English.",
     "Added a \"Check for Updates\" button to /setup, so you can check right away instead of waiting for the automatic check.",
     "Fixed: after installing an update, the program reopened in a visible console window instead of staying hidden in the background like normal.",
     "Fixed: the auto-start shortcut could get stuck behind a Windows security prompt on every boot, since the launcher files were still marked as \"downloaded from the internet\". They now unblock themselves automatically the first time you run them.",

@@ -65,21 +65,72 @@ function copiarAssets() {
 }
 
 function copiarLanzador() {
+    // Estos 4 quedan en una subcarpeta "Advanced" — ya no hace falta que el
+    // usuario los toque directo (el panel de control ya cubre Iniciar/
+    // Apagar/Reiniciar/Reconfigurar), pero siguen siendo lo que el panel usa
+    // por dentro para esas acciones. Se dejan visibles (nunca ocultos: ya se
+    // probó ocultarlos antes y generaba la sospecha de que el programa se
+    // había borrado archivos a sí mismo), solo organizados aparte.
+    fs.mkdirSync(path.join(DIST, 'Advanced'), { recursive: true });
     fs.copyFileSync(
-        path.join(RAIZ, 'Start Monitor Pokemon.bat'),
-        path.join(DIST, 'Start Monitor Pokemon.bat')
+        path.join(RAIZ, 'Advanced', 'Start Monitor Pokemon.bat'),
+        path.join(DIST, 'Advanced', 'Start Monitor Pokemon.bat')
     );
     fs.copyFileSync(
-        path.join(RAIZ, 'Unblock.bat'),
-        path.join(DIST, 'Unblock.bat')
+        path.join(RAIZ, 'Advanced', 'Unblock.bat'),
+        path.join(DIST, 'Advanced', 'Unblock.bat')
     );
     fs.copyFileSync(
-        path.join(RAIZ, 'Reconfigure.bat'),
-        path.join(DIST, 'Reconfigure.bat')
+        path.join(RAIZ, 'Advanced', 'Reconfigure.bat'),
+        path.join(DIST, 'Advanced', 'Reconfigure.bat')
+    );
+    fs.copyFileSync(
+        path.join(RAIZ, 'Advanced', 'Quit Monitor Pokemon.bat'),
+        path.join(DIST, 'Advanced', 'Quit Monitor Pokemon.bat')
+    );
+    fs.copyFileSync(
+        path.join(RAIZ, 'Open Control Panel.bat'),
+        path.join(DIST, 'Open Control Panel.bat')
     );
     fs.copyFileSync(
         path.join(RAIZ, 'README.txt'),
         path.join(DIST, 'README.txt')
+    );
+    // tray.ps1 (icono de bandeja) y ahk-window.ps1 (cierre puntual de
+    // instancias AHK) son PowerShell — esbuild no los puede empaquetar
+    // dentro del bundle de Node, así que se copian sueltos tal cual, en las
+    // mismas rutas relativas que el código ya espera. El panel de control en
+    // sí YA NO es PowerShell (ver compilarPanelControl) — así Windows lo
+    // identifica como su propia app en la barra de tareas, no como
+    // "Windows PowerShell" ejecutando un script.
+    fs.copyFileSync(
+        path.join(RAIZ, 'tray.ps1'),
+        path.join(DIST, 'tray.ps1')
+    );
+    fs.mkdirSync(path.join(DIST, 'scripts'), { recursive: true });
+    fs.copyFileSync(
+        path.join(RAIZ, 'scripts', 'ahk-window.ps1'),
+        path.join(DIST, 'scripts', 'ahk-window.ps1')
+    );
+}
+
+// El panel de control se compila con el compilador de C# que ya trae
+// Windows (Framework64\v4.0.30319\csc.exe, sin instalar nada extra) en vez
+// de correr como script de PowerShell — así queda como su propio .exe, con
+// su propio ícono/nombre en la barra de tareas.
+function compilarPanelControl() {
+    const cscPath = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
+    if (!fs.existsSync(cscPath)) {
+        console.log('⚠️ No se encontró csc.exe — se omite compilar el panel de control.');
+        return;
+    }
+    const salida = path.join(DIST, 'MonitorPokemonPanel.exe');
+    const icono = path.join(RAIZ, 'assets', 'tray_icon.ico');
+    const fuente = path.join(RAIZ, 'scripts', 'ControlPanel.cs');
+    execSync(
+        `"${cscPath}" /nologo /target:winexe /out:"${salida}" /win32icon:"${icono}" ` +
+        `/reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll "${fuente}"`,
+        { stdio: 'inherit' }
     );
 }
 
@@ -147,24 +198,27 @@ function generarZip() {
 async function main() {
     console.log('📦 Empaquetando Monitor Pokémon...');
     console.log('');
-    console.log('1/5 — Compilando bundle con esbuild...');
+    console.log('1/6 — Compilando bundle con esbuild...');
     await bundlear();
 
-    console.log('2/5 — Copiando dependencias nativas (sharp)...');
+    console.log('2/6 — Copiando dependencias nativas (sharp)...');
     copiarDependenciaNativa('sharp');
     copiarDependenciaNativa('@img/colour');
     copiarDependenciaNativa('@img/sharp-win32-x64');
     copiarDependenciaNativa('detect-libc');
     copiarDependenciaNativa('semver');
 
-    console.log('3/5 — Copiando assets y lanzador...');
+    console.log('3/6 — Copiando assets y lanzador...');
     copiarAssets();
     copiarLanzador();
 
-    console.log('4/5 — Generando el ejecutable...');
+    console.log('4/6 — Generando el ejecutable...');
     empaquetarSea();
 
-    console.log('5/5 — Generando los .zip de distribución...');
+    console.log('5/6 — Compilando el panel de control...');
+    compilarPanelControl();
+
+    console.log('6/6 — Generando los .zip de distribución...');
     // Todo queda visible siempre (ni en el zip ni después de abrirlo se oculta
     // nada) — ocultar archivos generaba confusión real: con "mostrar ocultos"
     // apagado (la config por defecto de Windows), parecía que el programa había

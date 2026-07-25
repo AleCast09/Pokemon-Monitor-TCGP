@@ -25,6 +25,7 @@ pm2list.json
 stats_cache.json
 assets/drive_cache/
 assets/drive_folder_map.json
+assets/guild_emojis_cache.json
 automation/Logs/
 logs/
 .pending_update.json
@@ -34,6 +35,12 @@ MonitorPokemon.new.exe
 assets-actualizacion.zip
 .monitor.lock
 .reconfigurar.lock
+.panel.lock
 Open configuration.url
 Change token or API key.lnk
+Monitor Pokemon.lnk
 Ports in use.txt
+
+# Panel de control compilado sueltos en la raiz (uso local de desarrollo) -
+# la version real que se distribuye sale de dist/, generada por build-exe.js
+MonitorPokemonPanel.exe
