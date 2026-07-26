@@ -1379,14 +1379,19 @@ app.post('/', upload.any(), async (req, res) => {
             });
 
             if (S4T_FORWARD_XML) {
-                // Prefer XML from multipart request; fall back to XML read from disk
+                // Solo reenvía el XML si llegó adjunto de verdad en esta petición
+                // (multipart) — eso es lo que refleja si el checkbox "Send Account
+                // XML" de la herramienta que lee el emulador estaba tildado o no.
+                // El fallback a disco (xmlInput con source='disk') es solo para el
+                // matching de cuenta/pull más arriba, no debe disparar un reenvío
+                // a Discord que el usuario no pidió con ese checkbox.
                 let xmlBuffer = null;
                 let xmlName = null;
                 if (req.files) {
                     const xmlFile = req.files.find(f => f.originalname.toLowerCase().endsWith('.xml'));
                     if (xmlFile) { xmlBuffer = xmlFile.buffer; xmlName = xmlFile.originalname; }
                 }
-                if (!xmlBuffer && xmlInput) {
+                if (!xmlBuffer && xmlInput && xmlInput.source === 'multipart') {
                     xmlBuffer = Buffer.from(xmlInput.xmlContent, 'utf8');
                     xmlName = xmlInput.xmlName;
                 }

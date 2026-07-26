@@ -248,6 +248,7 @@ public class ControlPanelForm : Form {
     }
 
     void DescargarActualizacionDesdePanel(Form dialogo) {
+        string salida = null;
         try {
             var psi = new ProcessStartInfo {
                 UseShellExecute = false,
@@ -263,7 +264,7 @@ public class ControlPanelForm : Form {
                 psi.Arguments = "\"scripts\\apply-update.js\"";
             }
             var proc = Process.Start(psi);
-            var salida = proc.StandardOutput.ReadToEnd();
+            salida = proc.StandardOutput.ReadToEnd();
             proc.WaitForExit(120000);
             var serializer = new JavaScriptSerializer();
             var resultado = serializer.Deserialize<Dictionary<string, object>>(salida);
@@ -275,7 +276,13 @@ public class ControlPanelForm : Form {
             }
         } catch (Exception ex) {
             dialogo.Close();
-            MessageBox.Show("Could not download the update: " + ex.Message, "Monitor Pokemon");
+            // Si lo que imprimió el proceso hijo no era JSON válido, el mensaje del
+            // parser solo (ex.Message) no dice nada útil para diagnosticar a
+            // distancia — se muestra también la salida cruda (recortada) para que,
+            // si esto le pasa a otro usuario, la captura que mande tenga la pista
+            // real en vez de solo "Invalid JSON primitive".
+            var detalle = !string.IsNullOrEmpty(salida) ? salida.Substring(0, Math.Min(300, salida.Length)) : "(no output)";
+            MessageBox.Show("Could not download the update: " + ex.Message + "\n\nProcess output: " + detalle, "Monitor Pokemon");
         }
     }
 

@@ -1625,7 +1625,7 @@ function construirSlashCommands() {
         new SlashCommandBuilder().setName('setup').setDescription('Opens the bot control panel'),
         new SlashCommandBuilder().setName('embed').setDescription('Configures what is shown in the S4T embed'),
         new SlashCommandBuilder().setName('webhook').setDescription('Manages the name and avatar of each channel\'s webhooks')
-            .addStringOption(opt => opt.setName('type').setDescription('Upload a new avatar directly for this webhook (use together with "image")').setAutocomplete(true).setRequired(false))
+            .addStringOption(opt => opt.setName('channel').setDescription('Upload a new avatar directly for this webhook (use together with "image")').setAutocomplete(true).setRequired(false))
             .addAttachmentOption(opt => opt.setName('image').setDescription('Image to use as the new avatar (use together with "type")').setRequired(false)),
         new SlashCommandBuilder().setName('card').setDescription('Runs the All Cards flow')
             .addStringOption(opt => opt.setName('expansion').setDescription('Filter by expansion before picking the name (optional)').setAutocomplete(true).setRequired(false))
@@ -2848,14 +2848,14 @@ client.on('interactionCreate', async interaction => {
             return await interaction.reply({ content: `❌ This command only works in <#${rowWebhook.canal_id}>.`, ephemeral: true });
         }
 
-        // Subida directa: /webhook type:X image:Y — evita el modal (Discord no
+        // Subida directa: /webhook channel:X image:Y — evita el modal (Discord no
         // permite adjuntar archivos dentro de un modal, solo texto), pegando la
         // URL sigue andando igual para quien lo prefiera así.
-        const tipoSubida = interaction.options.getString('type');
+        const tipoSubida = interaction.options.getString('channel');
         const imagenSubida = interaction.options.getAttachment('image');
         if (tipoSubida || imagenSubida) {
             if (!tipoSubida || !imagenSubida) {
-                return await interaction.reply({ content: '❌ To upload an avatar directly, fill in both "type" and "image".', ephemeral: true });
+                return await interaction.reply({ content: '❌ To upload an avatar directly, fill in both "channel" and "image".', ephemeral: true });
             }
             await interaction.deferReply({ ephemeral: true });
             const filaWebhook = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipoSubida]);
