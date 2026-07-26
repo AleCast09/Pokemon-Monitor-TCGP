@@ -270,6 +270,14 @@ public class ControlPanelForm : Form {
             var resultado = serializer.Deserialize<Dictionary<string, object>>(salida);
             dialogo.Close();
             if (resultado != null && resultado.ContainsKey("ok") && (bool)resultado["ok"]) {
+                if (EjecutarSwapPanelSiExiste(raiz)) {
+                    // Se descargo tambien una version nueva del panel - este
+                    // .exe no se puede reemplazar a si mismo mientras corre,
+                    // asi que un script aparte espera a que cierre, lo
+                    // reemplaza, y lo vuelve a abrir solo.
+                    Application.Exit();
+                    return;
+                }
                 MessageBox.Show("Update downloaded. The bot will restart on its own in a few seconds to finish installing it.", "Monitor Pokemon");
             } else {
                 MessageBox.Show("Could not download the update. Try the Discord channel instead.", "Monitor Pokemon");
@@ -609,10 +617,50 @@ public class ControlPanelForm : Form {
         if (!string.IsNullOrEmpty(infoDiscord.heartbeatUrl)) { txtHeartbeat.Text = infoDiscord.heartbeatUrl; AjustarAnchoAlTexto(txtHeartbeat); }
     }
 
+    // Mismo truco que usa launcher.js para reemplazar el .exe del bot
+    // (rutaBat/_update.bat en iniciarActualizacion()): un .exe no se puede
+    // borrar/reemplazar a si mismo mientras esta corriendo, asi que un
+    // proceso aparte (cmd.exe, detached) espera a que este cierre del todo,
+    // recien ahi hace el reemplazo, y vuelve a abrir el panel actualizado.
+    // Se llama tanto al arrancar (por si la actualizacion se bajo por
+    // Discord mientras el panel no estaba abierto) como justo despues de
+    // bajarla desde el propio boton "Download Now".
+    static bool EjecutarSwapPanelSiExiste(string raizBase) {
+        var rutaNueva = Path.Combine(raizBase, "MonitorPokemonPanel.new.exe");
+        if (!File.Exists(rutaNueva)) return false;
+
+        var rutaPropia = Assembly.GetExecutingAssembly().Location;
+        var rutaBat = Path.Combine(raizBase, "_update_panel.bat");
+        var contenido =
+            "@echo off\r\n" +
+            "ping 127.0.0.1 -n 2 >nul\r\n" +
+            ":retry\r\n" +
+            "del \"" + rutaPropia + "\" 2>nul\r\n" +
+            "if exist \"" + rutaPropia + "\" (\r\n" +
+            "  ping 127.0.0.1 -n 2 >nul\r\n" +
+            "  goto retry\r\n" +
+            ")\r\n" +
+            "move /y \"" + rutaNueva + "\" \"" + rutaPropia + "\"\r\n" +
+            "start \"\" \"" + rutaPropia + "\"\r\n" +
+            "del \"%~f0\"\r\n";
+        File.WriteAllText(rutaBat, contenido);
+
+        Process.Start(new ProcessStartInfo {
+            FileName = "cmd.exe",
+            Arguments = "/c \"" + rutaBat + "\"",
+            WorkingDirectory = raizBase,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+        return true;
+    }
+
     [STAThread]
     public static void Main() {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        var raizInicial = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+        if (EjecutarSwapPanelSiExiste(raizInicial)) return;
         Application.Run(new ControlPanelForm());
     }
 }

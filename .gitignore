@@ -31,7 +31,9 @@ logs/
 .pending_update.json
 .pending_restart.json
 _update.bat
+_update_panel.bat
 MonitorPokemon.new.exe
+MonitorPokemonPanel.new.exe
 assets-actualizacion.zip
 .monitor.lock
 .reconfigurar.lock

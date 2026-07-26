@@ -1,6 +1,8 @@
 {
-  "version": "1.5.2",
+  "version": "1.5.3",
   "notes": [
+    "Fixed: \"Quit Monitor Pokemon\" didn't close the control panel itself, only the bot - that could leave the panel's own file locked and cause \"access denied\" when replacing it during a manual update.",
+    "The control panel itself now updates automatically too (before, only the bot did - the panel had to be replaced by hand on every release).",
     "Renamed the /webhook option \"type\" to \"channel\" for clarity.",
     "Fixed: the account XML was forwarded to Discord even when \"Send Account XML\" was left unchecked in the emulator-reading tool, as long as a fallback account folder was configured - now it only forwards the XML when it actually arrives attached (i.e. that checkbox is on).",
     "If the panel's \"Download Now\" fails, the error now shows the actual process output instead of just a generic parser error, so a failure can be diagnosed from a screenshot without needing remote access to that PC.",
@@ -28,5 +30,6 @@
     "The trade/injection automation is now protected against stuck confirmation windows, and no longer freezes waiting for a click that never comes."
   ],
   "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe",
+  "panelDownloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemonPanel.exe",
   "assetsUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip"
 }

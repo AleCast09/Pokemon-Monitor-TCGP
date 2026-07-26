@@ -139,6 +139,31 @@ async function descargarYExtraerAssets(remota) {
     }
 }
 
+// El panel (MonitorPokemonPanel.exe) no es hijo de launcher.js y no se puede
+// reemplazar a si mismo mientras corre — a diferencia del bot, cuyo swap ya
+// resuelve launcher.js con MonitorPokemon.new.exe. Se baja igual acá (si la
+// versión remota lo ofrece — versiones viejas de version.json no tienen este
+// campo, se ignora en silencio) y queda en disco como
+// "MonitorPokemonPanel.new.exe"; el propio panel (ControlPanel.cs,
+// EjecutarSwapPanelSiExiste) es quien detecta ese archivo y hace el
+// reemplazo real, tanto al arrancar como justo después de bajarlo.
+async function descargarActualizacionPanel(remota) {
+    if (!remota.panelDownloadUrl) return;
+    try {
+        const rutaNueva = path.join(__dirname, 'MonitorPokemonPanel.new.exe');
+        const respuesta = await axios.get(remota.panelDownloadUrl, { responseType: 'stream', timeout: 60000 });
+        await new Promise((resolve, reject) => {
+            const archivo = fs.createWriteStream(rutaNueva);
+            respuesta.data.pipe(archivo);
+            archivo.on('finish', resolve);
+            archivo.on('error', reject);
+            respuesta.data.on('error', reject);
+        });
+    } catch (e) {
+        console.error('DEBUG: error descargando la actualización del panel:', e?.message || e);
+    }
+}
+
 async function descargarActualizacion(remota) {
     const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
     const respuesta = await axios.get(remota.downloadUrl, { responseType: 'stream', timeout: 120000 });
@@ -151,6 +176,7 @@ async function descargarActualizacion(remota) {
         respuesta.data.on('error', reject);
     });
 
+    await descargarActualizacionPanel(remota);
     await descargarYExtraerAssets(remota);
 
     // Sin esto, version.json local nunca cambia y el bot cree para siempre que
