@@ -314,11 +314,17 @@ async function construirPanelListaWebhooks(userId) {
         );
 
     const componentes = [];
-    if (filas.length) {
+    // Un select menu de Discord admite maximo 25 opciones — con mas de 25
+    // webhooks reales, los que sobraban quedaban invisibles en el dropdown
+    // (aunque la lista de arriba ya los mostrara a todos). Se arma un menu
+    // aparte por cada tanda de 25 para que ninguno quede sin forma de
+    // seleccionarse.
+    for (let i = 0; i < filas.length; i += 25) {
+        const tanda = filas.slice(i, i + 25);
         const menu = new StringSelectMenuBuilder()
-            .setCustomId('webhook_seleccionar')
-            .setPlaceholder('Select a webhook to edit')
-            .addOptions(filas.slice(0, 25).map(f => ({
+            .setCustomId(i === 0 ? 'webhook_seleccionar' : `webhook_seleccionar_${i / 25 + 1}`)
+            .setPlaceholder(filas.length > 25 ? `Select a webhook to edit (${i + 1}-${i + tanda.length})` : 'Select a webhook to edit')
+            .addOptions(tanda.map(f => ({
                 label: `Webhook - ${etiquetaTipoWebhook(f.tipo)}`.slice(0, 100),
                 value: f.tipo
             })));
@@ -3023,7 +3029,7 @@ client.on('interactionCreate', async interaction => {
         return await interaction.showModal(modalFeedback);
     }
 
-    if (interaction.isStringSelectMenu() && interaction.customId === 'webhook_seleccionar') {
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('webhook_seleccionar')) {
         await interaction.deferUpdate();
         const tipo = interaction.values[0];
         const panel = await construirPanelDetalleWebhook(interaction.user.id, tipo);
