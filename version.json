@@ -1,6 +1,7 @@
 {
-  "version": "1.5.3",
+  "version": "1.5.4",
   "notes": [
+    "Fixed: the panel's \"Download Now\" always showed \"Invalid JSON primitive\" even when the update downloaded correctly, because a database connection log was mixing into the same output the panel expects to be pure JSON - it now goes to the right place and the popup shows the real result.",
     "Fixed: \"Quit Monitor Pokemon\" didn't close the control panel itself, only the bot - that could leave the panel's own file locked and cause \"access denied\" when replacing it during a manual update.",
     "The control panel itself now updates automatically too (before, only the bot did - the panel had to be replaced by hand on every release).",
     "Renamed the /webhook option \"type\" to \"channel\" for clarity.",
