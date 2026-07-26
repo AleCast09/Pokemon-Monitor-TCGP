@@ -87,6 +87,84 @@ const ETIQUETAS_TIPO_WEBHOOK = {
     'cmd_build_embed': 'Build Embed',
     'cmd_build_webhooks': 'Build Webhooks'
 };
+// Nombre por defecto que se le pone al webhook AL CREARLO (no confundir con
+// ETIQUETAS_TIPO_WEBHOOK, que es solo para mostrar en las listas de /webhook)
+// — a pedido del usuario, reemplaza el genérico "Bot {tipo}" por algo
+// presentable. Si un tipo no está acá, se sigue usando el genérico de
+// siempre. No afecta webhooks que ya existen y siguen funcionando bien (Sync
+// Channels no los toca), ni pisa el nombre que un usuario ya se puso a mano
+// con /webhook (aplicarPersonalizacionWebhookSiExiste siempre manda encima).
+const NOMBRES_DEFAULT_WEBHOOK = {
+    's4t': 'S4T TCGP',
+    's4t-categoria': 'S4T Category TCGP',
+    'wishlist': 'Wishlist TCGP',
+    '3-diamond': 'Card 3 Diamond 🔷',
+    '4-diamond': 'Card 4 Diamond 💠',
+    '1-star': 'Card 1 Star ⭐',
+    '1-star-shiny': 'Card 1 Star Shiny 🌟',
+    '2-star-trainer': 'Card 2 Star Trainer ⭐⭐',
+    '2-star-rainbow': 'Card 2 Star Rainbow 🌈',
+    '2-star-full-art': 'Card 2 Star Full Art 🎨',
+    '2-star-shiny': 'Card 2 Star Shiny ✨',
+    'immersive': 'Card Immersive 🌌',
+    'crown-rare': 'Card Crown Rare 👑',
+    'heartbeat': 'Heartbeat ❤️',
+    'cmd_build_embed': 'Build Embed 🔧',
+    'cmd_build_webhooks': 'Build Webhooks 🔗',
+    'cmd_setup': 'Settings ⚙',
+    'actualizaciones': 'Updates 🔔',
+    'apoyo': 'Donate ☕',
+    'cmd_feedback': 'Feedback 📝',
+    'godpack-general': 'God Pack General 📦',
+    'godpack-alive': 'God Pack Alive 👼',
+    'godpack-dead': 'God Pack Dead ☠️',
+    'cmd_card_wishlist': 'Wishlist 💖',
+    'cmd_card_all': 'AllCards ⚡',
+    'cmd_extract_xlm': 'Extract XML 📄',
+    'cmd_run_instance': 'Run MumuPlayer 📄'
+};
+function nombreDefaultWebhook(tipo) {
+    return NOMBRES_DEFAULT_WEBHOOK[tipo] || `Bot ${tipo}`;
+}
+
+// Foto por defecto por tipo (misma logica que el nombre: solo pisa el generico
+// de siempre, nunca lo que un usuario ya se puso a mano con /webhook). Ruta
+// relativa a la raiz del proyecto — discord.js acepta un path de archivo local
+// directo en "avatar" al crear un webhook, igual que ya se usa en otros lados
+// del proyecto para adjuntos.
+const AVATARES_DEFAULT_WEBHOOK = {
+    'actualizaciones': path.join(__dirname, 'assets', 'element', 'camp.png'),
+    'heartbeat': path.join(__dirname, 'assets', 'element', 'heart.png'),
+    'apoyo': path.join(__dirname, 'assets', 'element', 'kofi_me.png'),
+    'cmd_feedback': path.join(__dirname, 'assets', 'element', 'feedvack.png'),
+    'cmd_build_embed': path.join(__dirname, 'assets', 'element', 'settings.png'),
+    'cmd_build_webhooks': path.join(__dirname, 'assets', 'element', 'settings.png'),
+    'cmd_setup': path.join(__dirname, 'assets', 'element', 'settings.png'),
+    '3-diamond': path.join(__dirname, 'assets', 'element', 'Poké_Ball_EP.png'),
+    '4-diamond': path.join(__dirname, 'assets', 'element', 'Poké_Ball_EP.png'),
+    '1-star': path.join(__dirname, 'assets', 'element', 'Poké_Ball_EP.png'),
+    '1-star-shiny': path.join(__dirname, 'assets', 'element', 'Poké_Ball_EP.png'),
+    '2-star-trainer': path.join(__dirname, 'assets', 'element', 'Ultra_Ball_EP.png'),
+    '2-star-rainbow': path.join(__dirname, 'assets', 'element', 'Ultra_Ball_EP.png'),
+    '2-star-full-art': path.join(__dirname, 'assets', 'element', 'Ultra_Ball_EP.png'),
+    '2-star-shiny': path.join(__dirname, 'assets', 'element', 'Ultra_Ball_EP.png'),
+    'immersive': path.join(__dirname, 'assets', 'element', 'Master_Ball_EP.png'),
+    'crown-rare': path.join(__dirname, 'assets', 'element', 'Master_Ball_EP.png'),
+    'wishlist': path.join(__dirname, 'assets', 'element', 'Master_Ball_EP.png'),
+    's4t-categoria': path.join(__dirname, 'assets', 'element', 'Honor_Ball_EP.png'),
+    's4t': path.join(__dirname, 'assets', 'element', 'pokerotom.png'),
+    'godpack-general': path.join(__dirname, 'assets', 'element', 'Fragmento_de_cometa_EP.png'),
+    'godpack-alive': path.join(__dirname, 'assets', 'element', 'Globo_Helio_EP.png'),
+    'godpack-dead': path.join(__dirname, 'assets', 'element', 'Tarjeta_roja_EP.png'),
+    'cmd_run_instance': path.join(__dirname, 'assets', 'element', 'mumuplayer-logo_avatar.png'),
+    'cmd_extract_xlm': path.join(__dirname, 'assets', 'element', 'Leyenda.png'),
+    'cmd_card_all': path.join(__dirname, 'assets', 'element', 'Tarjeta_de_puntos_grande.png'),
+    'cmd_card_wishlist': path.join(__dirname, 'assets', 'element', 'list.png')
+};
+function avatarDefaultWebhook(tipo) {
+    return AVATARES_DEFAULT_WEBHOOK[tipo] || 'https://i.imgur.com/gK1q9yS.png';
+}
+
 function etiquetaTipoWebhook(tipo) {
     if (ETIQUETAS_TIPO_WEBHOOK[tipo]) return ETIQUETAS_TIPO_WEBHOOK[tipo];
     const comando = Object.values(COMANDO_CONFIG).find(c => c.tipo === tipo);
@@ -1076,13 +1154,23 @@ function construirEmbedRunInstanceInicio(user) {
 }
 
 function rutaMuMuManager() {
-    const candidatos = [
-        'C:\\Program Files\\Netease\\MuMuPlayer\\nx_main\\MuMuManager.exe',
-        'C:\\Program Files\\Netease\\MuMuPlayer\\shell\\MuMuManager.exe',
-        'C:\\Program Files\\Netease\\MuMuPlayerGlobal-12.0\\nx_main\\MuMuManager.exe',
-        'C:\\Program Files\\Netease\\MuMuPlayerGlobal-12.0\\shell\\MuMuManager.exe'
-    ];
-    return candidatos.find(p => fs.existsSync(p)) || null;
+    // Antes solo miraba el disco C: — un usuario real lo tenía instalado en
+    // D: (instalador de MuMuPlayer deja elegir disco) y el bot decía "not
+    // found" pese a estar instalado. Se prueban las mismas rutas conocidas en
+    // cualquier disco de A a J (cubre discos externos/particiones extra sin
+    // tener que pedirle la ruta exacta a cada usuario).
+    const carpetas = ['MuMuPlayer', 'MuMuPlayerGlobal-12.0'];
+    const subrutas = ['nx_main', 'shell'];
+    const discos = 'CDEFGHIJ'.split('');
+    for (const disco of discos) {
+        for (const carpeta of carpetas) {
+            for (const sub of subrutas) {
+                const candidato = `${disco}:\\Program Files\\Netease\\${carpeta}\\${sub}\\MuMuManager.exe`;
+                if (fs.existsSync(candidato)) return candidato;
+            }
+        }
+    }
+    return null;
 }
 
 function obtenerInstanciasMuMu() {
@@ -2742,10 +2830,10 @@ client.on('interactionCreate', async interaction => {
                 try {
                     const canal = await interaction.guild.channels.fetch(rowSetup.canal_id);
                     const webhooksViejos = await canal.fetchWebhooks();
-                    for (const w of webhooksViejos.filter(w => w.name === 'Bot cmd_setup').values()) {
+                    for (const w of webhooksViejos.filter(w => w.name === 'Bot cmd_setup' || w.name === nombreDefaultWebhook('cmd_setup')).values()) {
                         await w.delete('Recreating invalid webhook').catch(() => {});
                     }
-                    const webhookNuevo = await canal.createWebhook({ name: 'Bot cmd_setup', avatar: 'https://i.imgur.com/gK1q9yS.png' });
+                    const webhookNuevo = await canal.createWebhook({ name: nombreDefaultWebhook('cmd_setup'), avatar: avatarDefaultWebhook('cmd_setup') });
                     await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, 'cmd_setup']);
                     await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.user.id, 'cmd_setup', rowSetup.canal_id, webhookNuevo.url]);
                     await db.run(`DELETE FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, 'interfaz_msg_setup']);
@@ -3360,7 +3448,11 @@ client.on('interactionCreate', async interaction => {
             if (!fs.existsSync(ruta)) {
                 return await interaction.reply({ content: '❌ No tutorial available for this channel yet.', ephemeral: true });
             }
-            return await interaction.reply({ files: [new AttachmentBuilder(ruta, { name: `${tipo}.pdf` })], ephemeral: true });
+            // El de Settings es el tutorial general (token/API) - a pedido del
+            // usuario, se descarga con un nombre mas descriptivo en vez del
+            // slug interno del tipo de canal.
+            const nombreDescarga = tipo === 'cmd_setup' ? 'TUTORIAL MONITOR POKEMON.pdf' : `${tipo}.pdf`;
+            return await interaction.reply({ files: [new AttachmentBuilder(ruta, { name: nombreDescarga })], ephemeral: true });
         }
 
         if (interaction.customId === 'extract_xml_abrir') {
@@ -3811,7 +3903,7 @@ client.on('interactionCreate', async interaction => {
                             tipoCategoria: 'crear_canales',
                             canales: [
                                 { tipo: 's4t', name: '🤖-s4t' },
-                                { tipo: 's4t-categoria', name: '📊-s4t-categoria' },
+                                { tipo: 's4t-categoria', name: '📊-s4t-category' },
                                 { tipo: '3-diamond', name: '🔷-3-diamond' },
                                 { tipo: '4-diamond', name: '💠-4-diamond' },
                                 { tipo: '1-star', name: '⭐-1-star' },
@@ -3847,7 +3939,7 @@ client.on('interactionCreate', async interaction => {
                             categoria: '🎮 RUN MUMU PLAYER 🎮',
                             tipoCategoria: 'run_mumu_categoria',
                             canales: [
-                                { tipo: 'cmd_run_instance', name: '📄-open-mumuplayer' }
+                                { tipo: 'cmd_run_instance', name: '🎮-open-mumuplayer' }
                             ]
                         }
                     ];
@@ -3913,12 +4005,12 @@ client.on('interactionCreate', async interaction => {
                         }
 
                         const webhooks = await canal.fetchWebhooks();
-                        const existingHooks = webhooks.filter(w => w.name === `Bot ${tipo}`);
+                        const existingHooks = webhooks.filter(w => w.name === `Bot ${tipo}` || w.name === nombreDefaultWebhook(tipo));
                         for (const oldWebhook of existingHooks.values()) {
                             await oldWebhook.delete('Recreating invalid webhook').catch(console.error);
                         }
 
-                        const webhook = await canal.createWebhook({ name: `Bot ${tipo}`, avatar: 'https://i.imgur.com/gK1q9yS.png' });
+                        const webhook = await canal.createWebhook({ name: nombreDefaultWebhook(tipo), avatar: avatarDefaultWebhook(tipo) });
                         await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
                         await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.user.id, tipo, canal.id, webhook.url]);
                         // Si el usuario ya le había puesto nombre/foto propia a este webhook

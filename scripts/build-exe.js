@@ -112,6 +112,14 @@ function copiarLanzador() {
         path.join(RAIZ, 'scripts', 'ahk-window.ps1'),
         path.join(DIST, 'scripts', 'ahk-window.ps1')
     );
+
+    // Copia suelta en la raiz del paquete (a pedido del usuario) - asi quien
+    // recien descarga el .zip lo ve de una, sin tener que abrir el bot y
+    // buscar el boton de Tutorial en Discord primero.
+    const rutaTutorialSetup = path.join(RAIZ, 'assets', 'tutoriales', 'cmd_setup.pdf');
+    if (fs.existsSync(rutaTutorialSetup)) {
+        fs.copyFileSync(rutaTutorialSetup, path.join(DIST, 'TUTORIAL MONITOR POKEMON.pdf'));
+    }
 }
 
 // El panel de control se compila con el compilador de C# que ya trae

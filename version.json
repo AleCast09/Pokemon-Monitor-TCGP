@@ -1,6 +1,9 @@
 {
-  "version": "1.5.4",
+  "version": "1.5.5",
   "notes": [
+    "Fixed: MuMuManager.exe was only ever looked for on drive C: - if MuMuPlayer was installed on a different drive (the installer lets you pick one), every MumuPlayer-related button failed with \"MuMuManager.exe not found\" even though it was installed correctly. Now checks drives C: through J:.",
+    "Every channel's webhook now gets a proper name and profile picture instead of the generic \"Bot {type}\" placeholder (Cards, Wishlist, God Pack, rarities, Settings, Heartbeat, Donate, Updates, Feedback, etc.) - purely cosmetic, doesn't affect anyone who already customized their own webhook with /webhook.",
+    "Added the real tutorial for Settings (token/API key setup, with a reminder to keep your token private) - also placed loose in the main folder as \"TUTORIAL MONITOR POKEMON.pdf\" so it's visible right after extracting, without opening Discord first.",
     "Fixed: the panel's \"Download Now\" always showed \"Invalid JSON primitive\" even when the update downloaded correctly, because a database connection log was mixing into the same output the panel expects to be pure JSON - it now goes to the right place and the popup shows the real result.",
     "Fixed: \"Quit Monitor Pokemon\" didn't close the control panel itself, only the bot - that could leave the panel's own file locked and cause \"access denied\" when replacing it during a manual update.",
     "The control panel itself now updates automatically too (before, only the bot did - the panel had to be replaced by hand on every release).",
