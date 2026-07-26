@@ -53,6 +53,18 @@ const FUENTES_EMOJIS = {
 const cachePorGuild = new Map();
 const promesaEnCursoPorGuild = new Map();
 
+// Bug real reportado (2026-07-27): si un emoji custom se borra/recrea en el
+// servidor (por ejemplo al probar "Reset Total", o por llegar al límite de
+// espacios de emoji), el ID cacheado queda apuntando a un emoji que ya no
+// existe — Discord no puede resolverlo y lo muestra como texto plano
+// (":rareza_estrella:") en vez de la imagen. Como este caché nunca vencía,
+// quedaba roto para siempre hasta reiniciar el proceso a mano. Con un TTL,
+// la próxima vez que se pida el mapa (que pasa todo el tiempo, en casi
+// cualquier comando) se vuelve a construir solo — y como
+// construirMapaEmojisGuild() ya sube de nuevo cualquier emoji que no
+// encuentre por nombre, se autorepara sin intervención.
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
 // s4t.js corre en un proceso PM2 aparte, sin cliente de discord.js propio, así
 // que no puede llamar guild.emojis.fetch()/.create() como acá. En vez de
 // duplicar la lógica de subida ahí (y volver a tener IDs fijos por-usuario,
@@ -103,18 +115,22 @@ async function construirMapaEmojisGuild(guild) {
 // y cachea en memoria el resto de la sesión.
 async function obtenerMapaEmojisGuild(guild) {
     if (!guild) return {};
-    if (cachePorGuild.has(guild.id)) return cachePorGuild.get(guild.id);
+    const cacheado = cachePorGuild.get(guild.id);
+    if (cacheado && Date.now() - cacheado.ts < CACHE_TTL_MS) return cacheado.mapa;
     if (promesaEnCursoPorGuild.has(guild.id)) return promesaEnCursoPorGuild.get(guild.id);
 
     const promesa = construirMapaEmojisGuild(guild).then((mapa) => {
-        cachePorGuild.set(guild.id, mapa);
+        cachePorGuild.set(guild.id, { mapa, ts: Date.now() });
         promesaEnCursoPorGuild.delete(guild.id);
         guardarCacheEnDisco(mapa);
         return mapa;
     }).catch((e) => {
         promesaEnCursoPorGuild.delete(guild.id);
         console.error(`❌ Error armando emojis para ${guild?.name || guild?.id}:`, e?.message || e);
-        return {};
+        // Si falla la reconstrucción pero ya había un mapa viejo cacheado, mejor
+        // seguir usando ese (emojis viejos que sí funcionan) que devolver vacío
+        // (todos los emojis rotos de golpe por un error de red puntual).
+        return cacheado?.mapa || {};
     });
     promesaEnCursoPorGuild.set(guild.id, promesa);
     return promesa;

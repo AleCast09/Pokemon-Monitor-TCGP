@@ -1031,7 +1031,17 @@ app.post('/', upload.any(), async (req, res) => {
                     const displayCarta = configEmbed.mostrar_categoria
                         ? `> ${lineaConIcono}\n> **${nombreCarta}**`
                         : `> **${nombreCarta}**`;
-                    cartas.push({ rareza, nombre: nombreCarta, display: displayCarta });
+                    // Bug real reportado (2026-07-27): a diferencia de Pokémon (que
+                    // repite el bloque rareza+nombre completo por cada copia), el
+                    // juego a veces le pega el "(xN)" directo al nombre de las
+                    // cartas de Trainer en la misma línea (ej. "Cynthia (x2)") — sin
+                    // limpiarlo, ese texto se usaba tal cual para buscar la imagen y
+                    // nunca matcheaba contra el nombre real ("Cynthia") en
+                    // cardmaster/en_US, así que esas cartas quedaban sin foto. El
+                    // "(xN)" se mantiene en el texto mostrado (linea de arriba), solo
+                    // se saca para la búsqueda de imagen.
+                    const nombreParaBuscar = nombreCarta.replace(/\s*\(x\d+\)\s*$/i, '').trim();
+                    cartas.push({ rareza, nombre: nombreParaBuscar, display: displayCarta });
                 }
             } else if (/star|diamond|crown|immersive|partidario|supporter|trainer/i.test(textoLinea)) {
                 console.log(`DEBUG: rareza no detectada linea="${textoLinea}"`);

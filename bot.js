@@ -3871,6 +3871,7 @@ client.on('interactionCreate', async interaction => {
                         await interaction.editReply({ content: `✅ You're on the latest version (**${localVer.version}**).` });
                     }
                 } catch (e) {
+                    console.error('DEBUG: error en "Check for Updates":', e?.message || e);
                     await interaction.editReply({ content: '❌ Could not check for updates right now. Try again later.' });
                 }
                 break;

@@ -1,6 +1,9 @@
 {
-  "version": "1.5.6",
+  "version": "1.5.7",
   "notes": [
+    "Fixed: custom emojis (rarity/type icons) could break permanently and show as plain \":name:\" text instead of the icon if they were ever deleted/recreated on the server - the bot cached emoji IDs forever without checking they still existed. Now refreshes every 10 minutes and re-uploads anything missing automatically.",
+    "Fixed: Trainer cards showed no photo when the game reported 2+ copies on the same line (e.g. \"Cynthia (x2)\") - the \"(x2)\" was being used as part of the search name and never matched, so the image lookup always failed for those.",
+    "\"Check for Updates\" in /setup now logs the real error when it fails instead of only showing a generic message, so a failure can actually be diagnosed instead of being a total black box.",
     "Fixed: with more than 25 configured webhooks, the \"Select a webhook to edit\" dropdown in /webhook silently cut off the extras (a Discord platform limit of 25 options per dropdown) - now adds a second dropdown so every webhook is reachable, no matter how many there are.",
     "Fixed: MuMuManager.exe was only ever looked for on drive C: - if MuMuPlayer was installed on a different drive (the installer lets you pick one), every MumuPlayer-related button failed with \"MuMuManager.exe not found\" even though it was installed correctly. Now checks drives C: through J:.",
     "Every channel's webhook now gets a proper name and profile picture instead of the generic \"Bot {type}\" placeholder (Cards, Wishlist, God Pack, rarities, Settings, Heartbeat, Donate, Updates, Feedback, etc.) - purely cosmetic, doesn't affect anyone who already customized their own webhook with /webhook.",
