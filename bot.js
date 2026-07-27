@@ -3,7 +3,7 @@ const {
     Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder,
     ButtonStyle, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
     ChannelType, PermissionsBitField, StringSelectMenuBuilder, SlashCommandBuilder, REST, Routes,
-    AttachmentBuilder
+    AttachmentBuilder, WebhookClient
 } = require('discord.js');
 const axios = require('axios');
 const FormData = require('form-data');
@@ -85,7 +85,8 @@ const ETIQUETAS_TIPO_WEBHOOK = {
     'apoyo': 'Donate',
     'cmd_setup': 'Settings',
     'cmd_build_embed': 'Build Embed',
-    'cmd_build_webhooks': 'Build Webhooks'
+    'cmd_build_webhooks': 'Build Webhooks',
+    'shinedust': 'Shinedust'
 };
 // Nombre por defecto que se le pone al webhook AL CREARLO (no confundir con
 // ETIQUETAS_TIPO_WEBHOOK, que es solo para mostrar en las listas de /webhook)
@@ -121,7 +122,8 @@ const NOMBRES_DEFAULT_WEBHOOK = {
     'cmd_card_wishlist': 'Wishlist 💖',
     'cmd_card_all': 'AllCards ⚡',
     'cmd_extract_xlm': 'Extract XML 📄',
-    'cmd_run_instance': 'Run MumuPlayer 📄'
+    'cmd_run_instance': 'Run MumuPlayer 📄',
+    'shinedust': 'Shinedust 🍬'
 };
 function nombreDefaultWebhook(tipo) {
     return NOMBRES_DEFAULT_WEBHOOK[tipo] || `Bot ${tipo}`;
@@ -159,7 +161,8 @@ const AVATARES_DEFAULT_WEBHOOK = {
     'cmd_run_instance': path.join(__dirname, 'assets', 'element', 'mumuplayer-logo_avatar.png'),
     'cmd_extract_xlm': path.join(__dirname, 'assets', 'element', 'Leyenda.png'),
     'cmd_card_all': path.join(__dirname, 'assets', 'element', 'Tarjeta_de_puntos_grande.png'),
-    'cmd_card_wishlist': path.join(__dirname, 'assets', 'element', 'list.png')
+    'cmd_card_wishlist': path.join(__dirname, 'assets', 'element', 'list.png'),
+    'shinedust': path.join(__dirname, 'assets', 'element', 'coin_bag_3.png')
 };
 function avatarDefaultWebhook(tipo) {
     return AVATARES_DEFAULT_WEBHOOK[tipo] || 'https://i.imgur.com/gK1q9yS.png';
@@ -1114,6 +1117,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const filaXml = new ActionRowBuilder().addComponents(...botones);
 
     const filaAcciones = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary)
     );
 
@@ -1339,12 +1343,29 @@ function derivarRutasDesdeRaiz(raiz) {
         master: path.join(base, 'Helper'),
         xml: path.join(base, 'Accounts', 'Saved'),
         json: path.join(base, 'Accounts', 'Cards', 'accounts'),
-        wishlist: path.join(base, 'Accounts', 'Cards')
+        wishlist: path.join(base, 'Accounts', 'Cards'),
+        injectIni: path.join(base, 'Accounts', 'InjectAccount.ini'),
+        injectScript: path.join(base, 'Accounts', '_InjectAccount.ahk')
     };
 }
 
-const RUTA_INJECT_INI = 'C:\\POKEMON\\PTCGPB-ALE\\Accounts\\InjectAccount.ini';
-const RUTA_INJECT_ACCOUNT_SCRIPT = 'C:\\POKEMON\\PTCGPB-ALE\\Accounts\\_InjectAccount.ahk';
+// Antes hardcodeado a la PC de Ale (funcionaba solo para él) -- cualquier otro
+// usuario del panel de MuMu (Add Friend/Submit/Status) recibía "Could not save
+// the selection to InjectAccount.ini" porque esa carpeta no existe en su PC.
+// Ahora se deriva de "Main Path" (ruta_raiz), que cada usuario ya configura por
+// su cuenta -- con respaldo a la ruta vieja de Ale si todavía no la configuró
+// con las claves nuevas (ruta_inject_ini/ruta_inject_script).
+const RUTA_INJECT_INI_DEFAULT = 'C:\\POKEMON\\PTCGPB-ALE\\Accounts\\InjectAccount.ini';
+const RUTA_INJECT_ACCOUNT_SCRIPT_DEFAULT = 'C:\\POKEMON\\PTCGPB-ALE\\Accounts\\_InjectAccount.ahk';
+
+async function obtenerRutasInject(discordId) {
+    const filaIni = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_inject_ini' AND discord_id = ?`, [discordId]);
+    const filaScript = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_inject_script' AND discord_id = ?`, [discordId]);
+    return {
+        rutaIni: filaIni?.webhook_url || RUTA_INJECT_INI_DEFAULT,
+        rutaScript: filaScript?.webhook_url || RUTA_INJECT_ACCOUNT_SCRIPT_DEFAULT
+    };
+}
 
 function rutaAutoHotkey() {
     const candidatos = [
@@ -1354,8 +1375,8 @@ function rutaAutoHotkey() {
     return candidatos.find(p => fs.existsSync(p)) || null;
 }
 
-function actualizarIniInject(cambios) {
-    let contenido = fs.readFileSync(RUTA_INJECT_INI, 'utf16le');
+function actualizarIniInject(cambios, rutaIni = RUTA_INJECT_INI_DEFAULT) {
+    let contenido = fs.readFileSync(rutaIni, 'utf16le');
     const tieneBOM = contenido.charCodeAt(0) === 0xFEFF;
     if (tieneBOM) contenido = contenido.slice(1);
 
@@ -1376,21 +1397,21 @@ function actualizarIniInject(cambios) {
 
     let salida = nuevasLineas.join('\r\n');
     if (tieneBOM) salida = String.fromCharCode(0xFEFF) + salida;
-    fs.writeFileSync(RUTA_INJECT_INI, salida, 'utf16le');
+    fs.writeFileSync(rutaIni, salida, 'utf16le');
 }
 
-function guardarXmlParaInyeccion(instanceName, archivoPath) {
+function guardarXmlParaInyeccion(instanceName, archivoPath, rutaIni = RUTA_INJECT_INI_DEFAULT) {
     const nombreSinExt = path.basename(archivoPath, '.xml');
     actualizarIniInject({
         winTitle: instanceName,
         fileName: nombreSinExt,
         selectedFilePath: archivoPath
-    });
+    }, rutaIni);
 }
 
-function leerIniInject() {
-    if (!fs.existsSync(RUTA_INJECT_INI)) return {};
-    let contenido = fs.readFileSync(RUTA_INJECT_INI, 'utf16le');
+function leerIniInject(rutaIni = RUTA_INJECT_INI_DEFAULT) {
+    if (!fs.existsSync(rutaIni)) return {};
+    let contenido = fs.readFileSync(rutaIni, 'utf16le');
     if (contenido.charCodeAt(0) === 0xFEFF) contenido = contenido.slice(1);
     const datos = {};
     for (const linea of contenido.split(/\r?\n/)) {
@@ -1401,16 +1422,16 @@ function leerIniInject() {
     return datos;
 }
 
-function parsearListaFriends() {
-    const datos = leerIniInject();
+function parsearListaFriends(rutaIni = RUTA_INJECT_INI_DEFAULT) {
+    const datos = leerIniInject(rutaIni);
     const ids = (datos.favoriteFriendIDs || '').split(',').map(s => s.trim()).filter(Boolean);
     const labels = (datos.favoriteFriendLabels || '').split('|').map(s => s.trim());
     return ids.map((id, i) => ({ id, label: labels[i] || '' }));
 }
 
-function construirEmbedStatusInstancia(index, name) {
-    const datos = leerIniInject();
-    const friends = parsearListaFriends();
+function construirEmbedStatusInstancia(index, name, rutaIni = RUTA_INJECT_INI_DEFAULT) {
+    const datos = leerIniInject(rutaIni);
+    const friends = parsearListaFriends(rutaIni);
 
     const listaFriends = friends.length > 0
         ? friends.map((f, i) => `**${i + 1}.** ${f.label || '(no name)'} — \`${f.id}\``).join('\n')
@@ -1435,8 +1456,8 @@ function construirEmbedStatusInstancia(index, name) {
     return { embeds: [embed], ephemeral: true };
 }
 
-function agregarFriend(label, friendId) {
-    const actuales = parsearListaFriends();
+function agregarFriend(label, friendId, rutaIni = RUTA_INJECT_INI_DEFAULT) {
+    const actuales = parsearListaFriends(rutaIni);
     if (actuales.length >= 10) return { ok: false, motivo: 'lleno' };
     if (actuales.some(f => f.id === friendId)) return { ok: false, motivo: 'duplicado' };
 
@@ -1449,7 +1470,7 @@ function agregarFriend(label, friendId) {
         favoriteFriendLabels: labelsPipe,
         injectSelectedFriendIDs: idsCsv,
         sendFriendRequestAfterInject: '1'
-    });
+    }, rutaIni);
 
     return { ok: true, total: actuales.length };
 }
@@ -1558,15 +1579,15 @@ function spawnAhkConProteccion(ahkExe, args, opciones, timeoutMs, callback) {
     });
 }
 
-function ejecutarInyeccionHeadless(callback) {
+function ejecutarInyeccionHeadless(callback, rutaScript = RUTA_INJECT_ACCOUNT_SCRIPT_DEFAULT) {
     const ahkExe = rutaAutoHotkey();
-    if (!ahkExe || !fs.existsSync(RUTA_INJECT_ACCOUNT_SCRIPT)) {
+    if (!ahkExe || !fs.existsSync(rutaScript)) {
         return callback(false, 'faltan_archivos');
     }
     spawnAhkConProteccion(
         ahkExe,
-        [RUTA_INJECT_ACCOUNT_SCRIPT, '--headless'],
-        { windowsHide: false, cwd: path.dirname(RUTA_INJECT_ACCOUNT_SCRIPT) },
+        [rutaScript, '--headless'],
+        { windowsHide: false, cwd: path.dirname(rutaScript) },
         5 * 60 * 1000,
         callback
     );
@@ -3234,7 +3255,8 @@ client.on('interactionCreate', async interaction => {
             await interaction.deferReply({ ephemeral: true });
             let resultado;
             try {
-                resultado = agregarFriend(friendLabel, friendId);
+                const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+                resultado = agregarFriend(friendLabel, friendId, rutaIni);
             } catch (e) {
                 return await interaction.editReply({ content: '❌ Could not save the friend to InjectAccount.ini.' });
             }
@@ -3264,7 +3286,8 @@ client.on('interactionCreate', async interaction => {
             }
 
             try {
-                guardarXmlParaInyeccion(nombre, archivo);
+                const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+                guardarXmlParaInyeccion(nombre, archivo, rutaIni);
             } catch (e) {
                 return await interaction.editReply({ content: '❌ Could not save the selection to InjectAccount.ini.' });
             }
@@ -3378,7 +3401,9 @@ client.on('interactionCreate', async interaction => {
                 ['ruta_master', derivadas.master],
                 ['ruta_xml_cuentas', derivadas.xml],
                 ['ruta_json_cuentas', derivadas.json],
-                ['ruta_wishlist', derivadas.wishlist]
+                ['ruta_wishlist', derivadas.wishlist],
+                ['ruta_inject_ini', derivadas.injectIni],
+                ['ruta_inject_script', derivadas.injectScript]
             ];
             for (const [tipo, valor] of filas) {
                 await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, 'local', ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET webhook_url = ?`, [interaction.user.id, tipo, valor, valor]);
@@ -3458,6 +3483,29 @@ client.on('interactionCreate', async interaction => {
         return await interaction.update(payload);
     }
 
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_cuenta::')) {
+        const cartaId = interaction.customId.replace('card_trade_cuenta::', '');
+        const fileName = interaction.values[0];
+
+        const instancias = obtenerInstanciasMuMu();
+        if (instancias === null) {
+            return await interaction.update({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+        }
+        if (!instancias.length) {
+            return await interaction.update({ content: '❌ No MuMuPlayer instances found.', components: [] });
+        }
+
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`card_trade_instancia::${cartaId}::${fileName}`.slice(0, 100))
+            .setPlaceholder('Select an instance')
+            .addOptions(instancias.slice(0, 25).map(i => ({
+                label: `${i.index}. ${i.name}`.slice(0, 100),
+                description: i.is_android_started ? 'On' : 'Off',
+                value: `${i.index}::${i.name}`
+            })));
+        return await interaction.update({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_shinedust_cuenta::')) {
         const [, cartaId] = interaction.customId.split('::');
         const fileName = interaction.values[0];
@@ -3481,6 +3529,64 @@ client.on('interactionCreate', async interaction => {
         return await interaction.update({ content: `Which instance do you want to run the check on for \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_instancia::')) {
+        const [, cartaId, fileName] = interaction.customId.split('::');
+        const [index, nombre] = interaction.values[0].split('::');
+
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+
+        const prendida = await asegurarInstanciaEncendida(index);
+        if (!prendida) {
+            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true });
+        }
+
+        try { await interaction.followUp({ content: `🔄 Running injection on instance **${nombre}**... this WILL CLOSE the current session and may take several minutes.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+        }
+
+        const { rutaIni: rutaIniTrade, rutaScript: rutaScriptTrade } = await obtenerRutasInject(interaction.user.id);
+        try {
+            guardarXmlParaInyeccion(nombre, archivo, rutaIniTrade);
+            // Al reves que Shinedust: Trade SI necesita mandar la solicitud de amistad
+            // (el ini es compartido, así que si un chequeo de Shinedust la apagó antes,
+            // hay que prenderla de nuevo acá).
+            actualizarIniInject({ sendFriendRequestAfterInject: '1' }, rutaIniTrade);
+        } catch (e) {
+            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
+        }
+
+        ejecutarInyeccionHeadless(async (ok, detalle) => {
+            try {
+                if (!ok) {
+                    return await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true });
+                }
+                const filaNext = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`mumu_nexttrade_${index}::${nombre}`).setLabel('▶️ Next Trade').setStyle(ButtonStyle.Success)
+                );
+                const mensaje = `✅ Injection completed on instance **${nombre}** (\`${fileName}\`).\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist.`;
+
+                const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+                if (canalRunInstance?.webhook_url) {
+                    try {
+                        await axios.post(`${canalRunInstance.webhook_url}?wait=true`, {
+                            content: mensaje,
+                            components: [filaNext.toJSON()]
+                        }, { timeout: 10000 });
+                        return await interaction.followUp({ content: '✅ Sent to your Run MumuPlayer channel.', ephemeral: true });
+                    } catch (e) {
+                        console.error('DEBUG: error mandando el resultado de Trade al canal de run mumu:', e?.response?.data || e?.message || e);
+                    }
+                }
+                await interaction.followUp({ content: mensaje, components: [filaNext], ephemeral: true });
+            } catch (e) { /* interacción puede haber expirado */ }
+        }, rutaScriptTrade);
+        return;
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_instancia::')) {
         const [, cartaId, fileName] = interaction.customId.split('::');
         const [index, nombre] = interaction.values[0].split('::');
@@ -3500,12 +3606,13 @@ client.on('interactionCreate', async interaction => {
             return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
         }
 
+        const { rutaIni: rutaIniShinedust, rutaScript: rutaScriptShinedust } = await obtenerRutasInject(interaction.user.id);
         try {
-            guardarXmlParaInyeccion(nombre, archivo);
+            guardarXmlParaInyeccion(nombre, archivo, rutaIniShinedust);
             // Shinedust no manda solicitud de amistad -- pero el ini es compartido con
             // el flujo de Trade, así que si quedó una activada de un uso anterior de
             // "Add Friend" hay que apagarla, o la inyección la dispara igual.
-            actualizarIniInject({ sendFriendRequestAfterInject: '0' });
+            actualizarIniInject({ sendFriendRequestAfterInject: '0' }, rutaIniShinedust);
         } catch (e) {
             return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
         }
@@ -3529,12 +3636,81 @@ client.on('interactionCreate', async interaction => {
                     const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
                     const payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild);
                     payload.embeds[0].addFields({ name: '👛 Shinedust', value: `**${valorOMotivo}** (\`${fileName}\`)` });
+                    payload.content = `<@${interaction.user.id}> Account \`${fileName}\` has **${valorOMotivo}** Shinedust.`;
+                    payload.components = [new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`shinedust_result_trade::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder().setCustomId(`shinedust_result_extract::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary)
+                    )];
 
-                    await interaction.channel.send(payload);
+                    const canalShinedust = await obtenerCanalComando(interaction.user.id, 'shinedust');
+                    if (canalShinedust?.webhook_url) {
+                        try {
+                            const webhookShinedust = new WebhookClient({ url: canalShinedust.webhook_url });
+                            await webhookShinedust.send(payload);
+                        } catch (e) {
+                            console.error('DEBUG: error mandando el resultado de Shinedust al canal dedicado:', e?.message || e);
+                            await interaction.channel.send(payload);
+                        }
+                    } else {
+                        await interaction.channel.send(payload);
+                    }
                     await interaction.followUp({ content: `✅ Shinedust for \`${fileName}\`: **${valorOMotivo}**.`, ephemeral: true });
                 } catch (e) { /* interacción puede haber expirado */ }
             });
-        });
+        }, rutaScriptShinedust);
+        return;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_result_trade_instancia::')) {
+        const [, cartaId, fileName] = interaction.customId.split('::');
+        const [index, nombre] = interaction.values[0].split('::');
+
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+
+        const prendida = await asegurarInstanciaEncendida(index);
+        if (!prendida) {
+            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true });
+        }
+
+        try { await interaction.followUp({ content: `🔄 Running injection on instance **${nombre}**... this WILL CLOSE the current session and may take several minutes.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+        }
+
+        const { rutaIni: rutaIniTradeResult, rutaScript: rutaScriptTradeResult } = await obtenerRutasInject(interaction.user.id);
+        try {
+            guardarXmlParaInyeccion(nombre, archivo, rutaIniTradeResult);
+            actualizarIniInject({ sendFriendRequestAfterInject: '1' }, rutaIniTradeResult);
+        } catch (e) {
+            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
+        }
+
+        ejecutarInyeccionHeadless(async (ok, detalle) => {
+            try {
+                if (!ok) {
+                    return await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true });
+                }
+                const filaNext = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`mumu_nexttrade_${index}::${nombre}`).setLabel('▶️ Next Trade').setStyle(ButtonStyle.Success)
+                );
+                const mensaje = `✅ Injection completed on instance **${nombre}** (\`${fileName}\`).\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist.`;
+
+                const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+                if (canalRunInstance?.webhook_url) {
+                    try {
+                        const webhookRunInstance = new WebhookClient({ url: canalRunInstance.webhook_url });
+                        await webhookRunInstance.send({ content: mensaje, components: [filaNext] });
+                        return await interaction.followUp({ content: '✅ Sent to your Run MumuPlayer channel.', ephemeral: true });
+                    } catch (e) {
+                        console.error('DEBUG: error mandando el resultado de Trade (desde Shinedust) al canal de run mumu:', e?.message || e);
+                    }
+                }
+                await interaction.followUp({ content: mensaje, components: [filaNext], ephemeral: true });
+            } catch (e) { /* interacción puede haber expirado */ }
+        }, rutaScriptTradeResult);
         return;
     }
 
@@ -3813,7 +3989,8 @@ client.on('interactionCreate', async interaction => {
             const [index, nombre] = interaction.customId.replace('mumu_ejecutar_', '').split('::');
             await interaction.deferReply({ ephemeral: true });
 
-            const datosIni = leerIniInject();
+            const { rutaIni: rutaIniEjecutar, rutaScript: rutaScriptEjecutar } = await obtenerRutasInject(interaction.user.id);
+            const datosIni = leerIniInject(rutaIniEjecutar);
             if ((datosIni.winTitle || '').trim() !== nombre || !(datosIni.selectedFilePath || '').trim()) {
                 return await interaction.editReply({ content: `❌ First select the XML with the 💠 XML button for instance **${nombre}**.` });
             }
@@ -3834,7 +4011,7 @@ client.on('interactionCreate', async interaction => {
                         ephemeral: true
                     });
                 } catch (e) {}
-            });
+            }, rutaScriptEjecutar);
             return;
         }
 
@@ -3881,7 +4058,8 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId.startsWith('mumu_status_')) {
             const [index, nombre] = interaction.customId.replace('mumu_status_', '').split('::');
-            const payload = construirEmbedStatusInstancia(index, nombre);
+            const { rutaIni: rutaIniStatus } = await obtenerRutasInject(interaction.user.id);
+            const payload = construirEmbedStatusInstancia(index, nombre, rutaIniStatus);
             return await interaction.reply({ ...payload, ephemeral: true });
         }
 
@@ -3892,6 +4070,29 @@ client.on('interactionCreate', async interaction => {
                     new TextInputBuilder().setCustomId('input_xml_nombre').setLabel('XML file name').setStyle(TextInputStyle.Short)
                 ));
             return await interaction.showModal(modalXml);
+        }
+
+        if (interaction.customId.startsWith('card_trade::')) {
+            const cartaId = interaction.customId.replace('card_trade::', '');
+            await interaction.deferReply({ ephemeral: true });
+
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId);
+            if (resultados === null) {
+                return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.' });
+            }
+            if (resultados.length === 0) {
+                return await interaction.editReply({ content: '❌ No account has this card.' });
+            }
+
+            const menu = new StringSelectMenuBuilder()
+                .setCustomId(`card_trade_cuenta::${cartaId}`)
+                .setPlaceholder('Select an account')
+                .addOptions(resultados.slice(0, 25).map(r => ({
+                    label: `${r.fileName} (x${r.cantidad})`.slice(0, 100),
+                    value: r.fileName.replace(/\.xml$/i, '').slice(0, 100)
+                })));
+            return await interaction.editReply({ content: 'Which account do you want to trade this card from?', components: [new ActionRowBuilder().addComponents(menu)] });
         }
 
         if (interaction.customId.startsWith('card_shinedust::')) {
@@ -3915,6 +4116,73 @@ client.on('interactionCreate', async interaction => {
             const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
             const fileNames = listarTodosLosXml(rutaXmlCfg?.webhook_url) || [];
             return await interaction.update(construirSelectXmlPaginado(fileNames, cartaId, parseInt(paginaTexto, 10) || 0, 'card_shinedust_cuenta'));
+        }
+
+        if (interaction.customId.startsWith('shinedust_result_extract::')) {
+            const [, cartaId, fileName, valorShinedust] = interaction.customId.split('::');
+            await interaction.deferReply({ ephemeral: true });
+
+            const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+            const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+            if (!archivo) {
+                return await interaction.editReply({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.` });
+            }
+
+            const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+            const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+            const payloadEmbed = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild);
+            payloadEmbed.components = [];
+            payloadEmbed.embeds[0].addFields({ name: '👛 Shinedust', value: `**${valorShinedust || '?'}** (\`${fileName}\`)` });
+
+            const archivos = [new AttachmentBuilder(archivo)];
+            const deviceAccount = extraerDeviceAccount(archivo);
+            if (deviceAccount) {
+                const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+                const archivoJson = buscarArchivoJsonPorDeviceAccount(rutaJsonCfg?.webhook_url, deviceAccount);
+                if (archivoJson) archivos.push(new AttachmentBuilder(archivoJson));
+            }
+            const contenidoTexto = `<@${interaction.user.id}> Account \`${fileName}\` has **${valorShinedust || '?'}** Shinedust. Database attached.`;
+
+            // Texto -> Embed -> XML/JSON, en ese orden -- dentro de UN mismo mensaje
+            // Discord ya muestra el texto (content) arriba del embed sin importar el
+            // orden de los campos en el payload, así que combinar content+embed en el
+            // primer mensaje ya da "Texto, Embed"; el XML/JSON va en un segundo mensaje
+            // aparte para que caiga despues.
+            const canalExtract = await obtenerCanalComando(interaction.user.id, 'cmd_extract_xlm');
+            if (canalExtract?.webhook_url) {
+                try {
+                    const webhookExtract = new WebhookClient({ url: canalExtract.webhook_url });
+                    await webhookExtract.send({ content: contenidoTexto, embeds: payloadEmbed.embeds, files: payloadEmbed.files });
+                    await webhookExtract.send({ files: archivos });
+                    return await interaction.editReply({ content: '✅ Sent to your Extract XML channel.' });
+                } catch (e) {
+                    console.error('DEBUG: error mandando extract xml desde shinedust:', e?.message || e);
+                }
+            }
+            return await interaction.editReply({ ...payloadEmbed, content: contenidoTexto, files: [...(payloadEmbed.files || []), ...archivos] });
+        }
+
+        if (interaction.customId.startsWith('shinedust_result_trade::')) {
+            const [, cartaId, fileName] = interaction.customId.split('::');
+            await interaction.deferReply({ ephemeral: true });
+
+            const instancias = obtenerInstanciasMuMu();
+            if (instancias === null) {
+                return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.' });
+            }
+            if (!instancias.length) {
+                return await interaction.editReply({ content: '❌ No MuMuPlayer instances found.' });
+            }
+
+            const menu = new StringSelectMenuBuilder()
+                .setCustomId(`shinedust_result_trade_instancia::${cartaId}::${fileName}`.slice(0, 100))
+                .setPlaceholder('Select an instance')
+                .addOptions(instancias.slice(0, 25).map(i => ({
+                    label: `${i.index}. ${i.name}`.slice(0, 100),
+                    description: i.is_android_started ? 'On' : 'Off',
+                    value: `${i.index}::${i.name}`
+                })));
+            return await interaction.editReply({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu)] });
         }
 
         if (interaction.customId.startsWith('wishlist_xml::')) {
@@ -4154,7 +4422,8 @@ client.on('interactionCreate', async interaction => {
                             canales: [
                                 { tipo: 'cmd_card_wishlist', name: '💖-cards-wishlist' },
                                 { tipo: 'cmd_card_all', name: '⚡-all-cards' },
-                                { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' }
+                                { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' },
+                                { tipo: 'shinedust', name: '🍬-shinedust' }
                             ]
                         },
                         {
@@ -4177,7 +4446,8 @@ client.on('interactionCreate', async interaction => {
                         apoyo: { title: '☕ Donate', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
                         cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
                         cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
-                        cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot — you can attach a screenshot too.' }
+                        cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot — you can attach a screenshot too.' },
+                        shinedust: { title: '🍬 Shinedust', description: 'Results from the 👛 Shinedust button on card lookups land here — the card, the account, and its current Shinedust balance, with buttons to jump straight into Trade or Extract XML for that same account.' }
                     };
 
                     // Canales con un comando real y no-efímero asignado: en vez del embed

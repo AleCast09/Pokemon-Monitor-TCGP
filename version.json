@@ -1,6 +1,10 @@
 {
-  "version": "1.5.8",
+  "version": "1.5.9",
   "notes": [
+    "New: a dedicated \"Shinedust\" channel now receives the result of the 👛 Shinedust button, with 🔄 Trade and 📄 Extract XML buttons on it that jump straight into those flows using the same account - no need to search or select it again.",
+    "New: a 🔄 Trade button on card lookups lets you pick an account that has that card and an instance, injects it, and drops you in your Run MumuPlayer channel ready to trade.",
+    "Fixed: the MuMu panel (Add Friend/Submit/Status, and the new Trade/Shinedust buttons) only worked on Ale's own PC - two hardcoded paths never used each user's own configured \"Main Path\", so anyone else got \"Could not save the selection to InjectAccount.ini\". Existing users need to re-save Main Path once (same folder, in /setup) to pick up the fix.",
+    "Fixed: \"Create Bots\" and \"Inject Rewards\" modes don't work off a 24h account pool like Inject/Wonderpick do - they were triggering false \"instance stalled, close it?\" alerts during normal multi-minute pauses between cycles.",
     "New: a \"Shinedust\" button on card lookups (/card, /wishlist) lets you pick any account and instance, injects it, and reads the account's current Shinedust balance automatically (via on-screen OCR, no manual navigation), posting the result back on the same card.",
     "\"Check for Updates\" now shows the actual underlying error (network code, HTTP status, etc.) instead of just a generic message, so a repeated failure can actually be diagnosed from a screenshot.",
     "Node now also trusts Windows' own certificate store in addition to its built-in list - if an antivirus that inspects HTTPS traffic was silently breaking \"Check for Updates\" (a real case seen this week), this should fix it without needing to update through the app instead.",

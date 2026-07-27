@@ -313,7 +313,16 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
             let versionBot = headerText.match(/\[(kevnITG-v[0-9.]+)\]/i)?.[1] || "kevnITG-v9.6.4";
             let modVersion = headerText.match(/Mod Version:\s*([^\n]+)/i)?.[1]?.trim() || "Leanny-v0.10.0";
             let botType = headerText.match(/Type:\s*([^\n]+)/i)?.[1]?.trim() || "Inject 13P+";
-            
+            // Los 4 modos del "Bot Mode" son: Create Bots (13P), Inject 13P+, Inject
+            // Wonderpick 96P+, Inject Rewards. Solo "Inject 13P+" y "Wonderpick" trabajan
+            // con un pool de cuentas de 24h real -- ahi si tiene sentido avisar "sin
+            // cuentas elegibles". "Create Bots" crea y descarta una cuenta nueva por
+            // ciclo (~3 min c/u) e "Inject Rewards" tampoco depende de ese pool, asi que
+            // una pausa de varios minutos ahi es normal, no un stall real (confirmado
+            // por el usuario 2026-07-27, reporte real de un usuario que recibia el aviso
+            // en loop sin estar realmente caido).
+            const esModoSinPool24h = /create bots|inject rewards/i.test(botType);
+
             let openingType = "Automatic Detection";
             let openingMatch = headerText.match(/Opening:\s*([^\n]+)/i);
             if (openingMatch) {
@@ -407,7 +416,12 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                         // se reporta como offline/sleeping o no — el usuario aclaró
                         // que ese estado también lo usa para detectar instancias
                         // caídas, así que debe avisar en los dos casos por igual.
-                        if (estaCongelado && !contieneActividadExtra) {
+                        // Excepto en "Create Bots": ahí no hay pool de 24h, crea y
+                        // descarta una cuenta nueva por ciclo (~3 min c/u) y puede
+                        // pasar varios minutos sin mover el contador de packs sin
+                        // que sea un stall real -- de lo contrario el aviso se
+                        // repite en loop para algo que sigue funcionando bien.
+                        if (estaCongelado && !contieneActividadExtra && !esModoSinPool24h) {
                             avisarInstanciaCongeladaSiHaceFalta(DISCORD_WEBHOOK, instId, packs, TIEMPO_MAXIMO_INACTIVO_MS, hbConfig.canal_id, hbConfig.discord_id, RUTA_LOGS_INSTANCIAS, cuentasRestantesPrevio).catch(() => {});
                         } else if (statsCache[instId].avisado) {
                             statsCache[instId].avisado = false;
@@ -424,7 +438,7 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                             onlineInstancesList.push(counter);
                             let pausaTexto = "Pause".padStart(5, ' ');
                             tabla += `> 🖥️ \`${idStr}\` | 💤 \`${pausaTexto}\` | 📦 \`${packsVal}\` | 🔓 \`${cuentasVal}\`\n`;
-                        } else if (estaCongelado && !contieneActividadExtra) {
+                        } else if (estaCongelado && !contieneActividadExtra && !esModoSinPool24h) {
                             offlineInstancesList.push(counter);
                             let offlineTexto = " Off ".padStart(5, ' ');
                             tabla += `> 🖥️ \`${idStr}\` | 🔴 \`${offlineTexto}\` | 📦 \`${packsVal}\` | 🔓 \`${cuentasVal}\`\n`;
