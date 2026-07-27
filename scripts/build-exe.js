@@ -62,6 +62,17 @@ function copiarAssets() {
         fs.cpSync(path.join(RAIZ, 'cardmap.json'), path.join(DIST, 'cardmap.json'));
     }
     fs.copyFileSync(path.join(RAIZ, 'version.json'), path.join(DIST, 'version.json'));
+
+    // automation/ (scripts propios de AHK para el panel de MuMu: inyeccion de cuenta,
+    // trade, shinedust) nunca se copiaba al paquete -- no se notaba porque en esta PC
+    // el bot corre directo desde el codigo fuente (PM2), nunca desde el .exe empaquetado.
+    const automationDir = path.join(RAIZ, 'automation');
+    if (fs.existsSync(automationDir)) {
+        fs.cpSync(automationDir, path.join(DIST, 'automation'), {
+            recursive: true,
+            filter: (origen) => !origen.includes(`${path.sep}Logs${path.sep}`) && !origen.endsWith(`${path.sep}Logs`)
+        });
+    }
 }
 
 function copiarLanzador() {

@@ -1,6 +1,9 @@
 {
-  "version": "1.5.7",
+  "version": "1.5.8",
   "notes": [
+    "New: a \"Shinedust\" button on card lookups (/card, /wishlist) lets you pick any account and instance, injects it, and reads the account's current Shinedust balance automatically (via on-screen OCR, no manual navigation), posting the result back on the same card.",
+    "\"Check for Updates\" now shows the actual underlying error (network code, HTTP status, etc.) instead of just a generic message, so a repeated failure can actually be diagnosed from a screenshot.",
+    "Node now also trusts Windows' own certificate store in addition to its built-in list - if an antivirus that inspects HTTPS traffic was silently breaking \"Check for Updates\" (a real case seen this week), this should fix it without needing to update through the app instead.",
     "Fixed: custom emojis (rarity/type icons) could break permanently and show as plain \":name:\" text instead of the icon if they were ever deleted/recreated on the server - the bot cached emoji IDs forever without checking they still existed. Now refreshes every 10 minutes and re-uploads anything missing automatically.",
     "Fixed: Trainer cards showed no photo when the game reported 2+ copies on the same line (e.g. \"Cynthia (x2)\") - the \"(x2)\" was being used as part of the search name and never matched, so the image lookup always failed for those.",
     "\"Check for Updates\" in /setup now logs the real error when it fails instead of only showing a generic message, so a failure can actually be diagnosed instead of being a total black box.",

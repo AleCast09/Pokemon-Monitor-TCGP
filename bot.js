@@ -1113,7 +1113,11 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     );
     const filaXml = new ActionRowBuilder().addComponents(...botones);
 
-    const payload = { embeds: [embed], components: [filaXml] };
+    const filaAcciones = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary)
+    );
+
+    const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
     const archivosPayload = [];
     if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
@@ -1206,6 +1210,29 @@ function lanzarInstanciaMuMu(index) {
         console.error(`DEBUG: MuMuManager rechazó "control launch -v ${index}":`, e?.stderr?.toString() || e?.message || e);
         return false;
     }
+}
+
+// El script de inyección de Kevin (_InjectAccount.ahk) requiere que la instancia YA
+// esté prendida -- no la prende él. Los atajos de Trade/Shinedust (a diferencia del
+// panel manual de MuMu, que siempre pasa primero por "Turn On") saltan directo a
+// elegir instancia, así que hay que prenderla nosotros si hace falta antes de inyectar.
+async function asegurarInstanciaEncendida(index, timeoutMs = 90000) {
+    const instancias = obtenerInstanciasMuMu();
+    const info = instancias?.find(i => String(i.index) === String(index));
+    if (info?.is_android_started) return true;
+    if (!lanzarInstanciaMuMu(index)) return false;
+
+    const limite = Date.now() + timeoutMs;
+    while (Date.now() < limite) {
+        await new Promise(r => setTimeout(r, 3000));
+        const actuales = obtenerInstanciasMuMu();
+        const actual = actuales?.find(i => String(i.index) === String(index));
+        if (actual?.is_android_started) {
+            await new Promise(r => setTimeout(r, 2000)); // margen para que la ventana termine de aparecer
+            return true;
+        }
+    }
+    return false;
 }
 
 // Usado por el botón "Close Instance" del aviso de heartbeat cuando la
@@ -1572,6 +1599,38 @@ function ejecutarFinalizeTradeCard(winTitle, instanceIndex, callback) {
     spawnAhkConProteccion(ahkExe, [RUTA_FINALIZE_TRADE_CARD_SCRIPT, winTitle, folderPath, String(instanceIndex)], { windowsHide: false }, 3 * 60 * 1000, callback);
 }
 
+const RUTA_COUNT_SHINEDUST_SCRIPT = path.join(__dirname, 'automation', '_CountShinedust.ahk');
+
+// Corre nuestro propio script de OCR (ver automation/_CountShinedust.ahk) sobre una
+// instancia que YA tiene la cuenta inyectada y el juego cargado (ejecutarInyeccionHeadless
+// debe haber corrido antes) -- navega hasta Items y lee el valor de shinedust con el OCR
+// nativo de Windows. callback(ok, valorOMotivo).
+function ejecutarCountShinedust(winTitle, callback) {
+    const ahkExe = rutaAutoHotkey();
+    const folderPath = carpetaBaseMuMu();
+    if (!ahkExe || !folderPath || !fs.existsSync(RUTA_COUNT_SHINEDUST_SCRIPT)) {
+        return callback(false, 'faltan_archivos');
+    }
+    const outputFile = path.join(os.tmpdir(), `shinedust_${winTitle}_${Date.now()}.txt`);
+    spawnAhkConProteccion(ahkExe, [RUTA_COUNT_SHINEDUST_SCRIPT, winTitle, folderPath, outputFile], { windowsHide: false }, 3 * 60 * 1000, (ok, detalle) => {
+        if (!ok) {
+            try { fs.unlinkSync(outputFile); } catch (e) { /* nada que limpiar */ }
+            return callback(false, detalle);
+        }
+        let resultado;
+        try {
+            resultado = fs.readFileSync(outputFile, 'utf8').trim();
+        } catch (e) {
+            return callback(false, 'sin_resultado');
+        }
+        try { fs.unlinkSync(outputFile); } catch (e) { /* nada que limpiar */ }
+        if (!resultado || resultado.startsWith('ERROR')) {
+            return callback(false, resultado || 'sin_resultado');
+        }
+        callback(true, resultado);
+    });
+}
+
 function extraerDeviceAccount(rutaXml) {
     try {
         const contenido = fs.readFileSync(rutaXml, 'utf8');
@@ -1631,6 +1690,57 @@ function buscarArchivoXmlPorNombre(rutaBase, nombreBuscado) {
         }
     }
     return null;
+}
+
+function listarTodosLosXml(rutaBase) {
+    if (!rutaBase || !fs.existsSync(rutaBase)) return null;
+    const encontrados = [];
+    const pendientes = [rutaBase];
+    while (pendientes.length) {
+        const actual = pendientes.pop();
+        let entradas;
+        try {
+            entradas = fs.readdirSync(actual, { withFileTypes: true });
+        } catch (e) {
+            continue;
+        }
+        for (const entrada of entradas) {
+            const rutaCompleta = path.join(actual, entrada.name);
+            if (entrada.isDirectory()) {
+                pendientes.push(rutaCompleta);
+            } else if (entrada.name.toLowerCase().endsWith('.xml')) {
+                encontrados.push(path.basename(entrada.name, '.xml'));
+            }
+        }
+    }
+    encontrados.sort((a, b) => a.localeCompare(b));
+    return encontrados;
+}
+
+const XML_SELECT_POR_PAGINA = 25;
+
+// Dropdown paginado (25 por pagina, limite de Discord para un select menu) sobre una
+// lista de nombres de XML -- usado por el flujo de Shinedust para elegir cualquier
+// cuenta (no filtradas por carta, a diferencia del dropdown de Trade).
+function construirSelectXmlPaginado(fileNames, cartaId, pagina, prefix) {
+    const totalPaginas = Math.max(1, Math.ceil(fileNames.length / XML_SELECT_POR_PAGINA));
+    const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
+    const inicio = paginaSegura * XML_SELECT_POR_PAGINA;
+    const items = fileNames.slice(inicio, inicio + XML_SELECT_POR_PAGINA);
+
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId(`${prefix}::${cartaId}::${paginaSegura}`.slice(0, 100))
+        .setPlaceholder(totalPaginas > 1 ? `Select an account (page ${paginaSegura + 1}/${totalPaginas})` : 'Select an account')
+        .addOptions(items.map(f => ({ label: f.slice(0, 100), value: f.slice(0, 100) })));
+
+    const componentes = [new ActionRowBuilder().addComponents(menu)];
+    if (totalPaginas > 1) {
+        componentes.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`${prefix}_pag::${cartaId}::${paginaSegura - 1}`.slice(0, 100)).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
+            new ButtonBuilder().setCustomId(`${prefix}_pag::${cartaId}::${paginaSegura + 1}`.slice(0, 100)).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
+        ));
+    }
+    return { content: `Which account? (${fileNames.length} found)`, components: componentes };
 }
 
 function resolverNombreCarta(cartaId, rutaMasterPath) {
@@ -3162,6 +3272,7 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply({ content: `✅ Saved \`${path.basename(archivo)}\` to inject into instance **${nombre}**. Ready to use in Inject XML.` });
         }
 
+
         if (interaction.customId === 'modal_extract_xml') {
             await interaction.deferReply({ ephemeral: true });
             const nombreBuscado = interaction.fields.getTextInputValue('input_xml_nombre');
@@ -3345,6 +3456,86 @@ client.on('interactionCreate', async interaction => {
         const instanciaInfo = instancias.find(i => String(i.index) === String(index));
         const payload = construirEmbedInstanciasMuMu(instancias, { index, name: nombre, encendida: !!instanciaInfo?.is_android_started });
         return await interaction.update(payload);
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_shinedust_cuenta::')) {
+        const [, cartaId] = interaction.customId.split('::');
+        const fileName = interaction.values[0];
+
+        const instancias = obtenerInstanciasMuMu();
+        if (instancias === null) {
+            return await interaction.update({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+        }
+        if (!instancias.length) {
+            return await interaction.update({ content: '❌ No MuMuPlayer instances found.', components: [] });
+        }
+
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`shinedust_instancia::${cartaId}::${fileName}`.slice(0, 100))
+            .setPlaceholder('Select an instance')
+            .addOptions(instancias.slice(0, 25).map(i => ({
+                label: `${i.index}. ${i.name}`.slice(0, 100),
+                description: i.is_android_started ? 'On' : 'Off',
+                value: `${i.index}::${i.name}`
+            })));
+        return await interaction.update({ content: `Which instance do you want to run the check on for \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_instancia::')) {
+        const [, cartaId, fileName] = interaction.customId.split('::');
+        const [index, nombre] = interaction.values[0].split('::');
+
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+
+        const prendida = await asegurarInstanciaEncendida(index);
+        if (!prendida) {
+            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true });
+        }
+
+        try { await interaction.followUp({ content: `🔄 Injecting \`${fileName}\` into instance **${nombre}**... this may take a couple of minutes.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+        }
+
+        try {
+            guardarXmlParaInyeccion(nombre, archivo);
+            // Shinedust no manda solicitud de amistad -- pero el ini es compartido con
+            // el flujo de Trade, así que si quedó una activada de un uso anterior de
+            // "Add Friend" hay que apagarla, o la inyección la dispara igual.
+            actualizarIniInject({ sendFriendRequestAfterInject: '0' });
+        } catch (e) {
+            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
+        }
+
+        ejecutarInyeccionHeadless(async (ok, detalle) => {
+            if (!ok) {
+                try { await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+                return;
+            }
+
+            try { await interaction.followUp({ content: `🔍 Reading shinedust on instance **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+
+            ejecutarCountShinedust(nombre, async (okOcr, valorOMotivo) => {
+                apagarInstanciaMuMu(index);
+                try {
+                    if (!okOcr) {
+                        return await interaction.followUp({ content: `❌ Could not read the shinedust value (${valorOMotivo}).`, ephemeral: true });
+                    }
+
+                    const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+                    const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+                    const payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild);
+                    payload.embeds[0].addFields({ name: '👛 Shinedust', value: `**${valorOMotivo}** (\`${fileName}\`)` });
+
+                    await interaction.channel.send(payload);
+                    await interaction.followUp({ content: `✅ Shinedust for \`${fileName}\`: **${valorOMotivo}**.`, ephemeral: true });
+                } catch (e) { /* interacción puede haber expirado */ }
+            });
+        });
+        return;
     }
 
     if (interaction.isChannelSelectMenu() || (interaction.isStringSelectMenu() && interaction.customId === 'select_reset_modulo')) {
@@ -3703,6 +3894,29 @@ client.on('interactionCreate', async interaction => {
             return await interaction.showModal(modalXml);
         }
 
+        if (interaction.customId.startsWith('card_shinedust::')) {
+            const cartaId = interaction.customId.replace('card_shinedust::', '');
+            await interaction.deferReply({ ephemeral: true });
+
+            const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+            const fileNames = listarTodosLosXml(rutaXmlCfg?.webhook_url);
+            if (fileNames === null) {
+                return await interaction.editReply({ content: '❌ Could not find the configured **XML Accounts Path** folder.' });
+            }
+            if (!fileNames.length) {
+                return await interaction.editReply({ content: '❌ No XML accounts found.' });
+            }
+
+            return await interaction.editReply(construirSelectXmlPaginado(fileNames, cartaId, 0, 'card_shinedust_cuenta'));
+        }
+
+        if (interaction.customId.startsWith('card_shinedust_cuenta_pag::')) {
+            const [, cartaId, paginaTexto] = interaction.customId.split('::');
+            const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+            const fileNames = listarTodosLosXml(rutaXmlCfg?.webhook_url) || [];
+            return await interaction.update(construirSelectXmlPaginado(fileNames, cartaId, parseInt(paginaTexto, 10) || 0, 'card_shinedust_cuenta'));
+        }
+
         if (interaction.customId.startsWith('wishlist_xml::')) {
             // El mismo customId sirve para el botón inicial (viene del detalle de
             // carta, mensaje nuevo) y para paginar (edita el mensaje de XML que ya
@@ -3871,8 +4085,9 @@ client.on('interactionCreate', async interaction => {
                         await interaction.editReply({ content: `✅ You're on the latest version (**${localVer.version}**).` });
                     }
                 } catch (e) {
-                    console.error('DEBUG: error en "Check for Updates":', e?.message || e);
-                    await interaction.editReply({ content: '❌ Could not check for updates right now. Try again later.' });
+                    const detalle = e?.code || e?.response?.status || e?.message || String(e);
+                    console.error('DEBUG: error en "Check for Updates":', detalle);
+                    await interaction.editReply({ content: `❌ Could not check for updates right now.\n\`${detalle}\`\nTry again later, or send this to Ale if it keeps happening.` });
                 }
                 break;
 

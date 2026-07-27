@@ -138,7 +138,13 @@ function iniciarProceso(def) {
     const hijo = spawn(process.execPath, args, {
         cwd: __dirname,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, MONITOR_ROLE: def.rol }
+        // --use-system-ca: ademas de la lista de certificados que Node trae de
+        // fabrica, tambien confia en el almacen de certificados de Windows. Sin
+        // esto, un antivirus que inspecciona HTTPS (inyectando su propio
+        // certificado raiz, cosa que Windows SI confia pero Node no) rompe
+        // silenciosamente cualquier request HTTPS del bot (ej. "Check for
+        // Updates") aunque el resto de la PC navegue sin problema.
+        env: { ...process.env, MONITOR_ROLE: def.rol, NODE_OPTIONS: [process.env.NODE_OPTIONS, '--use-system-ca'].filter(Boolean).join(' ') }
     });
 
     conectarSalida(hijo, def.nombre);
