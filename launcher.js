@@ -188,17 +188,8 @@ async function iniciarActualizacion() {
         return;
     }
 
-    // Bug real encontrado 2026-07-30: antes se usaba process.execPath (el
-    // nombre del .exe QUE ESTA CORRIENDO AHORA) como destino del swap -- para
-    // alguien que actualiza desde una instalacion vieja (MonitorPokemon.exe,
-    // de antes del rename a MonitorPokemonBot.exe) via el boton de Discord,
-    // el archivo nunca pasaba a llamarse MonitorPokemonBot.exe, se quedaba
-    // con el nombre viejo para siempre. Ahora el destino final SIEMPRE es el
-    // nombre canonico actual -- si el que estaba corriendo tenia otro nombre
-    // (instalacion vieja), ese archivo viejo se borra y no vuelve a aparecer.
-    const rutaExeActual = process.execPath;
-    const rutaExeCanonica = path.join(__dirname, 'MonitorPokemonBot.exe');
-    const rutaNueva = path.join(__dirname, 'MonitorPokemonBot.new.exe');
+    const rutaExe = process.execPath;
+    const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
     const rutaBat = path.join(__dirname, '_update.bat');
     // Nota: "timeout" de Windows depende de tener una consola/stdin real y falla
     // (o se saltea) cuando corre sin ventana, como en nuestro caso — por eso las
@@ -207,16 +198,16 @@ async function iniciarActualizacion() {
         '@echo off',
         'ping 127.0.0.1 -n 4 >nul',
         ':retry',
-        `del "${rutaExeActual}" 2>nul`,
-        `if exist "${rutaExeActual}" (`,
+        `del "${rutaExe}" 2>nul`,
+        `if exist "${rutaExe}" (`,
         '  ping 127.0.0.1 -n 2 >nul',
         '  goto retry',
         ')',
-        `move /y "${rutaNueva}" "${rutaExeCanonica}"`,
+        `move /y "${rutaNueva}" "${rutaExe}"`,
         // "start" abre una consola visible por defecto — a diferencia de "Start
         // Monitor Pokemon.bat", que sí lo lanza oculto. Mismo patrón acá para
         // que el relanzamiento tras actualizar quede igual de invisible.
-        `powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '${rutaExeCanonica.replace(/'/g, "''")}' -WorkingDirectory '${__dirname.replace(/'/g, "''")}' -WindowStyle Hidden"`,
+        `powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '${rutaExe.replace(/'/g, "''")}' -WorkingDirectory '${__dirname.replace(/'/g, "''")}' -WindowStyle Hidden"`,
         'del "%~f0"',
         ''
     ].join('\r\n');

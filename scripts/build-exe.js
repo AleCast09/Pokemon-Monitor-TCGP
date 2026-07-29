@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 const RAIZ = path.join(__dirname, '..');
 const DIST = path.join(RAIZ, 'dist');
 const BUNDLE_PATH = path.join(DIST, 'bundle.js');
-const EXE_PATH = path.join(DIST, 'MonitorPokemonBot.exe');
+const EXE_PATH = path.join(DIST, 'MonitorPokemon.exe');
 
 const BANNER = `
 global.__baseDir = (() => {

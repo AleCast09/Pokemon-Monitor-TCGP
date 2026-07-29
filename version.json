@@ -1,9 +1,9 @@
 {
-  "version": "1.5.16",
+  "version": "1.5.17",
   "notes": [
-    "Fixed: updating from an old install (from before the MonitorPokemon.exe → MonitorPokemonBot.exe rename) through Discord's \"Update now\" kept the old filename forever and left a stale, unused copy of the old .exe sitting next to the new one. Now the old file gets cleaned up and the result always ends up correctly named.",
+    "Reverted the MonitorPokemon.exe → MonitorPokemonBot.exe rename from the last couple of versions - it fixed a minor confusion (which .exe to open) but caused a much worse one: renaming reset Windows SmartScreen's reputation for the file, so \"Windows protected your PC\" started showing up for everyone on this update, when it hadn't for a long time. Not worth the trade - keeping the old, already-trusted name.",
     "The Control Panel window title now says \"Monitor Pokemon — Control Panel\" instead of just \"Monitor Pokemon\", so it's clear this is the window you're supposed to open and use.",
-    "Renamed the internal bot engine from MonitorPokemon.exe to MonitorPokemonBot.exe - two files named almost the same (it and MonitorPokemonPanel.exe) sitting next to each other was confusing about which one to actually open. Only ever open the Control Panel (or \"Open Control Panel.bat\") - never either .exe directly.",
+    "New: manually pressing \"Check for Updates\" now also posts the update announcement (with an @mention) to your Updates channel, not just as a private reply to whoever clicked it.",
     "New: manually pressing \"Check for Updates\" now also posts the update announcement (with an @mention) to your Updates channel, not just as a private reply to whoever clicked it.",
     "New: after pressing \"Update now\" and the download finishes, you get a message in your Updates channel reminding you to press Sync Channels and re-save your Main Path once it restarts.",
     "Fixed the real cause of \"Check for Updates\" failing with \"Received one or more errors\" (confirmed on a clean Windows 10, no antivirus involved): Node was racing an IPv6 and IPv4 connection at the same time (\"Happy Eyeballs\"), and failed entirely on PCs where IPv6 has no real route even though DNS still returns an IPv6 record. Now forces IPv4 first, avoiding the race.",
@@ -61,7 +61,7 @@
     "Fixed: the MuMu \"Turn On\" button now waits for the instance to actually finish starting before reporting its status.",
     "The trade/injection automation is now protected against stuck confirmation windows, and no longer freezes waiting for a click that never comes."
   ],
-  "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemonBot.exe",
+  "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe",
   "panelDownloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemonPanel.exe",
   "assetsUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip"
 }
