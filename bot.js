@@ -5520,6 +5520,23 @@ client.on('interactionCreate', async interaction => {
                 const remota = await obtenerVersionRemota();
                 await descargarActualizacion(remota);
                 await interaction.editReply({ content: `✅ Update ready. Restarting with version **${remota.version}**...` });
+
+                // A pedido explicito del usuario 2026-07-30: avisar en el canal de
+                // Updates cuando la descarga termina, recordando los pasos manuales
+                // que siguen (Sync Channels + volver a guardar Main Path) -- se
+                // manda ANTES de programar el process.exit para asegurarse de que
+                // el mensaje realmente sale antes de que el proceso muera.
+                try {
+                    const canalUpdates = await obtenerCanalComando(interaction.user.id, 'actualizaciones');
+                    if (canalUpdates?.webhook_url) {
+                        await axios.post(`${canalUpdates.webhook_url}?wait=true`, {
+                            content: `<@${interaction.user.id}> ✅ The download for **${remota.version}** finished 100%. Please press **Sync Channels** and re-save your **Main Path** in \`/setup\` once it restarts, so nothing breaks.`
+                        }, { timeout: 15000 });
+                    }
+                } catch (e) {
+                    console.error('DEBUG: no se pudo avisar en el canal de Updates que la descarga termino:', e?.response?.data || e?.message || e);
+                }
+
                 setTimeout(() => process.exit(0), 1500);
             } catch (e) {
                 console.error('DEBUG: error descargando actualización:', e?.message || e);
@@ -5651,6 +5668,24 @@ client.on('interactionCreate', async interaction => {
                             new ButtonBuilder().setCustomId('actualizacion_luego').setLabel('Later').setStyle(ButtonStyle.Secondary)
                         );
                         await interaction.editReply({ embeds: [embedUpdate], components: [filaUpdate] });
+
+                        // A pedido explicito del usuario 2026-07-30: ademas de la
+                        // respuesta efimera de arriba (solo la ve quien aprieta el
+                        // boton), tambien se manda al canal de Updates con mencion
+                        // directa -- asi queda un aviso visible para cualquiera que
+                        // entre despues a ese canal, no solo para quien chequeo.
+                        try {
+                            const canalUpdates = await obtenerCanalComando(interaction.user.id, 'actualizaciones');
+                            if (canalUpdates?.webhook_url) {
+                                await axios.post(`${canalUpdates.webhook_url}?wait=true`, {
+                                    content: `<@${interaction.user.id}>`,
+                                    embeds: [embedUpdate.toJSON()],
+                                    components: [filaUpdate.toJSON()]
+                                }, { timeout: 15000 });
+                            }
+                        } catch (e) {
+                            console.error('DEBUG: no se pudo avisar en el canal de Updates:', e?.response?.data || e?.message || e);
+                        }
                     } else {
                         await interaction.editReply({ content: `✅ You're on the latest version (**${localVer.version}**).` });
                     }
