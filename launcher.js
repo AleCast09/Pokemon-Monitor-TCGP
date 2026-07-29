@@ -46,6 +46,16 @@ function crearAccesoDirectoConfigurar() {
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
 }
 
+// v1.5.19 dejo de crear "Monitor Pokemon.lnk" (redundante con MonitorPokemonPanel.exe,
+// que ya tiene su propio icono) -- pero quien ya lo tenia de una version vieja se queda
+// con el archivo para siempre, porque el auto-update solo agrega/reemplaza archivos,
+// nunca borra los que ya no hacen falta. Esto lo limpia solo, sin que el usuario tenga
+// que hacer nada ni volver a bajar el zip entero.
+const ACCESO_PANEL_VIEJO_PATH = path.join(__dirname, 'Monitor Pokemon.lnk');
+function limpiarAccesoDirectoPanelViejo() {
+    try { fs.unlinkSync(ACCESO_PANEL_VIEJO_PATH); } catch (e) { /* no existia, nada que limpiar */ }
+}
+
 // Carpeta de Inicio de Windows: cualquier acceso directo ahí arranca solo al
 // iniciar sesión, sin necesitar permisos de administrador ni una Tarea
 // Programada — a diferencia del Programador de Tareas, esto funciona igual
@@ -300,6 +310,7 @@ async function main() {
         }
     }
     crearAccesoDirectoConfigurar();
+    limpiarAccesoDirectoPanelViejo();
     crearAccesoDirectoInicioAutomatico();
     iniciarBandejaSistema();
 

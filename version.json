@@ -1,6 +1,7 @@
 {
-  "version": "1.5.22",
+  "version": "1.5.23",
   "notes": [
+    "Fixed: the leftover \"Monitor Pokemon\" shortcut (removed in 1.5.19, redundant with MonitorPokemonPanel.exe) now also gets cleaned up automatically for anyone who already had it from an older version - no need to redownload the whole zip or migrate to a new folder, updating normally removes it.",
     "Fixed a real bug: \"Check for Updates\" crashed with an error specifically whenever there WAS a real update available (never when already up to date) - the \"What's new\" list was built from every single release note ever recorded (this changelog keeps growing, never gets trimmed), which by now is way past Discord's 4096-character limit for an embed description. Now only shows as many recent notes as fit, with a note that older history is on GitHub.",
     "Fixed the real cause of \"Check for Updates\" failing again right after the previous fix, now with \"Expected values to be equals\"/\"Invalid string length\" instead: the experimental --use-system-ca Node flag (added for one antivirus-related case) has real bugs validating GitHub's certificate on some Windows setups. Removed it - it was breaking more than it fixed.",
     "Fixed the real cause of \"Check for Updates\" still failing with \"Received one or more errors\" even after forcing IPv4 first: Node was still racing an IPv6 connection in parallel in the background (\"Happy Eyeballs\") and grouping both failures into the same generic error if the second attempt also failed. Now disables that race entirely, so it either works or shows the real underlying error instead of a generic one.",
