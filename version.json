@@ -1,6 +1,10 @@
 {
-  "version": "1.5.10",
+  "version": "1.5.11",
   "notes": [
+    "Fixed: \"Check for Updates\" (and the automatic background check) could fail permanently on some networks/ISPs that block raw.githubusercontent.com - now falls back to api.github.com automatically if the first attempt fails.",
+    "New: the update notification posted in your Updates channel now @mentions you directly instead of sitting there as a silent embed nobody notices.",
+    "Fixed: reading Shinedust could silently show the wrong failure reason (just an exit code) instead of the real one (e.g. \"ocr invalido\", \"puerto no encontrado\") - the actual error is now shown so it can be diagnosed.",
+    "Fixed: the Shinedust reader depended on a hardcoded path that only existed on Ale's own PC, and could also break entirely if Kevin's own toolkit changed - it's now fully independent and no longer depends on anyone else's files.",
     "New: Main Trade now runs fully automatically end-to-end - injects the donor account, sends the friend request, offers a card from Main's own Favorites, the donor responds with the requested card, Main finalizes and cleans up the friendship, and both instances shut down on their own. No manual clicks needed anywhere in the middle.",
     "New: a 📄 Extract XML button on card lookups (/card, /wishlist, Gold Cards) sends an account's XML + JSON straight to your Extract XML channel, narrowed to accounts that actually have that card.",
     "Fixed: the 👛 Shinedust button on card lookups was listing every saved account instead of just the ones that actually have the card - could show over a thousand unrelated accounts to pick from.",

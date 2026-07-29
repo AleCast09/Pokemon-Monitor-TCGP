@@ -2406,19 +2406,21 @@ function ejecutarCountShinedust(winTitle, callback) {
     }
     const outputFile = path.join(os.tmpdir(), `shinedust_${winTitle}_${Date.now()}.txt`);
     spawnAhkConProteccion(ahkExe, [RUTA_COUNT_SHINEDUST_SCRIPT, winTitle, folderPath, outputFile], { windowsHide: false }, 3 * 60 * 1000, (ok, detalle) => {
-        if (!ok) {
-            try { fs.unlinkSync(outputFile); } catch (e) { /* nada que limpiar */ }
-            return callback(false, detalle);
-        }
+        // Bug real encontrado 2026-07-30: si el script terminaba con codigo != 0
+        // (cualquier ExitConError), esto devolvia directo "codigo_N" sin siquiera
+        // leer el archivo -- el motivo real ("puerto_no_encontrado", "ocr
+        // invalido (...)", etc.) que el script SIEMPRE escribe ahi se perdia.
+        // Ahora lee el archivo primero pase lo que pase, mismo criterio que
+        // ejecutarPasoAhk.
         let resultado;
         try {
             resultado = fs.readFileSync(outputFile, 'utf8').trim();
         } catch (e) {
-            return callback(false, 'sin_resultado');
+            resultado = '';
         }
         try { fs.unlinkSync(outputFile); } catch (e) { /* nada que limpiar */ }
-        if (!resultado || resultado.startsWith('ERROR')) {
-            return callback(false, resultado || 'sin_resultado');
+        if (!ok || !resultado || resultado.startsWith('ERROR')) {
+            return callback(false, resultado || detalle);
         }
         callback(true, resultado);
     });

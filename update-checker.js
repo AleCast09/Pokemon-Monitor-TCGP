@@ -9,14 +9,29 @@ const VERSION_PATH = path.join(__dirname, 'version.json');
 const PENDING_UPDATE_PATH = path.join(__dirname, '.pending_update.json');
 const ASSETS_ZIP_TEMP_PATH = path.join(__dirname, 'assets-actualizacion.zip');
 const VERSION_URL_REMOTA = 'https://raw.githubusercontent.com/AleCast09/Pokemon-Monitor-TCGP/main/version.json';
+// Respaldo por si raw.githubusercontent.com esta bloqueado por el ISP del
+// usuario (reporte real 2026-07-30: varios usuarios, no solo uno, con
+// "Check for Updates" fallando siempre por Discord y solo funcionando bajando
+// el .exe a mano -- raw.githubusercontent.com tiene historial de bloqueos
+// regionales de algunos proveedores en Latinoamerica). Mismo contenido,
+// dominio distinto -- si uno esta bloqueado el otro probablemente no.
+const VERSION_URL_RESPALDO = 'https://api.github.com/repos/AleCast09/Pokemon-Monitor-TCGP/contents/version.json';
 
 function obtenerVersionLocal() {
     return JSON.parse(fs.readFileSync(VERSION_PATH, 'utf8'));
 }
 
 async function obtenerVersionRemota() {
-    const resp = await axios.get(VERSION_URL_REMOTA, { timeout: 8000, headers: { 'Cache-Control': 'no-cache' } });
-    return resp.data;
+    try {
+        const resp = await axios.get(VERSION_URL_REMOTA, { timeout: 8000, headers: { 'Cache-Control': 'no-cache' } });
+        return resp.data;
+    } catch (e) {
+        const resp = await axios.get(VERSION_URL_RESPALDO, {
+            timeout: 8000,
+            headers: { 'Cache-Control': 'no-cache', 'Accept': 'application/vnd.github.raw+json', 'User-Agent': 'MonitorPokemon' }
+        });
+        return typeof resp.data === 'string' ? JSON.parse(resp.data) : resp.data;
+    }
 }
 
 function esVersionMasNueva(remota, local) {
@@ -47,16 +62,23 @@ function construirPayloadActualizacion(local, remota) {
 }
 
 async function obtenerDestinoNotificacion(client) {
+    // Se busca el ID del dueño SIEMPRE (no solo cuando no hay webhook) -- a
+    // pedido explicito del usuario 2026-07-30: un embed sin mencion en el
+    // canal de Updates pasa desapercibido facil (nadie vuelve a mirar el bot
+    // una vez que ya lo dejo corriendo). Con el ID, el aviso por webhook
+    // tambien puede hacerle "@mencion" directa, no solo quedar ahi mudo.
+    let ownerId = null;
+    try {
+        const app = await client.application.fetch();
+        ownerId = app.owner?.id || app.owner?.ownerId || null;
+    } catch (e) { /* sin dueño detectable */ }
+
     const filaWebhook = await db.get(
         `SELECT webhook_url FROM configs_canales WHERE tipo = 'actualizaciones' AND webhook_url LIKE 'https://discord.com/api/webhooks/%' ORDER BY rowid DESC LIMIT 1`
     );
-    if (filaWebhook?.webhook_url) return { tipo: 'webhook', webhookUrl: filaWebhook.webhook_url };
+    if (filaWebhook?.webhook_url) return { tipo: 'webhook', webhookUrl: filaWebhook.webhook_url, ownerId };
 
-    try {
-        const app = await client.application.fetch();
-        const ownerId = app.owner?.id || app.owner?.ownerId;
-        if (ownerId) return { tipo: 'dm', userId: ownerId };
-    } catch (e) { /* sin dueño detectable, se omite el aviso */ }
+    if (ownerId) return { tipo: 'dm', userId: ownerId };
     return null;
 }
 
@@ -82,7 +104,11 @@ async function chequearActualizaciones(client) {
         const payload = construirPayloadActualizacion(local, remota);
 
         if (destino.tipo === 'webhook') {
-            await axios.post(`${destino.webhookUrl}?wait=true`, payload, { timeout: 15000 });
+            // @mencion directa al dueño del bot (a pedido explicito del usuario
+            // 2026-07-30): un embed mudo en el canal de Updates se ignora facil
+            // una vez que el bot ya esta corriendo y nadie vuelve a mirarlo.
+            const contenido = destino.ownerId ? `<@${destino.ownerId}>` : undefined;
+            await axios.post(`${destino.webhookUrl}?wait=true`, { ...payload, content: contenido }, { timeout: 15000 });
         } else {
             const usuario = await client.users.fetch(destino.userId);
             await usuario.send(payload);
