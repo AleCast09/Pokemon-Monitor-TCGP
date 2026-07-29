@@ -7,7 +7,7 @@ const {
 } = require('discord.js');
 const axios = require('axios');
 const FormData = require('form-data');
-const { exec, execSync, spawn } = require('child_process');
+const { exec, execSync, execFileSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -16,7 +16,7 @@ const db = require('./database.js');
 
 const heartbeatScript = require('./heartbeat.js');
 const configScript = require('./config.js');
-const { chequearActualizaciones, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion } = require('./update-checker.js');
+const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion } = require('./update-checker.js');
 const { obtenerMapaEmojisGuild } = require('./guild-emojis.js');
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
 iniciarAutoSyncCardTypes();
@@ -60,7 +60,8 @@ const COMANDO_CONFIG = {
     card_all: { tipo: 'cmd_card_all', label: 'All Cards', titulo: '⚡ All Cards', descripcion: 'Exclusive channel for /card.' },
     card_wishlist: { tipo: 'cmd_card_wishlist', label: 'Cards Wishlist', titulo: '💖 Cards Wishlist', descripcion: 'Exclusive channel for /wishlist.' },
     extract_xlm: { tipo: 'cmd_extract_xlm', label: 'Extract XML', titulo: '📄 Extract XML', descripcion: 'Exclusive channel for /extract xml.' },
-    run_instance: { tipo: 'cmd_run_instance', label: 'Run MumuPlayer', titulo: '🎮 Run MumuPlayer', descripcion: 'Exclusive channel for /run instance.' }
+    run_instance: { tipo: 'cmd_run_instance', label: 'Trading', titulo: '🔄 Trading', descripcion: 'Exclusive channel for /run instance.' },
+    card_gold: { tipo: 'cmd_card_gold', label: 'Gold Cards', titulo: '🏆 Gold Cards', descripcion: 'Exclusive channel for /goldcards.' }
 };
 
 const ETIQUETAS_TIPO_WEBHOOK = {
@@ -86,7 +87,8 @@ const ETIQUETAS_TIPO_WEBHOOK = {
     'cmd_setup': 'Settings',
     'cmd_build_embed': 'Build Embed',
     'cmd_build_webhooks': 'Build Webhooks',
-    'shinedust': 'Shinedust'
+    'shinedust': 'Shinedust',
+    'cmd_card_gold': 'Gold Cards'
 };
 // Nombre por defecto que se le pone al webhook AL CREARLO (no confundir con
 // ETIQUETAS_TIPO_WEBHOOK, que es solo para mostrar en las listas de /webhook)
@@ -122,7 +124,7 @@ const NOMBRES_DEFAULT_WEBHOOK = {
     'cmd_card_wishlist': 'Wishlist 💖',
     'cmd_card_all': 'AllCards ⚡',
     'cmd_extract_xlm': 'Extract XML 📄',
-    'cmd_run_instance': 'Run MumuPlayer 📄',
+    'cmd_run_instance': 'Trading 🔄',
     'shinedust': 'Shinedust 🍬'
 };
 function nombreDefaultWebhook(tipo) {
@@ -415,6 +417,7 @@ function normalizarComando(interaction) {
     if (key === 'wishlist') return 'card_wishlist';
     if (key === 'extract') return interaction?.options?.getSubcommand?.(false) === 'xml' ? 'extract_xlm' : null;
     if (key === 'run') return interaction?.options?.getSubcommand?.(false) === 'instance' ? 'run_instance' : null;
+    if (key === 'goldcards') return 'card_gold';
     return COMANDO_CONFIG[key] ? key : null;
 }
 
@@ -550,6 +553,45 @@ async function obtenerTodasLasCartasCacheadas() {
     return { cartas: _todasCartasCacheBot.cartas, rutaMasterPath: rutaMaster };
 }
 
+// Umbral de copias para que una carta cuente como "Gold" -- configurable por
+// usuario (a pedido explicito, ya no hardcodeado a 10) via el boton "⚙️
+// Threshold" en el panel de Gold Cards. UMBRAL_GOLD_CARD_DEFAULT es solo el
+// valor inicial para quien nunca lo cambió.
+const UMBRAL_GOLD_CARD_DEFAULT = 10;
+
+async function obtenerUmbralGold(discordId) {
+    const fila = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = 'umbral_gold'`, [discordId]);
+    const valor = fila ? parseInt(fila.estado, 10) : NaN;
+    return Number.isFinite(valor) && valor > 0 ? valor : UMBRAL_GOLD_CARD_DEFAULT;
+}
+
+async function guardarUmbralGold(discordId, umbral) {
+    await db.run(
+        `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, 'umbral_gold', ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
+        [discordId, String(umbral), String(umbral)]
+    );
+}
+
+// Catalogo completo (mismo que allcards) pero filtrado a solo las cartas que
+// YA califican como Gold en al menos una cuenta (umbral configurable) -- a
+// pedido explicito del usuario, para que el dropdown de seleccion de
+// /goldcards no muestre cartas que nadie tiene completas.
+let _cartasGoldCacheBot = null;
+async function obtenerCartasGoldCacheadas(discordId) {
+    const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
+    if (cartas === null) return { cartas: null, rutaMasterPath: null, mapaCopias: null, umbral: UMBRAL_GOLD_CARD_DEFAULT };
+
+    const umbral = await obtenerUmbralGold(discordId);
+    const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+    const claveCache = `${rutaMasterPath}::${rutaJsonCfg?.webhook_url || ''}::${umbral}`;
+    if (!_cartasGoldCacheBot || _cartasGoldCacheBot.clave !== claveCache) {
+        const mapaCopias = construirMapaCopiasPorCarta(rutaJsonCfg?.webhook_url);
+        const cartasGold = mapaCopias ? cartas.filter(c => cuentasGoldParaCarta(mapaCopias, c.id, umbral).length > 0) : [];
+        _cartasGoldCacheBot = { clave: claveCache, cartas: cartasGold, mapaCopias };
+    }
+    return { cartas: _cartasGoldCacheBot.cartas, rutaMasterPath, mapaCopias: _cartasGoldCacheBot.mapaCopias, umbral };
+}
+
 function construirEmbedAllCardsInicio(user) {
     return new EmbedBuilder()
         .setTitle('⚡ Pokemon TCGP Library ⚡')
@@ -563,6 +605,37 @@ function construirEmbedAllCardsInicio(user) {
         .setColor(0x3498DB)
         .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
         .setTimestamp();
+}
+
+function construirEmbedGoldCardsInicio(user) {
+    return new EmbedBuilder()
+        .setTitle('🏆 Gold Cards')
+        .setDescription(
+            `**Command run by <@${user.id}>.\n\n**` +
+            `__Select an option below:__\n\n` +
+            `1-› TCGP Expansions Panel.\n` +
+            `2-› Category of each card by rarity.\n` +
+            `3-› Only cards with 10+ copies in at least one account show up — those are the ones that turn Gold in-game.\n`
+        )
+        .setColor(0xF0A93A)
+        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
+        .setTimestamp();
+}
+
+// Gold Cards depende sí o sí de la API de Google Drive (las imágenes con
+// borde dorado SOLO existen en la carpeta "Gold Frames" del Drive de Kevin,
+// no hay ningún otro lado de donde sacarlas) -- a pedido explícito del
+// usuario, se corta con un aviso claro en vez de dejar que falle en silencio
+// mostrando la carta sin la imagen dorada.
+function advertenciaGoldSinApi() {
+    const embed = new EmbedBuilder()
+        .setTitle('⚠️ Google Drive API key required')
+        .setDescription(
+            'Gold Cards needs a **Google Drive API key** configured — the gold-bordered card images only exist in a Drive folder, there\'s no other source for them.\n\n' +
+            'Set it up in **Settings** (see the tutorial below), then try again.'
+        )
+        .setColor(0xE74C3C);
+    return { embeds: [embed], components: [filaBotonesConTutorial('cmd_setup')] };
 }
 
 const SYMBOL_EMBEDS_PATH = path.join(__dirname, 'assets', 'embeds', 'symbol.png');
@@ -971,6 +1044,125 @@ async function obtenerImagenHDBot(cardMap, cartaId) {
     }
 }
 
+// Misma logica que obtenerImagenHDBot, pero contra la carpeta "Gold Frames"
+// (id fijo, confirmado 2026-07-27 con la API key ya configurada) -- carpeta
+// hermana de la raiz normal, con la misma estructura de subcarpetas por
+// expansion, usada solo para las imagenes con borde dorado de /goldcards.
+const DRIVE_GOLD_ROOT_FOLDER_ID_BOT = '1QPbJC376ZzsuCY_ME62G8Mq9_eMHL8XA';
+const DRIVE_CACHE_DIR_GOLD_BOT = path.join(__dirname, 'assets', 'drive_cache_gold');
+const DRIVE_FOLDER_MAP_PATH_GOLD_BOT = path.join(__dirname, 'assets', 'drive_folder_map_gold.json');
+
+let _driveFolderMapCacheGoldBot = null;
+async function refrescarMapaCarpetasDriveGoldBot() {
+    if (!GOOGLE_DRIVE_API_KEY_BOT) return {};
+    try {
+        const resp = await axios.get('https://www.googleapis.com/drive/v3/files', {
+            params: { q: `'${DRIVE_GOLD_ROOT_FOLDER_ID_BOT}' in parents`, key: GOOGLE_DRIVE_API_KEY_BOT, fields: 'files(id,name)', pageSize: 200 },
+            timeout: 5000
+        });
+        const mapa = {};
+        for (const f of resp.data.files || []) {
+            const guion = f.name.indexOf('-');
+            if (guion === -1) continue;
+            mapa[f.name.substring(0, guion)] = f.id;
+        }
+        _driveFolderMapCacheGoldBot = mapa;
+        fs.writeFileSync(DRIVE_FOLDER_MAP_PATH_GOLD_BOT, JSON.stringify(mapa, null, 2));
+        return mapa;
+    } catch (e) {
+        return _driveFolderMapCacheGoldBot || {};
+    }
+}
+
+async function obtenerMapaCarpetasDriveGoldBot() {
+    if (_driveFolderMapCacheGoldBot) return _driveFolderMapCacheGoldBot;
+    try {
+        if (fs.existsSync(DRIVE_FOLDER_MAP_PATH_GOLD_BOT)) {
+            _driveFolderMapCacheGoldBot = JSON.parse(fs.readFileSync(DRIVE_FOLDER_MAP_PATH_GOLD_BOT, 'utf8'));
+            return _driveFolderMapCacheGoldBot;
+        }
+    } catch (e) { /* caché corrupto, se reconstruye abajo */ }
+    return await refrescarMapaCarpetasDriveGoldBot();
+}
+
+async function obtenerImagenGoldBot(cardMap, cartaId) {
+    const info = cardMap?.[cartaId];
+    if (!info?.ExpansionID || !info?.CollectionNumber || !GOOGLE_DRIVE_API_KEY_BOT || !GOOGLE_DRIVE_HD_ENABLED_BOT) return null;
+
+    const localId = String(info.CollectionNumber).padStart(3, '0');
+    const dirCache = path.join(DRIVE_CACHE_DIR_GOLD_BOT, info.ExpansionID);
+    const rutaCache = path.join(dirCache, `${localId}.png`);
+    if (fs.existsSync(rutaCache)) return rutaCache;
+
+    try {
+        let mapaCarpetas = await obtenerMapaCarpetasDriveGoldBot();
+        let subfolderId = mapaCarpetas[info.ExpansionID];
+        if (!subfolderId) {
+            mapaCarpetas = await refrescarMapaCarpetasDriveGoldBot();
+            subfolderId = mapaCarpetas[info.ExpansionID];
+        }
+        if (!subfolderId) return null;
+
+        const busqueda = await axios.get('https://www.googleapis.com/drive/v3/files', {
+            params: { q: `'${subfolderId}' in parents and name contains '${info.ExpansionID}-${localId}'`, key: GOOGLE_DRIVE_API_KEY_BOT, fields: 'files(id,name)', pageSize: 5 },
+            timeout: 5000
+        });
+        const archivo = (busqueda.data.files || [])[0];
+        if (!archivo) return null;
+
+        const descarga = await axios.get(`https://www.googleapis.com/drive/v3/files/${archivo.id}`, {
+            params: { alt: 'media', key: GOOGLE_DRIVE_API_KEY_BOT },
+            responseType: 'arraybuffer', timeout: 8000
+        });
+        fs.mkdirSync(dirCache, { recursive: true });
+        fs.writeFileSync(rutaCache, descarga.data);
+        return rutaCache;
+    } catch (e) {
+        console.log('DEBUG: Error obteniendo imagen Gold del Drive (/goldcards):', e?.response?.status || '', e?.message || e);
+        return null;
+    }
+}
+
+// N+ copias de la misma carta en una cuenta la vuelve "dorada" en el juego
+// real (cosmetico, usado para intercambiar) -- N es configurable por usuario
+// (ver UMBRAL_GOLD_CARD_DEFAULT/obtenerUmbralGold mas abajo). Escanea todas
+// las cuentas JSON una sola vez (no por-carta) y arma un mapa cartaId -> lista
+// de cuentas que la tienen, para poder filtrar la lista de seleccion de
+// /goldcards a solo las cartas que YA califican en al menos una cuenta.
+function construirMapaCopiasPorCarta(rutaJsonCuentas) {
+    if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
+    const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
+    const mapa = {};
+
+    for (const archivo of archivos) {
+        const data = leerJsonSeguro(path.join(rutaJsonCuentas, archivo));
+        if (!data || !Array.isArray(data.pulls)) continue;
+
+        const conteoPorCarta = {};
+        for (const pull of data.pulls) {
+            if (!Array.isArray(pull.cards)) continue;
+            for (const id of pull.cards) {
+                conteoPorCarta[id] = (conteoPorCarta[id] || 0) + 1;
+            }
+        }
+
+        const fileName = data.metadata?.fileName || archivo;
+        for (const [cartaId, cantidad] of Object.entries(conteoPorCarta)) {
+            if (!mapa[cartaId]) mapa[cartaId] = [];
+            mapa[cartaId].push({ fileName, cantidad });
+        }
+    }
+
+    for (const cartaId of Object.keys(mapa)) {
+        mapa[cartaId].sort((a, b) => b.cantidad - a.cantidad);
+    }
+    return mapa;
+}
+
+function cuentasGoldParaCarta(mapaCopias, cartaId, umbral = UMBRAL_GOLD_CARD_DEFAULT) {
+    return (mapaCopias?.[cartaId] || []).filter(r => r.cantidad >= umbral);
+}
+
 const RAREZA_POR_CODIGO = {
     100: '🔹 1 Diamond',
     200: '🔸 2 Diamonds',
@@ -1064,7 +1256,7 @@ function trainerTypeDesdeId(cartaId, rutaMasterPath) {
     return cardmaster?.[cartaId]?.TrainerType;
 }
 
-async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volver = null, guild = null) {
+async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volver = null, guild = null, datosGold = null) {
     const mapaEmojis = await obtenerMapaEmojisGuild(guild);
     const cardMap = cargarCardMap(rutaMasterPath);
     const en_US = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json')) : null;
@@ -1072,7 +1264,11 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const expansiones = construirMapaExpansiones(en_US);
     const expansionNombre = info?.ExpansionID ? (expansiones[info.ExpansionID] || info.ExpansionID) : 'Unknown';
     const categoria = resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis);
-    const imagenPath = (await obtenerImagenHDBot(cardMap, cartaId)) || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID);
+    // datosGold (solo lo pasa /goldcards) -- usa la imagen con borde dorado si
+    // existe para esa carta, con la misma cadena de respaldo de siempre si no.
+    const imagenPath = (datosGold ? await obtenerImagenGoldBot(cardMap, cartaId) : null)
+        || (await obtenerImagenHDBot(cardMap, cartaId))
+        || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID);
 
     const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombre)];
     const trainerType = trainerTypeDesdeId(cartaId, rutaMasterPath);
@@ -1093,7 +1289,18 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         .setDescription(`**Expansion:** ${expansionNombre}\n**Name:** ${nombre}\n**Element:** ${elemento}\n**Category:** ${categoria}\n**ID:** \`${cartaId}\``)
         .setColor(0xE91E63);
 
-    const botones = [new ButtonBuilder().setCustomId(`wishlist_xml::${cartaId}::0`).setLabel('💠 XML').setStyle(ButtonStyle.Success)];
+    if (datosGold && datosGold.cuentas.length) {
+        const listaGold = datosGold.cuentas.map(r => `\`${r.fileName}\` — x${r.cantidad}`).join('\n');
+        embed.addFields({ name: `🏆 Gold Accounts (${datosGold.umbral}+ copies)`, value: listaGold.slice(0, 1024) });
+    }
+
+    // En Gold Cards, "XML" tiene que mostrar SOLO las cuentas que ya califican
+    // (10+ copias, igual que el campo de arriba) -- no la busqueda generica de
+    // "cualquier cuenta con al menos 1 copia" que usa AllCards/Wishlist, que
+    // en este contexto confunde (puede mostrar cientos de cuentas que no
+    // sirven para nada acá).
+    const botonXmlId = datosGold ? `goldcards_xml::${cartaId}::0` : `wishlist_xml::${cartaId}::0`;
+    const botones = [new ButtonBuilder().setCustomId(botonXmlId).setLabel('💠 XML').setStyle(ButtonStyle.Success)];
     // "volver" solo existe cuando se llegó acá desde la lista de cartas de una
     // expansión+categoría (no desde la búsqueda directa por autocompletado de
     // /card, que no tiene una pantalla anterior a la que volver).
@@ -1116,9 +1323,15 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     );
     const filaXml = new ActionRowBuilder().addComponents(...botones);
 
+    // En Gold Cards, Trade/Shinedust tienen su propio boton de entrada
+    // (goldcards_trade::/goldcards_shinedust::) que solo lista las cuentas ya
+    // calificadas -- entradas separadas de las de AllCards/Wishlist, para que
+    // un bug ahi nunca las afecte, pero comparten la MISMA ejecucion de abajo
+    // (instancia, inyeccion, OCR) ya probada.
     const filaAcciones = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary)
     );
 
     const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
@@ -1157,10 +1370,10 @@ function construirEmbedExtractXmlInicio(user, mapaEmojis = {}) {
 
 function construirEmbedRunInstanceInicio(user) {
     return new EmbedBuilder()
-        .setTitle('🎮 Run MumuPlayer')
+        .setTitle('🔄 Trading')
         .setDescription(
             `Command run by <@${user.id}>.\n\n` +
-            `Press the button to see your MuMuPlayer instances and open the one you need.`
+            `Press the button to see your MuMuPlayer instances and open the one you need, or configure your saved friends and check status under **⚙️ Settings Trade**.`
         )
         .setColor(0x2ECC71)
         .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
@@ -1255,6 +1468,13 @@ function apagarInstanciaMuMu(index) {
     }
 }
 
+// Cooldown simple en memoria para el botón 🛑 Stop del trade automático (a
+// pedido explicito del usuario 2026-07-27) -- evita que alguien pare y
+// relance la misma instancia en loop inmediato, dando tiempo real a que MuMu
+// y el script de inyección terminen de cerrar antes de la próxima corrida.
+const cooldownStopTradeInstancia = new Map(); // index -> timestamp hasta el que queda bloqueado
+const COOLDOWN_STOP_TRADE_MS = 30 * 1000;
+
 // Controla la ventana del AHK de UNA instancia puntual (título exacto
 // "{N}.ahk", confirmado en vivo) desde afuera — nunca toca ni lee el
 // contenido de esos scripts, que son de Kevin y no se tocan sin permiso. El
@@ -1325,11 +1545,15 @@ function construirEmbedInstanciasMuMu(instancias, seleccion = null) {
                 .setStyle(ButtonStyle.Secondary)
         ));
 
+        // XML y Submit se sacaron de acá (rediseño 2026-07-27, a pedido
+        // explícito del usuario): la inyección real ahora siempre pasa por el
+        // flujo automático nuevo que arranca desde el botón Trade de una carta
+        // (pregunta Friend ID -> cuenta -> ejecuta solo), no por este panel
+        // manual. Settings Trade queda solo para configurar amigos guardados
+        // y ver status.
         componentes.push(new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`mumu_friendid_${seleccion.index}::${seleccion.name}`).setLabel('🆔 Add Friend').setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId(`mumu_xml_${seleccion.index}::${seleccion.name}`).setLabel('💠 XML').setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId(`mumu_status_${seleccion.index}::${seleccion.name}`).setLabel('📊 Status').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(`mumu_ejecutar_${seleccion.index}::${seleccion.name}`).setLabel('✅ Submit').setStyle(ButtonStyle.Danger)
+            new ButtonBuilder().setCustomId(`mumu_status_${seleccion.index}::${seleccion.name}`).setLabel('📊 Status').setStyle(ButtonStyle.Secondary)
         ));
     }
 
@@ -1345,8 +1569,21 @@ function derivarRutasDesdeRaiz(raiz) {
         json: path.join(base, 'Accounts', 'Cards', 'accounts'),
         wishlist: path.join(base, 'Accounts', 'Cards'),
         injectIni: path.join(base, 'Accounts', 'InjectAccount.ini'),
-        injectScript: path.join(base, 'Accounts', '_InjectAccount.ahk')
+        injectScript: path.join(base, 'Accounts', '_InjectAccount.ahk'),
+        mainAhk: path.join(base, 'Scripts', 'Main.ahk')
     };
+}
+
+// Main.ahk (el bot de Kevin) vive en la carpeta personal de cada usuario, NO
+// empaquetada con el bot -- correrlo tal cual necesitaria los ~30 archivos de
+// Include y todas las imagenes Needle de Kevin, no solo los 11 que ya usamos.
+// Mas simple y ya establecido: igual que la inyeccion (obtenerRutasInject), se
+// deriva de "Main Path" (ruta_raiz) que cada usuario configura por su cuenta.
+const RUTA_MAIN_AHK_DEFAULT = 'C:\\POKEMON\\PTCGPB-ALE\\Scripts\\Main.ahk';
+
+async function obtenerRutaMainAhk(discordId) {
+    const fila = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_main_ahk' AND discord_id = ?`, [discordId]);
+    return fila?.webhook_url || RUTA_MAIN_AHK_DEFAULT;
 }
 
 // Antes hardcodeado a la PC de Ale (funcionaba solo para él) -- cualquier otro
@@ -1427,6 +1664,67 @@ function parsearListaFriends(rutaIni = RUTA_INJECT_INI_DEFAULT) {
     const ids = (datos.favoriteFriendIDs || '').split(',').map(s => s.trim()).filter(Boolean);
     const labels = (datos.favoriteFriendLabels || '').split('|').map(s => s.trim());
     return ids.map((id, i) => ({ id, label: labels[i] || '' }));
+}
+
+// A pedido explicito del usuario 2026-07-28: al presionar 🔄 Trade en
+// AllCards/Wishlist/GoldCards, el bot tiene que reenviar la carta COMPLETA
+// (misma imagen/embed que ya se estaba viendo) al canal de Trading -- nunca
+// mostrar el selector de modo/amigo/cuenta como un texto suelto en el canal
+// donde se buscó la carta. A partir de acá, todos los pasos siguientes editan
+// ESE MISMO mensaje del canal de Trading (interaction.update), así que nunca
+// vuelve a aparecer nada de este flujo en otro canal.
+//
+// IMPORTANTE: arma la carta completa (imagen HD/Gold, emojis, etc.) antes de
+// responder, lo que puede tardar más de los 3 segundos que da Discord para el
+// primer ack -- por eso el LLAMADOR tiene que hacer interaction.deferReply()
+// ANTES de invocar esta función (acá se usa editReply, nunca reply directo).
+async function reenviarCartaATrading(interaction, cartaId, datosGold, componentes) {
+    const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+    const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+    const payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
+    payload.components = componentes;
+
+    const canalTrading = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+    if (!canalTrading?.webhook_url) {
+        return await interaction.editReply({ content: '❌ Your **Trading** channel isn\'t set up yet. Run **Sync Channels** first.' });
+    }
+    try {
+        const webhookTrading = new WebhookClient({ url: canalTrading.webhook_url });
+        await webhookTrading.send({ content: `<@${interaction.user.id}>`, embeds: payload.embeds, files: payload.files, components: payload.components });
+        return await interaction.editReply({ content: '✅ Sent to your Trading channel.' });
+    } catch (e) {
+        console.error('DEBUG: error mandando la carta al canal de trading:', e?.message || e);
+        return await interaction.editReply({ content: '❌ Could not send to your Trading channel.' });
+    }
+}
+
+// Segundo paso en adelante (ya parado en el mensaje del canal de Trading):
+// pregunta a que amigo guardado se le manda la solicitud en ESTE trade
+// puntual -- antes se dependia de lo que hubiera quedado tildado en el .ini
+// de una vez anterior, ahora queda explicito por trade. El LLAMADOR ya hizo
+// interaction.deferUpdate() antes de invocar esto -- acá se usa editReply.
+// "modo" ('friend' o 'main') viaja en el customId hasta la ejecución final
+// (card_trade_instancia::), donde decide si se hace el flujo manual de
+// siempre (inyecta + manda solicitud, el usuario termina a mano) o el ciclo
+// automático completo (Main Trade). En modo 'main', el amigo elegido acá
+// representa a la propia cuenta Main (el usuario ya la tiene guardada como
+// un "amigo" más en su lista, ej. "Ale Cast") -- no hace falta ninguna
+// configuración nueva para esto.
+async function actualizarConSeleccionFriendId(interaction, cartaId, origen, modo = 'friend') {
+    const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+    const friends = parsearListaFriends(rutaIni);
+    if (!friends.length) {
+        return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **⚙️ Settings Trade → 🆔 Add Friend**.', components: [] });
+    }
+
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId(`card_trade_friendid::${origen}::${modo}::${cartaId}`.slice(0, 100))
+        .setPlaceholder('Select which friend to send the request to')
+        .addOptions(friends.slice(0, 25).map(f => ({
+            label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
+            value: f.id
+        })));
+    return await interaction.editReply({ content: 'Which friend do you want to send the trade request to?', components: [new ActionRowBuilder().addComponents(menu)] });
 }
 
 function construirEmbedStatusInstancia(index, name, rutaIni = RUTA_INJECT_INI_DEFAULT) {
@@ -1579,6 +1877,36 @@ function spawnAhkConProteccion(ahkExe, args, opciones, timeoutMs, callback) {
     });
 }
 
+// Main.ahk (el bot de Kevin) tiene que estar corriendo en la instancia Main
+// ANTES de que la donante mande la solicitud de amistad -- es el que la
+// acepta por su cuenta, con su propio loop infinito (nunca termina solo, asi
+// que nunca se espera/mata como al resto de los pasos del pipeline). Reporte
+// del usuario 2026-07-29: faltaba lanzarlo, así que Main Trade no tenía quién
+// aceptara la solicitud del lado de Main.
+function estaMainAhkCorriendo() {
+    try {
+        const salida = execSync(
+            `powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \\"Name='AutoHotkeyU64.exe' OR Name='AutoHotkeyU32.exe'\\" | Where-Object { $_.CommandLine -like '*Main.ahk*' } | Measure-Object).Count"`,
+            { windowsHide: true, timeout: 8000 }
+        ).toString().trim();
+        return parseInt(salida, 10) > 0;
+    } catch (e) {
+        return false;
+    }
+}
+
+function asegurarMainAhkCorriendo(ahkExe, rutaMainAhk) {
+    if (estaMainAhkCorriendo()) return true;
+    if (!ahkExe || !rutaMainAhk || !fs.existsSync(rutaMainAhk)) return false;
+    try {
+        const proceso = spawn(ahkExe, [rutaMainAhk], { cwd: path.dirname(rutaMainAhk), detached: true, stdio: 'ignore', windowsHide: false });
+        proceso.unref();
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 function ejecutarInyeccionHeadless(callback, rutaScript = RUTA_INJECT_ACCOUNT_SCRIPT_DEFAULT) {
     const ahkExe = rutaAutoHotkey();
     if (!ahkExe || !fs.existsSync(rutaScript)) {
@@ -1591,6 +1919,450 @@ function ejecutarInyeccionHeadless(callback, rutaScript = RUTA_INJECT_ACCOUNT_SC
         5 * 60 * 1000,
         callback
     );
+}
+
+// Inyección propia por ADB puro, en paralelo por instancia -- reimplementa
+// (sin tocar ni invocar) el paso de inyección de _InjectAccount.ahk de Kevin:
+// force-stop, borrar datos de la cuenta anterior, push del XML, relanzar.
+// A diferencia de ese script (instancia única de AHK + un solo .ini
+// compartido para pasar qué cuenta/ventana inyectar), acá cada llamada recibe
+// su propio index/XML como parámetros de función -- sin estado compartido,
+// así que N llamadas en paralelo (una por cuenta donante en el tradeo
+// automático) no se pisan entre sí. Necesario porque las instancias abiertas
+// a la vez para un trade de varias cartas no pueden esperar una atrás de otra.
+const APP_ID_PTCGP = 'jp.pokemon.pokemontcgp';
+const USER_PREFS_A_LIMPIAR_INJECT = [
+    'BattleUserPrefs', 'FeedUserPrefs', 'FilterConditionUserPrefs', 'HomeBattleMenuUserPrefs',
+    'MissionUserPrefs', 'NotificationUserPrefs', 'PackUserPrefs', 'PvPBattleResumeUserPrefs',
+    'RankMatchPvEResumeUserPrefs', 'RankMatchUserPrefs', 'SoloBattleResumeUserPrefs', 'SortConditionUserPrefs'
+];
+
+function rutaAdbExe() {
+    const base = carpetaBaseMuMu();
+    if (!base) return null;
+    const candidatos = [path.join(base, 'shell', 'adb.exe'), path.join(base, 'nx_main', 'adb.exe')];
+    return candidatos.find(p => fs.existsSync(p)) || null;
+}
+
+// Mismo dato que lee _InjectAccount.ahk (vm_config.json -> vm.nat.port_forward.adb.host_port),
+// pero ubicado por índice numérico de MuMuManager en vez de por título de ventana --
+// el bot ya conoce el index de cada instancia, así que es más directo y no depende
+// de que la ventana esté visible/enfocada.
+function obtenerPuertoAdbInstancia(index) {
+    const base = carpetaBaseMuMu();
+    if (!base) return null;
+    const carpetaVms = path.join(base, 'vms');
+    if (!fs.existsSync(carpetaVms)) return null;
+    const carpetaInstancia = fs.readdirSync(carpetaVms).find(nombre => nombre.endsWith(`-${index}`));
+    if (!carpetaInstancia) return null;
+    const rutaConfig = path.join(carpetaVms, carpetaInstancia, 'configs', 'vm_config.json');
+    if (!fs.existsSync(rutaConfig)) return null;
+    try {
+        const config = JSON.parse(fs.readFileSync(rutaConfig, 'utf8'));
+        return config?.vm?.nat?.port_forward?.adb?.host_port || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function ejecutarAdbComando(adbExe, args, timeoutMs = 15000) {
+    try {
+        execFileSync(adbExe, args, { windowsHide: true, timeout: timeoutMs });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+// 3 intentos como en RunAdbRootCommand de Kevin (shell root directo, luego
+// "su -c", luego shell simple de nuevo) -- en algunos dispositivos "adb root"
+// no alcanza y hace falta el "su -c" explícito para que el comando aplique.
+function ejecutarAdbShellConFallback(adbExe, puerto, comando, timeoutMs = 15000) {
+    const device = `127.0.0.1:${puerto}`;
+    if (ejecutarAdbComando(adbExe, ['-s', device, 'shell', comando], timeoutMs)) return true;
+    if (ejecutarAdbComando(adbExe, ['-s', device, 'shell', 'su', '-c', comando], timeoutMs)) return true;
+    return ejecutarAdbComando(adbExe, ['-s', device, 'shell', comando], timeoutMs);
+}
+
+async function inyectarCuentaPorAdb(index, xmlPath) {
+    const adbExe = rutaAdbExe();
+    if (!adbExe) return { ok: false, motivo: 'adb_no_encontrado' };
+    const puerto = obtenerPuertoAdbInstancia(index);
+    if (!puerto) return { ok: false, motivo: 'puerto_no_encontrado' };
+    if (!fs.existsSync(xmlPath)) return { ok: false, motivo: 'xml_no_encontrado' };
+
+    const device = `127.0.0.1:${puerto}`;
+    if (!ejecutarAdbComando(adbExe, ['connect', device], 10000)) return { ok: false, motivo: 'conexion_fallida' };
+    ejecutarAdbComando(adbExe, ['-s', device, 'root'], 10000);
+    await new Promise(r => setTimeout(r, 500)); // margen para que el daemon reinicie en modo root
+
+    const esperar = (ms) => new Promise(r => setTimeout(r, ms));
+    const shell = (cmd) => ejecutarAdbShellConFallback(adbExe, puerto, cmd);
+
+    if (!shell(`am force-stop ${APP_ID_PTCGP}`)) return { ok: false, motivo: 'force_stop' };
+    await esperar(200);
+
+    if (!shell(`rm -f /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml`)) return { ok: false, motivo: 'borrar_cuenta_previa' };
+    await esperar(200);
+
+    for (const pref of USER_PREFS_A_LIMPIAR_INJECT) {
+        if (!shell(`rm -f /data/data/${APP_ID_PTCGP}/files/UserPreferences/v1/${pref}`)) return { ok: false, motivo: 'borrar_preferencias' };
+        await esperar(150);
+    }
+
+    if (!ejecutarAdbComando(adbExe, ['-s', device, 'push', xmlPath, '/sdcard/deviceAccount.xml'], 20000)) return { ok: false, motivo: 'push_xml' };
+    await esperar(150);
+
+    if (!shell(`mkdir -p /data/data/${APP_ID_PTCGP}/shared_prefs`)) return { ok: false, motivo: 'crear_carpeta' };
+    await esperar(100);
+
+    if (!shell(`cp /sdcard/deviceAccount.xml /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml`)) return { ok: false, motivo: 'copiar_xml' };
+    await esperar(100);
+
+    if (!shell(`chmod 664 /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml && chown system:system /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml`)) return { ok: false, motivo: 'permisos' };
+    await esperar(200);
+
+    shell(`rm -f /sdcard/deviceAccount.xml`);
+    shell(`rm -f /data/data/${APP_ID_PTCGP}/files/UserPreferences/v1/MissionUserPrefs`);
+
+    const lanzado = shell(`am start -W -n ${APP_ID_PTCGP}/com.unity3d.player.UnityPlayerActivity -f 0x10018000`)
+        || shell(`am start -n ${APP_ID_PTCGP}/com.unity3d.player.UnityPlayerActivity -f 0x20000000`);
+    if (!lanzado) return { ok: false, motivo: 'lanzar_juego' };
+
+    return { ok: true };
+}
+
+// ================= Automatizacion propia de trade (Main/Soft), sin AHK ni Kevin =================
+// Reemplaza _SendTradeCard.ahk/_FinalizeTradeCard.ahk (que incluian archivos privados de
+// Kevin) -- todo por ADB directo desde Node, con las coordenadas mapeadas en vivo esta
+// sesion (busqueda de carta por nombre, ciclo de amistad, deslizar para enviar, limpieza
+// de amistad al final). A diferencia del Friend Trade manual (donde un humano real
+// responde en un tiempo desconocido y hace falta el boton "Next Trade" desde Discord),
+// acá controlamos las DOS puntas del trade dentro de la misma corrida, así que no hace
+// falta esperar/sondear -- alcanza con delays fijos entre paso y paso.
+
+function adbTapLogico(adbExe, puerto, x, y) {
+    // Sin conversion: las coordenadas mapeadas en vivo esta sesion ya son
+    // pixeles reales del dispositivo (540x960) -- se descubrieron tocando
+    // directo con adb (input tap X Y) mientras se miraban capturas, no son
+    // coordenadas logicas de ventana. Aplicarles la formula de escala de
+    // Kevin (pensada para SUS coordenadas de ventana AHK) las mandaba fuera
+    // de pantalla -- confirmado en vivo 2026-07-29, causa real de que ningun
+    // tap automatizado hiciera nada.
+    return ejecutarAdbComando(adbExe, ['-s', `127.0.0.1:${puerto}`, 'shell', 'input', 'tap', String(x), String(y)]);
+}
+
+function adbSwipeLogico(adbExe, puerto, x, y1, y2, duracionMs = 400) {
+    return ejecutarAdbComando(adbExe, ['-s', `127.0.0.1:${puerto}`, 'shell', 'input', 'swipe', String(x), String(y1), String(x), String(y2), String(duracionMs)]);
+}
+
+function adbTextoLogico(adbExe, puerto, texto) {
+    return ejecutarAdbComando(adbExe, ['-s', `127.0.0.1:${puerto}`, 'shell', 'input', 'text', texto]);
+}
+
+const esperarMs = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Cuenta donante busca el ID de amigo de Main y le manda la solicitud. Mapeado en vivo
+// contra una cuenta real (2026-07-28): Comunidad -> Amigos -> agregar -> Friend ID Search.
+async function agregarAmigoPorId(adbExe, puerto, friendId) {
+    adbTapLogico(adbExe, puerto, 270, 925); await esperarMs(2000); // Comunidad
+    adbTapLogico(adbExe, puerto, 65, 830); await esperarMs(2000);  // Amigos
+    adbTapLogico(adbExe, puerto, 478, 143); await esperarMs(2000); // icono agregar amigo
+    adbTapLogico(adbExe, puerto, 140, 790); await esperarMs(2000); // "Friend ID Search"
+    adbTapLogico(adbExe, puerto, 270, 445); await esperarMs(1000); // enfocar el campo
+    adbTextoLogico(adbExe, puerto, friendId); await esperarMs(1000);
+    adbTapLogico(adbExe, puerto, 387, 638); await esperarMs(2500); // OK (busca)
+    adbTapLogico(adbExe, puerto, 409, 428); await esperarMs(2000); // Send Request
+}
+
+// Main acepta la solicitud pendiente -- asume que es la unica/primera en la lista
+// (la limpieza de amigos al final de cada vuelta mantiene esto asi).
+async function aceptarSolicitudAmistad(adbExe, puerto) {
+    adbTapLogico(adbExe, puerto, 270, 925); await esperarMs(2000); // Comunidad
+    adbTapLogico(adbExe, puerto, 65, 830); await esperarMs(2000);  // Amigos
+    adbTapLogico(adbExe, puerto, 433, 822); await esperarMs(2000); // Solicitudes recibidas
+    adbTapLogico(adbExe, puerto, 466, 320); await esperarMs(2500); // Aceptar (primera fila)
+}
+
+// Elimina la amistad recién usada, para que la lista de Main no crezca sin límite y
+// el próximo trade siga encontrando fácil a la nueva cuenta donante en la primera fila.
+async function eliminarAmigo(adbExe, puerto) {
+    adbTapLogico(adbExe, puerto, 270, 925); await esperarMs(2000); // Comunidad
+    adbTapLogico(adbExe, puerto, 65, 830); await esperarMs(2000);  // Amigos
+    adbTapLogico(adbExe, puerto, 200, 240); await esperarMs(2500); // primer amigo de la lista
+    adbTapLogico(adbExe, puerto, 270, 710); await esperarMs(1500); // toggle "✓ Amigo"
+    adbTapLogico(adbExe, puerto, 387, 638); await esperarMs(2000); // confirmar "Vale"
+}
+
+// Main ofrece una carta puntual (buscada por nombre, no "la primera que aparezca") al
+// amigo recién aceptado. Deja el trade en "Esperando respuesta".
+async function proponerCartaTrade(adbExe, puerto, cardName) {
+    adbTapLogico(adbExe, puerto, 270, 925); await esperarMs(2000); // Comunidad
+    adbTapLogico(adbExe, puerto, 397, 715); await esperarMs(2500); // tile Intercambio
+    adbTapLogico(adbExe, puerto, 270, 750); await esperarMs(2500); // Intercambiar
+    adbTapLogico(adbExe, puerto, 413, 222); await esperarMs(3000); // fila del amigo (primero de la lista)
+    adbTapLogico(adbExe, puerto, 477, 213); await esperarMs(1500); // icono de búsqueda
+    adbTapLogico(adbExe, puerto, 270, 192); await esperarMs(800);  // caja de texto
+    adbTextoLogico(adbExe, puerto, cardName); await esperarMs(800);
+    adbTapLogico(adbExe, puerto, 270, 819); await esperarMs(2000); // Buscar
+    adbTapLogico(adbExe, puerto, 103, 798); await esperarMs(1500); // primer resultado
+    adbTapLogico(adbExe, puerto, 270, 820); await esperarMs(2000); // Vale (confirma selección)
+    adbTapLogico(adbExe, puerto, 387, 822); await esperarMs(2000); // Vale (resumen)
+    adbTapLogico(adbExe, puerto, 387, 638); await esperarMs(2500); // OK (confirmar carta)
+    adbTapLogico(adbExe, puerto, 270, 770); await esperarMs(2500); // Vale ("has ofrecido")
+}
+
+// Cuenta donante responde ofreciendo la MISMA carta buscada (misma rareza, la que
+// necesitamos que Main reciba). El popup de tutorial de 3 páginas aparece siempre (cada
+// cuenta donante es nueva), se toca de forma preventiva antes del flujo real.
+async function responderCartaTrade(adbExe, puerto, cardName) {
+    adbTapLogico(adbExe, puerto, 270, 925); await esperarMs(2500); // Comunidad
+    adbTapLogico(adbExe, puerto, 397, 715); await esperarMs(2500); // tile Trade
+    adbTapLogico(adbExe, puerto, 270, 750); await esperarMs(2000); // View / tutorial p.1 Next
+    adbTapLogico(adbExe, puerto, 270, 770); await esperarMs(1500); // tutorial p.2 Next
+    adbTapLogico(adbExe, puerto, 387, 770); await esperarMs(1500); // tutorial p.3 OK
+    adbTapLogico(adbExe, puerto, 270, 750); await esperarMs(2500); // View real
+    adbTapLogico(adbExe, puerto, 397, 820); await esperarMs(2500); // Trade (responder)
+    adbTapLogico(adbExe, puerto, 477, 213); await esperarMs(1500); // icono de búsqueda
+    adbTapLogico(adbExe, puerto, 270, 192); await esperarMs(800);
+    adbTextoLogico(adbExe, puerto, cardName); await esperarMs(800);
+    adbTapLogico(adbExe, puerto, 270, 819); await esperarMs(2000); // Buscar
+    adbTapLogico(adbExe, puerto, 103, 798); await esperarMs(1500); // primer resultado
+    adbTapLogico(adbExe, puerto, 270, 770); await esperarMs(1500); // popup info (si aparece)
+    adbTapLogico(adbExe, puerto, 270, 820); await esperarMs(2000); // OK (confirmar selección)
+    adbTapLogico(adbExe, puerto, 387, 822); await esperarMs(2000); // OK (confirmar final)
+    adbTapLogico(adbExe, puerto, 387, 638); await esperarMs(2500); // confirmar diálogo
+}
+
+// Main actualiza, acepta la respuesta, desliza para enviar, y cierra el cartel de gracias.
+async function finalizarTradeEnMain(adbExe, puerto) {
+    adbTapLogico(adbExe, puerto, 433, 654); await esperarMs(2500); // Actualizar
+    adbTapLogico(adbExe, puerto, 270, 750); await esperarMs(2500); // Ver
+    adbTapLogico(adbExe, puerto, 397, 820); await esperarMs(2000); // Intercambiar
+    adbTapLogico(adbExe, puerto, 387, 638); await esperarMs(2500); // Vale (confirmación final, irreversible)
+    adbSwipeLogico(adbExe, puerto, 270, 600, 100, 400); await esperarMs(3000); // deslizar para enviar
+    adbTapLogico(adbExe, puerto, 270, 920); await esperarMs(2000); // "Toca para continuar" (¡Genial!)
+    adbTapLogico(adbExe, puerto, 270, 905); await esperarMs(1500); // cerrar cartel "¿Quieres darle las gracias?"
+}
+
+// Orquestador completo de una vuelta: inyecta la cuenta donante, arma la amistad,
+// propone/responde el trade, finaliza, limpia la amistad, y apaga la instancia donante.
+async function ejecutarCicloTradeAutomatico({ indexMain, friendIdMain, indexDonante, xmlPathDonante, cardName }) {
+    const adbExe = rutaAdbExe();
+    if (!adbExe) return { ok: false, motivo: 'adb_no_encontrado' };
+
+    const inyeccion = await inyectarCuentaPorAdb(indexDonante, xmlPathDonante);
+    if (!inyeccion.ok) return { ok: false, motivo: `inyeccion_fallo_${inyeccion.motivo}` };
+
+    const puertoMain = obtenerPuertoAdbInstancia(indexMain);
+    const puertoDonante = obtenerPuertoAdbInstancia(indexDonante);
+    if (!puertoMain || !puertoDonante) return { ok: false, motivo: 'puerto_no_encontrado' };
+
+    // Tras inyectar, el juego arranca de cero: pantalla de carga -> splash
+    // "Toca para comenzar" -> menu principal. Un solo toque a tiempo fijo no
+    // alcanzaba (confirmado en vivo 2026-07-29 via diagnostico OCR: la donante
+    // se quedaba pegada en el splash con un solo intento) -- el tiempo de carga
+    // real varia bastante despues de una reinyeccion (reinicio "en caliente" del
+    // juego via am start, distinto a un arranque frio tocando el icono). Se
+    // reintenta el toque cada 5s durante un margen generoso.
+    await esperarMs(15000); // margen inicial para que aparezca el splash
+    for (let intento = 0; intento < 10; intento++) {
+        adbTapLogico(adbExe, puertoDonante, 270, 820); // "Toca para comenzar" (inofensivo si ya no está)
+        await esperarMs(5000);
+    }
+    // El juego suele mostrar un popup automatico (News, etc.) al llegar al menu
+    // principal -- se tapea directo la "X" del popup (inofensivo si no hay
+    // ninguno, cae en zona en blanco de la pantalla normal).
+    adbTapLogico(adbExe, puertoDonante, 141, 480);
+    await esperarMs(1500);
+
+    await agregarAmigoPorId(adbExe, puertoDonante, friendIdMain);
+    await aceptarSolicitudAmistad(adbExe, puertoMain);
+    await proponerCartaTrade(adbExe, puertoMain, cardName);
+    await responderCartaTrade(adbExe, puertoDonante, cardName);
+    await finalizarTradeEnMain(adbExe, puertoMain);
+    await eliminarAmigo(adbExe, puertoMain);
+
+    apagarInstanciaMuMu(indexDonante);
+
+    return { ok: true };
+}
+
+// Main Trade real -- piezas AHK separadas (cada una prueba/falla sola, en vez
+// de un solo script gigante), encadenadas desde Node en orden. A pedido
+// explicito del usuario 2026-07-29, tras encontrar que un script monolitico
+// era muy dificil de depurar: _InjectXml -> _SendFriendRequest (donante) ->
+// _MainAcceptAndTrade (main) -> _DonorRespondTrade (donante) ->
+// _MainFinalizeAndCleanup (main). Aceptar la solicitud de amistad en Main ya
+// NO es parte de este pipeline (mismo pedido 2026-07-29): Main.ahk (el bot de
+// Kevin) corre aparte, en paralelo, directo en la instancia Main, aceptando
+// solicitudes por su cuenta con su propio loop -- ver automation/Main.ahk.
+// _SendFriendRequest.ahk (copia adaptada del script propio de Kevin, mismo
+// pedido 2026-07-29) reemplaza a nuestro _AddFriendAndRequest.ahk -- usa el
+// motor de reconocimiento de imagen de Kevin en vez de taps a coordenadas fijas.
+const RUTA_INJECT_XML_SCRIPT = path.join(__dirname, 'automation', '_InjectXml.ahk');
+const RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT = path.join(__dirname, 'automation', '_SendFriendRequest.ahk');
+// Reemplaza a _MainAcceptAndTrade.ahk (a pedido explicito del usuario
+// 2026-07-29): ya no busca la carta por nombre, ofrece la marcada Favorita en
+// la coleccion de Main (12 pasos con coordenadas dadas por el usuario).
+const RUTA_MAIN_ACCEPT_TRADE_SCRIPT = path.join(__dirname, 'automation', '_MainProposeFavoriteCard.ahk');
+const RUTA_DONOR_RESPOND_SCRIPT = path.join(__dirname, 'automation', '_DonorRespondTrade.ahk');
+const RUTA_MAIN_FINALIZE_SCRIPT = path.join(__dirname, 'automation', '_MainFinalizeAndCleanup.ahk');
+
+function ejecutarPasoAhk(ahkExe, rutaScript, args, timeoutMs, outputFile) {
+    return new Promise((resolve) => {
+        spawnAhkConProteccion(
+            ahkExe, [rutaScript, ...args, outputFile],
+            { windowsHide: false, cwd: path.dirname(rutaScript) },
+            timeoutMs,
+            (ok, detalle) => {
+                let resultado = '';
+                try { resultado = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8').trim() : ''; } catch (e) { /* nada que leer */ }
+                try { if (fs.existsSync(outputFile)) fs.unlinkSync(outputFile); } catch (e) { /* nada que limpiar */ }
+                resolve({ ok: ok && resultado && !resultado.startsWith('ERROR'), resultado: resultado || detalle });
+            }
+        );
+    });
+}
+
+async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre }) {
+    const ahkExe = rutaAutoHotkey();
+    const folderPath = carpetaBaseMuMu();
+    const scripts = [RUTA_INJECT_XML_SCRIPT, RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, RUTA_SEND_TRADE_CARD_SCRIPT, RUTA_MAIN_ACCEPT_TRADE_SCRIPT, RUTA_DONOR_RESPOND_SCRIPT, RUTA_MAIN_FINALIZE_SCRIPT, RUTA_FINALIZE_TRADE_CARD_SCRIPT];
+    if (!ahkExe || !folderPath || scripts.some(s => !fs.existsSync(s))) {
+        return await interaction.followUp({ content: '❌ Main Trade scripts not found.', ephemeral: true });
+    }
+
+    const instancias = obtenerInstanciasMuMu();
+    const infoMain = (instancias || []).find(i => i.name === 'Main');
+    if (!infoMain) {
+        return await interaction.followUp({ content: '❌ Could not find an instance named exactly "Main". Main Trade needs your main account\'s MuMu instance to be named "Main".', ephemeral: true });
+    }
+
+    const prendidaMain = await asegurarInstanciaEncendida(infoMain.index);
+    const prendidaDonante = await asegurarInstanciaEncendida(index);
+    if (!prendidaMain || !prendidaDonante) {
+        return await interaction.followUp({ content: '❌ Could not turn on one of the instances.', ephemeral: true });
+    }
+
+    // Main.ahk necesita estar corriendo ANTES de que la donante mande la
+    // solicitud (mas abajo) para poder aceptarla por su cuenta -- se lanza acá,
+    // apenas la instancia esta prendida, para darle tiempo a llegar al menu
+    // principal antes de que llegue la solicitud. La ruta es la carpeta
+    // personal de Kevin de CADA usuario (ruta_main_ahk, derivada de su Main
+    // Path), no una copia empaquetada con el bot.
+    const rutaMainAhkUsuario = await obtenerRutaMainAhk(interaction.user.id);
+    const yaEstabaCorriendo = estaMainAhkCorriendo();
+    if (!asegurarMainAhkCorriendo(ahkExe, rutaMainAhkUsuario)) {
+        return await interaction.followUp({ content: `❌ Could not start Main.ahk (checked \`${rutaMainAhkUsuario}\`). Set your **Main Path** in Settings if this looks wrong.`, ephemeral: true });
+    }
+    // A pedido explicito del usuario 2026-07-29: Main.ahk solo necesita estar
+    // vivo el tiempo justo para aceptar la solicitud pendiente -- 30s despues
+    // de arrancarlo se lo mata (mismo mecanismo de matarInstanciasAhkPrevias,
+    // por CommandLine), asi no se queda tocando la pantalla en paralelo con
+    // nuestros propios scripts mas adelante en el pipeline. Si YA estaba
+    // corriendo de antes (el usuario lo dejo abierto el solo), no se lo mata --
+    // solo se apaga el que nosotros mismos arrancamos recien.
+    // Convertido en Promise (a pedido explicito del usuario 2026-07-29): el
+    // pipeline tiene que ESPERAR a que Main.ahk realmente termine (acepte la
+    // solicitud) antes de seguir con send_trade_card en la donante -- antes
+    // corria en paralelo sin relacion, y a veces send_trade_card arrancaba
+    // sin que Main.ahk hubiera tenido tiempo de aceptar todavia.
+    const mainAhkListo = yaEstabaCorriendo
+        ? Promise.resolve()
+        : new Promise((resolve) => {
+              // Subido de 30s a 60s, a 80s, bajado a 70s, y vuelto a 80s
+              // (reporte del usuario 2026-07-29): la instancia tarda bastante
+              // en bootear Android + abrir el juego antes de que el timer
+              // arranque a contar.
+              setTimeout(() => {
+                  matarInstanciasAhkPrevias(rutaMainAhkUsuario);
+                  resolve();
+              }, 80000);
+          });
+
+    try { await interaction.followUp({ content: `🔄 Running Main Trade (\`${fileName}\` → Main)... this may take several minutes and will close the current sessions on both instances.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+
+    const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+    const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+    const tmp = () => path.join(os.tmpdir(), `mtrade_${index}_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`);
+
+    // _SendTradeCard.ahk / _FinalizeTradeCard.ahk (los mismos de Friend Trade)
+    // no escriben resultado a un archivo -- avisan por codigo de salida via
+    // spawnAhkConProteccion (ver ejecutarSendTradeCard/ejecutarFinalizeTradeCard
+    // mas arriba). Envueltos en Promise para poder mezclarlos en la misma lista
+    // secuencial de pasos sin tocar esos dos scripts ni su forma de reportar.
+    const ejecutarSendTradeCardPromise = (winTitle) => new Promise((resolve) => {
+        ejecutarSendTradeCard(winTitle, (ok, detalle) => resolve({ ok, resultado: detalle }));
+    });
+    const ejecutarFinalizeTradeCardPromise = (winTitle, instanceIndex) => new Promise((resolve) => {
+        ejecutarFinalizeTradeCard(winTitle, instanceIndex, (ok, detalle) => resolve({ ok, resultado: detalle }));
+    });
+
+    // Orden confirmado por el usuario 2026-07-29: despues de mandar la
+    // solicitud, la donante ofrece la carta de la wishlist de Main
+    // (_SendTradeCard.ahk, igual que en Friend Trade) ANTES de que Main
+    // proponga la suya -- son dos ofertas de trade separadas, no una sola.
+    const pasos = [
+        { nombre: 'inject_xml', script: RUTA_INJECT_XML_SCRIPT, args: [nombre, folderPath, archivo], timeoutMs: 3 * 60 * 1000 },
+        { nombre: 'send_friend_request', script: RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, args: [nombre, folderPath, friendId], timeoutMs: 90 * 1000 },
+        // Espera a que Main.ahk termine (acepte la solicitud y se cierre solo,
+        // ver mainAhkListo mas arriba) ANTES de que la donante ofrezca la
+        // carta -- a pedido explicito del usuario 2026-07-29.
+        { nombre: 'esperar_main_ahk', promesa: () => mainAhkListo.then(() => ({ ok: true, resultado: 'OK' })) },
+        { nombre: 'send_trade_card', promesa: () => ejecutarSendTradeCardPromise(nombre) },
+        // Aceptar la solicitud ya NO es parte del pipeline (a pedido explicito del
+        // usuario 2026-07-29): Main.ahk (el bot de Kevin) corre aparte, en paralelo,
+        // se mata solo a los 80s de arrancar (ver mas arriba), y para cuando este
+        // paso llega ya paso ese tiempo -- por eso pasa directo a proponer la
+        // carta (ya no busca por nombre, ofrece la Favorita de Main).
+        { nombre: 'main_accept_propose', script: RUTA_MAIN_ACCEPT_TRADE_SCRIPT, args: ['Main', folderPath], timeoutMs: 2 * 60 * 1000 },
+        { nombre: 'donor_respond', script: RUTA_DONOR_RESPOND_SCRIPT, args: [nombre, folderPath, nombreCarta], timeoutMs: 2 * 60 * 1000 },
+        { nombre: 'main_finalize_cleanup', script: RUTA_MAIN_FINALIZE_SCRIPT, args: ['Main', folderPath], timeoutMs: 2 * 60 * 1000 },
+        { nombre: 'finalize_trade_card', promesa: () => ejecutarFinalizeTradeCardPromise(nombre, index) }
+    ];
+
+    for (const paso of pasos) {
+        const { ok, resultado } = paso.promesa
+            ? await paso.promesa()
+            : await ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, tmp());
+        if (!ok) {
+            const filaStop = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger)
+            );
+            const mensaje = `❌ Main Trade failed at step **${paso.nombre}** (${resultado}). Press **🛑 Stop** to clean up before trying again.`;
+            try {
+                const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+                if (canalRunInstance?.webhook_url) {
+                    await axios.post(`${canalRunInstance.webhook_url}?wait=true`, { content: mensaje, components: [filaStop.toJSON()] }, { timeout: 10000 });
+                    return await interaction.followUp({ content: '✅ Result sent to your Trading channel.', ephemeral: true });
+                }
+            } catch (e) {
+                console.error('DEBUG: error mandando el resultado de Main Trade al canal de trading:', e?.response?.data || e?.message || e);
+            }
+            return await interaction.followUp({ content: mensaje, components: [filaStop], ephemeral: true });
+        }
+    }
+
+    // A pedido explicito del usuario 2026-07-29: al terminar todo el pipeline
+    // con exito, apagar las DOS instancias (Main y donante) -- _FinalizeTradeCard.ahk
+    // ya apaga a la donante sola, pero Main se quedaba prendida. Sin setTimeout
+    // (reporte del usuario: quedaron prendidas igual) -- un reinicio del bot en
+    // esa ventana de 5s mataba el timer pendiente sin avisar. Apaga de una.
+    apagarInstanciaMuMu(index);
+    apagarInstanciaMuMu(infoMain.index);
+
+    const mensaje = `✅ Main Trade completed: **${nombreCarta}** (\`${fileName}\`) sent to Main.`;
+    try {
+        const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+        if (canalRunInstance?.webhook_url) {
+            await axios.post(`${canalRunInstance.webhook_url}?wait=true`, { content: mensaje }, { timeout: 10000 });
+            return await interaction.followUp({ content: '✅ Result sent to your Trading channel.', ephemeral: true });
+        }
+    } catch (e) {
+        console.error('DEBUG: error mandando el resultado de Main Trade al canal de trading:', e?.response?.data || e?.message || e);
+    }
+    return await interaction.followUp({ content: mensaje, ephemeral: true });
 }
 
 const RUTA_SEND_TRADE_CARD_SCRIPT = path.join(__dirname, 'automation', '_SendTradeCard.ahk');
@@ -1713,36 +2485,12 @@ function buscarArchivoXmlPorNombre(rutaBase, nombreBuscado) {
     return null;
 }
 
-function listarTodosLosXml(rutaBase) {
-    if (!rutaBase || !fs.existsSync(rutaBase)) return null;
-    const encontrados = [];
-    const pendientes = [rutaBase];
-    while (pendientes.length) {
-        const actual = pendientes.pop();
-        let entradas;
-        try {
-            entradas = fs.readdirSync(actual, { withFileTypes: true });
-        } catch (e) {
-            continue;
-        }
-        for (const entrada of entradas) {
-            const rutaCompleta = path.join(actual, entrada.name);
-            if (entrada.isDirectory()) {
-                pendientes.push(rutaCompleta);
-            } else if (entrada.name.toLowerCase().endsWith('.xml')) {
-                encontrados.push(path.basename(entrada.name, '.xml'));
-            }
-        }
-    }
-    encontrados.sort((a, b) => a.localeCompare(b));
-    return encontrados;
-}
-
 const XML_SELECT_POR_PAGINA = 25;
 
 // Dropdown paginado (25 por pagina, limite de Discord para un select menu) sobre una
-// lista de nombres de XML -- usado por el flujo de Shinedust para elegir cualquier
-// cuenta (no filtradas por carta, a diferencia del dropdown de Trade).
+// lista de nombres de XML -- usado por el flujo de Shinedust. Desde el fix
+// 2026-07-29 recibe la lista ya filtrada por carta (buscarXmlPorCarta), igual
+// que el dropdown de Trade.
 function construirSelectXmlPaginado(fileNames, cartaId, pagina, prefix) {
     const totalPaginas = Math.max(1, Math.ceil(fileNames.length / XML_SELECT_POR_PAGINA));
     const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
@@ -1800,7 +2548,7 @@ function buscarXmlPorCarta(rutaJsonCuentas, cartaId) {
 
 const XML_POR_PAGINA = 40;
 
-function construirEmbedXml(resultados, nombreCarta, cartaId, pagina = 0) {
+function construirEmbedXml(resultados, nombreCarta, cartaId, pagina = 0, prefijoBoton = 'wishlist') {
     const embed = new EmbedBuilder()
         .setTitle(`💠 XML — ${nombreCarta}`)
         .setColor(0xE91E63);
@@ -1836,8 +2584,8 @@ function construirEmbedXml(resultados, nombreCarta, cartaId, pagina = 0) {
             embeds: [embed],
             files: archivosPayload,
             components: [new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`wishlist_xml::${cartaId}::${paginaSegura - 1}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
-                new ButtonBuilder().setCustomId(`wishlist_xml::${cartaId}::${paginaSegura + 1}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
+                new ButtonBuilder().setCustomId(`${prefijoBoton}_xml::${cartaId}::${paginaSegura - 1}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
+                new ButtonBuilder().setCustomId(`${prefijoBoton}_xml::${cartaId}::${paginaSegura + 1}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
             )]
         };
     }
@@ -1888,6 +2636,24 @@ function construirSlashCommands() {
                     { name: 'Crown Rare', value: 'crown-rare' }
                 ))
             .addStringOption(opt => opt.setName('name').setDescription('Search for a card in your wishlist directly by name (optional)').setAutocomplete(true).setRequired(false)),
+        new SlashCommandBuilder().setName('goldcards').setDescription('Runs the Gold Cards flow')
+            .addStringOption(opt => opt.setName('expansion').setDescription('Filter by expansion before picking the name (optional)').setAutocomplete(true).setRequired(false))
+            .addStringOption(opt => opt.setName('rarity').setDescription('Filter by rarity before picking the name (optional)').setRequired(false)
+                .addChoices(
+                    { name: '1 Diamond', value: '1-diamond' },
+                    { name: '2 Diamond', value: '2-diamond' },
+                    { name: '3 Diamond', value: '3-diamond' },
+                    { name: '4 Diamond', value: '4-diamond' },
+                    { name: '1 Star', value: '1-star' },
+                    { name: '2 Star Trainer', value: '2-star-trainer' },
+                    { name: '2 Star Full Art', value: '2-star-full-art' },
+                    { name: '2 Star Rainbow', value: '2-star-rainbow' },
+                    { name: 'Immersive', value: 'immersive' },
+                    { name: '1 Star Shiny', value: '1-star-shiny' },
+                    { name: '2 Star Shiny', value: '2-star-shiny' },
+                    { name: 'Crown Rare', value: 'crown-rare' }
+                ))
+            .addStringOption(opt => opt.setName('name').setDescription('Search a Gold-eligible card directly by name (optional)').setAutocomplete(true).setRequired(false)),
         new SlashCommandBuilder()
             .setName('extract')
             .setDescription('Runs Extract XML')
@@ -2098,6 +2864,27 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
         await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar, guild);
         return;
     }
+    if (commandKey === 'card_gold') {
+        const embed = construirEmbedGoldCardsInicio(user);
+        const fila = filaBotonesConTutorial('cmd_card_gold',
+            new ButtonBuilder().setCustomId('goldcards_ver_expansiones').setLabel('🏆 View Gold Cards').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('goldcards_umbral').setLabel('⚙️ Threshold').setStyle(ButtonStyle.Secondary)
+        );
+
+        const bannerPath = path.join(__dirname, 'assets', 'embeds', 'card_banner.png');
+        const symbolPath = path.join(__dirname, 'assets', 'embeds', 'symbol.png');
+        const archivos = [];
+        if (fs.existsSync(bannerPath)) {
+            embed.setImage('attachment://card_banner.png');
+            archivos.push({ ruta: bannerPath, filename: 'card_banner.png' });
+        }
+        if (fs.existsSync(symbolPath)) {
+            embed.setThumbnail('attachment://symbol.png');
+            archivos.push({ ruta: symbolPath, filename: 'symbol.png' });
+        }
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar, guild);
+        return;
+    }
     if (commandKey === 'extract_xlm') {
         const mapaEmojis = await obtenerMapaEmojisGuild(guild);
         const embed = construirEmbedExtractXmlInicio(user, mapaEmojis);
@@ -2121,7 +2908,7 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
     if (commandKey === 'run_instance') {
         const embed = construirEmbedRunInstanceInicio(user);
         const fila = filaBotonesConTutorial('cmd_run_instance',
-            new ButtonBuilder().setCustomId('mumu_ver_instancias').setLabel('🎮 View Instances').setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('mumu_ver_instancias').setLabel('⚙️ Settings Trade').setStyle(ButtonStyle.Primary)
         );
         const archivos = [];
         const tradeBannerPath = path.join(__dirname, 'assets', 'embeds', 'Trade_banner.png');
@@ -2760,11 +3547,22 @@ async function generarPanelControl(userId) {
     const filaCartas = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('panel_wishlist').setLabel('💖 Cards Wishlist').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('panel_allcards').setLabel('⚡ All Cards').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('panel_goldcards').setLabel('🏆 Gold Cards').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('panel_extract_xml').setLabel('📄 Extract XML').setStyle(ButtonStyle.Primary)
     );
 
+    // "Add Friend"/"Status ID" agregados aca (a pedido explicito del usuario
+    // 2026-07-29): antes solo estaban dentro de una instancia puntual (Auto
+    // Trade -> Settings Trade), pero los amigos son por usuario, no por
+    // instancia, asi que no hace falta ese paso de por medio. "Status ID" (no
+    // solo "Status") para no confundirse con btn_status de mas arriba, que es
+    // el status de configuracion del bot, no de amigos guardados. Van en esta
+    // misma fila (no una nueva) porque Discord permite maximo 5 filas por
+    // mensaje y ya estaban las 5 ocupadas.
     const filaTrade = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('panel_run_instance').setLabel('🔄 Auto Trade').setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('panel_run_instance').setLabel('🔄 Auto Trade').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('setup_add_friend').setLabel('🆔 Add Friend').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('setup_status_friends').setLabel('📊 Status ID').setStyle(ButtonStyle.Secondary)
     );
 
     const archivos = [];
@@ -2794,10 +3592,18 @@ const FUENTES_CARTAS = {
         contexto: 'the catalog',
         errorSinDatos: '❌ cardmaster.json not found. Check the **Data Master Path** configured in the panel.',
         obtenerCartas: obtenerTodasLasCartasCacheadas
+    },
+    goldcards: {
+        tituloLista: '🏆 Gold Cards',
+        vacioTexto: 'No cards found with 10+ copies in any account yet.',
+        contexto: 'Gold Cards',
+        errorSinDatos: '❌ cardmaster.json not found. Check the **Data Master Path** configured in the panel.',
+        obtenerCartas: obtenerCartasGoldCacheadas
     }
 };
 
 function prefijoDeCartas(customId) {
+    if (customId.startsWith('goldcards')) return 'goldcards';
     return customId.startsWith('allcards') ? 'allcards' : 'wishlist';
 }
 
@@ -2851,14 +3657,59 @@ client.on('interactionCreate', async interaction => {
         const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
         await interaction.editReply(payload);
         // El resultado de la búsqueda queda como mensaje público aparte (nunca se
-        // toca) — pero sin esto el panel del canal se va quedando enterrado
-        // arriba a medida que se acumulan búsquedas. Se reubica (borra+reenvía)
-        // al final para que quede siempre cerca de la última actividad.
-        try {
-            await enviarComandoAlCanal('card_all', interaction.user, rowCardAll, true, interaction.guild);
-        } catch (e) {
-            console.error('DEBUG: no se pudo reubicar el panel de cmd_card_all tras una búsqueda:', e?.message || e);
+        // toca). A pedido explicito del usuario 2026-07-29: una búsqueda directa
+        // (con nombre/atajo) NUNCA debe reubicar el panel del comando, ni siquiera
+        // si ya pasó el intervalo de inactividad -- eso solo debe pasar al correr
+        // el comando "pelado" (/card sin opciones, ver ejecutarComandoEnCanal).
+        return;
+    }
+
+    if (interaction.isAutocomplete() && interaction.commandName === 'goldcards') {
+        const campoFocus = interaction.options.getFocused(true);
+        const focused = campoFocus.value.trim().toLowerCase();
+        const { cartas } = await obtenerCartasGoldCacheadas(interaction.user.id);
+        const base = cartas || [];
+
+        if (campoFocus.name === 'expansion') {
+            const expansiones = [...new Set(base.map(c => c.expansion))].sort((a, b) => a.localeCompare(b));
+            const coincidencias = (focused ? expansiones.filter(e => e.toLowerCase().includes(focused)) : expansiones)
+                .slice(0, 25)
+                .map(e => ({ name: e.slice(0, 100), value: e }));
+            return interaction.respond(coincidencias).catch(() => {});
         }
+
+        const expansionElegida = interaction.options.getString('expansion');
+        const rarezaElegida = interaction.options.getString('rarity');
+        let porExpansion = expansionElegida ? base.filter(c => c.expansion === expansionElegida) : base;
+        if (rarezaElegida) porExpansion = porExpansion.filter(c => c.tipoRareza === rarezaElegida);
+        const coincidencias = (focused ? porExpansion.filter(c => c.nombre.toLowerCase().includes(focused)) : porExpansion)
+            .slice(0, 25)
+            .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
+        return interaction.respond(coincidencias).catch(() => {});
+    }
+
+    // Búsqueda directa por nombre vía autocompletado de /goldcards, mismo
+    // patron que /card -- ya viene pre-filtrado a cartas Gold-elegibles.
+    if (interaction.isChatInputCommand() && interaction.commandName === 'goldcards' && interaction.options.getString('name')) {
+        const cartaId = interaction.options.getString('name');
+        const rowCardGold = await obtenerCanalComando(interaction.user.id, 'cmd_card_gold');
+        if (!rowCardGold) {
+            return await interaction.reply({ content: `❌ No channel synced for **Gold Cards**. Use **Sync Channels** first.`, ephemeral: true });
+        }
+        if (interaction.channelId !== rowCardGold.canal_id) {
+            return await interaction.reply({ content: `❌ This command only works in <#${rowCardGold.canal_id}>.`, ephemeral: true });
+        }
+        await interaction.deferReply();
+        if (!GOOGLE_DRIVE_API_KEY_BOT) {
+            return await interaction.editReply(advertenciaGoldSinApi());
+        }
+        const { cartas, rutaMasterPath, mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+        const carta = (cartas || []).find(c => c.id === cartaId);
+        if (!carta) return await interaction.editReply({ content: `❌ Card not found (or no account has ${umbral}+ copies of it yet).` });
+        const datosGold = { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral };
+        const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild, datosGold);
+        await interaction.editReply(payload);
+        // Ver nota en el handler de card_all: una búsqueda directa nunca reubica el panel.
         return;
     }
 
@@ -2907,11 +3758,7 @@ client.on('interactionCreate', async interaction => {
         if (!carta) return await interaction.editReply({ content: '❌ Card not found in your wishlist.' });
         const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
         await interaction.editReply(payload);
-        try {
-            await enviarComandoAlCanal('card_wishlist', interaction.user, rowWishlist, true, interaction.guild);
-        } catch (e) {
-            console.error('DEBUG: no se pudo reubicar el panel de cmd_card_wishlist tras una búsqueda:', e?.message || e);
-        }
+        // Ver nota en el handler de card_all: una búsqueda directa nunca reubica el panel.
         return;
     }
 
@@ -3243,6 +4090,35 @@ client.on('interactionCreate', async interaction => {
             }
         }
 
+        if (interaction.customId === 'modal_setup_friendid') {
+            const friendLabel = interaction.fields.getTextInputValue('input_friend_nombre').trim();
+            const friendId = interaction.fields.getTextInputValue('input_friend_id').trim();
+
+            if (!/^\d{16}$/.test(friendId)) {
+                return await interaction.reply({ content: '❌ The Friend ID must be exactly 16 numeric digits.', ephemeral: true });
+            }
+
+            await interaction.deferReply({ ephemeral: true });
+            let resultado;
+            try {
+                const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+                resultado = agregarFriend(friendLabel, friendId, rutaIni);
+            } catch (e) {
+                return await interaction.editReply({ content: '❌ Could not save the friend to InjectAccount.ini.' });
+            }
+
+            if (!resultado.ok && resultado.motivo === 'lleno') {
+                return await interaction.editReply({ content: '❌ You already have 10 friends added (maximum allowed for injection).' });
+            }
+            if (!resultado.ok && resultado.motivo === 'duplicado') {
+                return await interaction.editReply({ content: `⚠️ Friend ID **${friendId}** was already added.` });
+            }
+
+            return await interaction.editReply({
+                content: `✅ Added **${friendLabel || 'No name'}** (${friendId}). You have **${resultado.total}/10** friends saved.\nPress **🆔 Add Friend** again to add another.`
+            });
+        }
+
         if (interaction.customId.startsWith('modal_mumu_friendid::')) {
             const [, index, nombre] = interaction.customId.split('::');
             const friendLabel = interaction.fields.getTextInputValue('input_friend_nombre').trim();
@@ -3295,6 +4171,16 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply({ content: `✅ Saved \`${path.basename(archivo)}\` to inject into instance **${nombre}**. Ready to use in Inject XML.` });
         }
 
+        if (interaction.customId === 'modal_goldcards_umbral') {
+            await interaction.deferReply({ ephemeral: true });
+            const valorTexto = interaction.fields.getTextInputValue('input_umbral').trim();
+            const valor = parseInt(valorTexto, 10);
+            if (!Number.isFinite(valor) || valor <= 0) {
+                return await interaction.editReply({ content: '❌ Enter a positive whole number.' });
+            }
+            await guardarUmbralGold(interaction.user.id, valor);
+            return await interaction.editReply({ content: `✅ Gold Cards threshold set to **${valor}+** copies.` });
+        }
 
         if (interaction.customId === 'modal_extract_xml') {
             await interaction.deferReply({ ephemeral: true });
@@ -3403,32 +4289,33 @@ client.on('interactionCreate', async interaction => {
                 ['ruta_json_cuentas', derivadas.json],
                 ['ruta_wishlist', derivadas.wishlist],
                 ['ruta_inject_ini', derivadas.injectIni],
-                ['ruta_inject_script', derivadas.injectScript]
+                ['ruta_inject_script', derivadas.injectScript],
+                ['ruta_main_ahk', derivadas.mainAhk]
             ];
             for (const [tipo, valor] of filas) {
                 await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, 'local', ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET webhook_url = ?`, [interaction.user.id, tipo, valor, valor]);
             }
 
             return await interaction.editReply({
-                content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\``
+                content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\`\n📂 Main.ahk: \`${derivadas.mainAhk}\``
             });
         }
 
         return await configScript.manejarModal(interaction);
     }
 
-    if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_expansion_seleccion' || interaction.customId === 'allcards_expansion_seleccion')) {
+    if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_expansion_seleccion' || interaction.customId === 'allcards_expansion_seleccion' || interaction.customId === 'goldcards_expansion_seleccion')) {
         await interaction.deferUpdate();
         const prefijo = prefijoDeCartas(interaction.customId);
         const fuente = FUENTES_CARTAS[prefijo];
         const expansionElegida = interaction.values[0];
-        const { cartas } = await fuente.obtenerCartas();
+        const { cartas } = await fuente.obtenerCartas(interaction.user.id);
         const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
         const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo, contexto: fuente.contexto, mapaEmojis });
         return await interaction.editReply(payload);
     }
 
-    if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_categoria_seleccion' || interaction.customId === 'allcards_categoria_seleccion')) {
+    if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_categoria_seleccion' || interaction.customId === 'allcards_categoria_seleccion' || interaction.customId === 'goldcards_categoria_seleccion')) {
         await interaction.deferUpdate();
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
@@ -3436,7 +4323,7 @@ client.on('interactionCreate', async interaction => {
             const separador = interaction.values[0].indexOf('::');
             const expansion = interaction.values[0].slice(0, separador);
             const categoria = interaction.values[0].slice(separador + 2);
-            const { cartas } = await fuente.obtenerCartas();
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
             const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, 0, { prefijo, contexto: fuente.contexto, mapaEmojis });
             return await interaction.editReply(payload);
@@ -3449,24 +4336,25 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
-    if (interaction.isStringSelectMenu() && (interaction.customId.startsWith('wishlist_carta_seleccion::') || interaction.customId.startsWith('allcards_carta_seleccion::'))) {
+    if (interaction.isStringSelectMenu() && (interaction.customId.startsWith('wishlist_carta_seleccion::') || interaction.customId.startsWith('allcards_carta_seleccion::') || interaction.customId.startsWith('goldcards_carta_seleccion::'))) {
         await interaction.deferUpdate();
         const prefijo = prefijoDeCartas(interaction.customId);
         const fuente = FUENTES_CARTAS[prefijo];
         const [, expansion, categoria, pagina] = interaction.customId.split('::');
         const cartaId = interaction.values[0];
-        const { cartas, rutaMasterPath } = await fuente.obtenerCartas();
+        const { cartas, rutaMasterPath, mapaCopias, umbral } = await fuente.obtenerCartas(interaction.user.id);
         const carta = (cartas || []).find(c => c.id === cartaId);
-        const payload = await construirEmbedDetalleCarta(cartaId, carta?.nombre || cartaId, rutaMasterPath, { prefijo, expansion, categoria, pagina }, interaction.guild);
+        const datosGold = prefijo === 'goldcards' ? { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral } : null;
+        const payload = await construirEmbedDetalleCarta(cartaId, carta?.nombre || cartaId, rutaMasterPath, { prefijo, expansion, categoria, pagina }, interaction.guild, datosGold);
         return await interaction.editReply(payload);
     }
 
-    if (interaction.isButton() && (interaction.customId.startsWith('wishlist_volver_carta_lista::') || interaction.customId.startsWith('allcards_volver_carta_lista::'))) {
+    if (interaction.isButton() && (interaction.customId.startsWith('wishlist_volver_carta_lista::') || interaction.customId.startsWith('allcards_volver_carta_lista::') || interaction.customId.startsWith('goldcards_volver_carta_lista::'))) {
         await interaction.deferUpdate();
         const prefijo = prefijoDeCartas(interaction.customId);
         const fuente = FUENTES_CARTAS[prefijo];
         const [, expansion, categoria, pagina] = interaction.customId.split('::');
-        const { cartas } = await fuente.obtenerCartas();
+        const { cartas } = await fuente.obtenerCartas(interaction.user.id);
         const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
         const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, parseInt(pagina, 10) || 0, { prefijo, contexto: fuente.contexto, mapaEmojis });
         return await interaction.editReply(payload);
@@ -3483,27 +4371,58 @@ client.on('interactionCreate', async interaction => {
         return await interaction.update(payload);
     }
 
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_cuenta::')) {
-        const cartaId = interaction.customId.replace('card_trade_cuenta::', '');
-        const fileName = interaction.values[0];
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_friendid::')) {
+        const [, origen, modo, cartaId] = interaction.customId.split('::');
+        const friendId = interaction.values[0];
+        await interaction.deferUpdate(); // buscar cuentas puede tardar más de 3s
 
-        const instancias = obtenerInstanciasMuMu();
-        if (instancias === null) {
-            return await interaction.update({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+        let resultados;
+        if (origen === 'gold') {
+            const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            resultados = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : null;
+        } else {
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId);
         }
-        if (!instancias.length) {
-            return await interaction.update({ content: '❌ No MuMuPlayer instances found.', components: [] });
+        if (resultados === null) {
+            return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.', components: [] });
+        }
+        if (!resultados.length) {
+            return await interaction.editReply({ content: '❌ No account has this card.', components: [] });
         }
 
         const menu = new StringSelectMenuBuilder()
-            .setCustomId(`card_trade_instancia::${cartaId}::${fileName}`.slice(0, 100))
+            .setCustomId(`card_trade_cuenta::${cartaId}::${friendId}::${modo}`.slice(0, 100))
+            .setPlaceholder('Select an account')
+            .addOptions(resultados.slice(0, 25).map(r => ({
+                label: `${r.fileName} (x${r.cantidad})`.slice(0, 100),
+                value: r.fileName.replace(/\.xml$/i, '').slice(0, 100)
+            })));
+        return await interaction.editReply({ content: 'Which account do you want to trade this card from?', components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_cuenta::')) {
+        const [, cartaId, friendId, modo] = interaction.customId.split('::');
+        const fileName = interaction.values[0];
+        await interaction.deferUpdate(); // MuMuManager puede tardar más de 3s
+
+        const instancias = obtenerInstanciasMuMu();
+        if (instancias === null) {
+            return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+        }
+        if (!instancias.length) {
+            return await interaction.editReply({ content: '❌ No MuMuPlayer instances found.', components: [] });
+        }
+
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`card_trade_instancia::${cartaId}::${friendId}::${fileName}::${modo || 'friend'}`.slice(0, 100))
             .setPlaceholder('Select an instance')
             .addOptions(instancias.slice(0, 25).map(i => ({
                 label: `${i.index}. ${i.name}`.slice(0, 100),
                 description: i.is_android_started ? 'On' : 'Off',
                 value: `${i.index}::${i.name}`
             })));
-        return await interaction.update({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu)] });
+        return await interaction.editReply({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_shinedust_cuenta::')) {
@@ -3529,11 +4448,83 @@ client.on('interactionCreate', async interaction => {
         return await interaction.update({ content: `Which instance do you want to run the check on for \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_extract_cuenta::')) {
+        // No necesita instancia (a diferencia de Trade/Shinedust): Extract XML
+        // solo lee los archivos ya guardados en disco y los manda al canal.
+        const [, cartaId] = interaction.customId.split('::');
+        const fileName = interaction.values[0];
+        await interaction.deferUpdate();
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.editReply({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, components: [] });
+        }
+
+        const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+        const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+        // Mismo criterio que shinedust_result_extract:: -- si esta cuenta ya
+        // califica Gold para esta carta, usar el embed/campo dorado.
+        const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+        const cuentasGold = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : [];
+        const esCuentaGold = cuentasGold.some(r => r.fileName.replace(/\.xml$/i, '') === fileName);
+        const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
+        const payloadEmbed = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
+        payloadEmbed.components = [];
+
+        const archivos = [new AttachmentBuilder(archivo)];
+        const deviceAccount = extraerDeviceAccount(archivo);
+        if (deviceAccount) {
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            const archivoJson = buscarArchivoJsonPorDeviceAccount(rutaJsonCfg?.webhook_url, deviceAccount);
+            if (archivoJson) archivos.push(new AttachmentBuilder(archivoJson));
+        }
+        const contenidoTexto = `<@${interaction.user.id}> Account \`${fileName}\` (\`${nombreCarta}\`). Database attached.`;
+
+        const canalExtract = await obtenerCanalComando(interaction.user.id, 'cmd_extract_xlm');
+        if (canalExtract?.webhook_url) {
+            try {
+                const webhookExtract = new WebhookClient({ url: canalExtract.webhook_url });
+                await webhookExtract.send({ content: contenidoTexto, embeds: payloadEmbed.embeds, files: payloadEmbed.files });
+                await webhookExtract.send({ files: archivos });
+                return await interaction.editReply({ content: '✅ Sent to your Extract XML channel.', embeds: [], components: [] });
+            } catch (e) {
+                console.error('DEBUG: error mandando extract xml desde card_extract_cuenta:', e?.message || e);
+            }
+        }
+        return await interaction.editReply({ ...payloadEmbed, content: contenidoTexto, files: [...(payloadEmbed.files || []), ...archivos], components: [] });
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_instancia::')) {
-        const [, cartaId, fileName] = interaction.customId.split('::');
+        const [, cartaId, friendId, fileName, modo] = interaction.customId.split('::');
         const [index, nombre] = interaction.values[0].split('::');
 
-        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+        const bloqueadoHasta = cooldownStopTradeInstancia.get(String(index));
+        if (bloqueadoHasta && Date.now() < bloqueadoHasta) {
+            const restante = Math.ceil((bloqueadoHasta - Date.now()) / 1000);
+            return await interaction.update({ content: `⏳ Instance **${nombre}** was just stopped — wait ${restante}s before trading on it again.`, components: [] });
+        }
+
+        // Ack inmediato ANTES de cualquier consulta a DB/disco -- si esas tardan
+        // más de 3s la interacción expira en silencio y nunca llega a ejecutar
+        // nada (bug real encontrado 2026-07-29: Main Trade no corría el AHK
+        // porque la búsqueda del XML pasaba antes del primer update).
+        await interaction.update({ content: `🟢 Preparing instance **${nombre}**...`, components: [] });
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+        }
+
+        // Main Trade: ciclo automático propio (_TradeCycleMain.ahk), sin pasar por
+        // el flujo manual de siempre. A pedido explicito del usuario 2026-07-29: no
+        // hace falta ninguna configuración nueva -- el amigo elegido (friendId) ES
+        // la propia cuenta Main, y la instancia "Main" se prende sola por nombre fijo.
+        if (modo === 'main') {
+            try { await interaction.followUp({ content: `🏠 Running Main Trade: turning on **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+            return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre });
+        }
 
         const prendida = await asegurarInstanciaEncendida(index);
         if (!prendida) {
@@ -3542,19 +4533,16 @@ client.on('interactionCreate', async interaction => {
 
         try { await interaction.followUp({ content: `🔄 Running injection on instance **${nombre}**... this WILL CLOSE the current session and may take several minutes.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
-        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
-        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
-        if (!archivo) {
-            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
-        }
-
+        // Revertido 2026-07-29 a la version original (Kevin, via ruta configurada
+        // por el usuario) -- la migracion a piezas propias se probo inestable en
+        // vivo, y esta version ya funcionaba bien confirmado por el usuario.
         const { rutaIni: rutaIniTrade, rutaScript: rutaScriptTrade } = await obtenerRutasInject(interaction.user.id);
         try {
             guardarXmlParaInyeccion(nombre, archivo, rutaIniTrade);
-            // Al reves que Shinedust: Trade SI necesita mandar la solicitud de amistad
-            // (el ini es compartido, así que si un chequeo de Shinedust la apagó antes,
-            // hay que prenderla de nuevo acá).
-            actualizarIniInject({ sendFriendRequestAfterInject: '1' }, rutaIniTrade);
+            // A pedido explicito del usuario 2026-07-27: la solicitud se manda SOLO
+            // al amigo elegido en este trade puntual (card_trade_friendid::), no a
+            // todos los que hayan quedado tildados de una vez anterior en el .ini.
+            actualizarIniInject({ sendFriendRequestAfterInject: '1', injectSelectedFriendIDs: friendId }, rutaIniTrade);
         } catch (e) {
             return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
         }
@@ -3565,9 +4553,10 @@ client.on('interactionCreate', async interaction => {
                     return await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true });
                 }
                 const filaNext = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`mumu_nexttrade_${index}::${nombre}`).setLabel('▶️ Next Trade').setStyle(ButtonStyle.Success)
+                    new ButtonBuilder().setCustomId(`mumu_nexttrade_${index}::${nombre}`).setLabel('▶️ Next Trade').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger)
                 );
-                const mensaje = `✅ Injection completed on instance **${nombre}** (\`${fileName}\`).\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist.`;
+                const mensaje = `✅ Injection completed on instance **${nombre}** (\`${fileName}\`), friend request sent to \`${friendId}\`.\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist. If something went wrong, press **🛑 Stop**.`;
 
                 const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
                 if (canalRunInstance?.webhook_url) {
@@ -3576,15 +4565,53 @@ client.on('interactionCreate', async interaction => {
                             content: mensaje,
                             components: [filaNext.toJSON()]
                         }, { timeout: 10000 });
-                        return await interaction.followUp({ content: '✅ Sent to your Run MumuPlayer channel.', ephemeral: true });
+                        return await interaction.followUp({ content: '✅ Sent to your Trading channel.', ephemeral: true });
                     } catch (e) {
-                        console.error('DEBUG: error mandando el resultado de Trade al canal de run mumu:', e?.response?.data || e?.message || e);
+                        console.error('DEBUG: error mandando el resultado de Trade al canal de trading:', e?.response?.data || e?.message || e);
                     }
                 }
                 await interaction.followUp({ content: mensaje, components: [filaNext], ephemeral: true });
             } catch (e) { /* interacción puede haber expirado */ }
         }, rutaScriptTrade);
         return;
+    }
+
+    // Boton Stop (a pedido explicito del usuario 2026-07-27): corta la
+    // instancia y mata cualquier proceso de nuestro propio script de
+    // inyeccion en curso (nunca toca el bot de Kevin), y deja un cooldown
+    // para que no se pueda relanzar el mismo trade en loop inmediato.
+    if (interaction.customId.startsWith('mumu_stop_trade::')) {
+        const [, index, nombre] = interaction.customId.split('::');
+        await interaction.deferUpdate();
+        const { rutaScript } = await obtenerRutasInject(interaction.user.id);
+        // Mata cualquier proceso propio en curso: la inyección Y los pasos de
+        // trade (Next Trade/Finalize Trade), que son scripts de AHK separados y
+        // podían quedar corriendo/abiertos aunque el usuario ya haya apretado
+        // Stop -- reporte del usuario 2026-07-29 viendo sus íconos en la barra
+        // de tareas después de parar.
+        matarInstanciasAhkPrevias(rutaScript);
+        matarInstanciasAhkPrevias(RUTA_SEND_TRADE_CARD_SCRIPT);
+        matarInstanciasAhkPrevias(RUTA_FINALIZE_TRADE_CARD_SCRIPT);
+        apagarInstanciaMuMu(index);
+
+        // Reporte del usuario 2026-07-29: al apretar Stop durante un Main Trade,
+        // la instancia Main quedaba prendida y sus procesos (Main.ahk + las 5
+        // piezas propias del pipeline) seguian corriendo -- este mismo boton se
+        // usa para los dos flujos (Friend Trade y Main Trade), asi que tiene que
+        // limpiar TODO, no solo el lado de la donante.
+        matarInstanciasAhkPrevias(RUTA_INJECT_XML_SCRIPT);
+        matarInstanciasAhkPrevias(RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT);
+        matarInstanciasAhkPrevias(RUTA_MAIN_ACCEPT_TRADE_SCRIPT);
+        matarInstanciasAhkPrevias(RUTA_DONOR_RESPOND_SCRIPT);
+        matarInstanciasAhkPrevias(RUTA_MAIN_FINALIZE_SCRIPT);
+        const rutaMainAhkUsuario = await obtenerRutaMainAhk(interaction.user.id);
+        matarInstanciasAhkPrevias(rutaMainAhkUsuario);
+        const instanciasStop = obtenerInstanciasMuMu();
+        const infoMainStop = (instanciasStop || []).find(i => i.name === 'Main');
+        if (infoMainStop) apagarInstanciaMuMu(infoMainStop.index);
+
+        cooldownStopTradeInstancia.set(String(index), Date.now() + COOLDOWN_STOP_TRADE_MS);
+        return await interaction.followUp({ content: `🛑 Stopped instance **${nombre}** (and Main, if it was running) and closed any scripts running for them. Wait ${COOLDOWN_STOP_TRADE_MS / 1000}s before starting another trade on it.`, ephemeral: true });
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_instancia::')) {
@@ -3634,7 +4661,17 @@ client.on('interactionCreate', async interaction => {
 
                     const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
                     const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
-                    const payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild);
+                    // No importa si se llego aca desde AllCards o desde Gold Cards -- lo
+                    // que importa es si ESTA cuenta puntual ya califica como Gold para
+                    // ESTA carta puntual. Si es asi, se usa la imagen con borde dorado y
+                    // el campo de cuentas, igual que si se hubiera buscado en Gold Cards
+                    // directamente (reporte del usuario 2026-07-27: el resultado no
+                    // coincidia con la carta dorada que se habia buscado).
+                    const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+                    const cuentasGold = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : [];
+                    const esCuentaGold = cuentasGold.some(r => r.fileName.replace(/\.xml$/i, '') === fileName);
+                    const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
+                    const payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
                     payload.embeds[0].addFields({ name: '👛 Shinedust', value: `**${valorOMotivo}** (\`${fileName}\`)` });
                     payload.content = `<@${interaction.user.id}> Account \`${fileName}\` has **${valorOMotivo}** Shinedust.`;
                     payload.components = [new ActionRowBuilder().addComponents(
@@ -3722,8 +4759,8 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.isButton()) {
-        if (['panel_wishlist', 'panel_allcards', 'panel_extract_xml', 'panel_run_instance'].includes(interaction.customId)) {
-            const commandKey = { panel_wishlist: 'card_wishlist', panel_allcards: 'card_all', panel_extract_xml: 'extract_xlm', panel_run_instance: 'run_instance' }[interaction.customId];
+        if (['panel_wishlist', 'panel_allcards', 'panel_goldcards', 'panel_extract_xml', 'panel_run_instance'].includes(interaction.customId)) {
+            const commandKey = { panel_wishlist: 'card_wishlist', panel_allcards: 'card_all', panel_goldcards: 'card_gold', panel_extract_xml: 'extract_xlm', panel_run_instance: 'run_instance' }[interaction.customId];
             const cfg = COMANDO_CONFIG[commandKey];
             const row = await obtenerCanalComando(interaction.user.id, cfg.tipo);
 
@@ -3758,13 +4795,30 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply(payload);
         }
 
+        if (interaction.customId === 'goldcards_ver_expansiones') {
+            // Misma logica que allcards_ver_expansiones -- publica por el mismo motivo.
+            await interaction.deferReply();
+            if (!GOOGLE_DRIVE_API_KEY_BOT) {
+                return await interaction.editReply(advertenciaGoldSinApi());
+            }
+            const { cartas } = await FUENTES_CARTAS.goldcards.obtenerCartas(interaction.user.id);
+            if (cartas === null) {
+                return await interaction.editReply({ content: FUENTES_CARTAS.goldcards.errorSinDatos });
+            }
+            if (!cartas.length) {
+                return await interaction.editReply({ content: FUENTES_CARTAS.goldcards.vacioTexto });
+            }
+            const payload = construirEmbedResumenExpansiones(cartas, { prefijo: 'goldcards' });
+            return await interaction.editReply(payload);
+        }
+
         if (/^(wishlist|allcards)_ver$/.test(interaction.customId) || /^(wishlist|allcards)_pagina_-?\d+$/.test(interaction.customId)) {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
             const esPrimeraVez = interaction.customId === `${prefijo}_ver`;
             const pagina = esPrimeraVez ? 0 : (parseInt(interaction.customId.replace(`${prefijo}_pagina_`, ''), 10) || 0);
 
-            const { cartas } = await fuente.obtenerCartas();
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
 
             if (cartas === null) {
                 if (esPrimeraVez) return await interaction.reply({ content: fuente.errorSinDatos });
@@ -3778,7 +4832,7 @@ client.on('interactionCreate', async interaction => {
             return await interaction.update(payload);
         }
 
-        if (interaction.customId.startsWith('wishlist_expansion_pagina_') || interaction.customId.startsWith('allcards_expansion_pagina_')) {
+        if (interaction.customId.startsWith('wishlist_expansion_pagina_') || interaction.customId.startsWith('allcards_expansion_pagina_') || interaction.customId.startsWith('goldcards_expansion_pagina_')) {
             await interaction.deferUpdate();
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -3786,30 +4840,30 @@ client.on('interactionCreate', async interaction => {
             const [paginaTexto, expansion, categoria] = resto.split('::');
             const pagina = parseInt(paginaTexto, 10) || 0;
 
-            const { cartas } = await fuente.obtenerCartas();
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojisPagina = await obtenerMapaEmojisGuild(interaction.guild);
             const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, pagina, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisPagina });
             return await interaction.editReply(payload);
         }
 
-        if (interaction.customId.startsWith('wishlist_volver_categorias::') || interaction.customId.startsWith('allcards_volver_categorias::')) {
+        if (interaction.customId.startsWith('wishlist_volver_categorias::') || interaction.customId.startsWith('allcards_volver_categorias::') || interaction.customId.startsWith('goldcards_volver_categorias::')) {
             await interaction.deferUpdate();
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
             const expansion = interaction.customId.replace(`${prefijo}_volver_categorias::`, '');
-            const { cartas } = await fuente.obtenerCartas();
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojisVolver = await obtenerMapaEmojisGuild(interaction.guild);
             const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansion, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisVolver });
             return await interaction.editReply(payload);
         }
 
-        if (interaction.customId === 'wishlist_volver_expansiones' || interaction.customId === 'allcards_volver_expansiones') {
+        if (interaction.customId === 'wishlist_volver_expansiones' || interaction.customId === 'allcards_volver_expansiones' || interaction.customId === 'goldcards_volver_expansiones') {
             await interaction.deferUpdate();
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
-            const { cartas } = await fuente.obtenerCartas();
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojisExpansiones = await obtenerMapaEmojisGuild(interaction.guild);
-            const payload = prefijo === 'allcards'
+            const payload = (prefijo === 'allcards' || prefijo === 'goldcards')
                 ? construirEmbedResumenExpansiones(cartas || [], { prefijo })
                 : construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis: mapaEmojisExpansiones });
             return await interaction.editReply(payload);
@@ -3971,6 +5025,19 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply(payload);
         }
 
+        if (interaction.customId === 'setup_add_friend') {
+            const modalFriend = new ModalBuilder().setCustomId('modal_setup_friendid').setTitle('Add Friend (max. 10)')
+                .addComponents(
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder().setCustomId('input_friend_nombre').setLabel('Name').setStyle(TextInputStyle.Short).setRequired(false)
+                    ),
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder().setCustomId('input_friend_id').setLabel('Friend ID (16 digits)').setStyle(TextInputStyle.Short).setMinLength(16).setMaxLength(16)
+                    )
+                );
+            return await interaction.showModal(modalFriend);
+        }
+
         if (interaction.customId.startsWith('mumu_friendid_')) {
             const [index, nombre] = interaction.customId.replace('mumu_friendid_', '').split('::');
             const modalFriend = new ModalBuilder().setCustomId(`modal_mumu_friendid::${index}::${nombre}`).setTitle('Add Friend (max. 10)')
@@ -4072,8 +5139,113 @@ client.on('interactionCreate', async interaction => {
             return await interaction.showModal(modalXml);
         }
 
+        // Antes esto saltaba directo a elegir cuenta (flujo "friend": inyecta +
+        // manda solicitud, el usuario acepta y completa el trade a mano). A
+        // pedido explicito del usuario 2026-07-27, ahora primero se elige el
+        // MODO de trade -- la logica vieja se movio intacta a card_trade_friend::.
+        // A pedido explicito del usuario 2026-07-28: esto ya NO responde en el
+        // canal donde se buscó la carta -- reenvía la carta completa (misma
+        // imagen/embed) al canal de Trading con los 3 botones de modo, y todo
+        // lo que sigue pasa ahí (ver reenviarCartaATrading).
         if (interaction.customId.startsWith('card_trade::')) {
             const cartaId = interaction.customId.replace('card_trade::', '');
+            await interaction.deferReply({ ephemeral: true }); // armar la carta puede tardar más de 3s
+            const fila = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`card_trade_friend::${cartaId}`).setLabel('🤝 Friend Trade').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`card_trade_main::${cartaId}`).setLabel('🏠 Main Trade').setStyle(ButtonStyle.Primary),
+                // Deshabilitado a pedido explicito del usuario 2026-07-29: todavia no
+                // esta implementado, se libera en un release futuro.
+                new ButtonBuilder().setCustomId(`card_trade_agresivo::${cartaId}`).setLabel('⚡ Aggressive Trade — Coming Soon').setStyle(ButtonStyle.Danger).setDisabled(true)
+            );
+            return await reenviarCartaATrading(interaction, cartaId, null, [fila]);
+        }
+
+        // Ya parado en el mensaje del canal de Trading (interaction.message es
+        // el que reenviarCartaATrading acaba de mandar) -- edita ese mismo
+        // mensaje para pedir el amigo, no crea nada nuevo en otro canal.
+        if (interaction.customId.startsWith('card_trade_friend::')) {
+            const cartaId = interaction.customId.replace('card_trade_friend::', '');
+            await interaction.deferUpdate();
+            return await actualizarConSeleccionFriendId(interaction, cartaId, 'normal', 'friend');
+        }
+
+        // Tradeo main y agresivo -- todavia en construccion (ver ejecutarTradeoMain,
+        // que va a automatizar de punta a punta el ciclo mapeado en vivo: inyectar,
+        // agregar amistad, proponer, esperar respuesta, aceptar, deslizar). Por
+        // ahora solo confirman que el boton llega bien, editando el mismo
+        // mensaje del canal de Trading, sin ejecutar nada real todavía.
+        if (interaction.customId.startsWith('card_trade_main::')) {
+            const cartaId = interaction.customId.replace('card_trade_main::', '');
+            await interaction.deferUpdate();
+            return await actualizarConSeleccionFriendId(interaction, cartaId, 'normal', 'main');
+        }
+
+        if (interaction.customId.startsWith('card_trade_agresivo::')) {
+            const cartaId = interaction.customId.replace('card_trade_agresivo::', '');
+            return await interaction.update({ content: `🚧 Aggressive Trade for \`${cartaId}\` is still being built -- coming soon.`, components: [] });
+        }
+
+        if (interaction.customId.startsWith('goldcards_trade::')) {
+            // Entrada separada de card_trade:: (a pedido explicito del usuario
+            // 2026-07-27) -- solo lista cuentas ya calificadas como Gold, no
+            // "cualquier cuenta con al menos 1 copia". Gold Cards no tiene los 3
+            // modos todavía (solo el equivalente a Friend Trade) -- reenvía la
+            // carta al canal de Trading ya directo con el selector de amigo.
+            const cartaId = interaction.customId.replace('goldcards_trade::', '');
+            await interaction.deferReply({ ephemeral: true }); // obtenerCartasGoldCacheadas + armar la carta pueden tardar más de 3s
+            const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+            const friends = parsearListaFriends(rutaIni);
+            if (!friends.length) {
+                return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **⚙️ Settings Trade → 🆔 Add Friend** in your Trading channel.' });
+            }
+            const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const datosGold = mapaCopias ? { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral } : null;
+            const menu = new StringSelectMenuBuilder()
+                .setCustomId(`card_trade_friendid::gold::friend::${cartaId}`.slice(0, 100))
+                .setPlaceholder('Select which friend to send the request to')
+                .addOptions(friends.slice(0, 25).map(f => ({
+                    label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
+                    value: f.id
+                })));
+            return await reenviarCartaATrading(interaction, cartaId, datosGold, [new ActionRowBuilder().addComponents(menu)]);
+        }
+
+        if (interaction.customId.startsWith('goldcards_shinedust::')) {
+            // Misma idea que goldcards_trade:: -- entrada separada, comparte el
+            // customId de seleccion (card_shinedust_cuenta::) con el flujo normal.
+            const cartaId = interaction.customId.replace('goldcards_shinedust::', '');
+            await interaction.deferReply({ ephemeral: true });
+
+            const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const resultados = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : null;
+            if (resultados === null) {
+                return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.' });
+            }
+            if (!resultados.length) {
+                return await interaction.editReply({ content: `❌ No account has ${umbral}+ copies of this card.` });
+            }
+
+            const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
+            return await interaction.editReply(construirSelectXmlPaginado(fileNames, cartaId, 0, 'card_shinedust_cuenta'));
+        }
+
+        if (interaction.customId === 'goldcards_umbral') {
+            const umbralActual = await obtenerUmbralGold(interaction.user.id);
+            const modalUmbral = new ModalBuilder().setCustomId('modal_goldcards_umbral').setTitle('Gold Cards Threshold')
+                .addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('input_umbral').setLabel('Minimum copies to count as Gold').setStyle(TextInputStyle.Short).setValue(String(umbralActual)).setPlaceholder('10')
+                ));
+            return await interaction.showModal(modalUmbral);
+        }
+
+        if (interaction.customId.startsWith('card_shinedust::')) {
+            // Fix 2026-07-29: antes listaba TODAS las cuentas (sin relacion con
+            // la carta) -- reporte del usuario, salian 1196 cuentas
+            // random). Ahora usa la misma busqueda que ya usa el boton XML/Trade
+            // (buscarXmlPorCarta), asi solo aparecen las cuentas que realmente
+            // tienen esta carta -- aplica igual en All Cards y Wishlist, que
+            // comparten este mismo handler.
+            const cartaId = interaction.customId.replace('card_shinedust::', '');
             await interaction.deferReply({ ephemeral: true });
 
             const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
@@ -4081,41 +5253,69 @@ client.on('interactionCreate', async interaction => {
             if (resultados === null) {
                 return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.' });
             }
-            if (resultados.length === 0) {
+            if (!resultados.length) {
                 return await interaction.editReply({ content: '❌ No account has this card.' });
             }
 
-            const menu = new StringSelectMenuBuilder()
-                .setCustomId(`card_trade_cuenta::${cartaId}`)
-                .setPlaceholder('Select an account')
-                .addOptions(resultados.slice(0, 25).map(r => ({
-                    label: `${r.fileName} (x${r.cantidad})`.slice(0, 100),
-                    value: r.fileName.replace(/\.xml$/i, '').slice(0, 100)
-                })));
-            return await interaction.editReply({ content: 'Which account do you want to trade this card from?', components: [new ActionRowBuilder().addComponents(menu)] });
-        }
-
-        if (interaction.customId.startsWith('card_shinedust::')) {
-            const cartaId = interaction.customId.replace('card_shinedust::', '');
-            await interaction.deferReply({ ephemeral: true });
-
-            const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
-            const fileNames = listarTodosLosXml(rutaXmlCfg?.webhook_url);
-            if (fileNames === null) {
-                return await interaction.editReply({ content: '❌ Could not find the configured **XML Accounts Path** folder.' });
-            }
-            if (!fileNames.length) {
-                return await interaction.editReply({ content: '❌ No XML accounts found.' });
-            }
-
+            const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
             return await interaction.editReply(construirSelectXmlPaginado(fileNames, cartaId, 0, 'card_shinedust_cuenta'));
         }
 
         if (interaction.customId.startsWith('card_shinedust_cuenta_pag::')) {
             const [, cartaId, paginaTexto] = interaction.customId.split('::');
-            const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
-            const fileNames = listarTodosLosXml(rutaXmlCfg?.webhook_url) || [];
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId) || [];
+            const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
             return await interaction.update(construirSelectXmlPaginado(fileNames, cartaId, parseInt(paginaTexto, 10) || 0, 'card_shinedust_cuenta'));
+        }
+
+        if (interaction.customId.startsWith('goldcards_extract::')) {
+            // Misma idea que goldcards_shinedust:: -- entrada separada, comparte el
+            // customId de seleccion (card_extract_cuenta::) con el flujo normal.
+            const cartaId = interaction.customId.replace('goldcards_extract::', '');
+            await interaction.deferReply({ ephemeral: true });
+
+            const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const resultados = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : null;
+            if (resultados === null) {
+                return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.' });
+            }
+            if (!resultados.length) {
+                return await interaction.editReply({ content: `❌ No account has ${umbral}+ copies of this card.` });
+            }
+
+            const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
+            return await interaction.editReply(construirSelectXmlPaginado(fileNames, cartaId, 0, 'card_extract_cuenta'));
+        }
+
+        if (interaction.customId.startsWith('card_extract::')) {
+            // Mismo patron que card_shinedust:: (fix 2026-07-29): la lista de
+            // cuentas ya sale filtrada por buscarXmlPorCarta, no "todas las cuentas".
+            const cartaId = interaction.customId.replace('card_extract::', '');
+            await interaction.deferReply({ ephemeral: true });
+
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId);
+            if (resultados === null) {
+                return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.' });
+            }
+            if (!resultados.length) {
+                return await interaction.editReply({ content: '❌ No account has this card.' });
+            }
+
+            const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
+            return await interaction.editReply(construirSelectXmlPaginado(fileNames, cartaId, 0, 'card_extract_cuenta'));
+        }
+
+        if (interaction.customId.startsWith('card_extract_cuenta_pag::')) {
+            // Mismo criterio que card_shinedust_cuenta_pag:: (paginacion comparte
+            // prefijo entre el origen gold y el normal, asi que reconsulta siempre
+            // con buscarXmlPorCarta).
+            const [, cartaId, paginaTexto] = interaction.customId.split('::');
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId) || [];
+            const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
+            return await interaction.update(construirSelectXmlPaginado(fileNames, cartaId, parseInt(paginaTexto, 10) || 0, 'card_extract_cuenta'));
         }
 
         if (interaction.customId.startsWith('shinedust_result_extract::')) {
@@ -4130,7 +5330,14 @@ client.on('interactionCreate', async interaction => {
 
             const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
             const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
-            const payloadEmbed = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild);
+            // Mismo criterio que en el resultado de Shinedust: si ESTA cuenta ya
+            // califica como Gold para ESTA carta, usar la imagen/campo dorado, sin
+            // importar de que canal vino el click.
+            const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const cuentasGold = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : [];
+            const esCuentaGold = cuentasGold.some(r => r.fileName.replace(/\.xml$/i, '') === fileName);
+            const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
+            const payloadEmbed = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
             payloadEmbed.components = [];
             payloadEmbed.embeds[0].addFields({ name: '👛 Shinedust', value: `**${valorShinedust || '?'}** (\`${fileName}\`)` });
 
@@ -4162,20 +5369,64 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply({ ...payloadEmbed, content: contenidoTexto, files: [...(payloadEmbed.files || []), ...archivos] });
         }
 
+        // Igual que card_trade:: (fix 2026-07-28): no ejecuta nada en el canal de
+        // Shinedust -- reenvía la misma carta (embed ya armado, con su valor de
+        // Shinedust) al canal de Trading, con el selector de amigo. Como acá ya
+        // se sabe la cuenta (fileName), se salta el paso de "elegir cuenta" y va
+        // directo a "elegir instancia" reusando card_trade_instancia::.
         if (interaction.customId.startsWith('shinedust_result_trade::')) {
             const [, cartaId, fileName] = interaction.customId.split('::');
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.deferReply({ ephemeral: true }); // el envío por webhook puede tardar más de 3s
 
-            const instancias = obtenerInstanciasMuMu();
-            if (instancias === null) {
-                return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.' });
+            const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+            const friends = parsearListaFriends(rutaIni);
+            if (!friends.length) {
+                return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **⚙️ Settings Trade → 🆔 Add Friend** in your Trading channel.' });
             }
-            if (!instancias.length) {
-                return await interaction.editReply({ content: '❌ No MuMuPlayer instances found.' });
+
+            const canalTrading = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            if (!canalTrading?.webhook_url) {
+                return await interaction.editReply({ content: '❌ Your **Trading** channel isn\'t set up yet. Run **Sync Channels** first.' });
             }
 
             const menu = new StringSelectMenuBuilder()
-                .setCustomId(`shinedust_result_trade_instancia::${cartaId}::${fileName}`.slice(0, 100))
+                .setCustomId(`shinedust_result_trade_friendid::${cartaId}::${fileName}`.slice(0, 100))
+                .setPlaceholder('Select which friend to send the request to')
+                .addOptions(friends.slice(0, 25).map(f => ({
+                    label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
+                    value: f.id
+                })));
+
+            try {
+                const embedOriginal = interaction.message.embeds[0];
+                const webhookTrading = new WebhookClient({ url: canalTrading.webhook_url });
+                await webhookTrading.send({
+                    content: `<@${interaction.user.id}>`,
+                    embeds: embedOriginal ? [EmbedBuilder.from(embedOriginal)] : [],
+                    components: [new ActionRowBuilder().addComponents(menu)]
+                });
+                return await interaction.editReply({ content: '✅ Sent to your Trading channel.' });
+            } catch (e) {
+                console.error('DEBUG: error mandando el resultado de shinedust al canal de trading:', e?.message || e);
+                return await interaction.editReply({ content: '❌ Could not send to your Trading channel.' });
+            }
+        }
+
+        if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_result_trade_friendid::')) {
+            const [, cartaId, fileName] = interaction.customId.split('::');
+            const friendId = interaction.values[0];
+            await interaction.deferUpdate(); // MuMuManager puede tardar más de 3s
+
+            const instancias = obtenerInstanciasMuMu();
+            if (instancias === null) {
+                return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+            }
+            if (!instancias.length) {
+                return await interaction.editReply({ content: '❌ No MuMuPlayer instances found.', components: [] });
+            }
+
+            const menu = new StringSelectMenuBuilder()
+                .setCustomId(`card_trade_instancia::${cartaId}::${friendId}::${fileName}::friend`.slice(0, 100))
                 .setPlaceholder('Select an instance')
                 .addOptions(instancias.slice(0, 25).map(i => ({
                     label: `${i.index}. ${i.name}`.slice(0, 100),
@@ -4218,6 +5469,36 @@ client.on('interactionCreate', async interaction => {
                     }
                 } catch (e) {
                     console.error('DEBUG: no se pudo reubicar el panel tras abrir XML:', e?.message || e);
+                }
+            }
+            return;
+        }
+
+        if (interaction.customId.startsWith('goldcards_xml::')) {
+            // Mismo patron que wishlist_xml::, pero la lista sale de las cuentas ya
+            // filtradas a 10+ copias (mapaCopias), no de buscarXmlPorCarta (que
+            // muestra cualquier cuenta con al menos 1 copia -- confunde en este
+            // contexto, ver reporte del usuario 2026-07-27).
+            const yaEsVistaXml = interaction.message?.embeds?.[0]?.title?.startsWith('💠 XML');
+            if (yaEsVistaXml) await interaction.deferUpdate();
+            else await interaction.deferReply();
+
+            const [, cartaId, paginaTexto] = interaction.customId.split('::');
+            const pagina = parseInt(paginaTexto, 10) || 0;
+            const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+            const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+            const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const resultados = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : null;
+            const payload = construirEmbedXml(resultados, nombreCarta, cartaId, pagina, 'goldcards');
+            await interaction.editReply(payload);
+            if (!yaEsVistaXml) {
+                try {
+                    const rowGold = await obtenerCanalComando(interaction.user.id, 'cmd_card_gold');
+                    if (rowGold && interaction.channelId === rowGold.canal_id) {
+                        await enviarComandoAlCanal('card_gold', interaction.user, rowGold, true, interaction.guild);
+                    }
+                } catch (e) {
+                    console.error('DEBUG: no se pudo reubicar el panel de cmd_card_gold tras abrir XML:', e?.message || e);
                 }
             }
             return;
@@ -4307,6 +5588,21 @@ client.on('interactionCreate', async interaction => {
                     await interaction.editReply({ content: '❌ Error trying to delete the channels.' });
                 }
                 break;
+
+            case 'setup_status_friends': {
+                await interaction.deferReply({ ephemeral: true });
+                const { rutaIni: rutaIniStatusFriends } = await obtenerRutasInject(interaction.user.id);
+                const friendsGuardados = parsearListaFriends(rutaIniStatusFriends);
+                const listaFriendsGuardados = friendsGuardados.length > 0
+                    ? friendsGuardados.map((f, i) => `**${i + 1}.** ${f.label || '(no name)'} — \`${f.id}\``).join('\n')
+                    : '_None added._';
+                const embedStatusFriends = new EmbedBuilder()
+                    .setTitle('🆔 Status ID — Saved Friends')
+                    .addFields({ name: `🆔 Saved friends (${friendsGuardados.length}/10)`, value: listaFriendsGuardados })
+                    .setColor(0x3498DB);
+                await interaction.editReply({ embeds: [embedStatusFriends] });
+                break;
+            }
 
             case 'btn_status':
                 await interaction.deferReply({ ephemeral: true });
@@ -4422,6 +5718,7 @@ client.on('interactionCreate', async interaction => {
                             canales: [
                                 { tipo: 'cmd_card_wishlist', name: '💖-cards-wishlist' },
                                 { tipo: 'cmd_card_all', name: '⚡-all-cards' },
+                                { tipo: 'cmd_card_gold', name: '🏆-gold-cards' },
                                 { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' },
                                 { tipo: 'shinedust', name: '🍬-shinedust' }
                             ]
@@ -4430,7 +5727,7 @@ client.on('interactionCreate', async interaction => {
                             categoria: '🎮 RUN MUMU PLAYER 🎮',
                             tipoCategoria: 'run_mumu_categoria',
                             canales: [
-                                { tipo: 'cmd_run_instance', name: '🎮-open-mumuplayer' }
+                                { tipo: 'cmd_run_instance', name: '🔄-trading' }
                             ]
                         }
                     ];
@@ -4674,6 +5971,7 @@ client.once('ready', async () => {
     }
 
     chequearActualizaciones(client);
+    avisarActualizacionAplicadaSiHaceFalta(client);
 
     // El bot está pensado para quedarse prendido semanas sin reiniciarse —
     // si el chequeo de actualización solo corriera acá (una sola vez al

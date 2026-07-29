@@ -92,6 +92,51 @@ async function chequearActualizaciones(client) {
     }
 }
 
+// Aviso de "recien actualizado" -- a pedido explicito del usuario 2026-07-27:
+// que al aplicar una actualizacion, el bot avise que cosas nuevas trae y que
+// pasos manuales hacen falta (ej. correr Sync Channels para un canal nuevo).
+// Corre UNA vez por version, apenas el bot arranca ya en la version nueva (no
+// depende de que nadie apriete "Update now" -- tambien cubre actualizar el
+// .exe a mano, como hizo katrick). En la primerisima corrida de siempre (sin
+// fila guardada todavia, instalacion nueva) no avisa nada -- no hubo ninguna
+// "actualizacion" real que contar, solo se guarda la version actual como
+// punto de partida.
+async function avisarActualizacionAplicadaSiHaceFalta(client) {
+    try {
+        const local = obtenerVersionLocal();
+        const fila = await db.get(`SELECT status FROM estados_modulos WHERE nombre = 'version_aplicada_avisada'`);
+
+        if (!fila) {
+            await db.run(`INSERT INTO estados_modulos (nombre, status) VALUES ('version_aplicada_avisada', ?) ON CONFLICT(nombre) DO UPDATE SET status = excluded.status`, [local.version]);
+            return;
+        }
+        if (fila.status === local.version) return;
+
+        await db.run(`INSERT INTO estados_modulos (nombre, status) VALUES ('version_aplicada_avisada', ?) ON CONFLICT(nombre) DO UPDATE SET status = excluded.status`, [local.version]);
+
+        const destino = await obtenerDestinoNotificacion(client);
+        if (!destino) return;
+
+        const notas = (local.notes || []).map(n => `• ${n}`).join('\n');
+        const acciones = (local.actionsNeeded || []).map(a => `• ${a}`).join('\n');
+        const embed = {
+            title: `🎉 Updated to v${local.version}`,
+            color: 0x2ECC71,
+            description: `**What's new:**\n${notas || '_No notes for this version._'}`
+                + (acciones ? `\n\n**What you might need to do:**\n${acciones}` : '')
+        };
+
+        if (destino.tipo === 'webhook') {
+            await axios.post(`${destino.webhookUrl}?wait=true`, { embeds: [embed] }, { timeout: 15000 });
+        } else {
+            const usuario = await client.users.fetch(destino.userId);
+            await usuario.send({ embeds: [embed] });
+        }
+    } catch (e) {
+        console.error('DEBUG: error avisando actualizacion aplicada:', e?.message || e);
+    }
+}
+
 // A diferencia del .exe (bloqueado por Windows mientras el proceso corre y
 // por eso necesita el paso de _actualizar.bat en launcher.js), la carpeta
 // assets/ no está en uso exclusivo — se puede sobrescribir en caliente, sin
@@ -189,6 +234,7 @@ async function descargarActualizacion(remota) {
 
 module.exports = {
     chequearActualizaciones,
+    avisarActualizacionAplicadaSiHaceFalta,
     descargarActualizacion,
     obtenerVersionLocal,
     obtenerVersionRemota,

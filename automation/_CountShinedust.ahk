@@ -227,6 +227,11 @@ LogInfo("Iniciando chequeo de shinedust para instancia " . g_winTitle)
 tap(244, 518)   ; abre menu hamburguesa/configuracion desde la pantalla principal
 tap(143, 272)   ; entra a "Items" en ese menu (la lista ya muestra el shinedust directo, calibrado a mano contra una cuenta real)
 
+; Reporte del usuario 2026-07-29: la foto se tomaba muy rapido al llegar al
+; inventario y el OCR leia numeros mal (la pantalla todavia estaba animando/
+; cargando el numero real de shinedust). Espera extra antes de capturar.
+Sleep, 10000
+
 ; ============ Screenshot + OCR ============
 tempDir := A_ScriptDir . "\Logs"
 if !FileExist(tempDir)

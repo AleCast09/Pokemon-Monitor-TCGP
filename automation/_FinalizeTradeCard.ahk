@@ -24,19 +24,23 @@ global g_winTitle      := A_Args[1]
 global g_folderPath    := A_Args[2]
 global g_instanceIndex := A_Args[3]
 
-#Include C:\POKEMON\PTCGPB-ALE\Scripts\Include\Config.ahk
-#Include C:\POKEMON\PTCGPB-ALE\Scripts\Include\Session.ahk
-#Include C:\POKEMON\PTCGPB-ALE\Scripts\Include\Profiler.ahk
-#Include C:\POKEMON\PTCGPB-ALE\Scripts\Include\Gdip_All.ahk
-#Include C:\POKEMON\PTCGPB-ALE\Scripts\Include\Gdip_Imagesearch.ahk
+; Copia propia autorizada por Kevin 2026-07-29 (ver charla con el usuario) --
+; antes apuntaba a C:\POKEMON\PTCGPB-ALE\Scripts\Include\, una ruta externa que
+; solo existia en la PC de Ale y rompia para cualquier otro usuario del bot
+; empaquetado. Ahora vive junto al proyecto, funciona igual para todos.
+#Include %A_ScriptDir%\include\Config.ahk
+#Include %A_ScriptDir%\include\Session.ahk
+#Include %A_ScriptDir%\include\Profiler.ahk
+#Include %A_ScriptDir%\include\Gdip_All.ahk
+#Include %A_ScriptDir%\include\Gdip_Imagesearch.ahk
 
 global pToken := Gdip_Startup()
 
-#Include C:\POKEMON\PTCGPB-ALE\Scripts\Include\Utils.ahk
-#Include C:\POKEMON\PTCGPB-ALE\Scripts\Include\AccountMetadata.ahk
-#Include C:\POKEMON\PTCGPB-ALE\Scripts\Include\ADB.ahk
-#Include C:\POKEMON\PTCGPB-ALE\Scripts\Include\Coords.ahk
-#Include C:\POKEMON\PTCGPB-ALE\Scripts\Include\MumuHelper.ahk
+#Include %A_ScriptDir%\include\Utils.ahk
+#Include %A_ScriptDir%\include\AccountMetadata.ahk
+#Include %A_ScriptDir%\include\ADB.ahk
+#Include %A_ScriptDir%\include\Coords.ahk
+#Include %A_ScriptDir%\include\MumuHelper.ahk
 
 global ScriptDir := RegExReplace(A_LineFile, "\\[^\\]+$")
 global LogsDir   := A_ScriptDir . "\Logs"

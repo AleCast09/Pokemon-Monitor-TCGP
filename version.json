@@ -1,6 +1,13 @@
 {
-  "version": "1.5.9",
+  "version": "1.5.10",
   "notes": [
+    "New: Main Trade now runs fully automatically end-to-end - injects the donor account, sends the friend request, offers a card from Main's own Favorites, the donor responds with the requested card, Main finalizes and cleans up the friendship, and both instances shut down on their own. No manual clicks needed anywhere in the middle.",
+    "New: a 📄 Extract XML button on card lookups (/card, /wishlist, Gold Cards) sends an account's XML + JSON straight to your Extract XML channel, narrowed to accounts that actually have that card.",
+    "Fixed: the 👛 Shinedust button on card lookups was listing every saved account instead of just the ones that actually have the card - could show over a thousand unrelated accounts to pick from.",
+    "Fixed: sending a friend request could silently fail and time out if the tap on \"Send Request\" didn't register the first time - it now keeps retrying while the button is still on screen.",
+    "Fixed: the Shinedust reader could capture the screenshot too fast after opening the inventory and misread the number before it finished loading.",
+    "New: 🆔 Add Friend and 📊 Status ID buttons added directly to /setup, so you can manage saved friend IDs without opening a specific instance first.",
+    "⚡ Aggressive Trade is now marked \"Coming Soon\" and disabled - it isn't implemented yet, this avoids confusion until it ships in a future release.",
     "New: a dedicated \"Shinedust\" channel now receives the result of the 👛 Shinedust button, with 🔄 Trade and 📄 Extract XML buttons on it that jump straight into those flows using the same account - no need to search or select it again.",
     "New: a 🔄 Trade button on card lookups lets you pick an account that has that card and an instance, injects it, and drops you in your Run MumuPlayer channel ready to trade.",
     "Fixed: the MuMu panel (Add Friend/Submit/Status, and the new Trade/Shinedust buttons) only worked on Ale's own PC - two hardcoded paths never used each user's own configured \"Main Path\", so anyone else got \"Could not save the selection to InjectAccount.ini\". Existing users need to re-save Main Path once (same folder, in /setup) to pick up the fix.",
