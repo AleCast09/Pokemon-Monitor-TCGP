@@ -1,6 +1,7 @@
 {
-  "version": "1.5.19",
+  "version": "1.5.20",
   "notes": [
+    "Fixed the real cause of \"Check for Updates\" still failing with \"Received one or more errors\" even after forcing IPv4 first: Node was still racing an IPv6 connection in parallel in the background (\"Happy Eyeballs\") and grouping both failures into the same generic error if the second attempt also failed. Now disables that race entirely, so it either works or shows the real underlying error instead of a generic one.",
     "Fixed a real bug: opening the Control Panel could silently launch the bot engine on its own even with no token configured yet, which then opened the token/API setup page in your browser without you pressing anything - and it kept reopening every time you closed it. The panel now only auto-starts the engine on open if a token is already saved; otherwise it just shows \"Not configured\" like it should.",
     "Removed a leftover \"Monitor Pokemon\" shortcut that got created in the main folder right after saving your token for the first time - it was a duplicate of MonitorPokemonPanel.exe from before that had its own real icon, and only confused things by having two things that opened the same panel.",
     "Reverted the Control Panel window title back to just \"Monitor Pokemon\" (undoing the \"— Control Panel\" suffix added a few versions ago) - going back to the exact 1.5.13 state per request. Nothing else changed: no code was touched between 1.5.13 and this version, so this update won't affect the token-setup window behavior.",

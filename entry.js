@@ -5,6 +5,13 @@
 // generico ("Received one or more errors") en cualquier pedido HTTPS -- entre
 // ellos, el de "Check for Updates". Forzar IPv4 primero evita la carrera.
 require('dns').setDefaultResultOrder('ipv4first');
+// El fix de arriba solo cambia el orden de intento, pero Node igual sigue
+// corriendo IPv4 e IPv6 en paralelo ("Happy Eyeballs") -- si el intento que
+// queda de segundo tambien falla (o tarda), el AggregateError vuelve a
+// aparecer igual. Esto lo desactiva del todo: un solo intento de conexion,
+// con la familia que dio setDefaultResultOrder, y si falla se ve el error
+// real (ETIMEDOUT, ECONNREFUSED, etc.) en vez de uno generico agrupado.
+require('net').setDefaultAutoSelectFamily(false);
 
 const rol = process.env.MONITOR_ROLE;
 

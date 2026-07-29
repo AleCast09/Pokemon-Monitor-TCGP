@@ -1,6 +1,7 @@
 // Ver entry.js para el detalle -- se repite aca porque quien corre bot.js
 // directo (PM2 en un dev PC) no pasa por entry.js.
 require('dns').setDefaultResultOrder('ipv4first');
+require('net').setDefaultAutoSelectFamily(false);
 
 require('dotenv').config();
 const { 
@@ -20,7 +21,7 @@ const db = require('./database.js');
 
 const heartbeatScript = require('./heartbeat.js');
 const configScript = require('./config.js');
-const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion } = require('./update-checker.js');
+const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion, describirError } = require('./update-checker.js');
 const { obtenerMapaEmojisGuild } = require('./guild-emojis.js');
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
 iniciarAutoSyncCardTypes();
@@ -5690,7 +5691,7 @@ client.on('interactionCreate', async interaction => {
                         await interaction.editReply({ content: `✅ You're on the latest version (**${localVer.version}**).` });
                     }
                 } catch (e) {
-                    const detalle = e?.code || e?.response?.status || e?.message || String(e);
+                    const detalle = describirError(e);
                     console.error('DEBUG: error en "Check for Updates":', detalle);
                     await interaction.editReply({ content: `❌ Could not check for updates right now.\n\`${detalle}\`\nTry again later, or send this to Ale if it keeps happening.` });
                 }

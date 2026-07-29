@@ -21,6 +21,17 @@ function obtenerVersionLocal() {
     return JSON.parse(fs.readFileSync(VERSION_PATH, 'utf8'));
 }
 
+// Un AggregateError (el "Received one or more errors" generico de la carrera
+// IPv4/IPv6 de Node) esconde el motivo real dentro de e.errors -- .message
+// solo no alcanza para diagnosticar nada. Esto junta el detalle real de cada
+// intento fallido en un solo string legible.
+function describirError(e) {
+    if (e?.errors?.length) {
+        return e.errors.map((x) => x?.code || x?.message || String(x)).join(' | ');
+    }
+    return e?.code || e?.response?.status || e?.message || String(e);
+}
+
 async function obtenerVersionRemota() {
     try {
         const resp = await axios.get(VERSION_URL_REMOTA, { timeout: 8000, headers: { 'Cache-Control': 'no-cache' } });
@@ -114,7 +125,7 @@ async function chequearActualizaciones(client) {
             await usuario.send(payload);
         }
     } catch (e) {
-        console.error('DEBUG: error chequeando actualizaciones:', e?.message || e);
+        console.error('DEBUG: error chequeando actualizaciones:', describirError(e));
     }
 }
 
@@ -159,7 +170,7 @@ async function avisarActualizacionAplicadaSiHaceFalta(client) {
             await usuario.send({ embeds: [embed] });
         }
     } catch (e) {
-        console.error('DEBUG: error avisando actualizacion aplicada:', e?.message || e);
+        console.error('DEBUG: error avisando actualizacion aplicada:', describirError(e));
     }
 }
 
@@ -204,7 +215,7 @@ async function descargarYExtraerAssets(remota) {
         const script = `Expand-Archive -Path '${ASSETS_ZIP_TEMP_PATH}' -DestinationPath '${__dirname}' -Force`;
         execSync(`powershell -NoProfile -Command "${script}"`, { stdio: 'ignore' });
     } catch (e) {
-        console.error('DEBUG: error actualizando assets/:', e?.message || e);
+        console.error('DEBUG: error actualizando assets/:', describirError(e));
     } finally {
         try { fs.unlinkSync(ASSETS_ZIP_TEMP_PATH); } catch (e) { /* nada que limpiar */ }
     }
@@ -231,7 +242,7 @@ async function descargarActualizacionPanel(remota) {
             respuesta.data.on('error', reject);
         });
     } catch (e) {
-        console.error('DEBUG: error descargando la actualización del panel:', e?.message || e);
+        console.error('DEBUG: error descargando la actualización del panel:', describirError(e));
     }
 }
 
@@ -265,5 +276,6 @@ module.exports = {
     obtenerVersionLocal,
     obtenerVersionRemota,
     esVersionMasNueva,
+    describirError,
     PENDING_UPDATE_PATH
 };
