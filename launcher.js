@@ -123,13 +123,13 @@ function iniciarProceso(def) {
     const hijo = spawn(process.execPath, args, {
         cwd: __dirname,
         stdio: ['ignore', 'pipe', 'pipe'],
-        // --use-system-ca: ademas de la lista de certificados que Node trae de
-        // fabrica, tambien confia en el almacen de certificados de Windows. Sin
-        // esto, un antivirus que inspecciona HTTPS (inyectando su propio
-        // certificado raiz, cosa que Windows SI confia pero Node no) rompe
-        // silenciosamente cualquier request HTTPS del bot (ej. "Check for
-        // Updates") aunque el resto de la PC navegue sin problema.
-        env: { ...process.env, MONITOR_ROLE: def.rol, NODE_OPTIONS: [process.env.NODE_OPTIONS, '--use-system-ca'].filter(Boolean).join(' ') }
+        // --use-system-ca se probo para un caso de antivirus interceptando HTTPS,
+        // pero es un flag EXPERIMENTAL de Node con bugs reales del lado de
+        // Windows: rompe la validacion de certificado contra GitHub con errores
+        // internos raros ("Expected values to be equals", "Invalid string
+        // length") en vez de un error de red normal -- confirmado en una PC
+        // limpia, sin antivirus. Quitado: rompe mas de lo que arregla.
+        env: { ...process.env, MONITOR_ROLE: def.rol }
     });
 
     conectarSalida(hijo, def.nombre);

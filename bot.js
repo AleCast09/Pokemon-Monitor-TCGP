@@ -21,7 +21,7 @@ const db = require('./database.js');
 
 const heartbeatScript = require('./heartbeat.js');
 const configScript = require('./config.js');
-const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion, describirError } = require('./update-checker.js');
+const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion, describirError, notasParaEmbed } = require('./update-checker.js');
 const { obtenerMapaEmojisGuild } = require('./guild-emojis.js');
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
 iniciarAutoSyncCardTypes();
@@ -5662,7 +5662,7 @@ client.on('interactionCreate', async interaction => {
                             .setDescription(
                                 `**${localVer.version}** → **${remotaVer.version}**\n\n` +
                                 `**What's new:**\n` +
-                                (remotaVer.notes || []).map(n => `• ${n}`).join('\n')
+                                notasParaEmbed(remotaVer.notes)
                             );
                         const filaUpdate = new ActionRowBuilder().addComponents(
                             new ButtonBuilder().setCustomId('actualizacion_ahora').setLabel('Update now').setStyle(ButtonStyle.Success),

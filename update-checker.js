@@ -56,6 +56,29 @@ function esVersionMasNueva(remota, local) {
     return false;
 }
 
+// version.json acumula las notas de TODAS las versiones anteriores (nunca se
+// borran) - a esta altura ya suman miles de caracteres, muy por encima del
+// limite de 4096 de la descripcion de un embed de Discord, lo que rompia esta
+// respuesta con un error cada vez que SI habia una actualizacion real (bug
+// real 2026-07-30, solo se notaba en ese caso porque "ya estas actualizado"
+// no arma este embed). Se muestran solo las notas mas nuevas que entren.
+function notasParaEmbed(notes) {
+    const lista = notes || [];
+    const limite = 3500;
+    let acumulado = '';
+    let incluidas = 0;
+    for (const nota of lista) {
+        const linea = `• ${nota}\n`;
+        if (acumulado.length + linea.length > limite) break;
+        acumulado += linea;
+        incluidas++;
+    }
+    if (incluidas < lista.length) {
+        acumulado += `_...and ${lista.length - incluidas} more change${lista.length - incluidas === 1 ? '' : 's'} - see the full history on GitHub._`;
+    }
+    return acumulado.trim();
+}
+
 function construirPayloadActualizacion(local, remota) {
     const embed = new EmbedBuilder()
         .setTitle('🔔 An update is available')
@@ -63,7 +86,7 @@ function construirPayloadActualizacion(local, remota) {
         .setDescription(
             `**${local.version}** → **${remota.version}**\n\n` +
             `**What's new:**\n` +
-            (remota.notes || []).map(n => `• ${n}`).join('\n')
+            notasParaEmbed(remota.notes)
         );
     const fila = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('actualizacion_ahora').setLabel('Update now').setStyle(ButtonStyle.Success),
@@ -154,7 +177,7 @@ async function avisarActualizacionAplicadaSiHaceFalta(client) {
         const destino = await obtenerDestinoNotificacion(client);
         if (!destino) return;
 
-        const notas = (local.notes || []).map(n => `• ${n}`).join('\n');
+        const notas = notasParaEmbed(local.notes);
         const acciones = (local.actionsNeeded || []).map(a => `• ${a}`).join('\n');
         const embed = {
             title: `🎉 Updated to v${local.version}`,
@@ -277,5 +300,6 @@ module.exports = {
     obtenerVersionRemota,
     esVersionMasNueva,
     describirError,
+    notasParaEmbed,
     PENDING_UPDATE_PATH
 };
