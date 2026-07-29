@@ -1,6 +1,7 @@
 {
-  "version": "1.5.14",
+  "version": "1.5.15",
   "notes": [
+    "The Control Panel window title now says \"Monitor Pokemon — Control Panel\" instead of just \"Monitor Pokemon\", so it's clear this is the window you're supposed to open and use.",
     "Renamed the internal bot engine from MonitorPokemon.exe to MonitorPokemonBot.exe - two files named almost the same (it and MonitorPokemonPanel.exe) sitting next to each other was confusing about which one to actually open. Only ever open the Control Panel (or \"Open Control Panel.bat\") - never either .exe directly.",
     "New: manually pressing \"Check for Updates\" now also posts the update announcement (with an @mention) to your Updates channel, not just as a private reply to whoever clicked it.",
     "New: after pressing \"Update now\" and the download finishes, you get a message in your Updates channel reminding you to press Sync Channels and re-save your Main Path once it restarts.",
