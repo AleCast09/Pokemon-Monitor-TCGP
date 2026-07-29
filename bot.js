@@ -1,3 +1,7 @@
+// Ver entry.js para el detalle -- se repite aca porque quien corre bot.js
+// directo (PM2 en un dev PC) no pasa por entry.js.
+require('dns').setDefaultResultOrder('ipv4first');
+
 require('dotenv').config();
 const { 
     Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder,

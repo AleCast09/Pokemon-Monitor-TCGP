@@ -1,6 +1,7 @@
 {
-  "version": "1.5.11",
+  "version": "1.5.12",
   "notes": [
+    "Fixed the real cause of \"Check for Updates\" failing with \"Received one or more errors\" (confirmed on a clean Windows 10, no antivirus involved): Node was racing an IPv6 and IPv4 connection at the same time (\"Happy Eyeballs\"), and failed entirely on PCs where IPv6 has no real route even though DNS still returns an IPv6 record. Now forces IPv4 first, avoiding the race.",
     "Fixed: \"Check for Updates\" (and the automatic background check) could fail permanently on some networks/ISPs that block raw.githubusercontent.com - now falls back to api.github.com automatically if the first attempt fails.",
     "New: the update notification posted in your Updates channel now @mentions you directly instead of sitting there as a silent embed nobody notices.",
     "Fixed: reading Shinedust could silently show the wrong failure reason (just an exit code) instead of the real one (e.g. \"ocr invalido\", \"puerto no encontrado\") - the actual error is now shown so it can be diagnosed.",
