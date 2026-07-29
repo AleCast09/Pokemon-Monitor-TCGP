@@ -297,7 +297,7 @@ public class ControlPanelForm : Form {
     // ---------- UI ----------
 
     void ConstruirUI() {
-        Text = "Monitor Pokemon — Control Panel";
+        Text = "Monitor Pokemon";
         ClientSize = new Size(650, 415);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;

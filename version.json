@@ -1,6 +1,7 @@
 {
-  "version": "1.5.17",
+  "version": "1.5.18",
   "notes": [
+    "Reverted the Control Panel window title back to just \"Monitor Pokemon\" (undoing the \"— Control Panel\" suffix added a few versions ago) - going back to the exact 1.5.13 state per request. Nothing else changed: no code was touched between 1.5.13 and this version, so this update won't affect the token-setup window behavior.",
     "Reverted the MonitorPokemon.exe → MonitorPokemonBot.exe rename from the last couple of versions - it fixed a minor confusion (which .exe to open) but caused a much worse one: renaming reset Windows SmartScreen's reputation for the file, so \"Windows protected your PC\" started showing up for everyone on this update, when it hadn't for a long time. Not worth the trade - keeping the old, already-trusted name.",
     "The Control Panel window title now says \"Monitor Pokemon — Control Panel\" instead of just \"Monitor Pokemon\", so it's clear this is the window you're supposed to open and use.",
     "New: manually pressing \"Check for Updates\" now also posts the update announcement (with an @mention) to your Updates channel, not just as a private reply to whoever clicked it.",
