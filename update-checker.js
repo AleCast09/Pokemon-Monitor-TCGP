@@ -212,7 +212,7 @@ async function descargarYExtraerAssets(remota) {
 
 // El panel (MonitorPokemonPanel.exe) no es hijo de launcher.js y no se puede
 // reemplazar a si mismo mientras corre — a diferencia del bot, cuyo swap ya
-// resuelve launcher.js con MonitorPokemon.new.exe. Se baja igual acá (si la
+// resuelve launcher.js con MonitorPokemonBot.new.exe. Se baja igual acá (si la
 // versión remota lo ofrece — versiones viejas de version.json no tienen este
 // campo, se ignora en silencio) y queda en disco como
 // "MonitorPokemonPanel.new.exe"; el propio panel (ControlPanel.cs,
@@ -236,7 +236,7 @@ async function descargarActualizacionPanel(remota) {
 }
 
 async function descargarActualizacion(remota) {
-    const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
+    const rutaNueva = path.join(__dirname, 'MonitorPokemonBot.new.exe');
     const respuesta = await axios.get(remota.downloadUrl, { responseType: 'stream', timeout: 120000 });
 
     await new Promise((resolve, reject) => {

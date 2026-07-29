@@ -189,7 +189,7 @@ async function iniciarActualizacion() {
     }
 
     const rutaExe = process.execPath;
-    const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
+    const rutaNueva = path.join(__dirname, 'MonitorPokemonBot.new.exe');
     const rutaBat = path.join(__dirname, '_update.bat');
     // Nota: "timeout" de Windows depende de tener una consola/stdin real y falla
     // (o se saltea) cuando corre sin ventana, como en nuestro caso — por eso las

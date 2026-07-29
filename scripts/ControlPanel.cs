@@ -64,7 +64,7 @@ public class ControlPanelForm : Form {
         raiz = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         rutaLock = Path.Combine(raiz, ".monitor.lock");
         rutaPendienteRestart = Path.Combine(raiz, ".pending_restart.json");
-        rutaExe = Path.Combine(raiz, "MonitorPokemon.exe");
+        rutaExe = Path.Combine(raiz, "MonitorPokemonBot.exe");
         rutaStartBat = Path.Combine(raiz, "Advanced", "Start Monitor Pokemon.bat");
         rutaReconfigureBat = Path.Combine(raiz, "Advanced", "Reconfigure.bat");
         rutaIcono = Path.Combine(raiz, "assets", "tray_icon.ico");

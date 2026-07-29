@@ -1,6 +1,7 @@
 {
-  "version": "1.5.13",
+  "version": "1.5.14",
   "notes": [
+    "Renamed the internal bot engine from MonitorPokemon.exe to MonitorPokemonBot.exe - two files named almost the same (it and MonitorPokemonPanel.exe) sitting next to each other was confusing about which one to actually open. Only ever open the Control Panel (or \"Open Control Panel.bat\") - never either .exe directly.",
     "New: manually pressing \"Check for Updates\" now also posts the update announcement (with an @mention) to your Updates channel, not just as a private reply to whoever clicked it.",
     "New: after pressing \"Update now\" and the download finishes, you get a message in your Updates channel reminding you to press Sync Channels and re-save your Main Path once it restarts.",
     "Fixed the real cause of \"Check for Updates\" failing with \"Received one or more errors\" (confirmed on a clean Windows 10, no antivirus involved): Node was racing an IPv6 and IPv4 connection at the same time (\"Happy Eyeballs\"), and failed entirely on PCs where IPv6 has no real route even though DNS still returns an IPv6 record. Now forces IPv4 first, avoiding the race.",
@@ -58,7 +59,7 @@
     "Fixed: the MuMu \"Turn On\" button now waits for the instance to actually finish starting before reporting its status.",
     "The trade/injection automation is now protected against stuck confirmation windows, and no longer freezes waiting for a click that never comes."
   ],
-  "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe",
+  "downloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemonBot.exe",
   "panelDownloadUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemonPanel.exe",
   "assetsUrl": "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip"
 }
