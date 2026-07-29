@@ -75,7 +75,12 @@ public class ControlPanelForm : Form {
 
         ConstruirUI();
 
-        if (!EstaCorriendo()) IniciarBot();
+        // Solo arranca el bot solo al abrir el panel si ya hay un token guardado -
+        // si no, el motor abriria el wizard del navegador sin que el usuario haya
+        // apretado nada (bug real: parecia un loop de abre/cierra al abrir el panel).
+        string tokenGuardadoInicio;
+        bool tieneTokenGuardado = envConocido.TryGetValue("DISCORD_BOT_TOKEN", out tokenGuardadoInicio) && !string.IsNullOrWhiteSpace(tokenGuardadoInicio);
+        if (!EstaCorriendo() && tieneTokenGuardado) IniciarBot();
         RefrescarEstado();
         RefrescarInfoDiscord();
 

@@ -31,7 +31,7 @@ function avisarYaAbierto() {
     // Se usa un MessageBox de .NET vía PowerShell en vez de mshta.exe: mshta es
     // una herramienta vieja de Windows que Defender/EDR suele cerrar sola por
     // ser muy usada históricamente en malware — nada confiable para esto.
-    const mensaje = 'Monitor Pokemon is already running in the background. No need to open it again.\n\nIf you want to change the token or add the Google Drive API key, open "Monitor Pokemon" (the control panel) and use "Open Api y token change".';
+    const mensaje = 'Monitor Pokemon is already running in the background. No need to open it again.\n\nIf you want to change the token or add the Google Drive API key, open "MonitorPokemonPanel" and use "Open Token / API Settings".';
     const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${mensaje}', 'Monitor Pokemon')`;
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script}"`, () => {});
 }
@@ -43,21 +43,6 @@ function crearAccesoDirectoConfigurar() {
     const destino = path.join(__dirname, 'Advanced', 'Reconfigure.bat');
     if (!fs.existsSync(destino)) return;
     const script = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${ACCESO_CONFIGURAR_PATH.replace(/'/g, "''")}'); $s.TargetPath = '${destino.replace(/'/g, "''")}'; $s.WorkingDirectory = '${__dirname.replace(/'/g, "''")}'; $s.Save()`;
-    exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
-}
-
-const ACCESO_PANEL_PATH = path.join(__dirname, 'Monitor Pokemon.lnk');
-
-// Acceso directo con icono propio (no un .bat pelado) para abrir el panel de
-// control — el .bat sigue siendo lo que realmente corre por dentro (hace
-// falta para poner MONITOR_ROLE y lanzar PowerShell), pero lo que el usuario
-// ve y usa es este acceso directo con cara de aplicación real.
-function crearAccesoDirectoPanel() {
-    if (fs.existsSync(ACCESO_PANEL_PATH)) return;
-    const destino = path.join(__dirname, 'Open Control Panel.bat');
-    if (!fs.existsSync(destino)) return;
-    const rutaIcono = path.join(__dirname, 'assets', 'tray_icon.ico');
-    const script = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${ACCESO_PANEL_PATH.replace(/'/g, "''")}'); $s.TargetPath = '${destino.replace(/'/g, "''")}'; $s.WorkingDirectory = '${__dirname.replace(/'/g, "''")}'; $s.IconLocation = '${rutaIcono.replace(/'/g, "''")}'; $s.Save()`;
     exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
 }
 
@@ -315,7 +300,6 @@ async function main() {
         }
     }
     crearAccesoDirectoConfigurar();
-    crearAccesoDirectoPanel();
     crearAccesoDirectoInicioAutomatico();
     iniciarBandejaSistema();
 
