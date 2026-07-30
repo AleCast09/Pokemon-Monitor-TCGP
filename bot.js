@@ -853,7 +853,7 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
     return payload;
 }
 
-function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pagina = 0, opciones = {}) {
+async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pagina = 0, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
     const contexto = opciones.contexto || 'your wishlist';
     const mapaEmojisCartas = opciones.mapaEmojis || {};
@@ -924,11 +924,29 @@ function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pagina =
     componentes.push(new ActionRowBuilder().addComponents(...filaNavegacion));
 
     const payload = { embeds: [embed], components: componentes };
+    const archivosExtra = [];
+
     const rutaLogo = buscarLogoExpansionBot(expansion);
     if (rutaLogo) {
         const extension = path.extname(rutaLogo) || '.png';
         embed.setThumbnail(`attachment://logo${extension}`);
-        payload.files = [new AttachmentBuilder(rutaLogo, { name: `logo${extension}` })];
+        archivosExtra.push(new AttachmentBuilder(rutaLogo, { name: `logo${extension}` }));
+    }
+
+    // Collage con la imagen real de cada carta de esta pagina + badge de
+    // cantidad total (a pedido explicito del usuario 2026-07-30). Si no hay
+    // rutaMasterPath (Data Master Path sin configurar) simplemente no se
+    // arma -- la lista de texto de arriba sigue funcionando igual sin esto.
+    if (opciones.rutaMasterPath) {
+        const collageBuffer = await generarCollageCartas(items, opciones.rutaMasterPath);
+        if (collageBuffer) {
+            embed.setImage('attachment://collage.png');
+            archivosExtra.push(new AttachmentBuilder(collageBuffer, { name: 'collage.png' }));
+        }
+    }
+
+    if (archivosExtra.length) {
+        payload.files = archivosExtra;
     } else {
         payload.attachments = [];
     }
@@ -1011,9 +1029,21 @@ async function obtenerMapaCarpetasDriveBot() {
     return await refrescarMapaCarpetasDriveBot();
 }
 
+// A pedido explicito del usuario 2026-07-30: Drive HD para cartas normales es
+// opt-in (default apagado) -- descargar en HD el catalogo entero puede sumar
+// varios GB con el tiempo, y no todos quieren gastar ese espacio solo para
+// mirar cartas normales. Las doradas NO pasan por este chequeo (siguen abajo,
+// en obtenerImagenGoldBot): no tienen ninguna otra fuente, el borde dorado
+// solo existe en Drive.
+async function driveHdRegularHabilitado() {
+    const fila = await db.get(`SELECT status FROM estados_modulos WHERE nombre = 'drive_hd_regular'`);
+    return fila?.status === 'on';
+}
+
 async function obtenerImagenHDBot(cardMap, cartaId) {
     const info = cardMap?.[cartaId];
     if (!info?.ExpansionID || !info?.CollectionNumber || !GOOGLE_DRIVE_API_KEY_BOT || !GOOGLE_DRIVE_HD_ENABLED_BOT) return null;
+    if (!(await driveHdRegularHabilitado())) return null;
 
     const localId = String(info.CollectionNumber).padStart(3, '0');
     const dirCache = path.join(DRIVE_CACHE_DIR_BOT, info.ExpansionID);
@@ -1166,6 +1196,77 @@ function construirMapaCopiasPorCarta(rutaJsonCuentas) {
 
 function cuentasGoldParaCarta(mapaCopias, cartaId, umbral = UMBRAL_GOLD_CARD_DEFAULT) {
     return (mapaCopias?.[cartaId] || []).filter(r => r.cantidad >= umbral);
+}
+
+// Suma total de copias de una carta entre TODAS las cuentas -- no se usa para
+// el badge del collage (ver maxCopiasCarta), queda disponible por si hace
+// falta en otro lado.
+function sumaCopiasCarta(mapaCopias, cartaId) {
+    return (mapaCopias?.[cartaId] || []).reduce((total, r) => total + (r.cantidad || 0), 0);
+}
+
+// Bug real 2026-07-30: el badge del collage usaba sumaCopiasCarta (todas las
+// cuentas juntas), lo que mostraba numeros gigantes (ej. "x141") para cartas
+// repartidas entre muchisimas cuentas con pocas copias cada una -- pero Gold
+// Cards califica por "¿ALGUNA cuenta tiene 10+ copias ELLA SOLA?", no por la
+// suma total. El resultado confundia: una carta con "x141" en All Cards no
+// aparecia en Gold Cards porque ninguna cuenta individual llegaba a 10. Este
+// es el numero real que decide si es Gold o no -- el maximo que tiene UNA
+// sola cuenta, igual en las tres pantallas (Wishlist/All Cards/Gold Cards).
+function maxCopiasCarta(mapaCopias, cartaId) {
+    const registros = mapaCopias?.[cartaId] || [];
+    return registros.reduce((max, r) => Math.max(max, r.cantidad || 0), 0);
+}
+
+// Collage de miniaturas para la pantalla de "elegí la carta" (a pedido
+// explicito del usuario 2026-07-30): en vez de solo una lista de texto, arma
+// una grilla con la imagen real de cada carta de esta pagina. Sin numero de
+// cantidad acá a proposito (mismo pedido, corregido despues) -- mostrar un
+// numero en este paso confundia (sumaba entre cuentas, no coincidia con el
+// criterio real de Gold Cards). La cantidad real por cuenta se sigue viendo
+// mas adelante, al elegir una carta puntual y su XML.
+// Usa siempre la imagen LOCAL de baja calidad (encontrarImagenPorIllustration,
+// sin red) -- una miniatura chica no necesita HD, y bajar HD de hasta 25
+// cartas por cada pantalla seria lento y gastaria disco de mas sin necesidad.
+// Las cartas sin imagen local encontrada se saltean (no hay nada que dibujar).
+async function generarCollageCartas(items, rutaMasterPath) {
+    if (!items?.length || !rutaMasterPath) return null;
+    const cardMap = cargarCardMap(rutaMasterPath);
+    const CELL_W = 150, CELL_H = 210, GAP = 8, PADDING = 12;
+    const COLS = Math.min(5, items.length);
+
+    const celdas = [];
+    let indice = 0;
+    for (const item of items) {
+        const info = cardMap?.[item.id];
+        const rutaImg = encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID);
+        if (!rutaImg) continue;
+
+        let imgBuffer;
+        try {
+            imgBuffer = await sharp(rutaImg).resize(CELL_W, CELL_H, { fit: 'cover' }).png().toBuffer();
+        } catch (e) { continue; }
+
+        const col = indice % COLS;
+        const row = Math.floor(indice / COLS);
+        celdas.push({ input: imgBuffer, top: PADDING + row * (CELL_H + GAP), left: PADDING + col * (CELL_W + GAP) });
+        indice++;
+    }
+    if (!celdas.length) return null;
+
+    const filas = Math.ceil(indice / COLS);
+    const anchoTotal = PADDING * 2 + COLS * CELL_W + (COLS - 1) * GAP;
+    const altoTotal = PADDING * 2 + filas * CELL_H + (filas - 1) * GAP;
+
+    try {
+        return await sharp({ create: { width: anchoTotal, height: altoTotal, channels: 4, background: { r: 30, g: 30, b: 36, alpha: 1 } } })
+            .composite(celdas)
+            .png()
+            .toBuffer();
+    } catch (e) {
+        console.error('DEBUG: error armando el collage de cartas:', e?.message || e);
+        return null;
+    }
 }
 
 const RAREZA_POR_CODIGO = {
@@ -1378,7 +1479,7 @@ function construirEmbedRunInstanceInicio(user) {
         .setTitle('🔄 Trading')
         .setDescription(
             `Command run by <@${user.id}>.\n\n` +
-            `Press the button to see your MuMuPlayer instances and open the one you need, or configure your saved friends and check status under **⚙️ Settings Trade**.`
+            `Trades now run automatically from the 🔄 Trade button on a card lookup (/card, /wishlist, Gold Cards) - no need to open instances or pick friends by hand here anymore.`
         )
         .setColor(0x2ECC71)
         .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
@@ -1719,7 +1820,7 @@ async function actualizarConSeleccionFriendId(interaction, cartaId, origen, modo
     const { rutaIni } = await obtenerRutasInject(interaction.user.id);
     const friends = parsearListaFriends(rutaIni);
     if (!friends.length) {
-        return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **⚙️ Settings Trade → 🆔 Add Friend**.', components: [] });
+        return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.', components: [] });
     }
 
     const menu = new StringSelectMenuBuilder()
@@ -1757,6 +1858,44 @@ function construirEmbedStatusInstancia(index, name, rutaIni = RUTA_INJECT_INI_DE
         .setColor(0x3498DB);
 
     return { embeds: [embed], ephemeral: true };
+}
+
+// Reusado tanto al abrir "📊 Status ID" como despues de borrar un amigo (para
+// refrescar la misma lista in-place). El boton de borrar solo aparece si hay
+// algo guardado -- a pedido explicito del usuario 2026-07-30: antes solo se
+// podia agregar amigos, no habia forma de sacar uno de la lista.
+function construirPayloadStatusFriends(friends) {
+    const lista = friends.length > 0
+        ? friends.map((f, i) => `**${i + 1}.** ${f.label || '(no name)'} — \`${f.id}\``).join('\n')
+        : '_None added._';
+    const embed = new EmbedBuilder()
+        .setTitle('🆔 Status ID — Saved Friends')
+        .addFields({ name: `🆔 Saved friends (${friends.length}/10)`, value: lista })
+        .setColor(0x3498DB);
+    const components = [];
+    if (friends.length > 0) {
+        components.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('setup_remove_friend').setLabel('🗑️ Remove Friend').setStyle(ButtonStyle.Danger)
+        ));
+    }
+    return { embeds: [embed], components };
+}
+
+function quitarFriend(friendId, rutaIni = RUTA_INJECT_INI_DEFAULT) {
+    const actuales = parsearListaFriends(rutaIni);
+    const restantes = actuales.filter(f => f.id !== friendId);
+    if (restantes.length === actuales.length) return { ok: false, motivo: 'no_encontrado' };
+
+    const idsCsv = restantes.map(f => f.id).join(',');
+    const labelsPipe = restantes.map(f => f.label).join('|');
+
+    actualizarIniInject({
+        favoriteFriendIDs: idsCsv,
+        favoriteFriendLabels: labelsPipe,
+        injectSelectedFriendIDs: idsCsv
+    }, rutaIni);
+
+    return { ok: true, total: restantes.length };
 }
 
 function agregarFriend(label, friendId, rutaIni = RUTA_INJECT_INI_DEFAULT) {
@@ -2914,9 +3053,7 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
     }
     if (commandKey === 'run_instance') {
         const embed = construirEmbedRunInstanceInicio(user);
-        const fila = filaBotonesConTutorial('cmd_run_instance',
-            new ButtonBuilder().setCustomId('mumu_ver_instancias').setLabel('⚙️ Settings Trade').setStyle(ButtonStyle.Primary)
-        );
+        const fila = filaBotonesConTutorial('cmd_run_instance');
         const archivos = [];
         const tradeBannerPath = path.join(__dirname, 'assets', 'embeds', 'Trade_banner.png');
         if (fs.existsSync(tradeBannerPath)) {
@@ -3509,6 +3646,7 @@ async function generarPanelControl(userId) {
 
     if (estadoS4T === '🟢 ONLINE' && !(await tieneConfiguracion(userId, 's4t'))) estadoS4T = '🔴 OFFLINE (Setup Needed)';
     if (estadoHB === '🟢 ONLINE' && !(await tieneConfiguracion(userId, 'heartbeat'))) estadoHB = '🔴 OFFLINE (Setup Needed)';
+    const driveHdRegularOn = await driveHdRegularHabilitado();
 
     const embed = new EmbedBuilder()
         .setTitle(' 👑  Pokemon Home PTCGPB!  👑​')
@@ -3517,7 +3655,9 @@ async function generarPanelControl(userId) {
             `**🔥​ PROCESS CONTROL PANEL 🔥**\n\n` +
             `⚡ **Basic Infrastructure Status:**\n` +
             `• 🚀 **S4T Module:** \`${estadoS4T}\`\n` +
-            `• 💓 **Heartbeat Module:** \`${estadoHB}\`\n\n` +
+            `• 💓 **Heartbeat Module:** \`${estadoHB}\`\n` +
+            `• 🖼️ **Normal Cards in HD:** \`${driveHdRegularOn ? '🟢 ON' : '🔴 OFF'}\`\n` +
+            `-# OFF: normal cards stay low quality, Gold cards always HD. ON: normal cards also HD, but uses more disk space over time.\n\n` +
             `**🎴 Available Features:**\n` +
             `• 💖 **Cards Wishlist** — check and search the cards in your wishlist.\n` +
             `• ⚡ **All Cards** — browse the full catalog of cards in the game.\n` +
@@ -3532,7 +3672,8 @@ async function generarPanelControl(userId) {
     const filaSistema = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('toggle_trading').setLabel('🚀 S4T On/Off').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('toggle_heartbeat').setLabel('💓 Heartbeat On/Off').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('btn_crear_canales_menu').setLabel('🏗️ Sync Channels').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('btn_crear_canales_menu').setLabel('🏗️ Sync Channels').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('toggle_drive_hd_regular').setLabel('🖼️ Normal Cards HD On/Off').setStyle(ButtonStyle.Secondary)
     );
 
     const botonesGestion = [
@@ -3546,28 +3687,24 @@ async function generarPanelControl(userId) {
     }
     const filaGestion = new ActionRowBuilder().addComponents(...botonesGestion);
 
-    const filaPeligro = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('btn_reset_total').setLabel('🗑️ Reset Total').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('btn_borrar_todo').setLabel('🗑️ Delete Channels').setStyle(ButtonStyle.Danger)
-    );
+    // "Reset Total"/"Delete Channels" sacados del panel (a pedido explicito del
+    // usuario 2026-07-30): daba miedo tenerlos ahi mismo, un clic de mas (incluso
+    // del propio dueño) borraba todo sin aviso. Los handlers (btn_reset_total,
+    // btn_borrar_todo) quedan intactos por si hace falta reactivarlos despues,
+    // simplemente ya no hay ningun boton que los dispare.
 
-    const filaCartas = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('panel_wishlist').setLabel('💖 Cards Wishlist').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('panel_allcards').setLabel('⚡ All Cards').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('panel_goldcards').setLabel('🏆 Gold Cards').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('panel_extract_xml').setLabel('📄 Extract XML').setStyle(ButtonStyle.Primary)
-    );
-
+    // "Cards Wishlist"/"All Cards"/"Gold Cards"/"Extract XML"/"Auto Trade" se
+    // sacaron de aca (a pedido explicito del usuario 2026-07-30): quedan
+    // innecesarios una vez que existe el canal de accesos directos a cada uno
+    // de esos comandos - este panel de /setup no tiene por que repetirlos.
+    //
     // "Add Friend"/"Status ID" agregados aca (a pedido explicito del usuario
     // 2026-07-29): antes solo estaban dentro de una instancia puntual (Auto
     // Trade -> Settings Trade), pero los amigos son por usuario, no por
     // instancia, asi que no hace falta ese paso de por medio. "Status ID" (no
     // solo "Status") para no confundirse con btn_status de mas arriba, que es
-    // el status de configuracion del bot, no de amigos guardados. Van en esta
-    // misma fila (no una nueva) porque Discord permite maximo 5 filas por
-    // mensaje y ya estaban las 5 ocupadas.
+    // el status de configuracion del bot, no de amigos guardados.
     const filaTrade = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('panel_run_instance').setLabel('🔄 Auto Trade').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('setup_add_friend').setLabel('🆔 Add Friend').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('setup_status_friends').setLabel('📊 Status ID').setStyle(ButtonStyle.Secondary)
     );
@@ -3578,7 +3715,7 @@ async function generarPanelControl(userId) {
         archivos.push({ ruta: SYMBOL_EMBEDS_PATH, filename: 'symbol.png' });
     }
 
-    return { embeds: [embed], components: [filaSistema, filaGestion, filaPeligro, filaCartas, filaTrade], archivos };
+    return { embeds: [embed], components: [filaSistema, filaGestion, filaTrade], archivos };
 }
 
 const FUENTES_CARTAS = {
@@ -3590,7 +3727,12 @@ const FUENTES_CARTAS = {
         obtenerCartas: async () => {
             const rutaWishlistCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_wishlist'`);
             const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-            return { cartas: obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg), rutaMasterPath: rutaMasterCfg?.webhook_url };
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            return {
+                cartas: obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg),
+                rutaMasterPath: rutaMasterCfg?.webhook_url,
+                mapaCopias: construirMapaCopiasPorCarta(rutaJsonCfg?.webhook_url)
+            };
         }
     },
     allcards: {
@@ -3598,7 +3740,11 @@ const FUENTES_CARTAS = {
         vacioTexto: 'No cards found.',
         contexto: 'the catalog',
         errorSinDatos: '❌ cardmaster.json not found. Check the **Data Master Path** configured in the panel.',
-        obtenerCartas: obtenerTodasLasCartasCacheadas
+        obtenerCartas: async () => {
+            const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            return { cartas, rutaMasterPath, mapaCopias: construirMapaCopiasPorCarta(rutaJsonCfg?.webhook_url) };
+        }
     },
     goldcards: {
         tituloLista: '🏆 Gold Cards',
@@ -4022,6 +4168,15 @@ client.on('interactionCreate', async interaction => {
         return await interaction.editReply(panel);
     }
 
+    if (interaction.isStringSelectMenu() && interaction.customId === 'setup_remove_friend_select') {
+        await interaction.deferUpdate();
+        const friendId = interaction.values[0];
+        const { rutaIni: rutaIniQuitarFriend } = await obtenerRutasInject(interaction.user.id);
+        quitarFriend(friendId, rutaIniQuitarFriend);
+        const friendsRestantes = parsearListaFriends(rutaIniQuitarFriend);
+        return await interaction.editReply(construirPayloadStatusFriends(friendsRestantes));
+    }
+
     if (interaction.isButton() && interaction.customId === 'webhook_volver') {
         await interaction.deferUpdate();
         const panel = await construirPanelListaWebhooks(interaction.user.id);
@@ -4330,9 +4485,9 @@ client.on('interactionCreate', async interaction => {
             const separador = interaction.values[0].indexOf('::');
             const expansion = interaction.values[0].slice(0, separador);
             const categoria = interaction.values[0].slice(separador + 2);
-            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-            const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, 0, { prefijo, contexto: fuente.contexto, mapaEmojis });
+            const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
             return await interaction.editReply(payload);
         } catch (error) {
             // Red de seguridad: si algo similar al bug de "4 Diamonds" (texto
@@ -4361,9 +4516,9 @@ client.on('interactionCreate', async interaction => {
         const prefijo = prefijoDeCartas(interaction.customId);
         const fuente = FUENTES_CARTAS[prefijo];
         const [, expansion, categoria, pagina] = interaction.customId.split('::');
-        const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+        const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
         const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-        const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, parseInt(pagina, 10) || 0, { prefijo, contexto: fuente.contexto, mapaEmojis });
+        const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, parseInt(pagina, 10) || 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
         return await interaction.editReply(payload);
     }
 
@@ -4847,9 +5002,9 @@ client.on('interactionCreate', async interaction => {
             const [paginaTexto, expansion, categoria] = resto.split('::');
             const pagina = parseInt(paginaTexto, 10) || 0;
 
-            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojisPagina = await obtenerMapaEmojisGuild(interaction.guild);
-            const payload = construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, pagina, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisPagina });
+            const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, pagina, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisPagina, rutaMasterPath, mapaCopias });
             return await interaction.editReply(payload);
         }
 
@@ -4965,13 +5120,13 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.customId === 'mumu_ver_instancias') {
-            const instancias = obtenerInstanciasMuMu();
-            if (instancias === null) {
-                return await interaction.reply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', ephemeral: true });
-            }
-            const payload = construirEmbedInstanciasMuMu(instancias);
-            // Pública, mismo motivo que en allcards_ver_expansiones.
-            return await interaction.reply({ ...payload });
+            // Removido a pedido explicito del usuario 2026-07-30: dejaba elegir y
+            // prender cualquier instancia a mano, y de ahi seguir el flujo manual
+            // de amigo/cuenta -- un usuario cualquiera pudo activarlo. Reemplazado
+            // por el boton automatico 🔄 Trade en las cartas. Se mantiene el
+            // handler (en vez de borrarlo) por si queda un mensaje viejo con este
+            // boton todavia dando vueltas en algun canal.
+            return await interaction.reply({ content: '⚠️ This option is no longer available - trades now run automatically from the 🔄 Trade button on a card lookup (/card, /wishlist, Gold Cards).', ephemeral: true });
         }
 
         if (interaction.customId === 'mumu_refrescar' || interaction.customId.startsWith('mumu_refrescar::')) {
@@ -5203,7 +5358,7 @@ client.on('interactionCreate', async interaction => {
             const { rutaIni } = await obtenerRutasInject(interaction.user.id);
             const friends = parsearListaFriends(rutaIni);
             if (!friends.length) {
-                return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **⚙️ Settings Trade → 🆔 Add Friend** in your Trading channel.' });
+                return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.' });
             }
             const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
             const datosGold = mapaCopias ? { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral } : null;
@@ -5388,7 +5543,7 @@ client.on('interactionCreate', async interaction => {
             const { rutaIni } = await obtenerRutasInject(interaction.user.id);
             const friends = parsearListaFriends(rutaIni);
             if (!friends.length) {
-                return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **⚙️ Settings Trade → 🆔 Add Friend** in your Trading channel.' });
+                return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.' });
             }
 
             const canalTrading = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
@@ -5551,6 +5706,13 @@ client.on('interactionCreate', async interaction => {
         }
         switch (interaction.customId) {
             case 'btn_reset_total':
+                // Restringido a pedido explicito del usuario 2026-07-30: borra
+                // webhooks y configuracion de canales enteros -- cualquier miembro
+                // comun que lo apretara sin querer arruinaba todo, sin forma de
+                // deshacerlo.
+                if (!tienePermisosGestion(interaction)) {
+                    return await interaction.reply({ content: "❌ Only the server owner or an Administrator can use this.", ephemeral: true });
+                }
                 await interaction.deferReply({ ephemeral: true });
                 try {
                     const categoria = interaction.guild.channels.cache.find(c => c.name === '📦 PTCG POCKET DROPS' && c.type === ChannelType.GuildCategory);
@@ -5581,6 +5743,10 @@ client.on('interactionCreate', async interaction => {
                 break;
 
             case 'btn_borrar_todo':
+                // Mismo motivo que btn_reset_total -- este borra canales enteros.
+                if (!tienePermisosGestion(interaction)) {
+                    return await interaction.reply({ content: "❌ Only the server owner or an Administrator can use this.", ephemeral: true });
+                }
                 await interaction.deferReply({ ephemeral: true });
                 try {
                     const categoria = interaction.guild.channels.cache.find(c => c.name === '📦 PTCG POCKET DROPS' && c.type === ChannelType.GuildCategory);
@@ -5617,14 +5783,26 @@ client.on('interactionCreate', async interaction => {
                 await interaction.deferReply({ ephemeral: true });
                 const { rutaIni: rutaIniStatusFriends } = await obtenerRutasInject(interaction.user.id);
                 const friendsGuardados = parsearListaFriends(rutaIniStatusFriends);
-                const listaFriendsGuardados = friendsGuardados.length > 0
-                    ? friendsGuardados.map((f, i) => `**${i + 1}.** ${f.label || '(no name)'} — \`${f.id}\``).join('\n')
-                    : '_None added._';
-                const embedStatusFriends = new EmbedBuilder()
-                    .setTitle('🆔 Status ID — Saved Friends')
-                    .addFields({ name: `🆔 Saved friends (${friendsGuardados.length}/10)`, value: listaFriendsGuardados })
-                    .setColor(0x3498DB);
-                await interaction.editReply({ embeds: [embedStatusFriends] });
+                await interaction.editReply(construirPayloadStatusFriends(friendsGuardados));
+                break;
+            }
+
+            case 'setup_remove_friend': {
+                await interaction.deferUpdate();
+                const { rutaIni: rutaIniRemoveFriend } = await obtenerRutasInject(interaction.user.id);
+                const friendsParaBorrar = parsearListaFriends(rutaIniRemoveFriend);
+                if (friendsParaBorrar.length === 0) {
+                    return await interaction.editReply(construirPayloadStatusFriends(friendsParaBorrar));
+                }
+                const menuBorrar = new StringSelectMenuBuilder()
+                    .setCustomId('setup_remove_friend_select')
+                    .setPlaceholder('Select a friend to remove')
+                    .addOptions(friendsParaBorrar.map((f) => ({
+                        label: (f.label || '(no name)').slice(0, 100),
+                        description: f.id,
+                        value: f.id
+                    })));
+                await interaction.editReply({ embeds: interaction.message.embeds, components: [new ActionRowBuilder().addComponents(menuBorrar)] });
                 break;
             }
 
@@ -5835,6 +6013,19 @@ client.on('interactionCreate', async interaction => {
                             return canal;
                         }
 
+                        // Si se llega hasta acá es porque el webhook viejo se va a recrear
+                        // (invalido, o el chequeo de arriba dio falso) -- sin esto, el mensaje
+                        // de bienvenida/panel que ya se habia mandado con el webhook VIEJO
+                        // queda huerfano en el canal (el webhook que lo mando ya no existe) y
+                        // el de abajo manda uno nuevo, duplicando el mensaje para siempre.
+                        if (filaExistente?.webhook_url && filaExistente.webhook_url !== 'N/A') {
+                            const claveInterfazVieja = COMANDOS_REALES_POR_TIPO[tipo] || (tipo === 'cmd_setup' ? 'setup' : tipo);
+                            const filaMsgVieja = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, `interfaz_msg_${claveInterfazVieja}`]);
+                            if (filaMsgVieja?.estado) {
+                                try { await axios.delete(`${filaExistente.webhook_url}/messages/${filaMsgVieja.estado}`, { timeout: 10000 }); } catch (e) { /* ya no existia o el webhook viejo ya estaba muerto */ }
+                            }
+                        }
+
                         const webhooks = await canal.fetchWebhooks();
                         const existingHooks = webhooks.filter(w => w.name === `Bot ${tipo}` || w.name === nombreDefaultWebhook(tipo));
                         for (const oldWebhook of existingHooks.values()) {
@@ -5946,6 +6137,15 @@ client.on('interactionCreate', async interaction => {
                     await interaction.editReply({ ...panel, files: (archivosPanel || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename })) });
                 }, 1500);
                 break;
+
+            case 'toggle_drive_hd_regular': {
+                await interaction.deferUpdate();
+                const yaEstaOn = await driveHdRegularHabilitado();
+                await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('drive_hd_regular', ?)`, [yaEstaOn ? 'off' : 'on']);
+                const { archivos: archivosPanelDrive, ...panelDrive } = await generarPanelControl(interaction.user.id);
+                await interaction.editReply({ ...panelDrive, files: (archivosPanelDrive || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename })) });
+                break;
+            }
 
             case 'btn_config_canales': await configScript.ejecutar(interaction); break;
             

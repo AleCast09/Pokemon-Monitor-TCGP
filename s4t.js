@@ -737,8 +737,17 @@ async function obtenerMapaCarpetasDrive() {
     return await refrescarMapaCarpetasDrive();
 }
 
+// Ver la nota igual en bot.js (obtenerImagenHDBot) -- mismo flag compartido en
+// la misma tabla, para que prender/apagar desde Discord aplique tanto al
+// bot como al reroll (S4T) sin tener que configurarlo dos veces.
+async function driveHdRegularHabilitado() {
+    const fila = await db.get(`SELECT status FROM estados_modulos WHERE nombre = 'drive_hd_regular'`);
+    return fila?.status === 'on';
+}
+
 async function obtenerImagenHD(cardMap, code) {
     if (!code || !cardMap || !cardMap[code] || !GOOGLE_DRIVE_API_KEY || !GOOGLE_DRIVE_HD_ENABLED) return null;
+    if (!(await driveHdRegularHabilitado())) return null;
     const { ExpansionID, CollectionNumber } = cardMap[code];
     if (!ExpansionID || !CollectionNumber) return null;
 
