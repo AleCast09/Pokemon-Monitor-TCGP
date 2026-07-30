@@ -663,6 +663,25 @@ function encontrarImagen(rutaMaster, nombreArchivo) {
     return rutas.find(ruta => fs.existsSync(ruta)) || null;
 }
 
+// Ver la nota igual en bot.js (obtenerImagenLeannyBot) -- mismo respaldo
+// publico de la comunidad, ultimo recurso cuando ni Drive ni CardImageCache
+// tienen la carta (tipico el mismo dia que sale una expansion nueva).
+const LEANNY_IMG_BASE = 'https://leanny.github.io/pocket_tcg_resources/img/M/US';
+const LEANNY_CACHE_DIR = path.join(__dirname, 'assets', 'leanny_cache');
+async function obtenerImagenLeanny(illustrationId) {
+    if (!illustrationId) return null;
+    const rutaCache = path.join(LEANNY_CACHE_DIR, `${illustrationId}.png`);
+    if (fs.existsSync(rutaCache)) return rutaCache;
+    try {
+        const resp = await axios.get(`${LEANNY_IMG_BASE}/${illustrationId}.png`, { responseType: 'arraybuffer', timeout: 8000 });
+        fs.mkdirSync(LEANNY_CACHE_DIR, { recursive: true });
+        fs.writeFileSync(rutaCache, resp.data);
+        return rutaCache;
+    } catch (e) {
+        return null;
+    }
+}
+
 function buscarCartaPorNombreYRareza(cartasPorCodigo, nombre, rareza) {
     if (!nombre) return null;
     const nombreNormalizado = normalizeText(nombre);
@@ -788,6 +807,12 @@ async function obtenerImagenHD(cardMap, code) {
 async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, mapa, cardMap) {
     if (!rutaMaster || !data) return null;
 
+    // Se guarda el mejor illustrationId encontrado en el camino (aunque
+    // encontrarImagen no lo haya encontrado localmente) para poder probar el
+    // respaldo de Leanny al final, sin tener que repetir esa llamada en cada
+    // punto de salida de esta funcion.
+    let mejorIllustrationId = null;
+
     let cartaEncontrada = null;
     if (data.carta) {
         cartaEncontrada = data.carta;
@@ -808,12 +833,14 @@ async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, map
         }
         // Prefer IllustrationID from account/master
         if (cartaEncontrada.illustrationId) {
+            mejorIllustrationId = mejorIllustrationId || cartaEncontrada.illustrationId;
             const imagen = encontrarImagen(rutaMaster, cartaEncontrada.illustrationId);
             if (imagen) return imagen;
         }
         // Try cardMap lookup by code -> IllustrationID
         if (cardMap && cartaEncontrada.code && cardMap[cartaEncontrada.code] && cardMap[cartaEncontrada.code].IllustrationID) {
             const ilustr = cardMap[cartaEncontrada.code].IllustrationID;
+            mejorIllustrationId = mejorIllustrationId || ilustr;
             const imagen = encontrarImagen(rutaMaster, ilustr);
             if (imagen) return imagen;
         }
@@ -841,6 +868,7 @@ async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, map
         if (!elegida) elegida = variantesPorNombre[0];
         const imagenHD = await obtenerImagenHD(cardMap, elegida.code);
         if (imagenHD) return imagenHD;
+        mejorIllustrationId = mejorIllustrationId || elegida.illustrationId;
         const imagen = encontrarImagen(rutaMaster, elegida.illustrationId);
         if (imagen) return imagen;
     }
@@ -864,6 +892,7 @@ async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, map
             if (imagenHD) return imagenHD;
             const illustrationId = (masterData.cardmaster[matchingMasterKey] || {}).IllustrationID;
             if (illustrationId) {
+                mejorIllustrationId = mejorIllustrationId || illustrationId;
                 const imagen = encontrarImagen(rutaMaster, illustrationId);
                 if (imagen) return imagen;
             }
@@ -872,6 +901,15 @@ async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, map
 
     const imagenDirecta = encontrarImagen(rutaMaster, data.nombre);
     if (imagenDirecta) return imagenDirecta;
+
+    // Ultimo respaldo antes de rendirse: ninguna carpeta local tenia la
+    // imagen, pero en el camino se identifico un illustrationId real -- se
+    // intenta bajarla del recurso publico de la comunidad (ver
+    // obtenerImagenLeanny), tipico el mismo dia que sale una expansion nueva.
+    if (mejorIllustrationId) {
+        const imagenLeanny = await obtenerImagenLeanny(mejorIllustrationId);
+        if (imagenLeanny) return imagenLeanny;
+    }
 
     return null;
 }
