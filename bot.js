@@ -927,22 +927,31 @@ async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pa
     const archivosExtra = [];
 
     const rutaLogo = buscarLogoExpansionBot(expansion);
-    if (rutaLogo) {
-        const extension = path.extname(rutaLogo) || '.png';
-        embed.setThumbnail(`attachment://logo${extension}`);
-        archivosExtra.push(new AttachmentBuilder(rutaLogo, { name: `logo${extension}` }));
-    }
 
     // Collage con la imagen real de cada carta de esta pagina + badge de
     // cantidad total (a pedido explicito del usuario 2026-07-30). Si no hay
     // rutaMasterPath (Data Master Path sin configurar) simplemente no se
     // arma -- la lista de texto de arriba sigue funcionando igual sin esto.
     if (opciones.rutaMasterPath) {
-        const collageBuffer = await generarCollageCartas(items, opciones.rutaMasterPath);
+        let collageBuffer = await generarCollageCartas(items, opciones.rutaMasterPath, opciones.mapaCopias);
+        // Logo de la expansion arriba del collage (a pedido explicito del
+        // usuario 2026-07-31), en vez de solo un thumbnail chico en la
+        // esquina -- misma tecnica que ya usa s4t.js (componerLogoSobreImagen).
+        if (collageBuffer && rutaLogo) {
+            collageBuffer = await componerLogoSobreImagenBot(collageBuffer, rutaLogo);
+        } else if (rutaLogo) {
+            const extension = path.extname(rutaLogo) || '.png';
+            embed.setThumbnail(`attachment://logo${extension}`);
+            archivosExtra.push(new AttachmentBuilder(rutaLogo, { name: `logo${extension}` }));
+        }
         if (collageBuffer) {
             embed.setImage('attachment://collage.png');
             archivosExtra.push(new AttachmentBuilder(collageBuffer, { name: 'collage.png' }));
         }
+    } else if (rutaLogo) {
+        const extension = path.extname(rutaLogo) || '.png';
+        embed.setThumbnail(`attachment://logo${extension}`);
+        archivosExtra.push(new AttachmentBuilder(rutaLogo, { name: `logo${extension}` }));
     }
 
     if (archivosExtra.length) {
@@ -1253,7 +1262,7 @@ function maxCopiasCarta(mapaCopias, cartaId) {
 // sin red) -- una miniatura chica no necesita HD, y bajar HD de hasta 25
 // cartas por cada pantalla seria lento y gastaria disco de mas sin necesidad.
 // Las cartas sin imagen local encontrada se saltean (no hay nada que dibujar).
-async function generarCollageCartas(items, rutaMasterPath) {
+async function generarCollageCartas(items, rutaMasterPath, mapaCopias) {
     if (!items?.length || !rutaMasterPath) return null;
     const cardMap = cargarCardMap(rutaMasterPath);
     const CELL_W = 150, CELL_H = 210, GAP = 8, PADDING = 12;
@@ -1271,6 +1280,28 @@ async function generarCollageCartas(items, rutaMasterPath) {
         try {
             imgBuffer = await sharp(rutaImg).resize(CELL_W, CELL_H, { fit: 'cover' }).png().toBuffer();
         } catch (e) { continue; }
+
+        // Badge de cantidad (a pedido explicito del usuario 2026-07-31): el
+        // maximo que tiene UNA sola cuenta, mismo criterio real que usa Gold
+        // Cards para calificar -- no la suma entre todas las cuentas (eso
+        // mostraba numeros gigantes que no coincidian con Gold Cards).
+        const cantidad = maxCopiasCarta(mapaCopias, item.id);
+        if (cantidad > 0) {
+            const texto = `x${cantidad}`;
+            const anchoBadge = 26 + texto.length * 12;
+            const svgBadge = Buffer.from(
+                `<svg width="${anchoBadge}" height="28">` +
+                `<rect x="0" y="0" width="${anchoBadge}" height="28" rx="8" ry="8" fill="black" fill-opacity="0.72"/>` +
+                `<text x="${anchoBadge / 2}" y="19" font-size="16" font-family="Arial, sans-serif" font-weight="bold" fill="#FFD700" text-anchor="middle">${texto}</text>` +
+                `</svg>`
+            );
+            try {
+                imgBuffer = await sharp(imgBuffer)
+                    .composite([{ input: svgBadge, top: CELL_H - 28 - 6, left: CELL_W - anchoBadge - 6 }])
+                    .png()
+                    .toBuffer();
+            } catch (e) { /* si falla el badge, se muestra la imagen sin numero */ }
+        }
 
         const col = indice % COLS;
         const row = Math.floor(indice / COLS);
@@ -1291,6 +1322,39 @@ async function generarCollageCartas(items, rutaMasterPath) {
     } catch (e) {
         console.error('DEBUG: error armando el collage de cartas:', e?.message || e);
         return null;
+    }
+}
+
+// Mismo criterio que componerLogoSobreImagen de s4t.js -- agranda el canvas
+// hacia arriba y pone el logo de la expansion centrado en esa franja nueva,
+// en vez de dejarlo como un thumbnail chico aparte (a pedido explicito del
+// usuario 2026-07-31).
+async function componerLogoSobreImagenBot(bufferImagen, rutaLogo) {
+    if (!rutaLogo) return bufferImagen;
+    try {
+        const metaImagen = await sharp(bufferImagen).metadata();
+        const anchoLogo = Math.round(metaImagen.width * 0.85);
+        const logoBuffer = await sharp(rutaLogo)
+            .resize({ width: anchoLogo, fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+            .toBuffer();
+        const metaLogo = await sharp(logoBuffer).metadata();
+
+        const relleno = 20;
+        const altoFranja = metaLogo.height + relleno * 2;
+        const altoFinal = metaImagen.height + altoFranja;
+
+        return await sharp({
+            create: { width: metaImagen.width, height: altoFinal, channels: 4, background: { r: 30, g: 30, b: 36, alpha: 1 } }
+        })
+            .composite([
+                { input: bufferImagen, left: 0, top: altoFranja },
+                { input: logoBuffer, left: Math.round((metaImagen.width - metaLogo.width) / 2), top: relleno }
+            ])
+            .png()
+            .toBuffer();
+    } catch (e) {
+        console.error('DEBUG: error componiendo logo sobre el collage:', e?.message || e);
+        return bufferImagen;
     }
 }
 
@@ -1460,9 +1524,12 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     // calificadas -- entradas separadas de las de AllCards/Wishlist, para que
     // un bug ahi nunca las afecte, pero comparten la MISMA ejecucion de abajo
     // (instancia, inyeccion, OCR) ya probada.
+    // Trade/Shinedust deshabilitados temporalmente (a pedido explicito del
+    // usuario 2026-07-31): bugs reportados con la actualizacion nueva, hasta
+    // que se revisen no deben quedar disponibles para que nadie los use.
     const filaAcciones = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(true),
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary).setDisabled(true),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary)
     );
 

@@ -314,6 +314,48 @@ async function superponerBadgeWishlist(bufferCarta) {
     }
 }
 
+// Mismo badge de cantidad que ya tiene el collage de Wishlist/All Cards/Gold
+// Cards en bot.js (esquina inferior derecha) -- a pedido explicito del
+// usuario 2026-07-31, para que el collage de S4T tambien lo muestre. Acá la
+// cantidad es "cuantas veces salio esta carta en esta cuenta" (se cuenta
+// sobre accountData.pulls, la cuenta puntual del pull que se esta mandando),
+// no un cruce entre todas las cuentas guardadas -- mas simple y liviano de
+// calcular en cada pull real, sin tener que releer todos los JSON guardados.
+function contarCopiasEnCuenta(accountData, code) {
+    if (!accountData || !Array.isArray(accountData.pulls) || !code) return 0;
+    let total = 0;
+    for (const pull of accountData.pulls) {
+        if (!Array.isArray(pull.cards)) continue;
+        for (const c of pull.cards) {
+            if (normalizeCode(c) === code) total++;
+        }
+    }
+    return total;
+}
+
+async function superponerBadgeCantidad(bufferCarta, cantidad) {
+    if (!cantidad || cantidad <= 0) return bufferCarta;
+    try {
+        const metaCarta = await sharp(bufferCarta).metadata();
+        const texto = `x${cantidad}`;
+        const alto = Math.round(metaCarta.width * 0.1);
+        const ancho = Math.round(alto * (0.9 + texto.length * 0.5));
+        const margen = Math.round(metaCarta.width * 0.04);
+        const svgBadge = Buffer.from(
+            `<svg width="${ancho}" height="${alto}">` +
+            `<rect x="0" y="0" width="${ancho}" height="${alto}" rx="${alto * 0.3}" ry="${alto * 0.3}" fill="black" fill-opacity="0.72"/>` +
+            `<text x="${ancho / 2}" y="${alto * 0.68}" font-size="${alto * 0.6}" font-family="Arial, sans-serif" font-weight="bold" fill="#FFD700" text-anchor="middle">${texto}</text>` +
+            `</svg>`
+        );
+        return await sharp(bufferCarta)
+            .composite([{ input: svgBadge, left: metaCarta.width - ancho - margen, top: metaCarta.height - alto - margen }])
+            .toBuffer();
+    } catch (e) {
+        console.log('DEBUG: Error superponiendo badge de cantidad:', e.message);
+        return bufferCarta;
+    }
+}
+
 // Techo de altura por carta en el collage — sin esto, un sobre con muchas
 // cartas HD (10 en el "cuadro completo" del canal general, ver bug real
 // 2026-07-23) arma un PNG de decenas de MB y Discord lo rechaza con 413
@@ -325,15 +367,17 @@ const COLLAGE_ALTURA_MAX = 420;
 // cartas (2 packs = 10 cartas → 4 filas de 3/3/3/1, etc).
 const COLLAGE_COLUMNAS = 3;
 
-async function componerCollageImagenes(buffers, esWishlist = []) {
+async function componerCollageImagenes(buffers, esWishlist = [], cantidades = []) {
     try {
         const metas = await Promise.all(buffers.map(b => sharp(b).metadata()));
         const alturaComun = Math.min(COLLAGE_ALTURA_MAX, ...metas.map(m => m.height));
         const gap = 12;
         const redimensionadas = await Promise.all(buffers.map(async (b, i) => {
             const escala = alturaComun / metas[i].height;
-            const redimensionada = await sharp(b).resize({ height: alturaComun, width: Math.round(metas[i].width * escala) }).toBuffer();
-            return esWishlist[i] ? superponerBadgeWishlist(redimensionada) : redimensionada;
+            let redimensionada = await sharp(b).resize({ height: alturaComun, width: Math.round(metas[i].width * escala) }).toBuffer();
+            if (esWishlist[i]) redimensionada = await superponerBadgeWishlist(redimensionada);
+            if (cantidades[i]) redimensionada = await superponerBadgeCantidad(redimensionada, cantidades[i]);
+            return redimensionada;
         }));
         const metasFinal = await Promise.all(redimensionadas.map(b => sharp(b).metadata()));
 
@@ -548,6 +592,28 @@ function esRarezaGodPackAlive(rareza) {
         '2-star-rainbow',
         '2-star-full-art'
     ].includes(normalizeText(rareza));
+}
+
+// Rarezas que tumban un god pack a "dead" pero SIGUEN contando como god pack
+// (a diferencia de un diamante comun, que directamente lo saca de la
+// categoria entera -- ver esRarezaGodPackValida).
+function esRarezaGodPackDead(rareza) {
+    return [
+        '1-star-shiny',
+        '2-star-shiny',
+        'crown-rare',
+        'immersive'
+    ].includes(normalizeText(rareza));
+}
+
+// Bug real 2026-07-31 (reportado por el usuario): "es un god pack" solo
+// chequeaba "cartas.length >= 5", que es el tamaño de CUALQUIER sobre normal
+// -- terminaba marcando practicamente todos los sobres como god pack, tengan
+// o no cartas de valor. Un god pack de verdad exige que las 5 cartas sean
+// TODAS de rareza alta (alive o dead, nunca diamante) -- si aunque sea una
+// es diamante comun, no es un god pack, es un sobre normal y se ignora.
+function esRarezaGodPackValida(rareza) {
+    return esRarezaGodPackAlive(rareza) || esRarezaGodPackDead(rareza);
 }
 
 function clasificarGodPack(cartas) {
@@ -1250,7 +1316,7 @@ app.post('/', upload.any(), async (req, res) => {
         const cartasWishlistTexto = cartas.filter(c => c.isWishlist);
         console.log('DEBUG: wishlist en cartas (texto)=', cartasWishlistTexto.map(c => c.nombre).join(', ') || 'none');
 
-        const esGodPack = /god\s*pack|godpack/i.test(payload) || cartas.length >= 5;
+        const esGodPack = cartas.length >= 5 && cartas.every(c => esRarezaGodPackValida(c?.rareza));
         const tipoGodPack = esGodPack ? clasificarGodPack(cartas) : null;
 
         // Combine both sources, preferring matchedCard objects
@@ -1398,19 +1464,23 @@ app.post('/', upload.any(), async (req, res) => {
                 const listaCartas = data.cartasWishlist || data.cartasGodPack || data.cartasGeneral;
                 const buffers = [];
                 const esWishlist = [];
+                const cantidades = [];
                 for (const cartaItem of listaCartas) {
                     const imagePath = await resolverImagen(rutaMasterCfg?.webhook_url, cartaItem, cartasPorCodigo, masterData, mapa, cardMap);
                     if (imagePath) {
                         buffers.push(fs.readFileSync(imagePath));
                         esWishlist.push(!!cartaItem.isWishlist);
+                        cantidades.push(contarCopiasEnCuenta(accountData, cartaItem.code));
                     }
                 }
                 if (buffers.length === 1) {
                     // Igual que en el collage: marcar con el corazón si esa única carta
-                    // es el match de wishlist (ej. canal general con un sobre chico).
+                    // es el match de wishlist (ej. canal general con un sobre chico), y
+                    // el badge de cantidad (a pedido explicito del usuario 2026-07-31).
                     bufferImagen = esWishlist[0] ? await superponerBadgeWishlist(buffers[0]) : buffers[0];
+                    bufferImagen = await superponerBadgeCantidad(bufferImagen, cantidades[0]);
                 } else if (buffers.length > 1) {
-                    bufferImagen = await componerCollageImagenes(buffers, esWishlist);
+                    bufferImagen = await componerCollageImagenes(buffers, esWishlist, cantidades);
                 }
             } else {
                 imgPath = await resolverImagen(rutaMasterCfg?.webhook_url, data, cartasPorCodigo, masterData, mapa, cardMap);
