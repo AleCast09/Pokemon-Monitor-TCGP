@@ -986,6 +986,30 @@ function encontrarImagenPorIllustration(rutaMaster, illustrationId) {
     return fs.existsSync(ruta) ? ruta : null;
 }
 
+// Ultimo respaldo cuando la carpeta local del usuario no tiene la carta
+// (tipico el mismo dia que sale una expansion nueva, antes de que alguien la
+// suba a mano) -- a pedido explicito del usuario 2026-07-31. Repositorio
+// propio (no de un tercero) con las 3546 imagenes en baja calidad, mismo
+// nombre de archivo (IllustrationID) que ya usa CardImageCache. Se guarda
+// DIRECTO en CardImageCache (no en una carpeta aparte propia del bot) -- asi
+// no duplica peso, y una vez bajada queda indistinguible de una imagen que
+// el usuario ya tenia, sin volver a pegarle a la red por la misma carta.
+const REPO_CARTAS_BASE_BOT = 'https://raw.githubusercontent.com/AleCast09/Pokemon-TCGP-Card-Image/main';
+async function obtenerImagenRepoCartasBot(rutaMaster, illustrationId) {
+    if (!rutaMaster || !illustrationId) return null;
+    const dirCache = path.join(rutaMaster, 'CardImageCache');
+    const rutaCache = path.join(dirCache, `${illustrationId}.png`);
+    if (fs.existsSync(rutaCache)) return rutaCache;
+    try {
+        const resp = await axios.get(`${REPO_CARTAS_BASE_BOT}/${illustrationId}.png`, { responseType: 'arraybuffer', timeout: 8000 });
+        fs.mkdirSync(dirCache, { recursive: true });
+        fs.writeFileSync(rutaCache, resp.data);
+        return rutaCache;
+    } catch (e) {
+        return null;
+    }
+}
+
 // Misma caché en disco que usa s4t.js (assets/drive_cache) — arte HD real desde
 // el Drive público (ver s4t.js para la explicación completa). Si falla (sin API
 // key, sin internet, o la expansión todavía no subió), devuelve null y el que
@@ -1239,7 +1263,8 @@ async function generarCollageCartas(items, rutaMasterPath) {
     let indice = 0;
     for (const item of items) {
         const info = cardMap?.[item.id];
-        const rutaImg = encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID);
+        const rutaImg = encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID)
+            || (await obtenerImagenRepoCartasBot(rutaMasterPath, info?.IllustrationID));
         if (!rutaImg) continue;
 
         let imgBuffer;
@@ -1374,7 +1399,8 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     // existe para esa carta, con la misma cadena de respaldo de siempre si no.
     const imagenPath = (datosGold ? await obtenerImagenGoldBot(cardMap, cartaId) : null)
         || (await obtenerImagenHDBot(cardMap, cartaId))
-        || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID);
+        || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID)
+        || (await obtenerImagenRepoCartasBot(rutaMasterPath, info?.IllustrationID));
 
     const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombre)];
     const trainerType = trainerTypeDesdeId(cartaId, rutaMasterPath);

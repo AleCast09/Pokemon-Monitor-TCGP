@@ -1,6 +1,7 @@
 {
-  "version": "1.5.24",
+  "version": "1.5.26",
   "notes": [
+    "Fixed: cards from a brand-new expansion showed no image anywhere (collage, card lookup, S4T alerts) until someone downloaded them locally by hand or Kevin uploaded them to Drive - now falls back automatically to Ale's own card image repository, caching it locally the first time so it works from day one of a new set's release.",
     "New: Wishlist, All Cards and Gold Cards now show a collage with the real image of every card on the page (after picking expansion + rarity), instead of just a text list - easier to recognize cards at a glance.",
     "Removed the manual instance-picker (\"⚙️ Settings Trade\" inside the Trading channel) - it let anyone open any instance and send friend requests by hand, bypassing the automatic 🔄 Trade flow. That automatic flow is the only supported way to trade now.",
     "Removed \"Cards Wishlist\"/\"All Cards\"/\"Gold Cards\"/\"Extract XML\"/\"Auto Trade\" buttons from the /setup panel - redundant now that each has its own channel with direct access.",

@@ -663,6 +663,28 @@ function encontrarImagen(rutaMaster, nombreArchivo) {
     return rutas.find(ruta => fs.existsSync(ruta)) || null;
 }
 
+// Ver la nota igual en bot.js (obtenerImagenRepoCartasBot) -- mismo
+// repositorio propio, ultimo recurso cuando la carpeta local del usuario no
+// tiene la carta (tipico el mismo dia que sale una expansion nueva). Se
+// guarda DIRECTO en CardImageCache (no en una carpeta aparte) para no
+// duplicar peso -- una vez bajada queda igual que una imagen que el usuario
+// ya tenia.
+const REPO_CARTAS_BASE = 'https://raw.githubusercontent.com/AleCast09/Pokemon-TCGP-Card-Image/main';
+async function obtenerImagenRepoCartas(rutaMaster, illustrationId) {
+    if (!rutaMaster || !illustrationId) return null;
+    const dirCache = path.join(rutaMaster, 'CardImageCache');
+    const rutaCache = path.join(dirCache, `${illustrationId}.png`);
+    if (fs.existsSync(rutaCache)) return rutaCache;
+    try {
+        const resp = await axios.get(`${REPO_CARTAS_BASE}/${illustrationId}.png`, { responseType: 'arraybuffer', timeout: 8000 });
+        fs.mkdirSync(dirCache, { recursive: true });
+        fs.writeFileSync(rutaCache, resp.data);
+        return rutaCache;
+    } catch (e) {
+        return null;
+    }
+}
+
 function buscarCartaPorNombreYRareza(cartasPorCodigo, nombre, rareza) {
     if (!nombre) return null;
     const nombreNormalizado = normalizeText(nombre);
@@ -788,6 +810,12 @@ async function obtenerImagenHD(cardMap, code) {
 async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, mapa, cardMap) {
     if (!rutaMaster || !data) return null;
 
+    // Se guarda el mejor illustrationId encontrado en el camino (aunque
+    // encontrarImagen no lo haya encontrado localmente) para poder probar el
+    // respaldo del repositorio propio al final, sin repetir esa llamada en
+    // cada punto de salida de esta funcion.
+    let mejorIllustrationId = null;
+
     let cartaEncontrada = null;
     if (data.carta) {
         cartaEncontrada = data.carta;
@@ -808,12 +836,14 @@ async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, map
         }
         // Prefer IllustrationID from account/master
         if (cartaEncontrada.illustrationId) {
+            mejorIllustrationId = mejorIllustrationId || cartaEncontrada.illustrationId;
             const imagen = encontrarImagen(rutaMaster, cartaEncontrada.illustrationId);
             if (imagen) return imagen;
         }
         // Try cardMap lookup by code -> IllustrationID
         if (cardMap && cartaEncontrada.code && cardMap[cartaEncontrada.code] && cardMap[cartaEncontrada.code].IllustrationID) {
             const ilustr = cardMap[cartaEncontrada.code].IllustrationID;
+            mejorIllustrationId = mejorIllustrationId || ilustr;
             const imagen = encontrarImagen(rutaMaster, ilustr);
             if (imagen) return imagen;
         }
@@ -841,6 +871,7 @@ async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, map
         if (!elegida) elegida = variantesPorNombre[0];
         const imagenHD = await obtenerImagenHD(cardMap, elegida.code);
         if (imagenHD) return imagenHD;
+        mejorIllustrationId = mejorIllustrationId || elegida.illustrationId;
         const imagen = encontrarImagen(rutaMaster, elegida.illustrationId);
         if (imagen) return imagen;
     }
@@ -864,6 +895,7 @@ async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, map
             if (imagenHD) return imagenHD;
             const illustrationId = (masterData.cardmaster[matchingMasterKey] || {}).IllustrationID;
             if (illustrationId) {
+                mejorIllustrationId = mejorIllustrationId || illustrationId;
                 const imagen = encontrarImagen(rutaMaster, illustrationId);
                 if (imagen) return imagen;
             }
@@ -872,6 +904,15 @@ async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, map
 
     const imagenDirecta = encontrarImagen(rutaMaster, data.nombre);
     if (imagenDirecta) return imagenDirecta;
+
+    // Ultimo respaldo antes de rendirse: ninguna carpeta local tenia la
+    // imagen, pero en el camino se identifico un illustrationId real -- se
+    // busca en el repositorio propio (ver obtenerImagenRepoCartas), tipico
+    // el mismo dia que sale una expansion nueva.
+    if (mejorIllustrationId) {
+        const imagenRepo = await obtenerImagenRepoCartas(rutaMaster, mejorIllustrationId);
+        if (imagenRepo) return imagenRepo;
+    }
 
     return null;
 }
