@@ -5557,6 +5557,13 @@ client.on('interactionCreate', async interaction => {
             )
             .setFooter({ text: 'Links stop working if the bot restarts.' })
             .setColor(0xE91E63);
+        // Mismo logo de Pokemon TCG Pocket que ya usan el resto de los embeds
+        // del bot (a pedido explicito del usuario 2026-08-01).
+        const embedFiles = [];
+        if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+            embed.setThumbnail('attachment://symbol.png');
+            embedFiles.push(new AttachmentBuilder(SYMBOL_EMBEDS_PATH, { name: 'symbol.png' }));
+        }
 
         try {
             const webhookInfo = new WebhookClient({ url: canalInfoAccounts.webhook_url });
@@ -5565,7 +5572,7 @@ client.on('interactionCreate', async interaction => {
             // el MISMO mensaje, Discord siempre pinta los adjuntos arriba del
             // embed sin importar el orden en el payload -- la unica forma de
             // que el embed quede primero es que sea un mensaje aparte, antes.
-            await webhookInfo.send({ embeds: [embed] });
+            await webhookInfo.send({ embeds: [embed], files: embedFiles });
             await webhookInfo.send({ files: [new AttachmentBuilder(archivo), new AttachmentBuilder(archivoJson)] });
             return await interaction.editReply({ content: '✅ Sent to your Info Accounts channel.', components: [] });
         } catch (e) {
