@@ -1,7 +1,8 @@
 {
-  "version": "1.5.30",
+  "version": "1.5.31",
   "notesCount": 1,
   "notes": [
+    "Fixed: the Info Accounts remote-access link still didn't show up after \"Update Now\" - now downloads what it needs on its own.",
     "Fixed: the Info Accounts remote-access link now works for everyone, not just this PC.",
     "Fixed: some installs could end up reporting \"you're on the latest version\" without actually having that version's code, if an update attempt failed partway through - this forces every install to genuinely re-check and re-download, closing that gap.",
     "New: Info Accounts web dashboard - full card gallery for an account (grouped by expansion, rarity filter, click to zoom, quantity badges), reachable from Discord and shareable via a Download PDF button.",

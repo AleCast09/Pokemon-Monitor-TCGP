@@ -3262,13 +3262,40 @@ lightbox.addEventListener('click', function () {
 // explicito del usuario 2026-07-31: "no estoy en el mismo wifi"). Si no esta
 // el binario (bin/cloudflared.exe) simplemente no arranca el tunel y el link
 // cae de vuelta a localhost/IP de LAN -- no bloquea el resto del bot.
-// bin/ se copia al paquete en scripts/build-exe.js (copiarBin) para que
-// funcione en cualquier instalacion, no solo en esta PC.
-let DASHBOARD_PUBLIC_URL = null;
-function iniciarTunelDashboard(puerto) {
+// bin/ se copia al paquete en scripts/build-exe.js (copiarBin) SOLO para
+// quien baja el zip completo de cero -- quien ya tenia el programa instalado
+// y solo usa "Update Now" (reemplaza el .exe + assets/, nunca crea carpetas
+// nuevas) nunca iba a terminar teniendolo (bug real 2026-08-01, confirmado
+// por Ale probando como usuario). Por eso ademas se autodescarga una sola
+// vez desde el repositorio oficial de Cloudflare si no esta presente.
+const CLOUDFLARED_URL_OFICIAL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe';
+async function asegurarCloudflaredBot() {
     const rutaCloudflared = path.join(__dirname, 'bin', 'cloudflared.exe');
-    if (!fs.existsSync(rutaCloudflared)) {
-        console.log('DEBUG: cloudflared.exe no encontrado en bin/ -- Info Accounts solo estara disponible en la misma red.');
+    if (fs.existsSync(rutaCloudflared)) return rutaCloudflared;
+    try {
+        fs.mkdirSync(path.dirname(rutaCloudflared), { recursive: true });
+        const rutaTemporal = `${rutaCloudflared}.descargando`;
+        const respuesta = await axios.get(CLOUDFLARED_URL_OFICIAL, { responseType: 'stream', timeout: 120000, maxRedirects: 5 });
+        await new Promise((resolve, reject) => {
+            const archivo = fs.createWriteStream(rutaTemporal);
+            respuesta.data.pipe(archivo);
+            archivo.on('finish', resolve);
+            archivo.on('error', reject);
+        });
+        fs.renameSync(rutaTemporal, rutaCloudflared);
+        console.log('✅ cloudflared.exe descargado automaticamente -- Info Accounts ya puede armar un link publico.');
+        return rutaCloudflared;
+    } catch (e) {
+        console.log('DEBUG: no se pudo descargar cloudflared.exe automaticamente:', e.message);
+        return null;
+    }
+}
+
+let DASHBOARD_PUBLIC_URL = null;
+async function iniciarTunelDashboard(puerto) {
+    const rutaCloudflared = await asegurarCloudflaredBot();
+    if (!rutaCloudflared) {
+        console.log('DEBUG: cloudflared.exe no disponible -- Info Accounts solo estara disponible en la misma red.');
         return;
     }
     try {
