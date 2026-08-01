@@ -1,7 +1,8 @@
 {
-  "version": "1.5.28",
-  "notesCount": 7,
+  "version": "1.5.29",
+  "notesCount": 1,
   "notes": [
+    "Fixed: some installs could end up reporting \"you're on the latest version\" without actually having that version's code, if an update attempt failed partway through - this forces every install to genuinely re-check and re-download, closing that gap.",
     "New: Info Accounts web dashboard - full card gallery for an account (grouped by expansion, rarity filter, click to zoom, quantity badges), reachable from Discord and shareable via a Download PDF button.",
     "New: Info Accounts button added directly on card lookups (not just Extract XML) - pick the account and it posts the XML, JSON, total card count and dashboard links to your Info Accounts channel.",
     "Fixed: Alolan/Galarian/Hisuian/Paldean cards showed \"Element: Unknown\" - their names come glued together with no space in the game's data, so the lookup never matched.",
