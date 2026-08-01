@@ -75,6 +75,18 @@ function copiarAssets() {
     }
 }
 
+function copiarBin() {
+    // cloudflared.exe (tunel publico de Info Accounts) vivia solo en el bin/
+    // local de esta PC -- nunca se copiaba al paquete, asi que unicamente Ale
+    // (corriendo desde el codigo fuente vía PM2) tenia el link "Desde
+    // cualquier red"; cualquier otra instalacion (.exe/zip distribuido) caia
+    // siempre a localhost/LAN. Se copia igual que assets/ para que quede
+    // disponible para todos.
+    const origen = path.join(RAIZ, 'bin');
+    if (!fs.existsSync(origen)) return;
+    fs.cpSync(origen, path.join(DIST, 'bin'), { recursive: true });
+}
+
 function copiarLanzador() {
     // Estos 4 quedan en una subcarpeta "Advanced" — ya no hace falta que el
     // usuario los toque directo (el panel de control ya cubre Iniciar/
@@ -230,6 +242,7 @@ async function main() {
     console.log('3/6 — Copiando assets y lanzador...');
     copiarAssets();
     copiarLanzador();
+    copiarBin();
 
     console.log('4/6 — Generando el ejecutable...');
     empaquetarSea();

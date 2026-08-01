@@ -50,7 +50,8 @@ Ports in use.txt
 MonitorPokemonPanel.exe
 
 # Binario de terceros (cloudflared.exe, ~54MB) para el tunel publico de Info
-# Accounts -- no tiene sentido versionarlo en el repo de codigo fuente. Para
-# la version empaquetada (.exe distribuido a otros usuarios) todavia falta
-# resolver como se bundlea/descarga esto -- pendiente.
+# Accounts -- no tiene sentido versionarlo en el repo de codigo fuente (pesa
+# demasiado y no cambia). Si existe localmente en bin/, scripts/build-exe.js
+# lo copia igual al paquete distribuido (dist/bin), asi el tunel funciona
+# para todos, no solo en esta PC.
 bin/

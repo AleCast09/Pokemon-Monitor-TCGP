@@ -3261,9 +3261,9 @@ lightbox.addEventListener('click', function () {
 // funcione desde CUALQUIER red, no solo la misma WiFi que la PC (a pedido
 // explicito del usuario 2026-07-31: "no estoy en el mismo wifi"). Si no esta
 // el binario (bin/cloudflared.exe) simplemente no arranca el tunel y el link
-// cae de vuelta a localhost/IP de LAN -- no bloquea el resto del bot. Nota:
-// para la version empaquetada (.exe distribuido) este binario tendria que
-// venir incluido como asset aparte, todavia no esta resuelto.
+// cae de vuelta a localhost/IP de LAN -- no bloquea el resto del bot.
+// bin/ se copia al paquete en scripts/build-exe.js (copiarBin) para que
+// funcione en cualquier instalacion, no solo en esta PC.
 let DASHBOARD_PUBLIC_URL = null;
 function iniciarTunelDashboard(puerto) {
     const rutaCloudflared = path.join(__dirname, 'bin', 'cloudflared.exe');
