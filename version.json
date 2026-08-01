@@ -1,7 +1,14 @@
 {
-  "version": "1.5.27",
-  "notesCount": 4,
+  "version": "1.5.28",
+  "notesCount": 7,
   "notes": [
+    "New: Info Accounts web dashboard - full card gallery for an account (grouped by expansion, rarity filter, click to zoom, quantity badges), reachable from Discord and shareable via a Download PDF button.",
+    "New: Info Accounts button added directly on card lookups (not just Extract XML) - pick the account and it posts the XML, JSON, total card count and dashboard links to your Info Accounts channel.",
+    "Fixed: Alolan/Galarian/Hisuian/Paldean cards showed \"Element: Unknown\" - their names come glued together with no space in the game's data, so the lookup never matched.",
+    "Fixed: /card, /wishlist and /goldcards ignored the expansion/rarity filters unless you also picked a card name - now they jump straight to the right list.",
+    "Fixed: the channel panel (All Cards/Wishlist/Gold Cards) was moving itself to the bottom just from opening a card's XML view - now it only moves when you run the command yourself.",
+    "Added: a Quantity badge (overlaid on the image) on single-card lookups, matching the collage style.",
+    "Removed the control panel's auto-launch shortcut at Windows startup.",
     "Fixed: God Pack detection was flagging every normal pack, not just real god packs.",
     "Added: quantity badge back on card collages, expansion logo now above the collage.",
     "Added: quantity badge on S4T/God Pack alert collages too.",
