@@ -65,22 +65,16 @@ function carpetaInicioWindows() {
     return path.join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
 }
 
-function crearAccesoDirectoInicioAutomatico() {
+// Hasta 2026-07-31 esto CREABA el acceso directo (arrancaba el panel solo con
+// Windows) -- a pedido explicito del usuario ("esto no deberia aparecer al
+// iniciar la PC") ahora hace lo contrario: si de una version vieja ya quedo
+// puesto, lo saca. El bot en si sigue arrancando con Windows via PM2 (eso no
+// cambia), solo el panel de control deja de abrirse solo.
+function limpiarAccesoDirectoInicioAutomatico() {
     const carpeta = carpetaInicioWindows();
     if (!carpeta) return;
     const rutaAcceso = path.join(carpeta, 'Monitor Pokemon.lnk');
-    if (fs.existsSync(rutaAcceso)) return;
-    // Antes apuntaba directo a "Start Monitor Pokemon.bat" (todo oculto, sin
-    // ninguna ventana visible al arrancar Windows). Ahora apunta al panel de
-    // control — el panel arranca el bot solo si hace falta (mismo resultado
-    // de siempre) pero deja una ventana real con botones en vez de que todo
-    // sea invisible.
-    const destino = path.join(__dirname, 'Open Control Panel.bat');
-    if (!fs.existsSync(destino)) return;
-    // WindowStyle 7 = minimizado — la consola del .bat/PowerShell no se ve,
-    // pero la ventana real del panel (WinForms) sí se muestra igual.
-    const script = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${rutaAcceso.replace(/'/g, "''")}'); $s.TargetPath = '${destino.replace(/'/g, "''")}'; $s.WorkingDirectory = '${__dirname.replace(/'/g, "''")}'; $s.WindowStyle = 7; $s.Save()`;
-    exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
+    try { fs.unlinkSync(rutaAcceso); } catch (e) { /* no existia, nada que limpiar */ }
 }
 
 function tomarLock() {
@@ -311,7 +305,7 @@ async function main() {
     }
     crearAccesoDirectoConfigurar();
     limpiarAccesoDirectoPanelViejo();
-    crearAccesoDirectoInicioAutomatico();
+    limpiarAccesoDirectoInicioAutomatico();
     iniciarBandejaSistema();
 
     logLinea('🚀 Monitor Pokémon — starting bot, trading and heartbeat...');

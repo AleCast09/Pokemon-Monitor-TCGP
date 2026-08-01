@@ -48,3 +48,9 @@ Ports in use.txt
 # Panel de control compilado sueltos en la raiz (uso local de desarrollo) -
 # la version real que se distribuye sale de dist/, generada por build-exe.js
 MonitorPokemonPanel.exe
+
+# Binario de terceros (cloudflared.exe, ~54MB) para el tunel publico de Info
+# Accounts -- no tiene sentido versionarlo en el repo de codigo fuente. Para
+# la version empaquetada (.exe distribuido a otros usuarios) todavia falta
+# resolver como se bundlea/descarga esto -- pendiente.
+bin/

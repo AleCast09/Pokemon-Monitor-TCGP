@@ -11,18 +11,21 @@ const {
     AttachmentBuilder, WebhookClient
 } = require('discord.js');
 const axios = require('axios');
+const express = require('express');
+const crypto = require('crypto');
 const FormData = require('form-data');
 const { exec, execSync, execFileSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const sharp = require('./native-require.js')('sharp');
+const PDFDocument = require('pdfkit');
 const db = require('./database.js');
 
 const heartbeatScript = require('./heartbeat.js');
 const configScript = require('./config.js');
 const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion, describirError, notasParaEmbed } = require('./update-checker.js');
-const { obtenerMapaEmojisGuild } = require('./guild-emojis.js');
+const { obtenerMapaEmojisGuild, FUENTES_EMOJIS } = require('./guild-emojis.js');
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
 iniciarAutoSyncCardTypes();
 
@@ -93,7 +96,8 @@ const ETIQUETAS_TIPO_WEBHOOK = {
     'cmd_build_embed': 'Build Embed',
     'cmd_build_webhooks': 'Build Webhooks',
     'shinedust': 'Shinedust',
-    'cmd_card_gold': 'Gold Cards'
+    'cmd_card_gold': 'Gold Cards',
+    'info_accounts': 'Info Accounts'
 };
 // Nombre por defecto que se le pone al webhook AL CREARLO (no confundir con
 // ETIQUETAS_TIPO_WEBHOOK, que es solo para mostrar en las listas de /webhook)
@@ -130,7 +134,8 @@ const NOMBRES_DEFAULT_WEBHOOK = {
     'cmd_card_all': 'AllCards ⚡',
     'cmd_extract_xlm': 'Extract XML 📄',
     'cmd_run_instance': 'Trading 🔄',
-    'shinedust': 'Shinedust 🍬'
+    'shinedust': 'Shinedust 🍬',
+    'info_accounts': 'Info Accounts 📋'
 };
 function nombreDefaultWebhook(tipo) {
     return NOMBRES_DEFAULT_WEBHOOK[tipo] || `Bot ${tipo}`;
@@ -169,7 +174,8 @@ const AVATARES_DEFAULT_WEBHOOK = {
     'cmd_extract_xlm': path.join(__dirname, 'assets', 'element', 'Leyenda.png'),
     'cmd_card_all': path.join(__dirname, 'assets', 'element', 'Tarjeta_de_puntos_grande.png'),
     'cmd_card_wishlist': path.join(__dirname, 'assets', 'element', 'list.png'),
-    'shinedust': path.join(__dirname, 'assets', 'element', 'coin_bag_3.png')
+    'shinedust': path.join(__dirname, 'assets', 'element', 'coin_bag_3.png'),
+    'info_accounts': path.join(__dirname, 'assets', 'element', 'Diario_DBPR.png')
 };
 function avatarDefaultWebhook(tipo) {
     return AVATARES_DEFAULT_WEBHOOK[tipo] || 'https://i.imgur.com/gK1q9yS.png';
@@ -933,7 +939,7 @@ async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pa
     // rutaMasterPath (Data Master Path sin configurar) simplemente no se
     // arma -- la lista de texto de arriba sigue funcionando igual sin esto.
     if (opciones.rutaMasterPath) {
-        let collageBuffer = await generarCollageCartas(items, opciones.rutaMasterPath, opciones.mapaCopias);
+        let collageBuffer = await generarCollageCartas(items, opciones.rutaMasterPath, opciones.mapaCopias, opciones.prefijo === 'goldcards');
         // Logo de la expansion arriba del collage (a pedido explicito del
         // usuario 2026-07-31), en vez de solo un thumbnail chico en la
         // esquina -- misma tecnica que ya usa s4t.js (componerLogoSobreImagen).
@@ -1073,10 +1079,10 @@ async function driveHdRegularHabilitado() {
     return fila?.status === 'on';
 }
 
-async function obtenerImagenHDBot(cardMap, cartaId) {
+async function obtenerImagenHDBot(cardMap, cartaId, forzar = false) {
     const info = cardMap?.[cartaId];
     if (!info?.ExpansionID || !info?.CollectionNumber || !GOOGLE_DRIVE_API_KEY_BOT || !GOOGLE_DRIVE_HD_ENABLED_BOT) return null;
-    if (!(await driveHdRegularHabilitado())) return null;
+    if (!forzar && !(await driveHdRegularHabilitado())) return null;
 
     const localId = String(info.CollectionNumber).padStart(3, '0');
     const dirCache = path.join(DRIVE_CACHE_DIR_BOT, info.ExpansionID);
@@ -1262,7 +1268,7 @@ function maxCopiasCarta(mapaCopias, cartaId) {
 // sin red) -- una miniatura chica no necesita HD, y bajar HD de hasta 25
 // cartas por cada pantalla seria lento y gastaria disco de mas sin necesidad.
 // Las cartas sin imagen local encontrada se saltean (no hay nada que dibujar).
-async function generarCollageCartas(items, rutaMasterPath, mapaCopias) {
+async function generarCollageCartas(items, rutaMasterPath, mapaCopias, esGoldCards = false) {
     if (!items?.length || !rutaMasterPath) return null;
     const cardMap = cargarCardMap(rutaMasterPath);
     const CELL_W = 150, CELL_H = 210, GAP = 8, PADDING = 12;
@@ -1272,7 +1278,14 @@ async function generarCollageCartas(items, rutaMasterPath, mapaCopias) {
     let indice = 0;
     for (const item of items) {
         const info = cardMap?.[item.id];
-        const rutaImg = encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID)
+        // Mismo orden que la vista individual de carta (construirEmbedDetalleCarta)
+        // -- antes el collage se saltaba directo a local/repositorio y nunca
+        // consultaba el Drive, asi que la grilla se veia en baja calidad aunque
+        // el toggle "Normal Cards HD" estuviera prendido (bug real reportado
+        // 2026-07-31: HD andaba bien al entrar al detalle de una carta, pero no
+        // en la grilla de Wishlist/All Cards/Gold Cards).
+        const rutaImg = (await obtenerImagenHDBot(cardMap, item.id))
+            || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID)
             || (await obtenerImagenRepoCartasBot(rutaMasterPath, info?.IllustrationID));
         if (!rutaImg) continue;
 
@@ -1281,11 +1294,14 @@ async function generarCollageCartas(items, rutaMasterPath, mapaCopias) {
             imgBuffer = await sharp(rutaImg).resize(CELL_W, CELL_H, { fit: 'cover' }).png().toBuffer();
         } catch (e) { continue; }
 
-        // Badge de cantidad (a pedido explicito del usuario 2026-07-31): el
-        // maximo que tiene UNA sola cuenta, mismo criterio real que usa Gold
-        // Cards para calificar -- no la suma entre todas las cuentas (eso
-        // mostraba numeros gigantes que no coincidian con Gold Cards).
-        const cantidad = maxCopiasCarta(mapaCopias, item.id);
+        // Badge de cantidad (a pedido explicito del usuario 2026-07-31): en
+        // Gold Cards es el maximo que tiene UNA sola cuenta (el mismo criterio
+        // real que decide si califica como Gold). En Wishlist/All Cards es la
+        // SUMA entre todas las cuentas (el total real que el usuario tiene) --
+        // ahi no hay ninguna calificacion de por medio, asi que mostrar el
+        // maximo por cuenta confundia (ej. "x1" con 2 cuentas de 1 copia cada
+        // una, cuando en total el usuario tiene 2).
+        const cantidad = esGoldCards ? maxCopiasCarta(mapaCopias, item.id) : sumaCopiasCarta(mapaCopias, item.id);
         if (cantidad > 0) {
             const texto = `x${cantidad}`;
             const anchoBadge = 26 + texto.length * 12;
@@ -1354,6 +1370,37 @@ async function componerLogoSobreImagenBot(bufferImagen, rutaLogo) {
             .toBuffer();
     } catch (e) {
         console.error('DEBUG: error componiendo logo sobre el collage:', e?.message || e);
+        return bufferImagen;
+    }
+}
+
+// Badge de cantidad superpuesto en la imagen del detalle de carta (a pedido
+// explicito del usuario 2026-07-31, mostrando como referencia su propio
+// dashboard de PTCGPB) -- mismo estilo visual que ya usa generarCollageCartas,
+// pero con el tamaño calculado como % de la imagen real (que acá es la carta
+// individual a resolucion completa, no una miniatura de collage de tamaño
+// fijo).
+async function superponerBadgeCantidadCartaBot(bufferImagen, cantidad) {
+    try {
+        const meta = await sharp(bufferImagen).metadata();
+        const alto = meta.height, ancho = meta.width;
+        const texto = `x${cantidad}`;
+        const altoBadge = Math.round(alto * 0.09);
+        const fontSize = Math.round(altoBadge * 0.55);
+        const anchoBadge = Math.round(altoBadge * 0.9 + texto.length * fontSize * 0.62);
+        const margen = Math.round(alto * 0.02);
+        const svgBadge = Buffer.from(
+            `<svg width="${anchoBadge}" height="${altoBadge}">` +
+            `<rect x="0" y="0" width="${anchoBadge}" height="${altoBadge}" rx="${Math.round(altoBadge / 3)}" ry="${Math.round(altoBadge / 3)}" fill="black" fill-opacity="0.72"/>` +
+            `<text x="${anchoBadge / 2}" y="${Math.round(altoBadge * 0.7)}" font-size="${fontSize}" font-family="Arial, sans-serif" font-weight="bold" fill="#FFD700" text-anchor="middle">${texto}</text>` +
+            `</svg>`
+        );
+        return await sharp(bufferImagen)
+            .composite([{ input: svgBadge, top: alto - altoBadge - margen, left: ancho - anchoBadge - margen }])
+            .png()
+            .toBuffer();
+    } catch (e) {
+        console.error('DEBUG: error superponiendo badge de cantidad en detalle de carta:', e?.message || e);
         return bufferImagen;
     }
 }
@@ -1480,6 +1527,21 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         elemento = 'Unknown';
     }
 
+    // Cantidad total (a pedido explicito del usuario 2026-07-31): suma entre
+    // TODAS las cuentas guardadas, mismo criterio que ya usa el collage de
+    // Wishlist/All Cards ("cuantas tengo en total") -- en Gold Cards no hace
+    // falta, ese contexto ya muestra su propio detalle de cuentas calificadas
+    // mas abajo (datosGold). Se muestra como badge superpuesto en la esquina
+    // de la imagen (mismo estilo que el collage), no como texto en el embed --
+    // a pedido explicito del usuario, mostrando como referencia el estilo de
+    // badge que ya usa en otras pantallas.
+    let cantidadTotal = 0;
+    if (!datosGold) {
+        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+        const mapaCopias = construirMapaCopiasPorCarta(rutaJsonCfg?.webhook_url);
+        cantidadTotal = sumaCopiasCarta(mapaCopias, cartaId);
+    }
+
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${nombre}`)
         .setDescription(`**Expansion:** ${expansionNombre}\n**Name:** ${nombre}\n**Element:** ${elemento}\n**Category:** ${categoria}\n**ID:** \`${cartaId}\``)
@@ -1517,6 +1579,15 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
             .setLabel('🏠 Home')
             .setStyle(ButtonStyle.Secondary)
     );
+    // Info Accounts va en esta primera fila (no en la de abajo) para que
+    // queden 3 botones arriba y 3 abajo en vez de 2 y 4 (a pedido explicito
+    // del usuario 2026-07-31, "que se vean 3 arriba y 3 abajo").
+    botones.push(
+        new ButtonBuilder()
+            .setCustomId(datosGold ? `goldcards_info_accounts::${cartaId}` : `card_info_accounts::${cartaId}`)
+            .setLabel('📋 Info Accounts')
+            .setStyle(ButtonStyle.Secondary)
+    );
     const filaXml = new ActionRowBuilder().addComponents(...botones);
 
     // En Gold Cards, Trade/Shinedust tienen su propio boton de entrada
@@ -1542,6 +1613,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         let buffer = fs.readFileSync(imagenPath);
         const rutaLogo = buscarLogoExpansionBot(expansionNombre);
         if (rutaLogo) buffer = await componerLogoSobreImagenBot(buffer, rutaLogo);
+        if (cantidadTotal > 0) buffer = await superponerBadgeCantidadCartaBot(buffer, cantidadTotal);
         embed.setImage('attachment://carta.png');
         archivosPayload.push(new AttachmentBuilder(buffer, { name: 'carta.png' }));
     }
@@ -2698,6 +2770,545 @@ function buscarArchivoJsonPorDeviceAccount(rutaBase, deviceAccount) {
     return null;
 }
 
+// PDF de "Info Accounts" (a pedido explicito del usuario 2026-07-31): reporte
+// completo de una cuenta puntual, agrupado por expansion, con el nombre de
+// cada carta y cuantas veces salio en toda la historia de pulls guardada de
+// esa cuenta -- mismo conteo que ya usa Gold Cards/construirMapaCopiasPorCarta,
+// pero acotado a UNA sola cuenta (el archivo JSON que ya se identifico en el
+// flujo de Extract XML), no un cruce entre todas las cuentas guardadas.
+async function generarInfoAccountsPDF(rutaMasterPath, archivoJson, escalaRender = 3, calidadJpeg = 90) {
+    const accountData = leerJsonSeguro(archivoJson);
+    if (!accountData || !Array.isArray(accountData.pulls)) return null;
+
+    const conteoPorCodigo = {};
+    for (const pull of accountData.pulls) {
+        if (!Array.isArray(pull.cards)) continue;
+        for (const code of pull.cards) {
+            conteoPorCodigo[code] = (conteoPorCodigo[code] || 0) + 1;
+        }
+    }
+
+    const cardMap = cargarCardMap(rutaMasterPath);
+    const en_US = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json')) : null;
+    const cardmaster = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json')) : null;
+    const expansiones = construirMapaExpansiones(en_US);
+
+    const porExpansion = {};
+    for (const [code, cantidad] of Object.entries(conteoPorCodigo)) {
+        const infoMapa = cardMap?.[code];
+        const expansionId = infoMapa?.ExpansionID;
+        const nombreExpansion = expansionId ? (expansiones[expansionId] || expansionId) : 'Unknown';
+        const infoMaster = cardmaster?.[code];
+        const nombreCarta = (infoMaster?.Name && en_US?.[infoMaster.Name]) || infoMaster?.Name || code;
+        if (!porExpansion[nombreExpansion]) porExpansion[nombreExpansion] = [];
+        porExpansion[nombreExpansion].push({ nombre: nombreCarta, cantidad, illustrationId: infoMapa?.IllustrationID, code });
+    }
+    for (const lista of Object.values(porExpansion)) {
+        lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
+    }
+    const expansionesOrdenadas = Object.keys(porExpansion).sort();
+
+    // Miniatura por carta: HD del Drive SI YA ESTA CACHEADA en disco (de una
+    // vista de Gold Cards/S4T/card, sin llamada en vivo a la API -- eso ya se
+    // probo y para cuentas grandes Google corta por limite de cuota), sino
+    // disco local, sino el repositorio propio. A pedido explicito del usuario
+    // 2026-07-31 tras confirmar que ciertas cartas puntuales (ej. Greninja
+    // rareza R) tienen un defecto de fabrica horneado en el PNG de baja
+    // resolucion (un arco negro en una esquina) que la version HD del Drive
+    // no tiene -- osea que ademas de mejor calidad, evita defectos reales.
+    // Celdas mas grandes (4 por fila en vez de 5) y la miniatura se renderiza a
+    // 3x su tamaño de despliegue (ESCALA_RENDER) antes de meterla en el PDF --
+    // sharp.resize(CELL_W, CELL_H) generaba una imagen de solo esos pixeles,
+    // que puesta en una caja del mismo tamaño en puntos da ~72 DPI (se ve
+    // pixelada al hacer zoom en el PDF). A pedido explicito del usuario el peso
+    // no importa, asi que se prioriza nitidez.
+    // CELL_W/H son el tamaño de la IMAGEN; cada tarjeta ademas suma
+    // TILE_PADDING de aire alrededor (fondo oscuro + borde), como el
+    // .card-tile de la pagina web -- por eso son mas chicas que antes, para
+    // que 4 por fila sigan entrando en el ancho de la pagina.
+    const CELL_W = 105, CELL_H = 147, GAP = 8, COLS = 4, TILE_PADDING = 8;
+    const anchoUtil = 595 - 40 * 2; // A4 (pdfkit default) menos margenes de 40
+    const margenIzq = 40;
+
+    // Badge de cantidad superpuesto en la imagen (a pedido explicito del
+    // usuario 2026-07-31, mostrandole como referencia su propio dashboard
+    // "Card Library" de PTCGPB): en vez de imprimir "{nombre} xN" como texto
+    // debajo de cada miniatura, la cantidad va como badge sobre la esquina de
+    // la carta -- mismo estilo visual que ya usa generarCollageCartas para
+    // Wishlist/All Cards/Gold Cards, sin nombre de carta en ningun lado.
+    function obtenerImagenHDCacheadaBot(cartaId) {
+        const info = cardMap?.[cartaId];
+        if (!info?.ExpansionID || !info?.CollectionNumber) return null;
+        const localId = String(info.CollectionNumber).padStart(3, '0');
+        const rutaCache = path.join(DRIVE_CACHE_DIR_BOT, info.ExpansionID, `${localId}.png`);
+        return fs.existsSync(rutaCache) ? rutaCache : null;
+    }
+
+    const anchoRenderCelda = Math.round(CELL_W * escalaRender);
+    const altoRenderCelda = Math.round(CELL_H * escalaRender);
+    const todasLasCartas = Object.values(porExpansion).flat();
+    const buffersPorCodigo = new Map();
+    for (const carta of todasLasCartas) {
+        const rutaImg = obtenerImagenHDCacheadaBot(carta.code)
+            || encontrarImagenPorIllustration(rutaMasterPath, carta.illustrationId)
+            || (await obtenerImagenRepoCartasBot(rutaMasterPath, carta.illustrationId));
+        if (!rutaImg) continue;
+        try {
+            const composite = [];
+            if (carta.cantidad > 0) {
+                const texto = `x${carta.cantidad}`;
+                const altoBadge = Math.round(altoRenderCelda * 0.13);
+                const fontSize = Math.round(altoBadge * 0.6);
+                const anchoBadge = Math.round(altoBadge * 0.9 + texto.length * fontSize * 0.62);
+                const margenBadge = Math.round(altoRenderCelda * 0.03);
+                const svgBadge = Buffer.from(
+                    `<svg width="${anchoBadge}" height="${altoBadge}">` +
+                    `<rect x="0" y="0" width="${anchoBadge}" height="${altoBadge}" rx="${Math.round(altoBadge / 3)}" ry="${Math.round(altoBadge / 3)}" fill="black" fill-opacity="0.72"/>` +
+                    `<text x="${anchoBadge / 2}" y="${Math.round(altoBadge * 0.7)}" font-size="${fontSize}" font-family="Arial, sans-serif" font-weight="bold" fill="#FFD700" text-anchor="middle">${texto}</text>` +
+                    `</svg>`
+                );
+                composite.push({ input: svgBadge, top: altoRenderCelda - altoBadge - margenBadge, left: anchoRenderCelda - anchoBadge - margenBadge });
+            }
+            // Esquinas redondeadas -- JPEG no soporta transparencia, asi que
+            // la mascara recorta la imagen a la forma redondeada y el
+            // flatten() de abajo rellena las esquinas del mismo color oscuro
+            // que el fondo de la tarjeta (#121a2f, igual que .card-tile en el
+            // dashboard web -- a pedido explicito del usuario 2026-07-31 de
+            // que el PDF tenga la misma estetica oscura que la pagina, no
+            // fondo blanco).
+            const radioEsquina = Math.round(altoRenderCelda * 0.06);
+            const mascaraRedondeada = Buffer.from(
+                `<svg width="${anchoRenderCelda}" height="${altoRenderCelda}">` +
+                `<rect x="0" y="0" width="${anchoRenderCelda}" height="${altoRenderCelda}" rx="${radioEsquina}" ry="${radioEsquina}" fill="#ffffff"/>` +
+                `</svg>`
+            );
+            composite.push({ input: mascaraRedondeada, blend: 'dest-in' });
+            buffersPorCodigo.set(carta.code, await sharp(rutaImg)
+                .resize(anchoRenderCelda, altoRenderCelda, { fit: 'cover' })
+                .composite(composite)
+                .flatten({ background: '#121a2f' })
+                .jpeg({ quality: calidadJpeg })
+                .toBuffer());
+        } catch (e) { /* miniatura corrupta, queda como casillero vacio */ }
+    }
+
+    const doc = new PDFDocument({ margin: 40 });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    const finPromesa = new Promise((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
+
+    // Fondo oscuro (a pedido explicito del usuario 2026-07-31: que el PDF se
+    // vea con la misma estetica que el dashboard web, no una pagina blanca) --
+    // pdfkit no tiene "color de fondo de pagina" nativo, asi que se pinta un
+    // rectangulo del tamaño de la pagina en cada pageAdded (incluida la
+    // primera pagina que el constructor crea solo).
+    const FONDO_OSCURO = '#0b1020';
+    const TEXTO_CLARO = '#edf2ff';
+    const TEXTO_MUTED = '#aeb9d4';
+    doc.on('pageAdded', () => {
+        doc.rect(0, 0, doc.page.width, doc.page.height).fill(FONDO_OSCURO);
+    });
+    doc.rect(0, 0, doc.page.width, doc.page.height).fill(FONDO_OSCURO);
+
+    doc.fontSize(18).fillColor(TEXTO_CLARO).text(`Account Report — ${accountData.deviceAccount || path.basename(archivoJson, '.json')}`, { underline: true });
+    doc.fontSize(10).fillColor(TEXTO_MUTED).text(`File: ${accountData.metadata?.fileName || ''}`);
+    doc.fillColor(TEXTO_CLARO).moveDown();
+
+    for (let i = 0; i < expansionesOrdenadas.length; i++) {
+        const expansion = expansionesOrdenadas[i];
+        // Logo de la expansion centrado arriba de su seccion (a pedido
+        // explicito del usuario 2026-07-31), misma fuente que ya usa el
+        // collage de Discord -- si no hay logo, se muestra solo el nombre.
+        const rutaLogo = buscarLogoExpansionBot(expansion);
+        const altoLogo = rutaLogo ? 50 : 0;
+        if (doc.y + altoLogo + 30 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+        if (i > 0) doc.moveDown();
+        if (rutaLogo) {
+            try {
+                const dimsLogo = await sharp(rutaLogo).metadata();
+                const anchoLogo = Math.min(180, altoLogo * (dimsLogo.width / dimsLogo.height));
+                // Redimensionar SIEMPRE antes de meterlo al PDF -- pdfkit
+                // incrusta el archivo de origen tal cual (sin recomprimir),
+                // asi que un logo pesado (ej. 9.5MB) sin achicar antes inflaba
+                // el PDF entero a mas de 10MB (bug real 2026-07-31).
+                const logoChico = await sharp(rutaLogo)
+                    .resize(Math.round(anchoLogo * 2), Math.round(altoLogo * 2), { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                    .png()
+                    .toBuffer();
+                doc.image(logoChico, margenIzq + (anchoUtil - anchoLogo) / 2, doc.y, { height: altoLogo });
+                doc.y += altoLogo + 6;
+            } catch (e) { /* si falla, se sigue solo con el nombre de texto de abajo */ }
+        }
+        doc.fontSize(14).fillColor(TEXTO_CLARO).text(expansion, { underline: true, align: 'center' });
+        doc.moveDown(0.3);
+
+        const TILE_W = CELL_W + TILE_PADDING * 2;
+        const TILE_H = CELL_H + TILE_PADDING * 2;
+        let col = 0;
+        let filaTop = doc.y;
+        for (const carta of porExpansion[expansion]) {
+            if (filaTop + TILE_H + GAP > doc.page.height - doc.page.margins.bottom) {
+                doc.addPage();
+                filaTop = doc.y;
+                col = 0;
+            }
+            const xTile = margenIzq + col * (TILE_W + GAP);
+            const buffer = buffersPorCodigo.get(carta.code);
+            // Tarjeta con fondo y borde propios (igual que .card-tile en el
+            // dashboard web: fondo #121a2f, borde #2c385d) en vez de una
+            // simple linea sobre fondo blanco.
+            doc.roundedRect(xTile, filaTop, TILE_W, TILE_H, 10).fillAndStroke('#121a2f', '#2c385d');
+            const xImg = xTile + TILE_PADDING;
+            const yImg = filaTop + TILE_PADDING;
+            if (buffer) {
+                doc.image(buffer, xImg, yImg, { width: CELL_W, height: CELL_H });
+            } else {
+                doc.roundedRect(xImg, yImg, CELL_W, CELL_H, Math.round(CELL_H * 0.06)).strokeColor('#2c385d').stroke();
+            }
+
+            col++;
+            if (col >= COLS) {
+                col = 0;
+                filaTop += TILE_H + GAP;
+            }
+        }
+        doc.y = filaTop + (col > 0 ? TILE_H + GAP : 0);
+    }
+
+    doc.end();
+    return finPromesa;
+}
+
+// ============ Dashboard local "Info Accounts" (2026-07-31) ============
+// A pedido explicito del usuario, en reemplazo del PDF de arriba (pausado,
+// no borrado): mismo reporte (agrupado por expansion, cantidad por carta),
+// pero como pagina web servida localmente -- bordes redondeados via CSS en
+// vez de mascaras de sharp (evita toda la categoria de bugs de composite/
+// flatten/JPEG que se vinieron dando en el PDF), y accesible desde el celular
+// si esta en la MISMA red WiFi que la PC (el bind es a 0.0.0.0, no solo
+// localhost). Acceso desde fuera de esa red necesitaria un tunel aparte
+// (ngrok, Cloudflare Tunnel, etc.), no incluido.
+const DASHBOARD_PORT_BASE = Number(process.env.DASHBOARD_PORT) || 3005;
+const dashboardApp = express();
+const _dashboardTokens = new Map();
+
+function generarTokenDashboard(rutaMasterPath, archivoJson) {
+    const token = crypto.randomBytes(12).toString('hex');
+    _dashboardTokens.set(token, { rutaMasterPath, archivoJson });
+    return token;
+}
+
+function obtenerIpLan() {
+    const interfaces = os.networkInterfaces();
+    for (const nombre of Object.keys(interfaces)) {
+        for (const iface of interfaces[nombre] || []) {
+            if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+        }
+    }
+    return null;
+}
+
+function resolverRutaImagenDashboard(cardMap, rutaMasterPath, code, illustrationId) {
+    const info = cardMap?.[code];
+    if (info?.ExpansionID && info?.CollectionNumber) {
+        const localId = String(info.CollectionNumber).padStart(3, '0');
+        const rutaHD = path.join(DRIVE_CACHE_DIR_BOT, info.ExpansionID, `${localId}.png`);
+        if (fs.existsSync(rutaHD)) return rutaHD;
+    }
+    if (rutaMasterPath && illustrationId) {
+        const rutaLocal = path.join(rutaMasterPath, 'CardImageCache', `${illustrationId}.png`);
+        if (fs.existsSync(rutaLocal)) return rutaLocal;
+    }
+    return null;
+}
+
+dashboardApp.get('/img/:token/:code', async (req, res) => {
+    try {
+        const datos = _dashboardTokens.get(req.params.token);
+        if (!datos) return res.status(404).end();
+        const cardMap = cargarCardMap(datos.rutaMasterPath);
+        const info = cardMap?.[req.params.code];
+        let ruta = resolverRutaImagenDashboard(cardMap, datos.rutaMasterPath, req.params.code, info?.IllustrationID);
+        if (!ruta) ruta = await obtenerImagenRepoCartasBot(datos.rutaMasterPath, info?.IllustrationID);
+        if (!ruta) return res.status(404).end();
+        res.sendFile(ruta);
+    } catch (e) {
+        res.status(500).end();
+    }
+});
+
+dashboardApp.get('/logo/:expansionB64', (req, res) => {
+    try {
+        const nombre = Buffer.from(req.params.expansionB64, 'base64url').toString('utf8');
+        const ruta = buscarLogoExpansionBot(nombre);
+        if (!ruta) return res.status(404).end();
+        res.sendFile(ruta);
+    } catch (e) {
+        res.status(500).end();
+    }
+});
+
+// Los mismos iconos de rareza que ya usa el bot en Discord (RAREZA_ICONOS_CARTAS/
+// FUENTES_EMOJIS), servidos directo como archivo local -- para la pagina web no
+// hace falta pasar por el sistema de emojis custom de Discord (que son por-guild
+// y requieren un guild.id), el PNG de assets/element/ ya alcanza.
+dashboardApp.get('/rarity-icon/:nombre', (req, res) => {
+    const rutaRelativa = FUENTES_EMOJIS[req.params.nombre];
+    if (!rutaRelativa || !rutaRelativa.toLowerCase().endsWith('.png')) return res.status(404).end();
+    res.sendFile(path.join(__dirname, 'assets', rutaRelativa));
+});
+
+// Descarga en PDF (a pedido explicito del usuario 2026-07-31): el link del
+// dashboard es "cualquiera con el enlace puede verlo", asi que para pasarle
+// la coleccion a otra persona sin compartir ese acceso en vivo, se puede
+// descargar un PDF -- un archivo estatico, sin ningun link detras. Reusa
+// generarInfoAccountsPDF (el mismo generador de antes, pausado pero intacto).
+dashboardApp.get('/account/:token/pdf', async (req, res) => {
+    try {
+        const datos = _dashboardTokens.get(req.params.token);
+        if (!datos) return res.status(404).send('Link expirado o invalido.');
+        const pdfBuffer = await generarInfoAccountsPDF(datos.rutaMasterPath, datos.archivoJson);
+        if (!pdfBuffer) return res.status(500).send('No se pudo generar el PDF.');
+        const nombreArchivo = path.basename(datos.archivoJson, '.json') + '.pdf';
+        res.set('Content-Type', 'application/pdf');
+        res.set('Content-Disposition', `attachment; filename="${nombreArchivo}"`);
+        res.send(pdfBuffer);
+    } catch (e) {
+        console.error('DEBUG: error generando PDF desde dashboard:', e);
+        res.status(500).send('Error generando el PDF.');
+    }
+});
+
+dashboardApp.get('/account/:token', async (req, res) => {
+    try {
+        const datos = _dashboardTokens.get(req.params.token);
+        if (!datos) return res.status(404).send('Link expirado o invalido. Volve a apretar el boton de Info Accounts en Discord.');
+        const { rutaMasterPath, archivoJson } = datos;
+
+        const accountData = leerJsonSeguro(archivoJson);
+        if (!accountData || !Array.isArray(accountData.pulls)) return res.status(404).send('No se pudo leer la cuenta.');
+
+        const conteoPorCodigo = {};
+        for (const pull of accountData.pulls) {
+            if (!Array.isArray(pull.cards)) continue;
+            for (const code of pull.cards) conteoPorCodigo[code] = (conteoPorCodigo[code] || 0) + 1;
+        }
+
+        const cardMap = cargarCardMap(rutaMasterPath);
+        const en_US = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json')) : null;
+        const cardmaster = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json')) : null;
+        const expansiones = construirMapaExpansiones(en_US);
+
+        const porExpansion = {};
+        for (const [code, cantidad] of Object.entries(conteoPorCodigo)) {
+            const infoMapa = cardMap?.[code];
+            const expansionId = infoMapa?.ExpansionID;
+            const nombreExpansion = expansionId ? (expansiones[expansionId] || expansionId) : 'Unknown';
+            const infoMaster = cardmaster?.[code];
+            const nombreCarta = (infoMaster?.Name && en_US?.[infoMaster.Name]) || infoMaster?.Name || code;
+            const tipoRareza = tipoRarezaDesdeInfo(infoMaster) || '';
+            if (!porExpansion[nombreExpansion]) porExpansion[nombreExpansion] = [];
+            porExpansion[nombreExpansion].push({ nombre: nombreCarta, cantidad, code, tipoRareza });
+        }
+        for (const lista of Object.values(porExpansion)) lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
+        const expansionesOrdenadas = Object.keys(porExpansion).sort();
+
+        // Total de cartas (a pedido explicito del usuario 2026-08-01): suma de
+        // TODOS los pulls, cada copia repetida cuenta -- no es "cartas unicas",
+        // es "cuantas cartas en total salieron de sobres" (ej. 1029).
+        const totalCartas = Object.values(conteoPorCodigo).reduce((s, n) => s + n, 0);
+
+        // Filtro por rareza (a pedido explicito del usuario 2026-07-31): los
+        // MISMOS iconos que ya usa el bot en Discord (RAREZA_ICONOS_CARTAS +
+        // FUENTES_EMOJIS), no emojis genericos de Unicode -- el usuario ya
+        // habia notado la diferencia con los iconos custom que se ven en el
+        // resto del bot. Filtra TODAS las expansiones a la vez (con scroll el
+        // usuario sigue viendo cada seccion, solo que ya filtrada) via un
+        // atributo data-rareza por carta + JS chiquito, sin pedirle nada al
+        // servidor.
+        // Reusado tambien para la "pildora" de rareza debajo de cada carta (a
+        // pedido explicito del usuario, mostrando como referencia su propio
+        // dashboard de PTCGPB).
+        function iconosRarezaHtml(tipoRareza) {
+            const cfg = tipoRareza ? RAREZA_ICONOS_CARTAS[tipoRareza] : null;
+            if (!cfg) return '';
+            const iconos = `<img src="/rarity-icon/${cfg.emoji}" class="icono-rareza">`.repeat(cfg.cantidad);
+            return cfg.distintivo ? `${iconos}${cfg.distintivo}` : iconos;
+        }
+
+        const filtrosHtml = Object.entries(RAREZA_ICONOS_CARTAS).map(([valor, cfg]) => {
+            const iconos = `<img src="/rarity-icon/${cfg.emoji}" class="icono-rareza">`.repeat(cfg.cantidad);
+            const sufijo = cfg.distintivo ? `${cfg.distintivo} ${cfg.etiqueta}` : cfg.etiqueta;
+            return `<button class="filtro-btn" data-filtro="${valor}">${iconos} ${sufijo}</button>`;
+        }).join('');
+
+        const escaparHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+        let html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account Report - ${escaparHtml(accountData.deviceAccount || '')}</title>
+<style>
+    /* Estilo "glass" (a pedido explicito del usuario 2026-08-01): fondo con
+       degrade + paneles semitransparentes con backdrop-filter: blur en vez de
+       colores solidos planos -- el degrade de fondo es lo que le da "cuerpo"
+       al blur (sobre un color solido liso el efecto vidrio no se nota). */
+    body { font-family: -apple-system, Arial, sans-serif; color: #edf2ff; margin: 0; padding: 20px 24px 60px;
+        background: radial-gradient(circle at 15% 0%, #1c2b52 0%, #0b1020 45%), radial-gradient(circle at 85% 30%, #2a1f4d 0%, #0b1020 55%), #0b1020;
+        background-attachment: fixed; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: #aeb9d4; font-size: 13px; margin-bottom: 12px; }
+    .sub:last-of-type { margin-bottom: 28px; }
+    .expansion { margin-bottom: 40px; }
+    .expansion-header { display: flex; flex-direction: column; align-items: center; margin-bottom: 14px; }
+    .expansion-header img { max-height: 56px; max-width: 220px; margin-bottom: 8px; }
+    .expansion-header h2 { font-size: 14px; margin: 0; font-weight: 600; color: #cfe0ff; padding: 4px 14px; border-radius: 20px;
+        background: rgba(255,255,255,0.06); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.12); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 16px; }
+    .card-tile { background: rgba(255,255,255,0.055); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-radius: 14px; padding: 8px; border: 1px solid rgba(255,255,255,0.12); }
+    .img-wrap { position: relative; }
+    .card-tile img { width: 100%; border-radius: 10px; display: block; background: #1c2540; aspect-ratio: 0.716; object-fit: cover; }
+    .badge { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); color: #FFD700; font-weight: bold; font-size: 13px; padding: 3px 9px; border-radius: 10px; }
+    .top-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+    .download-btn { background: rgba(44,102,232,0.55); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); color: #fff; text-decoration: none; font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 10px; white-space: nowrap; }
+    .download-btn:hover { background: rgba(61,120,255,0.65); }
+    .filtros { position: sticky; top: 0; z-index: 10; background: rgba(11,16,32,0.55); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); padding: 12px; margin: 0 -12px 8px; border-radius: 14px; display: flex; flex-wrap: wrap; gap: 8px; border: 1px solid rgba(255,255,255,0.1); }
+    .filtro-btn { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); color: #edf2ff; font-size: 12px; padding: 6px 12px; border-radius: 20px; cursor: pointer; white-space: nowrap; }
+    .filtro-btn:hover { background: rgba(255,255,255,0.1); }
+    .filtro-btn.activo { background: rgba(44,102,232,0.65); border-color: rgba(90,140,255,0.8); }
+    .card-tile.oculta { display: none; }
+    .icono-rareza { height: 13px; vertical-align: middle; margin-right: 1px; }
+    .rareza-tag { display: flex; justify-content: center; margin-top: 8px; }
+    .rareza-pill { display: inline-flex; align-items: center; }
+    .card-tile img { cursor: zoom-in; }
+    .lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100; align-items: center; justify-content: center; cursor: zoom-out; padding: 24px; }
+    .lightbox.abierto { display: flex; }
+    /* Ancho/alto fijos (no max-width/max-height sueltos) para que toda carta
+       se vea del MISMO tamaño en el zoom sin importar la resolucion real de
+       origen (Drive HD/local/repositorio traen tamaños nativos distintos) --
+       object-fit: contain hace que la imagen se ajuste adentro de esa caja
+       fija sin recortarse ni estirarse. */
+    .lightbox-box { width: min(85vw, 460px); aspect-ratio: 0.716; }
+    .lightbox img { width: 100%; height: 100%; object-fit: contain; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
+</style></head><body>
+<div class="top-bar">
+    <h1>Account Report — ${escaparHtml(accountData.deviceAccount || path.basename(archivoJson, '.json'))}</h1>
+    <a class="download-btn" href="/account/${req.params.token}/pdf" download>⬇ Download PDF</a>
+</div>
+<div class="lightbox" id="lightbox"><div class="lightbox-box"><img id="lightbox-img" src="" alt=""></div></div>
+<div class="sub">File: ${escaparHtml(accountData.metadata?.fileName || '')} — el link de esta pagina es privado, pero si lo compartís cualquiera con el enlace puede verlo. Para pasarle esto a alguien, mejor descargá el PDF y mandale el archivo.</div>
+<div class="sub">🎴 Total cards pulled: <strong>${totalCartas}</strong></div>
+<div class="filtros">
+    <button class="filtro-btn activo" data-filtro="all">All</button>
+    ${filtrosHtml}
+</div>`;
+
+        for (const expansion of expansionesOrdenadas) {
+            const rutaLogo = buscarLogoExpansionBot(expansion);
+            // A pedido explicito del usuario 2026-08-01: en vez del nombre de
+            // la expansion (redundante con el logo de arriba), mostrar cuantas
+            // cartas de esa expansion tiene la cuenta -- si no hay logo (caso
+            // "Unknown"), el nombre sigue haciendo falta para identificarla.
+            const totalExpansion = porExpansion[expansion].reduce((s, c) => s + c.cantidad, 0);
+            const textoHeader = rutaLogo ? `${totalExpansion} cards` : `${escaparHtml(expansion)} — ${totalExpansion} cards`;
+            html += `<div class="expansion"><div class="expansion-header">`;
+            if (rutaLogo) {
+                const logoB64 = Buffer.from(expansion).toString('base64url');
+                html += `<img src="/logo/${logoB64}" alt="${escaparHtml(expansion)}">`;
+            }
+            html += `<h2>${textoHeader}</h2></div><div class="grid">`;
+            for (const carta of porExpansion[expansion]) {
+                const iconosCarta = iconosRarezaHtml(carta.tipoRareza);
+                html += `<div class="card-tile" data-rareza="${escaparHtml(carta.tipoRareza)}"><div class="img-wrap"><img src="/img/${req.params.token}/${encodeURIComponent(carta.code)}" loading="lazy" alt="${escaparHtml(carta.nombre)}">`;
+                if (carta.cantidad > 0) html += `<div class="badge">x${carta.cantidad}</div>`;
+                html += `</div>`;
+                if (iconosCarta) html += `<div class="rareza-tag"><span class="rareza-pill">${iconosCarta}</span></div>`;
+                html += `</div>`;
+            }
+            html += `</div></div>`;
+        }
+        html += `<script>
+document.querySelectorAll('.filtro-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        document.querySelectorAll('.filtro-btn').forEach(function (b) { b.classList.remove('activo'); });
+        btn.classList.add('activo');
+        var filtro = btn.dataset.filtro;
+        document.querySelectorAll('.card-tile').forEach(function (tile) {
+            var coincide = (filtro === 'all' || tile.dataset.rareza === filtro);
+            tile.classList.toggle('oculta', !coincide);
+        });
+    });
+});
+var lightbox = document.getElementById('lightbox');
+var lightboxImg = document.getElementById('lightbox-img');
+document.querySelectorAll('.card-tile img').forEach(function (img) {
+    img.addEventListener('click', function () {
+        lightboxImg.src = img.src;
+        lightbox.classList.add('abierto');
+    });
+});
+lightbox.addEventListener('click', function () {
+    lightbox.classList.remove('abierto');
+    lightboxImg.src = '';
+});
+</script></body></html>`;
+        res.send(html);
+    } catch (e) {
+        console.error('DEBUG: error en dashboard /account:', e);
+        res.status(500).send('Error generando el dashboard.');
+    }
+});
+
+// Tunel publico (Cloudflare Quick Tunnel) para que el link de Info Accounts
+// funcione desde CUALQUIER red, no solo la misma WiFi que la PC (a pedido
+// explicito del usuario 2026-07-31: "no estoy en el mismo wifi"). Si no esta
+// el binario (bin/cloudflared.exe) simplemente no arranca el tunel y el link
+// cae de vuelta a localhost/IP de LAN -- no bloquea el resto del bot. Nota:
+// para la version empaquetada (.exe distribuido) este binario tendria que
+// venir incluido como asset aparte, todavia no esta resuelto.
+let DASHBOARD_PUBLIC_URL = null;
+function iniciarTunelDashboard(puerto) {
+    const rutaCloudflared = path.join(__dirname, 'bin', 'cloudflared.exe');
+    if (!fs.existsSync(rutaCloudflared)) {
+        console.log('DEBUG: cloudflared.exe no encontrado en bin/ -- Info Accounts solo estara disponible en la misma red.');
+        return;
+    }
+    try {
+        const proceso = spawn(rutaCloudflared, ['tunnel', '--url', `http://localhost:${puerto}`], { windowsHide: true });
+        const buscarUrl = (data) => {
+            const texto = data.toString();
+            const match = texto.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+            if (match && !DASHBOARD_PUBLIC_URL) {
+                DASHBOARD_PUBLIC_URL = match[0];
+                console.log(`🌐 Tunel publico Info Accounts: ${DASHBOARD_PUBLIC_URL}`);
+            }
+        };
+        proceso.stdout.on('data', buscarUrl);
+        proceso.stderr.on('data', buscarUrl);
+        proceso.on('exit', (code) => {
+            console.log(`DEBUG: cloudflared se cerro (codigo ${code}), Info Accounts vuelve a localhost/LAN.`);
+            DASHBOARD_PUBLIC_URL = null;
+        });
+    } catch (e) {
+        console.log('DEBUG: no se pudo iniciar el tunel de Info Accounts:', e.message);
+    }
+}
+
+let DASHBOARD_PORT_ACTUAL = null;
+function iniciarServidorDashboard(puerto, intento = 0) {
+    const servidor = dashboardApp.listen(puerto, '0.0.0.0', () => {
+        DASHBOARD_PORT_ACTUAL = puerto;
+        console.log(`🚀 Dashboard Info Accounts online (port ${puerto})`);
+        iniciarTunelDashboard(puerto);
+    });
+    servidor.on('error', (err) => {
+        if (err.code === 'EADDRINUSE' && intento < 10) {
+            iniciarServidorDashboard(puerto + 1, intento + 1);
+        } else {
+            console.error(`❌ Could not start Dashboard: ${err.message}`);
+        }
+    });
+}
+iniciarServidorDashboard(DASHBOARD_PORT_BASE);
+
 function buscarArchivoXmlPorNombre(rutaBase, nombreBuscado) {
     if (!rutaBase || !fs.existsSync(rutaBase) || !nombreBuscado) return null;
     const objetivo = nombreBuscado.trim();
@@ -2950,35 +3561,23 @@ async function registrarSlashCommands() {
 // uso duplicaba el mensaje público y el canal se llenaba de spam. Guarda el ID del
 // último mensaje en configs_extras (tipo='interfaz_msg_{clave}') y lo EDITA in situ;
 // si ese mensaje ya no existe (lo borraron a mano), recién ahí crea uno nuevo.
-// Con el uso normal del chat, el mensaje del panel (editado in situ, nunca
-// duplicado) se va quedando cada vez más arriba en el historial — quien
-// vuelve después de un rato tiene que scrollear para encontrarlo. Se resuelve
-// ACÁ ADENTRO (no con un chequeo aparte disparado por cada interacción,
-// que corría en paralelo a esta misma función y terminaba compitiendo por el
-// mismo mensaje — dos operaciones a la vez sobre el mismo mensaje es
-// exactamente lo que producía el bug de "aparece duplicado"): si ya pasaron 5
-// minutos desde la última vez que se movió, esta MISMA llamada (la única que
-// va a tocar este mensaje) lo manda de nuevo al final en vez de editarlo donde
-// estaba.
-const BUMP_INTERVALO_MS = 5 * 60 * 1000;
-
+//
+// Hasta 2026-07-31 esto además "bumpeaba" el mensaje solo (borrar + mandar de
+// nuevo al final del canal) si pasaban 5 minutos sin tocarlo, para que no
+// quedara enterrado en el historial. A pedido explicito del usuario ("retira
+// eso, que solo aparezca cuando el usuario lo decida... pero sin crear spam...
+// que reuse el mismo mensaje") se saco SOLO el disparador automático por
+// tiempo -- correr el comando a mano (forzarReubicar=true, ver
+// ejecutarComandoEnCanal) sigue moviendo el panel al final del canal como
+// siempre (por eso "aparece" cuando el usuario lo pide), simplemente ya no
+// pasa solo por inactividad. "Sin spam"/"reusa el mismo mensaje" se cumple
+// igual que antes: se borra el viejo ANTES de crear el nuevo, así que nunca
+// hay dos a la vez -- solo cambia de posición (queda al final), nunca se
+// duplica.
 async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, archivos = [], forzarReubicar = false, guild = null) {
     const claveMsg = `interfaz_msg_${clave}`;
     const filaMsg = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [userId, claveMsg]);
     const msgId = filaMsg?.estado || null;
-
-    if (msgId && !forzarReubicar) {
-        const claveTiempo = `ultimo_bump_${clave}`;
-        const filaTiempo = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [userId, claveTiempo]);
-        const ultimoBump = filaTiempo ? Number(filaTiempo.estado) : 0;
-        if (Date.now() - ultimoBump >= BUMP_INTERVALO_MS) forzarReubicar = true;
-    }
-    if (forzarReubicar) {
-        await db.run(
-            `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, ?, ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
-            [userId, `ultimo_bump_${clave}`, String(Date.now()), String(Date.now())]
-        );
-    }
 
     // Reubicar = mandarlo de nuevo al final del historial en vez de editarlo
     // donde ya estaba — hace falta borrar el viejo primero, si no queda uno
@@ -2996,7 +3595,7 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
         try {
             const actual = await axios.get(`${webhookUrl}/messages/${msgId}`, { timeout: 10000 });
             const componentesActuales = (actual?.data?.components || []).flatMap(fila => fila.components || []);
-            const botonXml = componentesActuales.find(c => typeof c.custom_id === 'string' && c.custom_id.startsWith('wishlist_xml::'));
+            const botonXml = componentesActuales.find(c => typeof c.custom_id === 'string' && (c.custom_id.startsWith('wishlist_xml::') || c.custom_id.startsWith('goldcards_xml::')));
             if (botonXml) {
                 const [, cartaId] = botonXml.custom_id.split('::');
                 const botonHome = componentesActuales.find(c => typeof c.custom_id === 'string' && c.custom_id.endsWith('_volver_expansiones'));
@@ -3010,7 +3609,14 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
                 const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
                 const rutaMasterPath = rutaMasterCfg?.webhook_url;
                 const nombreCarta = resolverNombreCarta(cartaId, rutaMasterPath);
-                const payloadReconstruido = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterPath, volver, guild);
+                let datosGold = null;
+                if (prefijo === 'goldcards') {
+                    const umbral = await obtenerUmbralGold(userId);
+                    const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+                    const mapaCopias = construirMapaCopiasPorCarta(rutaJsonCfg?.webhook_url);
+                    datosGold = { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral };
+                }
+                const payloadReconstruido = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterPath, volver, guild, datosGold);
                 payloadJson = { embeds: payloadReconstruido.embeds, components: payloadReconstruido.components || [] };
                 archivos = archivosDesdeAttachmentBuilders(payloadReconstruido.files);
             }
@@ -3369,8 +3975,20 @@ function cargarCardTypesBot() {
 // en card_types.json (que sí usa espacio normal) no matchea y esas cartas
 // quedan como "Unknown" en el campo Element. Mismo problema con "Farfetch’d"
 // (comilla tipográfica ’ U+2019 en vez de la recta ' que tiene card_types.json).
+//
+// Bug real encontrado 2026-07-31 (Alolan Raichu EX con Element: Unknown): las
+// 45 cartas regionales del juego (confirmado revisando en_US.json entero, sin
+// excepciones) vienen con el prefijo pegado directo al nombre, SIN ningun
+// espacio de por medio -- "AlolanRaichu", no "Alolan Raichu". No es un
+// caracter raro de Unicode esta vez, el espacio directamente no esta. Se
+// inserta a mano antes de buscar en card_types.json (que sí lo tiene, ej.
+// "alolan raichu ex").
 function clavenormalizadaTipoCarta(nombre) {
-    return nombre ? nombre.toLowerCase().replace(/\s+/g, ' ').replace(/[‘’]/g, "'") : '';
+    if (!nombre) return '';
+    return nombre.toLowerCase()
+        .replace(/^(alolan|galarian|hisuian|paldean)(?=[a-z])/, '$1 ')
+        .replace(/\s+/g, ' ')
+        .replace(/[‘’]/g, "'");
 }
 
 // Mismo criterio que buscarLogoExpansion()/normalizarNombreExpansion() en s4t.js:
@@ -3881,6 +4499,40 @@ client.on('interactionCreate', async interaction => {
         return interaction.respond(coincidencias).catch(() => {});
     }
 
+    // Atajo /card expansion:X (y opcionalmente rarity:Y) SIN elegir un nombre
+    // puntual (bug real reportado 2026-07-31: antes esto se ignoraba por
+    // completo y caia al menu generico de "All Cards"). Si solo hay expansion,
+    // salta a la vista de categorias (igual que el select-menu manual); si
+    // ademas hay rarity, salta directo a la lista de cartas de esa rareza
+    // puntual (segundo bug reportado: con expansion+rarity seguia mostrando
+    // todas las categorias en vez de solo la elegida).
+    if (interaction.isChatInputCommand() && interaction.commandName === 'card' && !interaction.options.getString('name') && interaction.options.getString('expansion')) {
+        const rowCardAll = await obtenerCanalComando(interaction.user.id, 'cmd_card_all');
+        if (!rowCardAll) {
+            return await interaction.reply({ content: `❌ No channel synced for **All Cards**. Use **Sync Channels** first.`, ephemeral: true });
+        }
+        if (interaction.channelId !== rowCardAll.canal_id) {
+            return await interaction.reply({ content: `❌ This command only works in <#${rowCardAll.canal_id}>.`, ephemeral: true });
+        }
+        await interaction.deferReply();
+        const expansionElegida = interaction.options.getString('expansion');
+        const rarezaElegida = interaction.options.getString('rarity');
+        const fuente = FUENTES_CARTAS.allcards;
+        const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
+        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+        // c.tipoRareza usa exactamente los mismos valores que las choices de
+        // "rarity" (ya lo confirma el filtro de autocompletado unas lineas
+        // arriba) -- se toma la categoria (etiqueta) de la primera carta que
+        // matchee esa rareza dentro de la expansion, en vez de mantener una
+        // tabla de conversion aparte.
+        const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
+        const payload = cartaConEsaRareza
+            ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
+            : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis });
+        await interaction.editReply(payload);
+        return;
+    }
+
     // Búsqueda directa por nombre vía autocompletado de /card, sin pasar por
     // el banner+botón de "All Cards" — mismo canal/permiso que ese flujo.
     if (interaction.isChatInputCommand() && interaction.commandName === 'card' && interaction.options.getString('name')) {
@@ -3934,6 +4586,32 @@ client.on('interactionCreate', async interaction => {
         return interaction.respond(coincidencias).catch(() => {});
     }
 
+    // Atajo /goldcards expansion:X sin nombre -- mismo fix que /card.
+    if (interaction.isChatInputCommand() && interaction.commandName === 'goldcards' && !interaction.options.getString('name') && interaction.options.getString('expansion')) {
+        const rowCardGold = await obtenerCanalComando(interaction.user.id, 'cmd_card_gold');
+        if (!rowCardGold) {
+            return await interaction.reply({ content: `❌ No channel synced for **Gold Cards**. Use **Sync Channels** first.`, ephemeral: true });
+        }
+        if (interaction.channelId !== rowCardGold.canal_id) {
+            return await interaction.reply({ content: `❌ This command only works in <#${rowCardGold.canal_id}>.`, ephemeral: true });
+        }
+        await interaction.deferReply();
+        if (!GOOGLE_DRIVE_API_KEY_BOT) {
+            return await interaction.editReply(advertenciaGoldSinApi());
+        }
+        const expansionElegida = interaction.options.getString('expansion');
+        const rarezaElegida = interaction.options.getString('rarity');
+        const fuente = FUENTES_CARTAS.goldcards;
+        const { cartas, rutaMasterPath, mapaCopias } = await obtenerCartasGoldCacheadas(interaction.user.id);
+        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+        const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
+        const payload = cartaConEsaRareza
+            ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
+            : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis });
+        await interaction.editReply(payload);
+        return;
+    }
+
     // Búsqueda directa por nombre vía autocompletado de /goldcards, mismo
     // patron que /card -- ya viene pre-filtrado a cartas Gold-elegibles.
     if (interaction.isChatInputCommand() && interaction.commandName === 'goldcards' && interaction.options.getString('name')) {
@@ -3983,6 +4661,29 @@ client.on('interactionCreate', async interaction => {
             .slice(0, 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
         return interaction.respond(coincidencias).catch(() => {});
+    }
+
+    // Atajo /wishlist expansion:X sin nombre -- mismo fix que /card.
+    if (interaction.isChatInputCommand() && interaction.commandName === 'wishlist' && !interaction.options.getString('name') && interaction.options.getString('expansion')) {
+        const rowWishlist = await obtenerCanalComando(interaction.user.id, 'cmd_card_wishlist');
+        if (!rowWishlist) {
+            return await interaction.reply({ content: `❌ No channel synced for **Cards Wishlist**. Use **Sync Channels** first.`, ephemeral: true });
+        }
+        if (interaction.channelId !== rowWishlist.canal_id) {
+            return await interaction.reply({ content: `❌ This command only works in <#${rowWishlist.canal_id}>.`, ephemeral: true });
+        }
+        await interaction.deferReply();
+        const expansionElegida = interaction.options.getString('expansion');
+        const rarezaElegida = interaction.options.getString('rarity');
+        const fuente = FUENTES_CARTAS.wishlist;
+        const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas();
+        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+        const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
+        const payload = cartaConEsaRareza
+            ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
+            : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis });
+        await interaction.editReply(payload);
+        return;
     }
 
     // Búsqueda directa por nombre vía autocompletado de /wishlist, sin pasar por
@@ -4735,19 +5436,142 @@ client.on('interactionCreate', async interaction => {
             if (archivoJson) archivos.push(new AttachmentBuilder(archivoJson));
         }
         const contenidoTexto = `<@${interaction.user.id}> Account \`${fileName}\` (\`${nombreCarta}\`). Database attached.`;
+        // Boton "Info Accounts" (a pedido explicito del usuario 2026-07-31):
+        // reenvia esta MISMA cuenta como un PDF con todas sus cartas agrupadas
+        // por expansion, en vez de solo el XML/JSON crudo.
+        const filaInfoAccounts = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`info_accounts::${fileName}`.slice(0, 100)).setLabel('📋 Info Accounts').setStyle(ButtonStyle.Secondary)
+        );
 
         const canalExtract = await obtenerCanalComando(interaction.user.id, 'cmd_extract_xlm');
         if (canalExtract?.webhook_url) {
             try {
                 const webhookExtract = new WebhookClient({ url: canalExtract.webhook_url });
                 await webhookExtract.send({ content: contenidoTexto, embeds: payloadEmbed.embeds, files: payloadEmbed.files });
-                await webhookExtract.send({ files: archivos });
+                await webhookExtract.send({ files: archivos, components: [filaInfoAccounts] });
                 return await interaction.editReply({ content: '✅ Sent to your Extract XML channel.', embeds: [], components: [] });
             } catch (e) {
                 console.error('DEBUG: error mandando extract xml desde card_extract_cuenta:', e?.message || e);
             }
         }
-        return await interaction.editReply({ ...payloadEmbed, content: contenidoTexto, files: [...(payloadEmbed.files || []), ...archivos], components: [] });
+        return await interaction.editReply({ ...payloadEmbed, content: contenidoTexto, files: [...(payloadEmbed.files || []), ...archivos], components: [filaInfoAccounts] });
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('info_accounts::')) {
+        const fileName = interaction.customId.replace('info_accounts::', '');
+        await interaction.deferReply({ ephemeral: true });
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.editReply({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.` });
+        }
+        const deviceAccount = extraerDeviceAccount(archivo);
+        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+        const archivoJson = deviceAccount ? buscarArchivoJsonPorDeviceAccount(rutaJsonCfg?.webhook_url, deviceAccount) : null;
+        if (!archivoJson) {
+            return await interaction.editReply({ content: `❌ Could not find the saved JSON data for \`${fileName}\`.` });
+        }
+
+        // Dashboard local en vez de PDF (a pedido explicito del usuario
+        // 2026-07-31, tras varias vueltas con defectos de mascara/JPEG en el
+        // PDF): bordes redondeados via CSS, sin ningun procesamiento de imagen
+        // de por medio. Se ofrecen 3 links: localhost (esta PC), IP de LAN
+        // (misma WiFi), y el tunel publico de Cloudflare si logro levantar
+        // (cualquier red -- "no estoy en el mismo wifi", pedido explicito).
+        const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson);
+        const puertoActual = DASHBOARD_PORT_ACTUAL || DASHBOARD_PORT_BASE;
+        const ipLan = obtenerIpLan();
+        let texto = `📋 **Info Accounts — \`${fileName}\`**\n`;
+        if (DASHBOARD_PUBLIC_URL) {
+            texto += `Desde cualquier red: ${DASHBOARD_PUBLIC_URL}/account/${token}\n`;
+        } else {
+            texto += `-# Tunel publico no disponible ahora mismo -- usá alguno de estos (misma red):\n`;
+        }
+        texto += `En esta PC: http://localhost:${puertoActual}/account/${token}\n`;
+        if (ipLan) texto += `Misma WiFi: http://${ipLan}:${puertoActual}/account/${token}\n`;
+        texto += `-# Los links dejan de funcionar si reiniciás el bot.`;
+        return await interaction.editReply({ content: texto });
+    }
+
+    // Atajo directo a Info Accounts desde el detalle de carta (a pedido
+    // explicito del usuario 2026-07-31): a diferencia del boton "info_accounts::"
+    // de arriba (que solo respondia ephemeral con los links), esto arma UN
+    // embed con el XML, el JSON y los links del dashboard juntos, y lo manda
+    // directo al canal de Info Accounts -- "este mensaje... tiene que migrar
+    // a info accounts", palabras textuales del usuario.
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_info_accounts_cuenta::')) {
+        const fileName = interaction.values[0];
+        await interaction.deferUpdate();
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.editReply({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, components: [] });
+        }
+        const deviceAccount = extraerDeviceAccount(archivo);
+        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+        const archivoJson = deviceAccount ? buscarArchivoJsonPorDeviceAccount(rutaJsonCfg?.webhook_url, deviceAccount) : null;
+        if (!archivoJson) {
+            return await interaction.editReply({ content: `❌ Could not find the saved JSON data for \`${fileName}\`.`, components: [] });
+        }
+
+        const canalInfoAccounts = await obtenerCanalComando(interaction.user.id, 'info_accounts');
+        if (!canalInfoAccounts?.webhook_url) {
+            return await interaction.editReply({ content: `❌ No channel synced for **Info Accounts**. Use **Sync Channels** first.`, components: [] });
+        }
+
+        const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson);
+        const puertoActual = DASHBOARD_PORT_ACTUAL || DASHBOARD_PORT_BASE;
+        const ipLan = obtenerIpLan();
+        const paginas = [];
+        if (DASHBOARD_PUBLIC_URL) paginas.push(`🌐 [From any network](${DASHBOARD_PUBLIC_URL}/account/${token})`);
+        paginas.push(`🖥️ [On this PC](http://localhost:${puertoActual}/account/${token})`);
+        if (ipLan) paginas.push(`📶 [Same WiFi](http://${ipLan}:${puertoActual}/account/${token})`);
+
+        // Total de cartas (a pedido explicito del usuario 2026-08-01): suma de
+        // TODOS los pulls, cada copia repetida cuenta -- mismo criterio que el
+        // dashboard web ("esta cuenta tiene 1029 cards").
+        const accountData = leerJsonSeguro(archivoJson);
+        const totalCartas = Array.isArray(accountData?.pulls)
+            ? accountData.pulls.reduce((s, p) => s + (Array.isArray(p.cards) ? p.cards.length : 0), 0)
+            : 0;
+
+        // Campos separados (a pedido explicito del usuario, "ordenalo bien")
+        // en vez de un solo bloque de texto -- mas facil de leer de un
+        // vistazo que un parrafo con todo junto.
+        const embed = new EmbedBuilder()
+            .setTitle('📋 Info Accounts')
+            .setDescription(`Hi <@${interaction.user.id}>, the account data is attached!`)
+            .addFields(
+                // El JSON real vive con un nombre propio (deviceAccount hasheado),
+                // no comparte el nombre del XML -- bug real reportado 2026-07-31,
+                // el campo mostraba "${fileName}.json" que no coincidia con el
+                // archivo adjunto de verdad.
+                { name: '💠 Data XML', value: `\`${path.basename(archivo)}\``, inline: true },
+                { name: '🗂️ Data Json', value: `\`${path.basename(archivoJson)}\``, inline: true },
+                { name: '🎴 Total Cards', value: `${totalCartas}`, inline: true },
+                { name: '🔗 Pages we mentioned', value: paginas.join('\n') }
+            )
+            .setFooter({ text: 'Links stop working if the bot restarts.' })
+            .setColor(0xE91E63);
+
+        try {
+            const webhookInfo = new WebhookClient({ url: canalInfoAccounts.webhook_url });
+            // Dos mensajes separados (a pedido explicito del usuario, "primero
+            // el embed, luego xml, y json"): si el embed y los archivos van en
+            // el MISMO mensaje, Discord siempre pinta los adjuntos arriba del
+            // embed sin importar el orden en el payload -- la unica forma de
+            // que el embed quede primero es que sea un mensaje aparte, antes.
+            await webhookInfo.send({ embeds: [embed] });
+            await webhookInfo.send({ files: [new AttachmentBuilder(archivo), new AttachmentBuilder(archivoJson)] });
+            return await interaction.editReply({ content: '✅ Sent to your Info Accounts channel.', components: [] });
+        } catch (e) {
+            console.error('DEBUG: error mandando card_info_accounts_cuenta al canal de Info Accounts:', e?.response?.data || e?.message || e);
+            return await interaction.editReply({ content: '❌ Could not send to your Info Accounts channel.', components: [] });
+        }
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_instancia::')) {
@@ -5562,6 +6386,44 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply(construirSelectXmlPaginado(fileNames, cartaId, 0, 'card_extract_cuenta'));
         }
 
+        // Atajo directo a Info Accounts desde el detalle de carta (a pedido
+        // explicito del usuario 2026-07-31) -- mismo selector de cuenta que
+        // Extract XML, pero con su propio customId de seleccion
+        // (card_info_accounts_cuenta::) para que termine en el handler de abajo.
+        if (interaction.customId.startsWith('goldcards_info_accounts::')) {
+            const cartaId = interaction.customId.replace('goldcards_info_accounts::', '');
+            await interaction.deferReply({ ephemeral: true });
+
+            const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const resultados = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : null;
+            if (resultados === null) {
+                return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.' });
+            }
+            if (!resultados.length) {
+                return await interaction.editReply({ content: `❌ No account has ${umbral}+ copies of this card.` });
+            }
+
+            const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
+            return await interaction.editReply(construirSelectXmlPaginado(fileNames, cartaId, 0, 'card_info_accounts_cuenta'));
+        }
+
+        if (interaction.customId.startsWith('card_info_accounts::')) {
+            const cartaId = interaction.customId.replace('card_info_accounts::', '');
+            await interaction.deferReply({ ephemeral: true });
+
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId);
+            if (resultados === null) {
+                return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.' });
+            }
+            if (!resultados.length) {
+                return await interaction.editReply({ content: '❌ No account has this card.' });
+            }
+
+            const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
+            return await interaction.editReply(construirSelectXmlPaginado(fileNames, cartaId, 0, 'card_info_accounts_cuenta'));
+        }
+
         if (interaction.customId.startsWith('card_extract_cuenta_pag::')) {
             // Mismo criterio que card_shinedust_cuenta_pag:: (paginacion comparte
             // prefijo entre el origen gold y el normal, asi que reconsulta siempre
@@ -5571,6 +6433,14 @@ client.on('interactionCreate', async interaction => {
             const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId) || [];
             const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
             return await interaction.update(construirSelectXmlPaginado(fileNames, cartaId, parseInt(paginaTexto, 10) || 0, 'card_extract_cuenta'));
+        }
+
+        if (interaction.customId.startsWith('card_info_accounts_cuenta_pag::')) {
+            const [, cartaId, paginaTexto] = interaction.customId.split('::');
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId) || [];
+            const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
+            return await interaction.update(construirSelectXmlPaginado(fileNames, cartaId, parseInt(paginaTexto, 10) || 0, 'card_info_accounts_cuenta'));
         }
 
         if (interaction.customId.startsWith('shinedust_result_extract::')) {
@@ -5708,24 +6578,11 @@ client.on('interactionCreate', async interaction => {
             const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId);
             const payload = construirEmbedXml(resultados, nombreCarta, cartaId, pagina);
             await interaction.editReply(payload);
-            if (!yaEsVistaXml) {
-                // Mensaje nuevo (no una paginación in-place) — mismo motivo que en
-                // /card y /wishlist: reubicar el panel del canal para que no quede
-                // enterrado. No sabemos acá si el canal es cmd_card_all o
-                // cmd_card_wishlist (el botón es el mismo en los dos flujos), así
-                // que se prueban los dos y se reubica el que coincida con el canal.
-                try {
-                    const rowAll = await obtenerCanalComando(interaction.user.id, 'cmd_card_all');
-                    const rowWishlist = await obtenerCanalComando(interaction.user.id, 'cmd_card_wishlist');
-                    if (rowAll && interaction.channelId === rowAll.canal_id) {
-                        await enviarComandoAlCanal('card_all', interaction.user, rowAll, true, interaction.guild);
-                    } else if (rowWishlist && interaction.channelId === rowWishlist.canal_id) {
-                        await enviarComandoAlCanal('card_wishlist', interaction.user, rowWishlist, true, interaction.guild);
-                    }
-                } catch (e) {
-                    console.error('DEBUG: no se pudo reubicar el panel tras abrir XML:', e?.message || e);
-                }
-            }
+            // Hasta 2026-07-31 esto reubicaba el panel del canal como efecto
+            // secundario de abrir el XML de una carta -- a pedido explicito
+            // del usuario ("no quiero que aparezca de la nada, solo cuando el
+            // usuario lo llame") se saco: el panel ya solo se mueve cuando el
+            // usuario corre el comando /card, /wishlist o /goldcards a mano.
             return;
         }
 
@@ -5746,16 +6603,8 @@ client.on('interactionCreate', async interaction => {
             const resultados = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : null;
             const payload = construirEmbedXml(resultados, nombreCarta, cartaId, pagina, 'goldcards');
             await interaction.editReply(payload);
-            if (!yaEsVistaXml) {
-                try {
-                    const rowGold = await obtenerCanalComando(interaction.user.id, 'cmd_card_gold');
-                    if (rowGold && interaction.channelId === rowGold.canal_id) {
-                        await enviarComandoAlCanal('card_gold', interaction.user, rowGold, true, interaction.guild);
-                    }
-                } catch (e) {
-                    console.error('DEBUG: no se pudo reubicar el panel de cmd_card_gold tras abrir XML:', e?.message || e);
-                }
-            }
+            // Ver nota en wishlist_xml:: -- se saco la reubicacion automatica
+            // del panel como efecto secundario de abrir el XML.
             return;
         }
 
@@ -5933,7 +6782,7 @@ client.on('interactionCreate', async interaction => {
                             .setDescription(
                                 `**${localVer.version}** → **${remotaVer.version}**\n\n` +
                                 `**What's new:**\n` +
-                                notasParaEmbed(remotaVer.notes)
+                                notasParaEmbed(remotaVer.notes, remotaVer.notesCount)
                             );
                         const filaUpdate = new ActionRowBuilder().addComponents(
                             new ButtonBuilder().setCustomId('actualizacion_ahora').setLabel('Update now').setStyle(ButtonStyle.Success),
@@ -6033,7 +6882,8 @@ client.on('interactionCreate', async interaction => {
                                 { tipo: 'cmd_card_all', name: '⚡-all-cards' },
                                 { tipo: 'cmd_card_gold', name: '🏆-gold-cards' },
                                 { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' },
-                                { tipo: 'shinedust', name: '🍬-shinedust' }
+                                { tipo: 'shinedust', name: '🍬-shinedust' },
+                                { tipo: 'info_accounts', name: '📋-info-accounts' }
                             ]
                         },
                         {
@@ -6057,7 +6907,8 @@ client.on('interactionCreate', async interaction => {
                         cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
                         cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
                         cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot — you can attach a screenshot too.' },
-                        shinedust: { title: '🍬 Shinedust', description: 'Results from the 👛 Shinedust button on card lookups land here — the card, the account, and its current Shinedust balance, with buttons to jump straight into Trade or Extract XML for that same account.' }
+                        shinedust: { title: '🍬 Shinedust', description: 'Results from the 👛 Shinedust button on card lookups land here — the card, the account, and its current Shinedust balance, with buttons to jump straight into Trade or Extract XML for that same account.' },
+                        info_accounts: { title: '📋 Info Accounts', description: 'Press 📋 Info Accounts on a message in your Extract XML channel to get a full PDF report of that account here — every card it has, grouped by expansion, with quantities.' }
                     };
 
                     // Canales con un comando real y no-efímero asignado: en vez del embed

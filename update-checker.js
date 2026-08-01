@@ -62,8 +62,15 @@ function esVersionMasNueva(remota, local) {
 // respuesta con un error cada vez que SI habia una actualizacion real (bug
 // real 2026-07-30, solo se notaba en ese caso porque "ya estas actualizado"
 // no arma este embed). Se muestran solo las notas mas nuevas que entren.
-function notasParaEmbed(notes) {
-    const lista = notes || [];
+//
+// notesCount (bug real 2026-07-31): el corte por caracteres solo evitaba el
+// error de Discord, pero igual mostraba notas de varias versiones viejas
+// mezcladas con las de la version actual -- confuso, el usuario esperaba ver
+// solo "lo nuevo de esta version". version.json ahora guarda cuantas de las
+// notas (las primeras, mas nuevas) pertenecen a la version actual; si viene,
+// se usa ese numero en vez de rellenar hasta el limite de caracteres.
+function notasParaEmbed(notes, notesCount) {
+    const lista = (notesCount && notesCount > 0) ? (notes || []).slice(0, notesCount) : (notes || []);
     const limite = 3500;
     let acumulado = '';
     let incluidas = 0;
@@ -86,7 +93,7 @@ function construirPayloadActualizacion(local, remota) {
         .setDescription(
             `**${local.version}** → **${remota.version}**\n\n` +
             `**What's new:**\n` +
-            notasParaEmbed(remota.notes)
+            notasParaEmbed(remota.notes, remota.notesCount)
         );
     const fila = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('actualizacion_ahora').setLabel('Update now').setStyle(ButtonStyle.Success),
@@ -177,7 +184,7 @@ async function avisarActualizacionAplicadaSiHaceFalta(client) {
         const destino = await obtenerDestinoNotificacion(client);
         if (!destino) return;
 
-        const notas = notasParaEmbed(local.notes);
+        const notas = notasParaEmbed(local.notes, local.notesCount);
         const acciones = (local.actionsNeeded || []).map(a => `• ${a}`).join('\n');
         const embed = {
             title: `🎉 Updated to v${local.version}`,
