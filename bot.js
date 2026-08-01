@@ -3269,12 +3269,18 @@ lightbox.addEventListener('click', function () {
 // por Ale probando como usuario). Por eso ademas se autodescarga una sola
 // vez desde el repositorio oficial de Cloudflare si no esta presente.
 const CLOUDFLARED_URL_OFICIAL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe';
+// Bug real 2026-08-01: justo al actualizar, el proceso viejo (todavia
+// cerrando) y el nuevo llegaron a correr superpuestos un instante, los dos
+// intentando descargar cloudflared.exe al mismo tiempo -- el archivo
+// temporal compartido ("...descargando", mismo nombre para ambos) se
+// pisaba entre los dos, dejando a uno con "ENOENT" al renombrar. El nombre
+// temporal ahora incluye el PID de cada proceso para que nunca choquen.
 async function asegurarCloudflaredBot() {
     const rutaCloudflared = path.join(__dirname, 'bin', 'cloudflared.exe');
-    if (fs.existsSync(rutaCloudflared)) return rutaCloudflared;
+    if (fs.existsSync(rutaCloudflared)) return { ruta: rutaCloudflared, recienDescargado: false };
     try {
         fs.mkdirSync(path.dirname(rutaCloudflared), { recursive: true });
-        const rutaTemporal = `${rutaCloudflared}.descargando`;
+        const rutaTemporal = `${rutaCloudflared}.descargando.${process.pid}`;
         const respuesta = await axios.get(CLOUDFLARED_URL_OFICIAL, { responseType: 'stream', timeout: 120000, maxRedirects: 5 });
         await new Promise((resolve, reject) => {
             const archivo = fs.createWriteStream(rutaTemporal);
@@ -3282,9 +3288,13 @@ async function asegurarCloudflaredBot() {
             archivo.on('finish', resolve);
             archivo.on('error', reject);
         });
-        fs.renameSync(rutaTemporal, rutaCloudflared);
+        // Si otro proceso (ej. la instancia vieja que todavia no termino de
+        // cerrar durante un update) ya dejo el archivo real listo mientras
+        // este descargaba, no hace falta renombrar el propio -- se descarta.
+        if (!fs.existsSync(rutaCloudflared)) fs.renameSync(rutaTemporal, rutaCloudflared);
+        else fs.rmSync(rutaTemporal, { force: true });
         console.log('✅ cloudflared.exe descargado automaticamente -- Info Accounts ya puede armar un link publico.');
-        return rutaCloudflared;
+        return { ruta: rutaCloudflared, recienDescargado: true };
     } catch (e) {
         console.log('DEBUG: no se pudo descargar cloudflared.exe automaticamente:', e.message);
         return null;
@@ -3293,29 +3303,44 @@ async function asegurarCloudflaredBot() {
 
 let DASHBOARD_PUBLIC_URL = null;
 async function iniciarTunelDashboard(puerto) {
-    const rutaCloudflared = await asegurarCloudflaredBot();
-    if (!rutaCloudflared) {
+    const resultado = await asegurarCloudflaredBot();
+    if (!resultado) {
         console.log('DEBUG: cloudflared.exe no disponible -- Info Accounts solo estara disponible en la misma red.');
         return;
     }
-    try {
-        const proceso = spawn(rutaCloudflared, ['tunnel', '--url', `http://localhost:${puerto}`], { windowsHide: true });
-        const buscarUrl = (data) => {
-            const texto = data.toString();
-            const match = texto.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-            if (match && !DASHBOARD_PUBLIC_URL) {
-                DASHBOARD_PUBLIC_URL = match[0];
-                console.log(`🌐 Tunel publico Info Accounts: ${DASHBOARD_PUBLIC_URL}`);
+    if (resultado.recienDescargado) {
+        // Bug real 2026-08-01: ejecutar el .exe apenas se termina de escribir
+        // puede fallar con "spawn EBUSY" (Windows/el antivirus lo tiene
+        // brevemente tomado justo despues de crearlo). Un respiro corto alcanza.
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+
+    for (let intento = 1; intento <= 3; intento++) {
+        try {
+            const proceso = spawn(resultado.ruta, ['tunnel', '--url', `http://localhost:${puerto}`], { windowsHide: true });
+            const buscarUrl = (data) => {
+                const texto = data.toString();
+                const match = texto.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+                if (match && !DASHBOARD_PUBLIC_URL) {
+                    DASHBOARD_PUBLIC_URL = match[0];
+                    console.log(`🌐 Tunel publico Info Accounts: ${DASHBOARD_PUBLIC_URL}`);
+                }
+            };
+            proceso.stdout.on('data', buscarUrl);
+            proceso.stderr.on('data', buscarUrl);
+            proceso.on('exit', (code) => {
+                console.log(`DEBUG: cloudflared se cerro (codigo ${code}), Info Accounts vuelve a localhost/LAN.`);
+                DASHBOARD_PUBLIC_URL = null;
+            });
+            return;
+        } catch (e) {
+            if (e.code === 'EBUSY' && intento < 3) {
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+                continue;
             }
-        };
-        proceso.stdout.on('data', buscarUrl);
-        proceso.stderr.on('data', buscarUrl);
-        proceso.on('exit', (code) => {
-            console.log(`DEBUG: cloudflared se cerro (codigo ${code}), Info Accounts vuelve a localhost/LAN.`);
-            DASHBOARD_PUBLIC_URL = null;
-        });
-    } catch (e) {
-        console.log('DEBUG: no se pudo iniciar el tunel de Info Accounts:', e.message);
+            console.log('DEBUG: no se pudo iniciar el tunel de Info Accounts:', e.message);
+            return;
+        }
     }
 }
 
