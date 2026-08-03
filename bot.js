@@ -2751,11 +2751,53 @@ function ejecutarWaitWelcomeScreens(winTitle, callback) {
     });
 }
 
+// Cache en memoria (2026-08-03) de los datos de inventario que ya capturo una corrida de
+// Shinedust, para que si el usuario despues aprieta "Info Accounts" desde ESE MISMO
+// resultado no haga falta re-inyectar la cuenta ni volver a leer todo por OCR de nuevo.
+// TTL corto para no acumular memoria indefinidamente si nadie lo usa.
+const cacheDatosInventario = new Map(); // fileName -> { datos, ts }
+const TTL_CACHE_INVENTARIO_MS = 60 * 60 * 1000;
+
+function obtenerDatosInventarioCacheados(fileName) {
+    const entrada = cacheDatosInventario.get(fileName);
+    if (!entrada) return null;
+    if (Date.now() - entrada.ts > TTL_CACHE_INVENTARIO_MS) {
+        cacheDatosInventario.delete(fileName);
+        return null;
+    }
+    return entrada.datos;
+}
+
+// Mismo orden en el que aparecen en el inventario real del juego.
+const ETIQUETAS_INVENTARIO = [
+    ['pokegold_nonpaid', '🪙 Poké Gold (non-paid)'],
+    ['pokegold_paid', '🪙 Poké Gold (paid)'],
+    ['shopticket', '🎫 Shop Ticket'],
+    ['specialshopticket', '🎟️ Special Shop Ticket'],
+    ['premiumticket', '🎫 Premium Ticket'],
+    ['packhourglass', '⏳ Pack Hourglass'],
+    ['wonderhourglass', '⏳ Wonder Hourglass'],
+    ['rewindwatch', '⏱️ Rewind Watch'],
+    ['tradehourglass', '⏳ Trade Hourglass'],
+];
+
+// Solo incluye los campos que se pudieron leer bien (algunos pueden venir vacios si el OCR
+// no los reconocio esa corrida -- ver leerCampoOcr en _CountShinedust.ahk).
+function camposInventarioEmbed(datos) {
+    // Solo mayor a 0 (a pedido explicito del usuario 2026-08-03): un campo en "0" no aporta
+    // nada y satura el embed -- ya sea que el OCR lo haya leido bien o que sea el default
+    // aplicado cuando no se pudo leer (ver conValorODefaultCero en _CountShinedust.ahk).
+    return ETIQUETAS_INVENTARIO
+        .filter(([clave]) => datos[clave] && datos[clave] !== '0')
+        .map(([clave, etiqueta]) => ({ name: etiqueta, value: datos[clave], inline: true }));
+}
+
 // Corre nuestro propio script de OCR (ver automation/_CountShinedust.ahk) sobre una
 // instancia que YA tiene la cuenta inyectada, el juego cargado, y ya paso las pantallas de
 // bienvenida (ejecutarInyeccionHeadless y ejecutarWaitWelcomeScreens deben haber corrido
-// antes) -- navega hasta Items y lee el valor de shinedust con el OCR nativo de Windows.
-// callback(ok, valorOMotivo).
+// antes) -- navega hasta Items y lee el shinedust y el resto del inventario con el OCR
+// nativo de Windows. callback(ok, datosOMotivo) -- datos es un objeto ({shinedust, ...}) si
+// ok, un string con el motivo si no.
 function ejecutarCountShinedust(winTitle, callback) {
     const ahkExe = rutaAutoHotkey();
     const folderPath = carpetaBaseMuMu();
@@ -2780,7 +2822,17 @@ function ejecutarCountShinedust(winTitle, callback) {
         if (!ok || !resultado || resultado.startsWith('ERROR')) {
             return callback(false, resultado || detalle);
         }
-        callback(true, resultado);
+        // _CountShinedust.ahk devuelve un JSON armado a mano (2026-08-03, ver el script)
+        // con Shinedust y el resto de los campos del inventario (Poke gold, tickets,
+        // relojes de arena). Fallback por si algun dia vuelve a llegar el shinedust
+        // plano de antes (sin JSON), para no romper nada de golpe.
+        let datos;
+        try {
+            datos = JSON.parse(resultado);
+        } catch (e) {
+            datos = { shinedust: resultado };
+        }
+        callback(true, datos);
     });
 }
 
@@ -2825,7 +2877,7 @@ function buscarArchivoJsonPorDeviceAccount(rutaBase, deviceAccount) {
 // esa cuenta -- mismo conteo que ya usa Gold Cards/construirMapaCopiasPorCarta,
 // pero acotado a UNA sola cuenta (el archivo JSON que ya se identifico en el
 // flujo de Extract XML), no un cruce entre todas las cuentas guardadas.
-async function generarInfoAccountsPDF(rutaMasterPath, archivoJson, escalaRender = 3, calidadJpeg = 90) {
+async function generarInfoAccountsPDF(rutaMasterPath, archivoJson, escalaRender = 3, calidadJpeg = 90, datosInventario = null) {
     const accountData = leerJsonSeguro(archivoJson);
     if (!accountData || !Array.isArray(accountData.pulls)) return null;
 
@@ -2961,6 +3013,18 @@ async function generarInfoAccountsPDF(rutaMasterPath, archivoJson, escalaRender 
 
     doc.fontSize(18).fillColor(TEXTO_CLARO).text(`Account Report — ${accountData.deviceAccount || path.basename(archivoJson, '.json')}`, { underline: true });
     doc.fontSize(10).fillColor(TEXTO_MUTED).text(`File: ${accountData.metadata?.fileName || ''}`);
+    // Datos en vivo del inventario (2026-08-03, a pedido explicito del usuario): solo si se
+    // pidieron con "Yes, get live data" o vino del atajo de un resultado de Shinedust -- si
+    // no hay, no se agrega nada (mismo criterio que el embed de Discord).
+    if (datosInventario) {
+        doc.moveDown(0.3);
+        doc.fontSize(11).fillColor(TEXTO_CLARO).text(`👛 Shinedust: ${datosInventario.shinedust}`);
+        for (const [clave, etiqueta] of ETIQUETAS_INVENTARIO) {
+            if (datosInventario[clave] && datosInventario[clave] !== '0') {
+                doc.fontSize(11).fillColor(TEXTO_CLARO).text(`${etiqueta}: ${datosInventario[clave]}`);
+            }
+        }
+    }
     doc.fillColor(TEXTO_CLARO).moveDown();
 
     for (let i = 0; i < expansionesOrdenadas.length; i++) {
@@ -3041,9 +3105,9 @@ const DASHBOARD_PORT_BASE = Number(process.env.DASHBOARD_PORT) || 3005;
 const dashboardApp = express();
 const _dashboardTokens = new Map();
 
-function generarTokenDashboard(rutaMasterPath, archivoJson) {
+function generarTokenDashboard(rutaMasterPath, archivoJson, datosInventario = null) {
     const token = crypto.randomBytes(12).toString('hex');
-    _dashboardTokens.set(token, { rutaMasterPath, archivoJson });
+    _dashboardTokens.set(token, { rutaMasterPath, archivoJson, datosInventario });
     return token;
 }
 
@@ -3116,7 +3180,7 @@ dashboardApp.get('/account/:token/pdf', async (req, res) => {
     try {
         const datos = _dashboardTokens.get(req.params.token);
         if (!datos) return res.status(404).send('Link expirado o invalido.');
-        const pdfBuffer = await generarInfoAccountsPDF(datos.rutaMasterPath, datos.archivoJson);
+        const pdfBuffer = await generarInfoAccountsPDF(datos.rutaMasterPath, datos.archivoJson, 3, 90, datos.datosInventario);
         if (!pdfBuffer) return res.status(500).send('No se pudo generar el PDF.');
         const nombreArchivo = path.basename(datos.archivoJson, '.json') + '.pdf';
         res.set('Content-Type', 'application/pdf');
@@ -3132,7 +3196,7 @@ dashboardApp.get('/account/:token', async (req, res) => {
     try {
         const datos = _dashboardTokens.get(req.params.token);
         if (!datos) return res.status(404).send('Link expirado o invalido. Volve a apretar el boton de Info Accounts en Discord.');
-        const { rutaMasterPath, archivoJson } = datos;
+        const { rutaMasterPath, archivoJson, datosInventario } = datos;
 
         const accountData = leerJsonSeguro(archivoJson);
         if (!accountData || !Array.isArray(accountData.pulls)) return res.status(404).send('No se pudo leer la cuenta.');
@@ -3300,6 +3364,7 @@ dashboardApp.get('/account/:token', async (req, res) => {
 <div class="lightbox" id="lightbox"><div class="lightbox-box"><img id="lightbox-img" src="" alt=""></div></div>
 <div class="sub">File: ${escaparHtml(accountData.metadata?.fileName || '')} — el link de esta pagina es privado, pero si lo compartís cualquiera con el enlace puede verlo. Para pasarle esto a alguien, mejor descargá el PDF y mandale el archivo.</div>
 <div class="sub">🎴 Total cards pulled: <strong>${totalCartas}</strong></div>
+${datosInventario ? `<div class="sub">👛 Shinedust: <strong>${escaparHtml(datosInventario.shinedust)}</strong>${camposInventarioEmbed(datosInventario).map(c => ` — ${escaparHtml(c.name)}: <strong>${escaparHtml(c.value)}</strong>`).join('')}</div>` : ''}
 <div class="filtros">
     <div class="dropdown" id="dropdown-expansion">
         <button type="button" class="dropdown-toggle" id="toggle-expansion"><span class="dropdown-toggle-texto">All expansions</span><span class="caret">▾</span></button>
@@ -5714,29 +5779,37 @@ client.on('interactionCreate', async interaction => {
     // embed con el XML, el JSON y los links del dashboard juntos, y lo manda
     // directo al canal de Info Accounts -- "este mensaje... tiene que migrar
     // a info accounts", palabras textuales del usuario.
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_info_accounts_cuenta::')) {
-        const fileName = interaction.values[0];
-        await interaction.deferUpdate();
-
+    // Compartido entre el flujo normal de Info Accounts (card_info_accounts_cuenta::, sin
+    // datos en vivo) y el atajo desde un resultado de Shinedust (shinedust_result_info_accounts::,
+    // que SI tiene datos de inventario ya capturados por OCR -- ver cacheDatosInventario).
+    // Cuando vienen datos, se agregan como campos extra al embed; nunca dispara una
+    // inyeccion nueva aca, eso ya paso antes (o no, si el usuario entro por el camino normal).
+    async function enviarInfoAccounts(interaction, fileName, datosInventario = null) {
+        // followUp en vez de editReply en TODA esta funcion (2026-08-03, bug real reportado
+        // por el usuario): cuando se llama desde el boton de un resultado de Shinedust
+        // (shinedust_result_info_accounts::), el "mensaje original" de la interaccion es la
+        // carta con los botones de Trade/Extract XML/Info Accounts -- editReply lo
+        // reemplazaba entero por el texto de confirmacion, borrando los botones. followUp
+        // manda un mensaje aparte y deja el original intacto en los dos caminos de entrada.
         const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
         const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
         if (!archivo) {
-            return await interaction.editReply({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, components: [] });
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
         }
         const deviceAccount = extraerDeviceAccount(archivo);
         const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
         const archivoJson = deviceAccount ? buscarArchivoJsonPorDeviceAccount(rutaJsonCfg?.webhook_url, deviceAccount) : null;
         if (!archivoJson) {
-            return await interaction.editReply({ content: `❌ Could not find the saved JSON data for \`${fileName}\`.`, components: [] });
+            return await interaction.followUp({ content: `❌ Could not find the saved JSON data for \`${fileName}\`.`, ephemeral: true });
         }
 
         const canalInfoAccounts = await obtenerCanalComando(interaction.user.id, 'info_accounts');
         if (!canalInfoAccounts?.webhook_url) {
-            return await interaction.editReply({ content: `❌ No channel synced for **Info Accounts**. Use **Sync Channels** first.`, components: [] });
+            return await interaction.followUp({ content: `❌ No channel synced for **Info Accounts**. Use **Sync Channels** first.`, ephemeral: true });
         }
 
         const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson);
+        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson, datosInventario);
         const puertoActual = DASHBOARD_PORT_ACTUAL || DASHBOARD_PORT_BASE;
         const ipLan = obtenerIpLan();
         const paginas = [];
@@ -5754,7 +5827,9 @@ client.on('interactionCreate', async interaction => {
 
         // Campos separados (a pedido explicito del usuario, "ordenalo bien")
         // en vez de un solo bloque de texto -- mas facil de leer de un
-        // vistazo que un parrafo con todo junto.
+        // vistazo que un parrafo con todo junto. Shinedust/inventario (si hay) van justo
+        // despues de Total Cards, antes de los links -- pedido explicito del usuario
+        // 2026-08-03 ("preferible que vaya esto debajo de total cartas").
         const embed = new EmbedBuilder()
             .setTitle('📋 Info Accounts')
             .setDescription(`Hi <@${interaction.user.id}>, the account data is attached!`)
@@ -5765,11 +5840,15 @@ client.on('interactionCreate', async interaction => {
                 // archivo adjunto de verdad.
                 { name: '💠 Data XML', value: `\`${path.basename(archivo)}\``, inline: true },
                 { name: '🗂️ Data Json', value: `\`${path.basename(archivoJson)}\``, inline: true },
-                { name: '🎴 Total Cards', value: `${totalCartas}`, inline: true },
-                { name: '🔗 Pages we mentioned', value: paginas.join('\n') }
+                { name: '🎴 Total Cards', value: `${totalCartas}`, inline: true }
             )
-            .setFooter({ text: 'Links stop working if the bot restarts.' })
             .setColor(0xE91E63);
+        if (datosInventario) {
+            embed.addFields({ name: '👛 Shinedust', value: `${datosInventario.shinedust}`, inline: true });
+            embed.addFields(...camposInventarioEmbed(datosInventario));
+        }
+        embed.addFields({ name: '🔗 Pages we mentioned', value: paginas.join('\n') });
+        embed.setFooter({ text: 'Links stop working if the bot restarts.' });
         // Mismo logo de Pokemon TCG Pocket que ya usan el resto de los embeds
         // del bot (a pedido explicito del usuario 2026-08-01).
         const embedFiles = [];
@@ -5787,11 +5866,127 @@ client.on('interactionCreate', async interaction => {
             // que el embed quede primero es que sea un mensaje aparte, antes.
             await webhookInfo.send({ embeds: [embed], files: embedFiles });
             await webhookInfo.send({ files: [new AttachmentBuilder(archivo), new AttachmentBuilder(archivoJson)] });
-            return await interaction.editReply({ content: '✅ Sent to your Info Accounts channel.', components: [] });
+            return await interaction.followUp({ content: '✅ Sent to your Info Accounts channel.', ephemeral: true });
         } catch (e) {
-            console.error('DEBUG: error mandando card_info_accounts_cuenta al canal de Info Accounts:', e?.response?.data || e?.message || e);
-            return await interaction.editReply({ content: '❌ Could not send to your Info Accounts channel.', components: [] });
+            console.error('DEBUG: error mandando Info Accounts al canal dedicado:', e?.response?.data || e?.message || e);
+            return await interaction.followUp({ content: '❌ Could not send to your Info Accounts channel.', ephemeral: true });
         }
+    }
+
+    // Entrada normal a Info Accounts (2026-08-03, a pedido explicito del usuario): antes de
+    // armar el PDF, se pregunta si tambien quiere datos EN VIVO del inventario (Shinedust,
+    // tickets, relojes de arena) -- eso implica inyectar la cuenta de verdad, asi que no se
+    // hace a ciegas. Si dice que no, sigue igual que antes (PDF solo con lo ya guardado).
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_info_accounts_cuenta::')) {
+        const fileName = interaction.values[0];
+        const fila = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`info_accounts_extra_si::${fileName}`.slice(0, 100)).setLabel('Yes, get live data').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`info_accounts_extra_no::${fileName}`.slice(0, 100)).setLabel('No, just the PDF').setStyle(ButtonStyle.Secondary)
+        );
+        return await interaction.update({ content: `Do you also want live in-game data (Shinedust, tickets, hourglasses) for \`${fileName}\`? This requires injecting the account into an instance.`, components: [fila] });
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('info_accounts_extra_no::')) {
+        const fileName = interaction.customId.replace('info_accounts_extra_no::', '');
+        await interaction.deferUpdate();
+        return await enviarInfoAccounts(interaction, fileName);
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('info_accounts_extra_si::')) {
+        const fileName = interaction.customId.replace('info_accounts_extra_si::', '');
+        const instancias = obtenerInstanciasMuMu();
+        if (instancias === null) {
+            return await interaction.update({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+        }
+        if (!instancias.length) {
+            return await interaction.update({ content: '❌ No MuMuPlayer instances found.', components: [] });
+        }
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`info_accounts_instancia::${fileName}`.slice(0, 100))
+            .setPlaceholder('Select an instance')
+            .addOptions(instancias.slice(0, 25).map(i => ({
+                label: `${i.index}. ${i.name}`.slice(0, 100),
+                description: i.is_android_started ? 'On' : 'Off',
+                value: `${i.index}::${i.name}`
+            })));
+        return await interaction.update({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
+    // Mismos pasos que ejecutarFlujoShinedust (prender, arreglar ventana, inyectar, esperar
+    // pantallas de bienvenida, leer inventario) pero sin nada especifico de carta/Trade al
+    // final -- termina mandando el PDF de Info Accounts con los datos ya leidos.
+    async function ejecutarFlujoInfoAccountsConDatos(interaction, fileName, index, nombre) {
+        const prendida = await asegurarInstanciaEncendida(index);
+        if (!prendida) {
+            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true });
+        }
+
+        try { await interaction.followUp({ content: `🛠️ Fixing instance **${nombre}**'s window before injecting...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+        await new Promise((resolve) => ejecutarFixInstanceWindow(nombre, () => resolve()));
+
+        try { await interaction.followUp({ content: `🔄 Injecting \`${fileName}\` into instance **${nombre}**... this may take a couple of minutes.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+        }
+
+        const { rutaIni, rutaScript } = await obtenerRutasInject(interaction.user.id);
+        try {
+            guardarXmlParaInyeccion(nombre, archivo, rutaIni);
+            actualizarIniInject({ sendFriendRequestAfterInject: '0' }, rutaIni);
+        } catch (e) {
+            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
+        }
+
+        ejecutarInyeccionHeadless(async (ok, detalle) => {
+            if (!ok) {
+                try { await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+                return;
+            }
+
+            ejecutarWaitWelcomeScreens(nombre, async (okWelcome, motivoWelcome) => {
+                if (!okWelcome) {
+                    apagarInstanciaMuMu(index);
+                    try { await interaction.followUp({ content: `❌ Could not reach the main menu after injecting (${motivoWelcome}).`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+                    return;
+                }
+
+                try { await interaction.followUp({ content: `🔍 Reading account data on instance **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+
+                ejecutarCountShinedust(nombre, async (okOcr, datosOMotivo) => {
+                    apagarInstanciaMuMu(index);
+                    if (!okOcr) {
+                        try { await interaction.followUp({ content: `❌ Could not read the account data (${datosOMotivo}).`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+                        return;
+                    }
+                    cacheDatosInventario.set(fileName, { datos: datosOMotivo, ts: Date.now() });
+                    try {
+                        await enviarInfoAccounts(interaction, fileName, datosOMotivo);
+                    } catch (e) { /* interacción puede haber expirado */ }
+                });
+            });
+        }, rutaScript);
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('info_accounts_instancia::')) {
+        const fileName = interaction.customId.replace('info_accounts_instancia::', '');
+        const [index, nombre] = interaction.values[0].split('::');
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+        await ejecutarFlujoInfoAccountsConDatos(interaction, fileName, index, nombre);
+        return;
+    }
+
+    // Atajo desde un resultado de Shinedust (2026-08-03, a pedido explicito del usuario):
+    // esa corrida YA inyecto la cuenta y ya leyo el inventario completo por OCR -- si el
+    // usuario aprieta Info Accounts desde ESE mismo mensaje, no tiene sentido preguntarle
+    // de nuevo ni volver a inyectar, se reusan los datos cacheados directo.
+    if (interaction.isButton() && interaction.customId.startsWith('shinedust_result_info_accounts::')) {
+        const fileName = interaction.customId.replace('shinedust_result_info_accounts::', '');
+        await interaction.deferUpdate();
+        const datosInventario = obtenerDatosInventarioCacheados(fileName);
+        return await enviarInfoAccounts(interaction, fileName, datosInventario);
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_instancia::')) {
@@ -5970,13 +6165,20 @@ client.on('interactionCreate', async interaction => {
 
                 try { await interaction.followUp({ content: `🔍 Reading shinedust on instance **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
-                ejecutarCountShinedust(nombre, async (okOcr, valorOMotivo) => {
+                ejecutarCountShinedust(nombre, async (okOcr, datosOMotivo) => {
                     marcarProgreso();
                     apagarInstanciaMuMu(index);
                     try {
                         if (!okOcr) {
-                            return await interaction.followUp({ content: `❌ Could not read the shinedust value (${valorOMotivo}).`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
+                            return await interaction.followUp({ content: `❌ Could not read the shinedust value (${datosOMotivo}).`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
                         }
+                        const datos = datosOMotivo;
+                        const valorOMotivo = datos.shinedust;
+
+                        // Cache en memoria (2026-08-03) de los datos de inventario ya capturados
+                        // para esta cuenta -- si despues el usuario aprieta "Info Accounts" desde
+                        // ESTE mismo resultado, se reusan sin volver a inyectar/leer por OCR.
+                        cacheDatosInventario.set(fileName, { datos, ts: Date.now() });
 
                         const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
                         const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
@@ -5992,10 +6194,12 @@ client.on('interactionCreate', async interaction => {
                         const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
                         const payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
                         payload.embeds[0].addFields({ name: '👛 Shinedust', value: `**${valorOMotivo}** (\`${fileName}\`)` });
+                        payload.embeds[0].addFields(...camposInventarioEmbed(datos));
                         payload.content = `<@${interaction.user.id}> Account \`${fileName}\` has **${valorOMotivo}** Shinedust.`;
                         payload.components = [new ActionRowBuilder().addComponents(
                             new ButtonBuilder().setCustomId(`shinedust_result_trade::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
-                            new ButtonBuilder().setCustomId(`shinedust_result_extract::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary)
+                            new ButtonBuilder().setCustomId(`shinedust_result_extract::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
+                            new ButtonBuilder().setCustomId(`shinedust_result_info_accounts::${fileName}`.slice(0, 100)).setLabel('📋 Info Accounts').setStyle(ButtonStyle.Secondary)
                         )];
 
                         const canalShinedust = await obtenerCanalComando(interaction.user.id, 'shinedust');
