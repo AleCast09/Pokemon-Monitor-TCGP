@@ -103,7 +103,7 @@ AdbTap(adbPath, puerto, 397, 820) ; Intercambiar (confirmacion final)
 Sleep, 2000
 AdbTap(adbPath, puerto, 387, 638) ; Vale (irreversible)
 Sleep, 2500
-AdbSwipe(adbPath, puerto, 270, 600, 100, 400) ; deslizar para enviar
+AdbSwipePropio(adbPath, puerto, 270, 600, 100, 400) ; deslizar para enviar
 Sleep, 3000
 AdbTap(adbPath, puerto, 270, 920) ; tocar para continuar (Genial!)
 Sleep, 2000

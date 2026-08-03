@@ -1595,12 +1595,13 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     // calificadas -- entradas separadas de las de AllCards/Wishlist, para que
     // un bug ahi nunca las afecte, pero comparten la MISMA ejecucion de abajo
     // (instancia, inyeccion, OCR) ya probada.
-    // Trade/Shinedust deshabilitados temporalmente (a pedido explicito del
-    // usuario 2026-07-31): bugs reportados con la actualizacion nueva, hasta
-    // que se revisen no deben quedar disponibles para que nadie los use.
+    // Trade deshabilitado temporalmente (a pedido explicito del usuario
+    // 2026-07-31): bugs reportados con la actualizacion nueva, hasta que se
+    // revise no debe quedar disponible para que nadie lo use. Shinedust
+    // reactivado (2026-08-01) para probar si sigue funcionando tras la update.
     const filaAcciones = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(true),
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary).setDisabled(true),
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary)
     );
 
@@ -2216,6 +2217,25 @@ function asegurarMainAhkCorriendo(ahkExe, rutaMainAhk) {
     }
 }
 
+// Bug real reportado por el usuario 2026-08-01: antes de inyectar para
+// Shinedust, la instancia puede quedar con un problema de ventana visible/
+// glitcheada. La solucion de Kevin es correr el motor completo de esa
+// instancia (Scripts/{index}.ahk) -- pero ese script mas adelante en su loop
+// puede llegar a borrar todos los amigos guardados si algo sale mal, asi que
+// en vez de arrancarlo entero, este script PROPIO (automation/_FixInstanceWindow.ahk)
+// hace SOLO el arreglo de ventana (mismas funciones que ya vive en nuestra
+// copia autorizada de include/Utils.ahk: guarda que ventana tapaba a la de
+// MuMu, fuerza un redibujado, devuelve la tapadora arriba) y termina solo --
+// no hace falta matarlo a ciegas despues de N segundos.
+const RUTA_FIX_INSTANCE_WINDOW_SCRIPT = path.join(__dirname, 'automation', '_FixInstanceWindow.ahk');
+function ejecutarFixInstanceWindow(winTitle, callback) {
+    const ahkExe = rutaAutoHotkey();
+    if (!ahkExe || !fs.existsSync(RUTA_FIX_INSTANCE_WINDOW_SCRIPT)) {
+        return callback(false, 'faltan_archivos');
+    }
+    spawnAhkConProteccion(ahkExe, [RUTA_FIX_INSTANCE_WINDOW_SCRIPT, winTitle], { windowsHide: false }, 30 * 1000, callback);
+}
+
 function ejecutarInyeccionHeadless(callback, rutaScript = RUTA_INJECT_ACCOUNT_SCRIPT_DEFAULT) {
     const ahkExe = rutaAutoHotkey();
     if (!ahkExe || !fs.existsSync(rutaScript)) {
@@ -2701,12 +2721,41 @@ function ejecutarFinalizeTradeCard(winTitle, instanceIndex, callback) {
     spawnAhkConProteccion(ahkExe, [RUTA_FINALIZE_TRADE_CARD_SCRIPT, winTitle, folderPath, String(instanceIndex)], { windowsHide: false }, 3 * 60 * 1000, callback);
 }
 
+const RUTA_WAIT_WELCOME_SCREENS_SCRIPT = path.join(__dirname, 'automation', '_WaitWelcomeScreens.ahk');
 const RUTA_COUNT_SHINEDUST_SCRIPT = path.join(__dirname, 'automation', '_CountShinedust.ahk');
 
+// Separado de ejecutarCountShinedust (2026-08-03) para poder reusar este chequeo desde
+// cualquier flujo que arranque justo despues de una inyeccion (Shinedust, Trade, etc.) sin
+// acoplarlo a la logica puntual de cada uno. Espera hasta 70s a que el juego pase las
+// pantallas de bienvenida/carrusel post-inyeccion y llegue al menu principal.
+// callback(ok, detalle).
+function ejecutarWaitWelcomeScreens(winTitle, callback) {
+    const ahkExe = rutaAutoHotkey();
+    const folderPath = carpetaBaseMuMu();
+    if (!ahkExe || !folderPath || !fs.existsSync(RUTA_WAIT_WELCOME_SCREENS_SCRIPT)) {
+        return callback(false, 'faltan_archivos');
+    }
+    const outputFile = path.join(os.tmpdir(), `welcomescreens_${winTitle}_${Date.now()}.txt`);
+    spawnAhkConProteccion(ahkExe, [RUTA_WAIT_WELCOME_SCREENS_SCRIPT, winTitle, folderPath, outputFile], { windowsHide: false }, 90 * 1000, (ok, detalle) => {
+        let resultado;
+        try {
+            resultado = fs.readFileSync(outputFile, 'utf8').trim();
+        } catch (e) {
+            resultado = '';
+        }
+        try { fs.unlinkSync(outputFile); } catch (e) { /* nada que limpiar */ }
+        if (!ok || !resultado || resultado.startsWith('ERROR')) {
+            return callback(false, resultado || detalle);
+        }
+        callback(true, resultado);
+    });
+}
+
 // Corre nuestro propio script de OCR (ver automation/_CountShinedust.ahk) sobre una
-// instancia que YA tiene la cuenta inyectada y el juego cargado (ejecutarInyeccionHeadless
-// debe haber corrido antes) -- navega hasta Items y lee el valor de shinedust con el OCR
-// nativo de Windows. callback(ok, valorOMotivo).
+// instancia que YA tiene la cuenta inyectada, el juego cargado, y ya paso las pantallas de
+// bienvenida (ejecutarInyeccionHeadless y ejecutarWaitWelcomeScreens deben haber corrido
+// antes) -- navega hasta Items y lee el valor de shinedust con el OCR nativo de Windows.
+// callback(ok, valorOMotivo).
 function ejecutarCountShinedust(winTitle, callback) {
     const ahkExe = rutaAutoHotkey();
     const folderPath = carpetaBaseMuMu();
@@ -3094,21 +3143,41 @@ dashboardApp.get('/account/:token', async (req, res) => {
             for (const code of pull.cards) conteoPorCodigo[code] = (conteoPorCodigo[code] || 0) + 1;
         }
 
-        const cardMap = cargarCardMap(rutaMasterPath);
-        const en_US = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json')) : null;
-        const cardmaster = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json')) : null;
-        const expansiones = construirMapaExpansiones(en_US);
+        // Catalogo completo (a pedido explicito del usuario 2026-08-01): antes
+        // solo se listaban las cartas que la cuenta ya tenia -- ahora se
+        // muestra TODA carta que existe en el juego por expansion, marcando
+        // en gris (clase "faltante") las que esta cuenta todavia no saco, para
+        // poder ver de un vistazo que le falta completar. Respaldo a la lista
+        // vieja (solo lo que ya tiene) si el catalogo completo no esta
+        // disponible por algun motivo (ej. ruta_master global sin configurar).
+        const { cartas: catalogoCompleto } = await obtenerTodasLasCartasCacheadas();
 
         const porExpansion = {};
-        for (const [code, cantidad] of Object.entries(conteoPorCodigo)) {
-            const infoMapa = cardMap?.[code];
-            const expansionId = infoMapa?.ExpansionID;
-            const nombreExpansion = expansionId ? (expansiones[expansionId] || expansionId) : 'Unknown';
-            const infoMaster = cardmaster?.[code];
-            const nombreCarta = (infoMaster?.Name && en_US?.[infoMaster.Name]) || infoMaster?.Name || code;
-            const tipoRareza = tipoRarezaDesdeInfo(infoMaster) || '';
-            if (!porExpansion[nombreExpansion]) porExpansion[nombreExpansion] = [];
-            porExpansion[nombreExpansion].push({ nombre: nombreCarta, cantidad, code, tipoRareza });
+        if (catalogoCompleto) {
+            for (const carta of catalogoCompleto) {
+                if (!porExpansion[carta.expansion]) porExpansion[carta.expansion] = [];
+                porExpansion[carta.expansion].push({
+                    nombre: carta.nombre,
+                    cantidad: conteoPorCodigo[carta.id] || 0,
+                    code: carta.id,
+                    tipoRareza: carta.tipoRareza
+                });
+            }
+        } else {
+            const cardMap = cargarCardMap(rutaMasterPath);
+            const en_US = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json')) : null;
+            const cardmaster = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json')) : null;
+            const expansiones = construirMapaExpansiones(en_US);
+            for (const [code, cantidad] of Object.entries(conteoPorCodigo)) {
+                const infoMapa = cardMap?.[code];
+                const expansionId = infoMapa?.ExpansionID;
+                const nombreExpansion = expansionId ? (expansiones[expansionId] || expansionId) : 'Unknown';
+                const infoMaster = cardmaster?.[code];
+                const nombreCarta = (infoMaster?.Name && en_US?.[infoMaster.Name]) || infoMaster?.Name || code;
+                const tipoRareza = tipoRarezaDesdeInfo(infoMaster) || '';
+                if (!porExpansion[nombreExpansion]) porExpansion[nombreExpansion] = [];
+                porExpansion[nombreExpansion].push({ nombre: nombreCarta, cantidad, code, tipoRareza });
+            }
         }
         for (const lista of Object.values(porExpansion)) lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
         const expansionesOrdenadas = Object.keys(porExpansion).sort();
@@ -3136,13 +3205,29 @@ dashboardApp.get('/account/:token', async (req, res) => {
             return cfg.distintivo ? `${iconos}${cfg.distintivo}` : iconos;
         }
 
-        const filtrosHtml = Object.entries(RAREZA_ICONOS_CARTAS).map(([valor, cfg]) => {
-            const iconos = `<img src="/rarity-icon/${cfg.emoji}" class="icono-rareza">`.repeat(cfg.cantidad);
-            const sufijo = cfg.distintivo ? `${cfg.distintivo} ${cfg.etiqueta}` : cfg.etiqueta;
-            return `<button class="filtro-btn" data-filtro="${valor}">${iconos} ${sufijo}</button>`;
-        }).join('');
-
         const escaparHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+        // Barra de filtros compacta (a pedido explicito del usuario
+        // 2026-08-01): antes eran dos filas de botones (una por rareza, otra
+        // por expansion) -- se probo con <select> nativo para que ocupe menos
+        // espacio, pero un <select>/<option> del navegador NO puede mostrar
+        // imagenes adentro (el usuario pidio ver los iconos propios de rareza
+        // y los logos de expansion ahi) -- por eso es un dropdown propio:
+        // un boton que abre un panel con las opciones (con imagen incluida),
+        // se cierra solo al elegir una o al tocar afuera.
+        const opcionesRarezaHtml = `<div class="dropdown-opcion activo" data-filtro="all"><span class="dropdown-opcion-texto">All rarities</span></div>` +
+            Object.entries(RAREZA_ICONOS_CARTAS).map(([valor, cfg]) => {
+                const iconos = `<img src="/rarity-icon/${cfg.emoji}" class="icono-rareza">`.repeat(cfg.cantidad);
+                const sufijo = cfg.distintivo ? `${cfg.distintivo} ${cfg.etiqueta}` : cfg.etiqueta;
+                return `<div class="dropdown-opcion" data-filtro="${valor}">${iconos} <span class="dropdown-opcion-texto">${escaparHtml(sufijo)}</span></div>`;
+            }).join('');
+
+        const opcionesExpansionHtml = `<div class="dropdown-opcion activo" data-filtro-exp="all"><span class="dropdown-opcion-texto">All expansions</span></div>` +
+            expansionesOrdenadas.map(exp => {
+                const rutaLogo = buscarLogoExpansionBot(exp);
+                const logoHtml = rutaLogo ? `<img src="/logo/${Buffer.from(exp).toString('base64url')}" class="dropdown-logo">` : '';
+                return `<div class="dropdown-opcion" data-filtro-exp="${escaparHtml(exp)}">${logoHtml}<span class="dropdown-opcion-texto">${escaparHtml(exp)}</span></div>`;
+            }).join('');
 
         let html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Account Report - ${escaparHtml(accountData.deviceAccount || '')}</title>
@@ -3170,11 +3255,30 @@ dashboardApp.get('/account/:token', async (req, res) => {
     .top-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
     .download-btn { background: rgba(44,102,232,0.55); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); color: #fff; text-decoration: none; font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 10px; white-space: nowrap; }
     .download-btn:hover { background: rgba(61,120,255,0.65); }
-    .filtros { position: sticky; top: 0; z-index: 10; background: rgba(11,16,32,0.55); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); padding: 12px; margin: 0 -12px 8px; border-radius: 14px; display: flex; flex-wrap: wrap; gap: 8px; border: 1px solid rgba(255,255,255,0.1); }
-    .filtro-btn { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); color: #edf2ff; font-size: 12px; padding: 6px 12px; border-radius: 20px; cursor: pointer; white-space: nowrap; }
-    .filtro-btn:hover { background: rgba(255,255,255,0.1); }
-    .filtro-btn.activo { background: rgba(44,102,232,0.65); border-color: rgba(90,140,255,0.8); }
+    .filtros { position: sticky; top: 0; z-index: 10; background: rgba(11,16,32,0.55); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); padding: 12px; margin: 0 -12px 8px; border-radius: 14px; display: flex; flex-wrap: wrap; gap: 10px; border: 1px solid rgba(255,255,255,0.1); }
+    .dropdown { position: relative; }
+    .dropdown-toggle { display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: #edf2ff; font-size: 13px; padding: 8px 12px; border-radius: 10px; cursor: pointer; min-width: 160px; font-family: inherit; }
+    .dropdown-toggle:hover { background: rgba(255,255,255,0.1); }
+    .dropdown-toggle .caret { margin-left: auto; opacity: 0.7; font-size: 11px; }
+    .dropdown-panel { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; background: #171d33; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 6px; min-width: 220px; max-height: 320px; overflow-y: auto; box-shadow: 0 12px 30px rgba(0,0,0,0.4); }
+    .dropdown-panel.abierto { display: block; }
+    .dropdown-opcion { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+    .dropdown-opcion:hover { background: rgba(255,255,255,0.08); }
+    .dropdown-opcion.activo { background: rgba(44,102,232,0.35); }
+    .dropdown-logo { height: 20px; max-width: 60px; object-fit: contain; }
     .card-tile.oculta { display: none; }
+    .expansion.oculta { display: none; }
+    /* Cartas que la cuenta todavia no saco (a pedido explicito del usuario
+       2026-08-01, ver todo el catalogo y no solo lo que ya tiene) -- en gris,
+       sin badge de cantidad, para distinguirlas de un vistazo. */
+    .card-tile.faltante img { filter: grayscale(1) brightness(0.5); }
+    .card-tile.faltante .rareza-pill { opacity: 0.4; filter: grayscale(1); }
+    /* Si ni siquiera hay imagen en disco/repositorio para esa carta (nadie la
+       cacheo todavia), se oculta el <img> roto y se deja un placeholder liso
+       en vez del icono feo de "imagen rota" del navegador. */
+    .card-tile img.rota { visibility: hidden; }
+    .card-tile img.rota + .badge { display: none; }
+    .img-wrap:has(img.rota) { background: rgba(255,255,255,0.04); border-radius: 10px; aspect-ratio: 0.716; }
     .icono-rareza { height: 13px; vertical-align: middle; margin-right: 1px; }
     .rareza-tag { display: flex; justify-content: center; margin-top: 8px; }
     .rareza-pill { display: inline-flex; align-items: center; }
@@ -3197,19 +3301,35 @@ dashboardApp.get('/account/:token', async (req, res) => {
 <div class="sub">File: ${escaparHtml(accountData.metadata?.fileName || '')} — el link de esta pagina es privado, pero si lo compartís cualquiera con el enlace puede verlo. Para pasarle esto a alguien, mejor descargá el PDF y mandale el archivo.</div>
 <div class="sub">🎴 Total cards pulled: <strong>${totalCartas}</strong></div>
 <div class="filtros">
-    <button class="filtro-btn activo" data-filtro="all">All</button>
-    ${filtrosHtml}
+    <div class="dropdown" id="dropdown-expansion">
+        <button type="button" class="dropdown-toggle" id="toggle-expansion"><span class="dropdown-toggle-texto">All expansions</span><span class="caret">▾</span></button>
+        <div class="dropdown-panel" id="panel-expansion">${opcionesExpansionHtml}</div>
+    </div>
+    <div class="dropdown" id="dropdown-rareza">
+        <button type="button" class="dropdown-toggle" id="toggle-rareza"><span class="dropdown-toggle-texto">All rarities</span><span class="caret">▾</span></button>
+        <div class="dropdown-panel" id="panel-rareza">${opcionesRarezaHtml}</div>
+    </div>
+    <div class="dropdown" id="dropdown-estado">
+        <button type="button" class="dropdown-toggle" id="toggle-estado"><span class="dropdown-toggle-texto">All cards</span><span class="caret">▾</span></button>
+        <div class="dropdown-panel" id="panel-estado">
+            <div class="dropdown-opcion activo" data-filtro-estado="all"><span class="dropdown-opcion-texto">All cards</span></div>
+            <div class="dropdown-opcion" data-filtro-estado="tiene"><span class="dropdown-opcion-texto">✅ Have</span></div>
+            <div class="dropdown-opcion" data-filtro-estado="falta"><span class="dropdown-opcion-texto">⬜ Missing</span></div>
+        </div>
+    </div>
 </div>`;
 
         for (const expansion of expansionesOrdenadas) {
             const rutaLogo = buscarLogoExpansionBot(expansion);
             // A pedido explicito del usuario 2026-08-01: en vez del nombre de
             // la expansion (redundante con el logo de arriba), mostrar cuantas
-            // cartas de esa expansion tiene la cuenta -- si no hay logo (caso
-            // "Unknown"), el nombre sigue haciendo falta para identificarla.
-            const totalExpansion = porExpansion[expansion].reduce((s, c) => s + c.cantidad, 0);
-            const textoHeader = rutaLogo ? `${totalExpansion} cards` : `${escaparHtml(expansion)} — ${totalExpansion} cards`;
-            html += `<div class="expansion"><div class="expansion-header">`;
+            // cartas tiene la cuenta sobre el total del catalogo (ej. "42/107
+            // cards") -- antes solo se listaba lo que ya tenia, asi que no
+            // habia forma de ver cuanto faltaba para completar la expansion.
+            const totalExpansion = porExpansion[expansion].length;
+            const tenidas = porExpansion[expansion].filter(c => c.cantidad > 0).length;
+            const textoHeader = rutaLogo ? `${tenidas}/${totalExpansion} cards` : `${escaparHtml(expansion)} — ${tenidas}/${totalExpansion} cards`;
+            html += `<div class="expansion" data-expansion="${escaparHtml(expansion)}"><div class="expansion-header">`;
             if (rutaLogo) {
                 const logoB64 = Buffer.from(expansion).toString('base64url');
                 html += `<img src="/logo/${logoB64}" alt="${escaparHtml(expansion)}">`;
@@ -3217,7 +3337,8 @@ dashboardApp.get('/account/:token', async (req, res) => {
             html += `<h2>${textoHeader}</h2></div><div class="grid">`;
             for (const carta of porExpansion[expansion]) {
                 const iconosCarta = iconosRarezaHtml(carta.tipoRareza);
-                html += `<div class="card-tile" data-rareza="${escaparHtml(carta.tipoRareza)}"><div class="img-wrap"><img src="/img/${req.params.token}/${encodeURIComponent(carta.code)}" loading="lazy" alt="${escaparHtml(carta.nombre)}">`;
+                const faltante = carta.cantidad === 0;
+                html += `<div class="card-tile${faltante ? ' faltante' : ''}" data-rareza="${escaparHtml(carta.tipoRareza)}" data-tiene="${faltante ? '0' : '1'}"><div class="img-wrap"><img src="/img/${req.params.token}/${encodeURIComponent(carta.code)}" loading="lazy" alt="${escaparHtml(carta.nombre)}" onerror="this.classList.add('rota')">`;
                 if (carta.cantidad > 0) html += `<div class="badge">x${carta.cantidad}</div>`;
                 html += `</div>`;
                 if (iconosCarta) html += `<div class="rareza-tag"><span class="rareza-pill">${iconosCarta}</span></div>`;
@@ -3226,15 +3347,55 @@ dashboardApp.get('/account/:token', async (req, res) => {
             html += `</div></div>`;
         }
         html += `<script>
-document.querySelectorAll('.filtro-btn').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-        document.querySelectorAll('.filtro-btn').forEach(function (b) { b.classList.remove('activo'); });
-        btn.classList.add('activo');
-        var filtro = btn.dataset.filtro;
-        document.querySelectorAll('.card-tile').forEach(function (tile) {
-            var coincide = (filtro === 'all' || tile.dataset.rareza === filtro);
-            tile.classList.toggle('oculta', !coincide);
+function armarDropdown(toggleId, panelId, atributoDataset, onElegir) {
+    var toggle = document.getElementById(toggleId);
+    var panel = document.getElementById(panelId);
+    var textoToggle = toggle.querySelector('.dropdown-toggle-texto');
+    toggle.addEventListener('click', function (e) {
+        e.stopPropagation();
+        document.querySelectorAll('.dropdown-panel').forEach(function (p) { if (p !== panel) p.classList.remove('abierto'); });
+        panel.classList.toggle('abierto');
+    });
+    panel.querySelectorAll('.dropdown-opcion').forEach(function (opcion) {
+        opcion.addEventListener('click', function () {
+            panel.querySelectorAll('.dropdown-opcion').forEach(function (o) { o.classList.remove('activo'); });
+            opcion.classList.add('activo');
+            textoToggle.textContent = opcion.querySelector('.dropdown-opcion-texto').textContent;
+            panel.classList.remove('abierto');
+            onElegir(opcion.dataset[atributoDataset]);
         });
+    });
+}
+document.addEventListener('click', function () {
+    document.querySelectorAll('.dropdown-panel').forEach(function (p) { p.classList.remove('abierto'); });
+});
+// Rareza y Have/Missing filtran la MISMA tarjeta a la vez (a pedido explicito
+// del usuario 2026-08-01: agregar el filtro de "tenes/no tenes" ademas del de
+// rareza que ya existia) -- se guarda el filtro activo de cada uno y se
+// reevaluan juntos, para que elegir uno no pise lo que ya habia elegido el otro.
+var filtroRarezaActual = 'all';
+var filtroEstadoActual = 'all';
+function aplicarFiltrosTarjeta() {
+    document.querySelectorAll('.card-tile').forEach(function (tile) {
+        var coincideRareza = (filtroRarezaActual === 'all' || tile.dataset.rareza === filtroRarezaActual);
+        var coincideEstado = (filtroEstadoActual === 'all')
+            || (filtroEstadoActual === 'tiene' && tile.dataset.tiene === '1')
+            || (filtroEstadoActual === 'falta' && tile.dataset.tiene === '0');
+        tile.classList.toggle('oculta', !(coincideRareza && coincideEstado));
+    });
+}
+armarDropdown('toggle-rareza', 'panel-rareza', 'filtro', function (filtro) {
+    filtroRarezaActual = filtro;
+    aplicarFiltrosTarjeta();
+});
+armarDropdown('toggle-estado', 'panel-estado', 'filtroEstado', function (filtro) {
+    filtroEstadoActual = filtro;
+    aplicarFiltrosTarjeta();
+});
+armarDropdown('toggle-expansion', 'panel-expansion', 'filtroExp', function (filtro) {
+    document.querySelectorAll('.expansion').forEach(function (exp) {
+        var coincide = (filtro === 'all' || exp.dataset.expansion === filtro);
+        exp.classList.toggle('oculta', !coincide);
     });
 });
 var lightbox = document.getElementById('lightbox');
@@ -5752,23 +5913,33 @@ client.on('interactionCreate', async interaction => {
         return await interaction.followUp({ content: `🛑 Stopped instance **${nombre}** (and Main, if it was running) and closed any scripts running for them. Wait ${COOLDOWN_STOP_TRADE_MS / 1000}s before starting another trade on it.`, ephemeral: true });
     }
 
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_instancia::')) {
-        const [, cartaId, fileName] = interaction.customId.split('::');
-        const [index, nombre] = interaction.values[0].split('::');
+    // Boton "Retry" para el flujo de Shinedust (2026-08-03): si algo falla (instancia no
+    // prendio, timeout de pantallas de bienvenida, OCR invalido, etc.) el usuario puede
+    // reintentar sin tener que volver a navegar el select de cuentas desde cero.
+    function botonReintentarShinedust(cartaId, fileName, index, nombre) {
+        return new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`shinedust_instancia_retry::${cartaId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+        );
+    }
 
-        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
-
+    async function ejecutarFlujoShinedust(interaction, cartaId, fileName, index, nombre, marcarProgreso = () => {}) {
+        marcarProgreso();
         const prendida = await asegurarInstanciaEncendida(index);
         if (!prendida) {
-            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true });
+            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
         }
+        marcarProgreso();
+
+        try { await interaction.followUp({ content: `🛠️ Fixing instance **${nombre}**'s window before injecting...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+        await new Promise((resolve) => ejecutarFixInstanceWindow(nombre, () => resolve()));
+        marcarProgreso();
 
         try { await interaction.followUp({ content: `🔄 Injecting \`${fileName}\` into instance **${nombre}**... this may take a couple of minutes.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
         const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
         const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
         if (!archivo) {
-            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
         }
 
         const { rutaIni: rutaIniShinedust, rutaScript: rutaScriptShinedust } = await obtenerRutasInject(interaction.user.id);
@@ -5779,60 +5950,118 @@ client.on('interactionCreate', async interaction => {
             // "Add Friend" hay que apagarla, o la inyección la dispara igual.
             actualizarIniInject({ sendFriendRequestAfterInject: '0' }, rutaIniShinedust);
         } catch (e) {
-            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
+            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
         }
 
         ejecutarInyeccionHeadless(async (ok, detalle) => {
             if (!ok) {
-                try { await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+                try { await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
                 return;
             }
+            marcarProgreso();
 
-            try { await interaction.followUp({ content: `🔍 Reading shinedust on instance **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+            ejecutarWaitWelcomeScreens(nombre, async (okWelcome, motivoWelcome) => {
+                if (!okWelcome) {
+                    apagarInstanciaMuMu(index);
+                    try { await interaction.followUp({ content: `❌ Could not reach the main menu after injecting (${motivoWelcome}).`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
+                    return;
+                }
+                marcarProgreso();
 
-            ejecutarCountShinedust(nombre, async (okOcr, valorOMotivo) => {
-                apagarInstanciaMuMu(index);
-                try {
-                    if (!okOcr) {
-                        return await interaction.followUp({ content: `❌ Could not read the shinedust value (${valorOMotivo}).`, ephemeral: true });
-                    }
+                try { await interaction.followUp({ content: `🔍 Reading shinedust on instance **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
-                    const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-                    const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
-                    // No importa si se llego aca desde AllCards o desde Gold Cards -- lo
-                    // que importa es si ESTA cuenta puntual ya califica como Gold para
-                    // ESTA carta puntual. Si es asi, se usa la imagen con borde dorado y
-                    // el campo de cuentas, igual que si se hubiera buscado en Gold Cards
-                    // directamente (reporte del usuario 2026-07-27: el resultado no
-                    // coincidia con la carta dorada que se habia buscado).
-                    const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
-                    const cuentasGold = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : [];
-                    const esCuentaGold = cuentasGold.some(r => r.fileName.replace(/\.xml$/i, '') === fileName);
-                    const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
-                    const payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
-                    payload.embeds[0].addFields({ name: '👛 Shinedust', value: `**${valorOMotivo}** (\`${fileName}\`)` });
-                    payload.content = `<@${interaction.user.id}> Account \`${fileName}\` has **${valorOMotivo}** Shinedust.`;
-                    payload.components = [new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`shinedust_result_trade::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder().setCustomId(`shinedust_result_extract::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary)
-                    )];
+                ejecutarCountShinedust(nombre, async (okOcr, valorOMotivo) => {
+                    marcarProgreso();
+                    apagarInstanciaMuMu(index);
+                    try {
+                        if (!okOcr) {
+                            return await interaction.followUp({ content: `❌ Could not read the shinedust value (${valorOMotivo}).`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
+                        }
 
-                    const canalShinedust = await obtenerCanalComando(interaction.user.id, 'shinedust');
-                    if (canalShinedust?.webhook_url) {
-                        try {
-                            const webhookShinedust = new WebhookClient({ url: canalShinedust.webhook_url });
-                            await webhookShinedust.send(payload);
-                        } catch (e) {
-                            console.error('DEBUG: error mandando el resultado de Shinedust al canal dedicado:', e?.message || e);
+                        const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+                        const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+                        // No importa si se llego aca desde AllCards o desde Gold Cards -- lo
+                        // que importa es si ESTA cuenta puntual ya califica como Gold para
+                        // ESTA carta puntual. Si es asi, se usa la imagen con borde dorado y
+                        // el campo de cuentas, igual que si se hubiera buscado en Gold Cards
+                        // directamente (reporte del usuario 2026-07-27: el resultado no
+                        // coincidia con la carta dorada que se habia buscado).
+                        const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+                        const cuentasGold = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : [];
+                        const esCuentaGold = cuentasGold.some(r => r.fileName.replace(/\.xml$/i, '') === fileName);
+                        const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
+                        const payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
+                        payload.embeds[0].addFields({ name: '👛 Shinedust', value: `**${valorOMotivo}** (\`${fileName}\`)` });
+                        payload.content = `<@${interaction.user.id}> Account \`${fileName}\` has **${valorOMotivo}** Shinedust.`;
+                        payload.components = [new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId(`shinedust_result_trade::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
+                            new ButtonBuilder().setCustomId(`shinedust_result_extract::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary)
+                        )];
+
+                        const canalShinedust = await obtenerCanalComando(interaction.user.id, 'shinedust');
+                        if (canalShinedust?.webhook_url) {
+                            try {
+                                const webhookShinedust = new WebhookClient({ url: canalShinedust.webhook_url });
+                                await webhookShinedust.send(payload);
+                            } catch (e) {
+                                console.error('DEBUG: error mandando el resultado de Shinedust al canal dedicado:', e?.message || e);
+                                await interaction.channel.send(payload);
+                            }
+                        } else {
                             await interaction.channel.send(payload);
                         }
-                    } else {
-                        await interaction.channel.send(payload);
-                    }
-                    await interaction.followUp({ content: `✅ Shinedust for \`${fileName}\`: **${valorOMotivo}**.`, ephemeral: true });
-                } catch (e) { /* interacción puede haber expirado */ }
+                        await interaction.followUp({ content: `✅ Shinedust for \`${fileName}\`: **${valorOMotivo}**.`, ephemeral: true });
+                    } catch (e) { /* interacción puede haber expirado */ }
+                });
             });
         }, rutaScriptShinedust);
+    }
+
+    // Supervisor de inactividad (2026-08-03): reporte del usuario -- a veces la instancia
+    // prende pero se queda ahí sin que corra ningún AHK (nunca llega ni a "Fixing
+    // instance..."), y como nada falla explícitamente, el botón de Retry normal nunca
+    // aparece. marcarProgreso() se llama en cada paso real de ejecutarFlujoShinedust; si
+    // pasan 90s sin que se llame ninguna, se asume que quedó trabada y se reintenta sola
+    // (hasta 3 veces en total, para no quedar reintentando para siempre).
+    async function ejecutarFlujoShinedustConSupervisor(interaction, cartaId, fileName, index, nombre, intento = 1) {
+        let ultimoProgreso = Date.now();
+        let activo = true;
+        const marcarProgreso = () => { ultimoProgreso = Date.now(); };
+
+        const watchdog = setInterval(async () => {
+            if (!activo || Date.now() - ultimoProgreso < 90000) return;
+            activo = false;
+            clearInterval(watchdog);
+
+            apagarInstanciaMuMu(index);
+            if (intento >= 3) {
+                try { await interaction.followUp({ content: `⏱️ Instance **${nombre}** got stuck (no progress for 90s) and already auto-retried ${intento - 1} time(s). Try again manually.`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
+                return;
+            }
+            try { await interaction.followUp({ content: `⏱️ Instance **${nombre}** got stuck (no progress for 90s) -- retrying automatically...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+            await ejecutarFlujoShinedustConSupervisor(interaction, cartaId, fileName, index, nombre, intento + 1);
+        }, 5000);
+
+        try {
+            await ejecutarFlujoShinedust(interaction, cartaId, fileName, index, nombre, marcarProgreso);
+        } finally {
+            activo = false;
+            clearInterval(watchdog);
+        }
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_instancia::')) {
+        const [, cartaId, fileName] = interaction.customId.split('::');
+        const [index, nombre] = interaction.values[0].split('::');
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+        await ejecutarFlujoShinedustConSupervisor(interaction, cartaId, fileName, index, nombre);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('shinedust_instancia_retry::')) {
+        const [, cartaId, fileName, index, nombre] = interaction.customId.split('::');
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+        await ejecutarFlujoShinedustConSupervisor(interaction, cartaId, fileName, index, nombre);
         return;
     }
 

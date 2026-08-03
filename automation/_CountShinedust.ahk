@@ -4,13 +4,14 @@
 ; el OCR nativo de Windows. Escribe el resultado (solo digitos, sin comas) en outputFile.
 ;
 ; 100% propio (ver _AdbUtils.ahk, _OcrUtils.ahk, lib/Gdip_All.ahk, lib/Gdip_Extra.ahk) --
-; ningun archivo de Kevin. Reescrito 2026-07-30 (segunda vez que se rompia por depender
-; de la carpeta viva de Kevin -- primero por ruta externa hardcodeada que solo existia en
-; la PC de Ale, y de nuevo cuando Kevin actualizo su propio MumuHelper.ahk y choco con
+; ningun archivo de Kevin. Reescrito 2026-07-30 (segunda vez que se rompia por depender de
+; la carpeta viva de Kevin -- primero por ruta externa hardcodeada que solo existia en la
+; PC de Ale, y de nuevo cuando Kevin actualizo su propio MumuHelper.ahk y choco con
 ; "Duplicate function definition"). Ya no depende de nada que Kevin pueda cambiar.
 ;
-; No es un loop 24/7 (sin verificacion de imagen/needle): reintentos simples con delays
-; fijos, pensado para un chequeo puntual disparado a pedido desde Discord.
+; Asume que la instancia YA paso las pantallas de bienvenida/carrusel post-inyeccion (ver
+; _WaitWelcomeScreens.ahk, separado 2026-08-03 para poder reusar ese chequeo desde
+; cualquier flujo, no solo este) y que ya esta en el menu principal.
 ;
 ; Uso: _CountShinedust.ahk "<winTitle>" "<folderPath>" "<outputFile>"
 ;   winTitle   = nombre de la instancia (ej. "1")
@@ -33,6 +34,7 @@ global g_outputFile := A_Args[3]
 #Include %A_ScriptDir%\_OcrUtils.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Extra.ahk
+#Include %A_ScriptDir%\lib\Gdip_Imagesearch.ahk
 
 global pToken := Gdip_Startup()
 
@@ -69,7 +71,6 @@ if (puerto = "")
     ExitConError("puerto_no_encontrado")
 
 AdbConectar(adbPath, puerto)
-Sleep, 300
 
 ; Logico->dispositivo (mismo criterio que _MainProposeFavoriteCard.ahk): las
 ; coordenadas de este script se calibraron a mano en pantalla logica 283x532
@@ -82,19 +83,38 @@ tap(x, y, esperaMs := 4000) {
     Sleep, %esperaMs%
 }
 
-; ============ Volver al menu principal ============
-; Reintentos simples con espera fija (sin verificacion de imagen -- ver nota
-; en el encabezado: chequeo puntual, no loop 24/7). Subido de 3 a 4 (a pedido
-; del usuario 2026-07-30). El toque de "cerrar popup" es inofensivo si no hay
-; ningun popup ahi (cae en zona en blanco normal).
-Loop, 4 {
-    tap(36, 510)   ; icono "Home" de la barra inferior
-    tap(141, 480)  ; cierra popup si aparece (News, etc.)
+; ============ Chequeo rapido de popup "News" ============
+; Reporte del usuario 2026-08-03: _WaitWelcomeScreens.ahk ya habia confirmado el menu
+; principal, pero el popup de "News" podia aparecer recien aca (disparado por un tap de
+; Home que ya no se usa, ver mas abajo). Un chequeo rapido antes de seguir, por las dudas.
+chequearPopupNews() {
+    global adbPath, puerto, LogsDir
+    tempFile := LogsDir . "\_shinedust_newscheck.png"
+    AdbScreenshot(adbPath, puerto, tempFile)
+    if (!FileExist(tempFile))
+        return
+    pHaystack := Gdip_CreateBitmapFromFile(tempFile)
+    FileDelete, %tempFile%
+    if (!pHaystack)
+        return
+    pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_news_x.png")
+    if (pNeedle) {
+        vPosXY := ""
+        if (Gdip_ImageSearch(pHaystack, pNeedle, vPosXY, 0, 0, 0, 0, 30) = 1)
+            tap(141, 478)  ; boton "X" del popup "News"
+    }
+    Gdip_DisposeImage(pHaystack)
 }
+chequearPopupNews()
 
 ; ============ Navegacion hasta el detalle de Shinedust ============
-tap(244, 518)   ; abre menu hamburguesa/configuracion desde la pantalla principal
-tap(143, 272)   ; entra a "Items" (la lista ya muestra el shinedust directo, calibrado a mano)
+; Ya no se pasa por Home (a pedido explicito del usuario 2026-08-03): para cuando
+; _CountShinedust.ahk arranca, _WaitWelcomeScreens.ahk YA confirmo que estamos en una
+; pantalla con la barra de navegacion visible (Wonder Pick o la de abrir sobre), asi que
+; alcanza con ir directo al menu hamburguesa. Ademas, tocar Home desde la pantalla de abrir
+; sobre dispara el popup de "News" de nuevo -- evitarlo de raiz en vez de andar cerrandolo.
+tap(243, 511)   ; abre menu hamburguesa/configuracion desde la pantalla principal -- coordenada exacta mapeada en vivo 2026-08-03
+tap(136, 272)   ; entra a "Items" (la lista ya muestra el shinedust directo) -- coordenada exacta mapeada en vivo 2026-08-03
 
 ; Reporte del usuario 2026-07-29: la foto se tomaba muy rapido al llegar al
 ; inventario y el OCR leia numeros mal (la pantalla todavia estaba animando/

@@ -73,7 +73,13 @@ AdbTap(adbPath, puerto, x, y) {
     AdbEjecutar(adbPath, puerto, "shell input tap " . x . " " . y)
 }
 
-AdbSwipe(adbPath, puerto, x, y1, y2, duracionMs := 400) {
+; Nombre con sufijo "Propio" (no solo "AdbSwipe"): AutoHotkey no distingue
+; mayusculas/minusculas en nombres de funcion, y el include\ADB.ahk de Kevin
+; ya trae su propia "adbSwipe" -- con el mismo nombre (aunque distinta
+; capitalizacion) chocan como "Duplicate function definition" apenas un
+; script incluye ambos archivos a la vez (bug real 2026-08-02, encontrado
+; armando el reconocimiento de imagen de _CountShinedust.ahk).
+AdbSwipePropio(adbPath, puerto, x, y1, y2, duracionMs := 400) {
     AdbEjecutar(adbPath, puerto, "shell input swipe " . x . " " . y1 . " " . x . " " . y2 . " " . duracionMs)
 }
 

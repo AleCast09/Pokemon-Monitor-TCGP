@@ -1,7 +1,10 @@
 {
-  "version": "1.5.32",
-  "notesCount": 1,
+  "version": "1.5.33",
+  "notesCount": 3,
   "notes": [
+    "Fixed: reading Shinedust could get stuck or fail right after injecting an account, if the game showed a welcome-back carousel, a \"Tap to Start\" title screen, or a \"News\" update popup before reaching the main menu - now detects and dismisses all of these automatically.",
+    "New: a 🔄 Retry button now appears whenever a Shinedust step fails (instance won't turn on, injection failed, stuck on a screen, couldn't read the number) - retries the whole flow without having to re-select the account.",
+    "New: if the Shinedust flow gets stuck with no progress for 90 seconds (game crashed, frozen instance), it now retries automatically up to 3 times before asking you to retry manually.",
     "Fixed: the auto-downloaded remote-access link could fail once right after updating (Windows briefly locks the fresh file) - now retries and no longer races with the previous instance closing.",
     "Fixed: the Info Accounts remote-access link still didn't show up after \"Update Now\" - now downloads what it needs on its own.",
     "Fixed: the Info Accounts remote-access link now works for everyone, not just this PC.",
