@@ -1,7 +1,10 @@
 {
-  "version": "1.5.33",
-  "notesCount": 3,
+  "version": "1.5.34",
+  "notesCount": 4,
   "notes": [
+    "New: the 👛 Shinedust button now also reads Poké Gold, Shop/Special Shop/Premium Tickets, and Pack/Wonder/Trade Hourglasses and Rewind Watch from the same account, shown alongside Shinedust - not just the Shinedust number anymore.",
+    "New: a 📋 Info Accounts button on Shinedust results sends the PDF/dashboard with all that live data included, instantly (it was already read during that same run, no need to inject again).",
+    "New: Info Accounts (from All Cards/Wishlist) now asks if you also want live in-game data before generating the PDF - say yes and it injects the account to read it, say no and it works like before (instant, no injection).",
     "Fixed: reading Shinedust could get stuck or fail right after injecting an account, if the game showed a welcome-back carousel, a \"Tap to Start\" title screen, or a \"News\" update popup before reaching the main menu - now detects and dismisses all of these automatically.",
     "New: a 🔄 Retry button now appears whenever a Shinedust step fails (instance won't turn on, injection failed, stuck on a screen, couldn't read the number) - retries the whole flow without having to re-select the account.",
     "New: if the Shinedust flow gets stuck with no progress for 90 seconds (game crashed, frozen instance), it now retries automatically up to 3 times before asking you to retry manually.",
