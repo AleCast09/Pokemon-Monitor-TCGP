@@ -20,6 +20,12 @@
 ;   winTitle   = nombre de la instancia (ej. "1")
 ;   folderPath = carpeta base de MuMu (ej. "C:\Program Files\Netease\MuMuPlayer")
 ;   outputFile = ruta donde escribir "OK" o "ERROR: <motivo>"
+;
+; NO abre el juego (2026-08-05, a pedido explicito del usuario): se saco por completo
+; cualquier "am start" propio (tanto el respaldo inicial como el reintento agregado
+; despues) -- Kevin nunca hace esto en sus propios AHK, y quedo como sospecha real de la
+; causa de varios crashes en vivo esta noche. Este script asume que el juego YA esta
+; abierto (por el inject de Kevin, que lo abre solo) y unicamente busca/toca pantallas.
 
 #SingleInstance off
 SetBatchLines, -1
@@ -73,15 +79,6 @@ if (puerto = "")
 
 AdbConectar(adbPath, puerto)
 
-; Respaldo propio (2026-08-03): reporte del usuario -- a veces, tras un arranque en frio de
-; la instancia (apagada del todo y prendida de nuevo para el Retry), la inyeccion deja el
-; juego cerrado del todo, en el LAUNCHER de Android (nunca llega ni a "Tap to Start"). Sin
-; tocar el script de inyeccion de Kevin: forzamos la apertura por ADB directo (mismo comando
-; ya validado en la inyeccion propia por ADB puro para Trade, ver inyectarCuentaPorAdb en
-; bot.js) antes de empezar a buscar pantallas -- si el juego ya estaba abierto no rompe nada,
-; si quedo en el launcher lo abre.
-AdbEjecutar(adbPath, puerto, "shell am start -W -n jp.pokemon.pokemontcgp/com.unity3d.player.UnityPlayerActivity -f 0x10018000")
-Sleep, 2000
 
 ; Logico->dispositivo (mismo criterio que el resto de los scripts propios):
 ; coordenadas calibradas a mano en pantalla logica 283x532 (estilo Kevin).
@@ -114,10 +111,10 @@ buscarNeedleEnCaptura(pHaystack, nombreNeedle, variation := 30) {
 
 ; Log de depuracion TEMPORAL (2026-08-02) -- sacar una vez confirmado.
 logDebugBienvenida(msg) {
-    global LogsDir
+    global LogsDir, g_winTitle
     FormatTime, ahora,, HH:mm:ss
     try {
-        FileAppend, % "[" . ahora . "] " . msg . "`n", % LogsDir . "\_welcomeback_debug.txt"
+        FileAppend, % "[" . ahora . "] [" . g_winTitle . "] " . msg . "`n", % LogsDir . "\_welcomeback_debug.txt"
     } catch e {
     }
 }
@@ -126,6 +123,8 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
     global adbPath, puerto, LogsDir
     inicio := A_TickCount
     intento := 0
+    ultimoReintentoAmStart := 0
+    ultimoTapStart := 0
     logDebugBienvenida("=== INICIO esperarPantallasBienvenida (needles propios) ===")
     Loop {
         if (A_TickCount - inicio > timeoutMs) {
@@ -134,7 +133,9 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
         }
         intento++
 
-        tempFile := LogsDir . "\_welcomeback_check.png"
+        ; Nombre unico por instancia (por las dudas, no hace falta con secuencial pero
+        ; no molesta dejarlo asi).
+        tempFile := LogsDir . "\_welcomeback_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         if (!FileExist(tempFile)) {
             logDebugBienvenida("intento " . intento . " -- no se pudo sacar captura")
@@ -158,7 +159,11 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
         ; de esa pantalla tiene un shimmer animado que se ve a traves de los botones
         ; traslucidos y varia de frame a frame mas de lo que 30 tolera, sin dejar de ser
         ; especifico (0 falsos positivos contra las otras 6 pantallas conocidas ni con 45).
-        if (buscarNeedleEnCaptura(pHaystack, "own_mainmenu") || buscarNeedleEnCaptura(pHaystack, "own_mainmenu_packs", 45)) {
+        ; own_mainmenu_navbar (2026-08-04): la barra de navegacion inferior es solo iconos
+        ; (sin texto), asi que funciona sin importar el idioma de la cuenta -- a diferencia
+        ; de own_mainmenu/own_mainmenu_packs, que dependen de texto en ingles y no matcheaban
+        ; en cuentas en español (reporte del usuario, cuenta "Main" en español).
+        if (buscarNeedleEnCaptura(pHaystack, "own_mainmenu") || buscarNeedleEnCaptura(pHaystack, "own_mainmenu_packs", 45) || buscarNeedleEnCaptura(pHaystack, "own_mainmenu_navbar")) {
             logDebugBienvenida("intento " . intento . " -- YA LLEGO al menu principal, esperando 5s a que termine de cargar")
             Gdip_DisposeImage(pHaystack)
             Sleep, 5000  ; margen para que la pantalla termine de asentarse antes de que el siguiente script empiece a tocar -- pedido del usuario 2026-08-03
@@ -171,12 +176,34 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
         } else if (buscarNeedleEnCaptura(pHaystack, "own_ok")) {
             logDebugBienvenida("intento " . intento . " -- needle 'own_ok' -> tap OK (203,431)")
             tap(203, 431)  ; boton "OK" (pagina "special missions") -- coordenada exacta mapeada en vivo 2026-08-03
-        } else if (buscarNeedleEnCaptura(pHaystack, "own_tapstart")) {
-            logDebugBienvenida("intento " . intento . " -- needle 'own_tapstart' -> tap Start (141,452)")
-            tap(141, 452)  ; pantalla de titulo "Tap to Start"
+        } else if (buscarNeedleEnCaptura(pHaystack, "own_tapstart") || buscarNeedleEnCaptura(pHaystack, "own_tapstart_logo", 75)) {
+            ; own_tapstart_logo (2026-08-04): el texto "Tap to Start" cambia de idioma segun
+            ; la cuenta (ej. "Toca para comenzar" en cuentas en español) -- own_tapstart no
+            ; matcheaba nunca ahi. own_tapstart_logo recorta solo el logo "Pokemon" (grafico,
+            ; no traducido), asi funciona sin importar el idioma de la cuenta.
+            ;
+            ; Cooldown antes de repetir el tap (2026-08-05): reporte real -- el logo puede
+            ; seguir matcheando un rato despues del primer tap, mientras el juego ya esta a
+            ; mitad de la transicion de carga. Tocar "Start" de nuevo ENCIMA de esa
+            ; transicion parece causar el mismo tipo de crash que ya vimos con el am start
+            ; reforzando de mas (mismo patron, "interrumpe una carga real en progreso"). Si
+            ; ya tocamos Start hace menos de 8s, esperar en vez de tocar de nuevo.
+            if (A_TickCount - ultimoTapStart > 8000) {
+                logDebugBienvenida("intento " . intento . " -- needle 'own_tapstart'/'own_tapstart_logo' -> tap Start (141,452)")
+                ultimoTapStart := A_TickCount
+                tap(141, 452)  ; pantalla de titulo "Tap to Start"
+            } else {
+                logDebugBienvenida("intento " . intento . " -- needle 'own_tapstart'/'own_tapstart_logo' pero en cooldown, no vuelve a tocar")
+                Sleep, 1000
+            }
         } else if (buscarNeedleEnCaptura(pHaystack, "own_news_x")) {
             logDebugBienvenida("intento " . intento . " -- needle 'own_news_x' -> tap X (141,478)")
             tap(141, 478)  ; boton "X" del popup "News"
+        } else if (buscarNeedleEnCaptura(pHaystack, "own_gameclosed")) {
+            ; Popup "The game closed, but you successfully obtained the items" -- puede
+            ; aparecer despues de un force-stop/inyeccion. Needle mapeada en vivo 2026-08-04.
+            logDebugBienvenida("intento " . intento . " -- needle 'own_gameclosed' -> tap OK (150,369)")
+            tap(150, 369)  ; boton "OK"
         } else {
             ; OJO (2026-08-03): hubo un intento de "reforzar" la apertura con otro am start
             ; cada 5 intentos si no se reconocia nada -- SACADO, era CONTRAPRODUCENTE: si el
@@ -185,6 +212,12 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
             ; confirmado en vivo por el usuario (empezo a crashear justo despues de agregar
             ; esto, y antes no pasaba). El am start unico del principio del script alcanza
             ; para el caso real (arranque en frio dejando el launcher visible).
+            ;
+            ; SACADO de nuevo (2026-08-05, a pedido explicito del usuario): se habia
+            ; reagregado un reintento "mas seguro" (solo si el juego estaba confirmado
+            ; cerrado), pero el usuario noto que Kevin nunca hace esto en sus propios AHK y
+            ; sospecha que ES la causa del crash -- sacado por completo, vuelve a ser solo
+            ; el am start unico del principio.
             logDebugBienvenida("intento " . intento . " -- ningun needle matcheo, esperando")
             Sleep, 1000
         }
@@ -192,7 +225,12 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
     }
 }
 
-llego := esperarPantallasBienvenida()
+; Subido de 70s a 130s (2026-08-05, a pedido del usuario): reporte real en vivo -- un
+; ciclo de crash+reintento de am start (ver mas arriba) puede consumir gran parte de los
+; 70s originales, dejando muy poco margen para que el juego realmente termine de cargar y
+; llegue al menu antes de que se acabe el tiempo. 130s le da margen de sobra incluso si
+; pasa un ciclo de recuperacion completo en el medio.
+llego := esperarPantallasBienvenida(130000)
 if (!llego)
     ExitConError("timeout_pantallas_bienvenida")
 

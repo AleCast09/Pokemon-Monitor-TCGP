@@ -1445,7 +1445,7 @@ app.post('/', upload.any(), async (req, res) => {
                 embeds: [{
                     color: data.tipoCanal === 'wishlist' ? 0xE91E63 : 0xF1C40F,
                     description: data.tipoCanal === 'wishlist'
-                        ? '**A wishlist card has been detected.**\nSaved in the S4T database.'
+                        ? '💖 **A wishlist card has been detected.** 💖\nSaved in the S4T database.'
                         : '🌟 **NEW VALUABLE CARD FOUND!** 🌟\n\n**An excellent trade has been detected.**\nSaved in the S4T database.',
                     fields: camposFinales,
                     footer: { text: `Data saved ${new Date().toLocaleString()}` }

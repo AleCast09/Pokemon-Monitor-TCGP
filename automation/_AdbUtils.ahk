@@ -89,6 +89,32 @@ AdbInputText(adbPath, puerto, texto) {
     AdbEjecutar(adbPath, puerto, "shell input text " . texto)
 }
 
+; Captura la salida de un comando adb (a diferencia de AdbEjecutar, que la descarta) --
+; agregada 2026-08-05 para poder chequear si el juego ya esta abierto ANTES de forzar un
+; "am start" (ver juegoYaAbierto en _WaitWelcomeScreens.ahk): reporte real del usuario de
+; que reforzar la apertura de un juego que ya estaba abierto (recien inyectado) lo
+; interrumpia a mitad de carga y lo crasheaba -- mismo patron ya visto y documentado con
+; el am start periodico que se saco por el mismo motivo.
+AdbEjecutarConSalida(adbPath, puerto, argumentos) {
+    device := "127.0.0.1:" . puerto
+    tempOut := A_Temp . "\_adb_out_" . A_TickCount . ".txt"
+    comando := """" . adbPath . """ -s " . device . " " . argumentos . " > """ . tempOut . """ 2>&1"
+    RunWait, %ComSpec% /c "%comando%", , Hide
+    salida := ""
+    if FileExist(tempOut) {
+        FileRead, salida, %tempOut%
+        FileDelete, %tempOut%
+    }
+    return salida
+}
+
+; NOTA (2026-08-05): se probo agregar una captura por GDI+ (estilo Kevin, ver
+; include\ADB.ahk adbTakeScreenshot) para evitar la contencion del servidor adb compartido
+; en paralelo -- SACADA de aca porque rompia cualquier script que incluya _AdbUtils.ahk sin
+; tambien incluir Gdip_All.ahk (ej. _CaptureAdbShot.ahk), con un error fatal de "funcion
+; inexistente" en tiempo de parseo. Ademas, la prueba en vivo mostro que obtenerHwndMuMu no
+; encuentra la ventana de instancias nombradas (ej. "Main") -- hace falta revisar como
+; resuelve el handle correcto include\MumuHelper.ahk de Kevin antes de reintentar esto.
 AdbScreenshot(adbPath, puerto, outputFile) {
     device := "127.0.0.1:" . puerto
     comando := """" . adbPath . """ -s " . device . " exec-out screencap -p > """ . outputFile . """"

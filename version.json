@@ -1,7 +1,16 @@
 {
-  "version": "1.5.34",
-  "notesCount": 4,
+  "version": "1.5.35",
+  "notesCount": 9,
   "notes": [
+    "Fixed: Main Trade/Shinedust crashes caused by the bot re-opening the game on top of an already-open instance.",
+    "Fixed: the Trade button on a Shinedust result could fail with \"didn't respond in time\" - now reuses the same reliable flow as the normal Trade button.",
+    "Fixed: error messages could silently fail to show up if a Main Trade step took longer than Discord's 15-minute interaction window.",
+    "Improved: Shinedust results now show account file + all inventory fields in a clean vertical layout, with custom icons instead of generic emoji.",
+    "New: a Tutorials channel with a PDF guide for every command.",
+    "New: Gold Cards shows an apology message instead of the un-golded image when a card's gold border isn't uploaded yet.",
+    "Disabled: Friend Trade button, and Trade button on Gold Cards results (known issues being worked on).",
+    "New: HD image fetch failures now log to a simple drive_hd_errores.txt file for easier troubleshooting.",
+    "Fixed: Build Embed preview text was slightly out of sync with the real wishlist/rarity/general messages.",
     "New: the 👛 Shinedust button now also reads Poké Gold, Shop/Special Shop/Premium Tickets, and Pack/Wonder/Trade Hourglasses and Rewind Watch from the same account, shown alongside Shinedust - not just the Shinedust number anymore.",
     "New: a 📋 Info Accounts button on Shinedust results sends the PDF/dashboard with all that live data included, instantly (it was already read during that same run, no need to inject again).",
     "New: Info Accounts (from All Cards/Wishlist) now asks if you also want live in-game data before generating the PDF - say yes and it injects the account to read it, say no and it works like before (instant, no injection).",

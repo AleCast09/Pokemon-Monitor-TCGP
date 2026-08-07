@@ -28,6 +28,7 @@ assets/drive_folder_map.json
 assets/drive_cache_gold/
 assets/drive_folder_map_gold.json
 assets/guild_emojis_cache.json
+drive_hd_errores.txt
 automation/Logs/
 logs/
 .pending_update.json

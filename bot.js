@@ -91,6 +91,7 @@ const ETIQUETAS_TIPO_WEBHOOK = {
     'godpack-dead': 'God Pack Dead',
     'heartbeat': 'Heartbeat',
     'actualizaciones': 'Updates',
+    'tutoriales': 'Tutorials',
     'apoyo': 'Donate',
     'cmd_setup': 'Settings',
     'cmd_build_embed': 'Build Embed',
@@ -125,6 +126,7 @@ const NOMBRES_DEFAULT_WEBHOOK = {
     'cmd_build_webhooks': 'Build Webhooks 🔗',
     'cmd_setup': 'Settings ⚙',
     'actualizaciones': 'Updates 🔔',
+    'tutoriales': 'Tutorials 📚',
     'apoyo': 'Donate ☕',
     'cmd_feedback': 'Feedback 📝',
     'godpack-general': 'God Pack General 📦',
@@ -141,6 +143,25 @@ function nombreDefaultWebhook(tipo) {
     return NOMBRES_DEFAULT_WEBHOOK[tipo] || `Bot ${tipo}`;
 }
 
+// Nombre "bonito" para el archivo descargado al presionar el boton de un
+// tutorial (2026-08-06, a pedido explicito del usuario -- antes todos
+// bajaban como "cmd_xxx.pdf", el slug interno del tipo de canal).
+const NOMBRES_TUTORIAL_DESCARGA = {
+    cmd_setup: 'Bot General',
+    cmd_build_embed: 'Build Embed',
+    cmd_build_webhooks: 'Build Webhooks',
+    cmd_card_wishlist: 'Cards Wishlist',
+    cmd_card_all: 'All Cards',
+    cmd_extract_xlm: 'Extract XML',
+    shinedust: 'Shinedust',
+    cmd_card_gold: 'Gold Cards',
+    info_accounts: 'Info Accounts',
+    cmd_run_instance: 'Automatic Trading'
+};
+function nombreTutorialDescarga(tipo) {
+    return `${NOMBRES_TUTORIAL_DESCARGA[tipo] || tipo}.pdf`;
+}
+
 // Foto por defecto por tipo (misma logica que el nombre: solo pisa el generico
 // de siempre, nunca lo que un usuario ya se puso a mano con /webhook). Ruta
 // relativa a la raiz del proyecto — discord.js acepta un path de archivo local
@@ -148,9 +169,10 @@ function nombreDefaultWebhook(tipo) {
 // del proyecto para adjuntos.
 const AVATARES_DEFAULT_WEBHOOK = {
     'actualizaciones': path.join(__dirname, 'assets', 'element', 'camp.png'),
+    'tutoriales': path.join(__dirname, 'assets', 'element', 'Tuto.png'),
     'heartbeat': path.join(__dirname, 'assets', 'element', 'heart.png'),
     'apoyo': path.join(__dirname, 'assets', 'element', 'kofi_me.png'),
-    'cmd_feedback': path.join(__dirname, 'assets', 'element', 'feedvack.png'),
+    'cmd_feedback': path.join(__dirname, 'assets', 'element', 'poke_feed.png'),
     'cmd_build_embed': path.join(__dirname, 'assets', 'element', 'settings.png'),
     'cmd_build_webhooks': path.join(__dirname, 'assets', 'element', 'settings.png'),
     'cmd_setup': path.join(__dirname, 'assets', 'element', 'settings.png'),
@@ -167,15 +189,16 @@ const AVATARES_DEFAULT_WEBHOOK = {
     'wishlist': path.join(__dirname, 'assets', 'element', 'Master_Ball_EP.png'),
     's4t-categoria': path.join(__dirname, 'assets', 'element', 'Honor_Ball_EP.png'),
     's4t': path.join(__dirname, 'assets', 'element', 'pokerotom.png'),
-    'godpack-general': path.join(__dirname, 'assets', 'element', 'Fragmento_de_cometa_EP.png'),
-    'godpack-alive': path.join(__dirname, 'assets', 'element', 'Globo_Helio_EP.png'),
-    'godpack-dead': path.join(__dirname, 'assets', 'element', 'Tarjeta_roja_EP.png'),
-    'cmd_run_instance': path.join(__dirname, 'assets', 'element', 'mumuplayer-logo_avatar.png'),
-    'cmd_extract_xlm': path.join(__dirname, 'assets', 'element', 'Leyenda.png'),
-    'cmd_card_all': path.join(__dirname, 'assets', 'element', 'Tarjeta_de_puntos_grande.png'),
-    'cmd_card_wishlist': path.join(__dirname, 'assets', 'element', 'list.png'),
-    'shinedust': path.join(__dirname, 'assets', 'element', 'coin_bag_3.png'),
-    'info_accounts': path.join(__dirname, 'assets', 'element', 'Diario_DBPR.png')
+    'godpack-general': path.join(__dirname, 'assets', 'element', 'Moneda_set_especial_02_TCGP.png'),
+    'godpack-alive': path.join(__dirname, 'assets', 'element', 'Moneda_set_especial_01_TCGP.png'),
+    'godpack-dead': path.join(__dirname, 'assets', 'element', 'Moneda_Poké_Ball_TCGP.png'),
+    'cmd_run_instance': path.join(__dirname, 'assets', 'element', 'Ficha_de_intercambio_TCGP.png'),
+    'cmd_extract_xlm': path.join(__dirname, 'assets', 'element', 'Rango_Principiante_TCGP.png'),
+    'cmd_card_all': path.join(__dirname, 'assets', 'element', 'Rango_Super_Ball_TCGP.png'),
+    'cmd_card_wishlist': path.join(__dirname, 'assets', 'element', 'Rango_Master_Ball_TCGP.png'),
+    'cmd_card_gold': path.join(__dirname, 'assets', 'element', 'Rango_Ultra_Ball_TCGP.png'),
+    'shinedust': path.join(__dirname, 'assets', 'element', 'Rango_Master_Ball_TCGP.png'),
+    'info_accounts': path.join(__dirname, 'assets', 'element', 'Rango_Poké_Ball_TCGP.png')
 };
 function avatarDefaultWebhook(tipo) {
     return AVATARES_DEFAULT_WEBHOOK[tipo] || 'https://i.imgur.com/gK1q9yS.png';
@@ -601,6 +624,42 @@ async function obtenerCartasGoldCacheadas(discordId) {
         _cartasGoldCacheBot = { clave: claveCache, cartas: cartasGold, mapaCopias };
     }
     return { cartas: _cartasGoldCacheBot.cartas, rutaMasterPath, mapaCopias: _cartasGoldCacheBot.mapaCopias, umbral };
+}
+
+// Banners al azar (2026-08-06, a pedido explicito del usuario): en vez del
+// banner fijo, cada vez que se corre el comando se elige una imagen distinta
+// de una carpeta de ilustraciones local (misma PC, subidas tambien a
+// github.com/AleCast09/Pokemon-Icon-Wallpapers). Si la carpeta no esta
+// disponible (o esta vacia), cae de vuelta al banner fijo pasado como default.
+function elegirBannerAleatorio(carpeta, rutaDefault) {
+    try {
+        if (fs.existsSync(carpeta)) {
+            const archivos = fs.readdirSync(carpeta).filter(f => /\.(png|jpe?g|webp)$/i.test(f));
+            if (archivos.length) {
+                const elegido = archivos[Math.floor(Math.random() * archivos.length)];
+                return path.join(carpeta, elegido);
+            }
+        }
+    } catch (e) {
+    }
+    return rutaDefault;
+}
+const CARPETA_FUNDAS_ALLCARDS = 'C:\\Users\\Ale TCG\\Pictures\\pokemon\\Pokemon Fundas';
+function elegirBannerAllCardsAleatorio() {
+    return elegirBannerAleatorio(CARPETA_FUNDAS_ALLCARDS, path.join(__dirname, 'assets', 'embeds', 'card_banner.png'));
+}
+const CARPETA_PORTADAS_WISHLIST = 'C:\\Users\\Ale TCG\\Pictures\\pokemon\\Pokemon Portadas';
+function elegirBannerWishlistAleatorio() {
+    return elegirBannerAleatorio(CARPETA_PORTADAS_WISHLIST, path.join(__dirname, 'assets', 'embeds', 'wishlist_banner.png'));
+}
+// Imagen "de disculpa" (2026-08-06, a pedido explicito del usuario): cuando
+// una carta buscada en Gold Cards todavia no tiene su borde dorado subido al
+// Drive, en vez de mostrar la version SIN dorar (confuso -- parece que ya
+// califica) se muestra una imagen al azar de nuestro propio repositorio de
+// ilustraciones + un aviso pidiendo disculpas.
+const CARPETA_ICONS_GOLD_SORRY = 'C:\\Users\\Ale TCG\\Pictures\\pokemon\\Pokemon Icons';
+function elegirImagenDisculpaGoldAleatoria() {
+    return elegirBannerAleatorio(CARPETA_ICONS_GOLD_SORRY, null);
 }
 
 function construirEmbedAllCardsInicio(user) {
@@ -1079,6 +1138,21 @@ async function driveHdRegularHabilitado() {
     return fila?.status === 'on';
 }
 
+// Log persistente de fallas del Drive HD (2026-08-06, a pedido explicito del
+// usuario): antes solo quedaba un console.log que se perdia apenas el bot
+// corria oculto/en pm2 -- para usuarios sin acceso comodo a una consola, esto
+// escribe cada falla a un .txt simple abrible con doble click, para
+// diagnosticar sin pedirles que abran CMD/PowerShell.
+const RUTA_LOG_DRIVE_HD = path.join(__dirname, 'drive_hd_errores.txt');
+function registrarErrorDriveHd(origen, cartaId, motivo, detalle = '') {
+    try {
+        const linea = `[${new Date().toLocaleString()}] (${origen}) carta=${cartaId} motivo=${motivo}${detalle ? ' — ' + detalle : ''}\n`;
+        fs.appendFileSync(RUTA_LOG_DRIVE_HD, linea);
+    } catch (e) {
+    }
+    console.log(`DEBUG: Drive HD (${origen}) carta=${cartaId} motivo=${motivo}`, detalle);
+}
+
 async function obtenerImagenHDBot(cardMap, cartaId, forzar = false) {
     const info = cardMap?.[cartaId];
     if (!info?.ExpansionID || !info?.CollectionNumber || !GOOGLE_DRIVE_API_KEY_BOT || !GOOGLE_DRIVE_HD_ENABLED_BOT) return null;
@@ -1096,14 +1170,20 @@ async function obtenerImagenHDBot(cardMap, cartaId, forzar = false) {
             mapaCarpetas = await refrescarMapaCarpetasDriveBot();
             subfolderId = mapaCarpetas[info.ExpansionID];
         }
-        if (!subfolderId) return null;
+        if (!subfolderId) {
+            registrarErrorDriveHd('normal', cartaId, 'carpeta_expansion_no_encontrada', info.ExpansionID);
+            return null;
+        }
 
         const busqueda = await axios.get('https://www.googleapis.com/drive/v3/files', {
             params: { q: `'${subfolderId}' in parents and name contains '${info.ExpansionID}-${localId}'`, key: GOOGLE_DRIVE_API_KEY_BOT, fields: 'files(id,name)', pageSize: 5 },
             timeout: 5000
         });
         const archivo = (busqueda.data.files || [])[0];
-        if (!archivo) return null;
+        if (!archivo) {
+            registrarErrorDriveHd('normal', cartaId, 'archivo_no_encontrado_en_carpeta', `${info.ExpansionID}-${localId}`);
+            return null;
+        }
 
         const descarga = await axios.get(`https://www.googleapis.com/drive/v3/files/${archivo.id}`, {
             params: { alt: 'media', key: GOOGLE_DRIVE_API_KEY_BOT },
@@ -1113,7 +1193,7 @@ async function obtenerImagenHDBot(cardMap, cartaId, forzar = false) {
         fs.writeFileSync(rutaCache, descarga.data);
         return rutaCache;
     } catch (e) {
-        console.log('DEBUG: Error obteniendo imagen HD del Drive (preview /embed):', e?.response?.status || '', e?.message || e);
+        registrarErrorDriveHd('normal', cartaId, 'excepcion', `HTTP ${e?.response?.status || '?'} — ${e?.message || e}`);
         return null;
     }
 }
@@ -1175,14 +1255,20 @@ async function obtenerImagenGoldBot(cardMap, cartaId) {
             mapaCarpetas = await refrescarMapaCarpetasDriveGoldBot();
             subfolderId = mapaCarpetas[info.ExpansionID];
         }
-        if (!subfolderId) return null;
+        if (!subfolderId) {
+            registrarErrorDriveHd('gold', cartaId, 'carpeta_expansion_no_encontrada', info.ExpansionID);
+            return null;
+        }
 
         const busqueda = await axios.get('https://www.googleapis.com/drive/v3/files', {
             params: { q: `'${subfolderId}' in parents and name contains '${info.ExpansionID}-${localId}'`, key: GOOGLE_DRIVE_API_KEY_BOT, fields: 'files(id,name)', pageSize: 5 },
             timeout: 5000
         });
         const archivo = (busqueda.data.files || [])[0];
-        if (!archivo) return null;
+        if (!archivo) {
+            registrarErrorDriveHd('gold', cartaId, 'archivo_no_encontrado_en_carpeta', `${info.ExpansionID}-${localId}`);
+            return null;
+        }
 
         const descarga = await axios.get(`https://www.googleapis.com/drive/v3/files/${archivo.id}`, {
             params: { alt: 'media', key: GOOGLE_DRIVE_API_KEY_BOT },
@@ -1192,7 +1278,7 @@ async function obtenerImagenGoldBot(cardMap, cartaId) {
         fs.writeFileSync(rutaCache, descarga.data);
         return rutaCache;
     } catch (e) {
-        console.log('DEBUG: Error obteniendo imagen Gold del Drive (/goldcards):', e?.response?.status || '', e?.message || e);
+        registrarErrorDriveHd('gold', cartaId, 'excepcion', `HTTP ${e?.response?.status || '?'} — ${e?.message || e}`);
         return null;
     }
 }
@@ -1507,11 +1593,20 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const expansionNombre = info?.ExpansionID ? (expansiones[info.ExpansionID] || info.ExpansionID) : 'Unknown';
     const categoria = resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis);
     // datosGold (solo lo pasa /goldcards) -- usa la imagen con borde dorado si
-    // existe para esa carta, con la misma cadena de respaldo de siempre si no.
-    const imagenPath = (datosGold ? await obtenerImagenGoldBot(cardMap, cartaId) : null)
-        || (await obtenerImagenHDBot(cardMap, cartaId))
-        || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID)
-        || (await obtenerImagenRepoCartasBot(rutaMasterPath, info?.IllustrationID));
+    // existe para esa carta. Si NO existe (2026-08-06, a pedido explicito del
+    // usuario), YA NO cae a la version sin dorar (confundia -- parecia que la
+    // carta ya calificaba) -- en su lugar se marca sinBordeGold y mas abajo se
+    // muestra una imagen de disculpa + aviso en vez de la carta.
+    let sinBordeGold = false;
+    let imagenPath;
+    if (datosGold) {
+        imagenPath = await obtenerImagenGoldBot(cardMap, cartaId);
+        if (!imagenPath) sinBordeGold = true;
+    } else {
+        imagenPath = (await obtenerImagenHDBot(cardMap, cartaId))
+            || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID)
+            || (await obtenerImagenRepoCartasBot(rutaMasterPath, info?.IllustrationID));
+    }
 
     const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombre)];
     const trainerType = trainerTypeDesdeId(cartaId, rutaMasterPath);
@@ -1550,6 +1645,9 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     if (datosGold && datosGold.cuentas.length) {
         const listaGold = datosGold.cuentas.map(r => `\`${r.fileName}\` — x${r.cantidad}`).join('\n');
         embed.addFields({ name: `🏆 Gold Accounts (${datosGold.umbral}+ copies)`, value: listaGold.slice(0, 1024) });
+    }
+    if (sinBordeGold) {
+        embed.addFields({ name: '😔 Gold border not available yet', value: "Sorry, we don't have this card's gold border yet. We'll update it as soon as we do!" });
     }
 
     // En Gold Cards, "XML" tiene que mostrar SOLO las cuentas que ya califican
@@ -1595,19 +1693,26 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     // calificadas -- entradas separadas de las de AllCards/Wishlist, para que
     // un bug ahi nunca las afecte, pero comparten la MISMA ejecucion de abajo
     // (instancia, inyeccion, OCR) ya probada.
-    // Trade deshabilitado temporalmente (a pedido explicito del usuario
-    // 2026-07-31): bugs reportados con la actualizacion nueva, hasta que se
-    // revise no debe quedar disponible para que nadie lo use. Shinedust
-    // reactivado (2026-08-01) para probar si sigue funcionando tras la update.
+    // Trade reactivado (2026-08-03) para probar si sigue funcionando tras la update --
+    // Shinedust ya se reactivo antes (2026-08-01) y se confirmo funcionando.
     const filaAcciones = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(true),
+        // Deshabilitado en Gold Cards a pedido explicito del usuario 2026-08-06.
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary)
     );
 
     const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
     const archivosPayload = [];
-    if (imagenPath) {
+    if (sinBordeGold) {
+        // Sin logo/badge compuestos encima -- esta imagen no es la carta real,
+        // superponerle el logo de la expansion daria a entender que si lo es.
+        const imagenDisculpa = elegirImagenDisculpaGoldAleatoria();
+        if (imagenDisculpa) {
+            embed.setImage('attachment://carta.png');
+            archivosPayload.push(new AttachmentBuilder(imagenDisculpa, { name: 'carta.png' }));
+        }
+    } else if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
         // que ya usa s4t.js/el preview de /embed), en vez de una miniatura
         // aparte en la esquina.
@@ -1720,6 +1825,23 @@ async function asegurarInstanciaEncendida(index, timeoutMs = 90000) {
             await new Promise(r => setTimeout(r, 2000)); // margen para que la ventana termine de aparecer
             return true;
         }
+    }
+    return false;
+}
+
+// Usado por el boton "Retry" de Main Trade (2026-08-05): a diferencia de
+// asegurarInstanciaEncendida, que no hace nada si is_android_started ya viene en true
+// (una instancia con el JUEGO colgado adentro sigue reportando Android como "prendido"),
+// esta fuerza un apagado real antes de reintentar -- confirmado por el usuario que el
+// Retry no reiniciaba nada de verdad porque la instancia nunca llegaba a apagarse.
+async function asegurarInstanciaApagada(index, timeoutMs = 30000) {
+    if (!apagarInstanciaMuMu(index)) return false;
+    const limite = Date.now() + timeoutMs;
+    while (Date.now() < limite) {
+        await new Promise(r => setTimeout(r, 2000));
+        const actuales = obtenerInstanciasMuMu();
+        const actual = actuales?.find(i => String(i.index) === String(index));
+        if (!actual?.is_android_started) return true;
     }
     return false;
 }
@@ -2537,6 +2659,12 @@ const RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT = path.join(__dirname, 'automation',
 const RUTA_MAIN_ACCEPT_TRADE_SCRIPT = path.join(__dirname, 'automation', '_MainProposeFavoriteCard.ahk');
 const RUTA_DONOR_RESPOND_SCRIPT = path.join(__dirname, 'automation', '_DonorRespondTrade.ahk');
 const RUTA_MAIN_FINALIZE_SCRIPT = path.join(__dirname, 'automation', '_MainFinalizeAndCleanup.ahk');
+// Remapeados 2026-08-03/04 (coordenadas viejas rotas tras el update del juego, mismo
+// motivo por el que Trade estuvo deshabilitado) -- reemplazan a los 4 de arriba.
+const RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT = path.join(__dirname, 'automation', '_MainAcceptFriendRequest.ahk');
+const RUTA_DONOR_OFFER_CARD_SCRIPT = path.join(__dirname, 'automation', '_DonorOfferCard.ahk');
+const RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT = path.join(__dirname, 'automation', '_MainAcceptTradeOffer.ahk');
+const RUTA_DONOR_RESPOND_FINALIZE_SCRIPT = path.join(__dirname, 'automation', '_DonorRespondAndFinalize.ahk');
 
 function ejecutarPasoAhk(ahkExe, rutaScript, args, timeoutMs, outputFile) {
     return new Promise((resolve) => {
@@ -2554,10 +2682,42 @@ function ejecutarPasoAhk(ahkExe, rutaScript, args, timeoutMs, outputFile) {
     });
 }
 
+// Boton "Retry" para Main Trade (2026-08-05, a pedido explicito del usuario): antes, si
+// fallaba prender una instancia o llegar al menu (game crash, ver verificarNoCrasheado en
+// los AHK propios), el usuario se quedaba sin forma de reintentar salvo repetir todo el
+// flujo manual de Discord desde cero (elegir carta, amigo, instancia de nuevo).
+function botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`main_trade_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+    );
+}
+
+// Respaldo para avisos de error de Main Trade (2026-08-05): reporte real del usuario --
+// el welcome+inject+reintentos puede tardar bastante, y el token de la interaccion de
+// Discord expira a los 15 minutos. Sin este respaldo, un interaction.followUp directo
+// fallaba en silencio ("Unknown interaction", DiscordAPIError 10062) y el usuario nunca
+// se enteraba de que algo habia fallado. Si el followUp falla, manda el mismo aviso al
+// canal de Trading por webhook -- mismo patron ya usado en el aviso de fallo de paso.
+async function enviarErrorMainTrade(interaction, mensaje, components = []) {
+    try {
+        return await interaction.followUp({ content: mensaje, components });
+    } catch (e) {
+        console.error('DEBUG: interaction.followUp fallo en Main Trade (probable token expirado), mandando por webhook:', e?.message || e);
+        try {
+            const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            if (canalRunInstance?.webhook_url) {
+                await axios.post(`${canalRunInstance.webhook_url}?wait=true`, { content: mensaje, components: components.map(c => (c.toJSON ? c.toJSON() : c)) }, { timeout: 10000 });
+            }
+        } catch (e2) {
+            console.error('DEBUG: tambien fallo el respaldo por webhook en Main Trade:', e2?.response?.data || e2?.message || e2);
+        }
+    }
+}
+
 async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre }) {
     const ahkExe = rutaAutoHotkey();
     const folderPath = carpetaBaseMuMu();
-    const scripts = [RUTA_INJECT_XML_SCRIPT, RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, RUTA_SEND_TRADE_CARD_SCRIPT, RUTA_MAIN_ACCEPT_TRADE_SCRIPT, RUTA_DONOR_RESPOND_SCRIPT, RUTA_MAIN_FINALIZE_SCRIPT, RUTA_FINALIZE_TRADE_CARD_SCRIPT];
+    const scripts = [RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, RUTA_DONOR_OFFER_CARD_SCRIPT, RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, RUTA_DONOR_RESPOND_FINALIZE_SCRIPT];
     if (!ahkExe || !folderPath || scripts.some(s => !fs.existsSync(s))) {
         return await interaction.followUp({ content: '❌ Main Trade scripts not found.', ephemeral: true });
     }
@@ -2571,44 +2731,8 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     const prendidaMain = await asegurarInstanciaEncendida(infoMain.index);
     const prendidaDonante = await asegurarInstanciaEncendida(index);
     if (!prendidaMain || !prendidaDonante) {
-        return await interaction.followUp({ content: '❌ Could not turn on one of the instances.', ephemeral: true });
+        return await enviarErrorMainTrade(interaction, '❌ Could not turn on one of the instances.', [botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre)]);
     }
-
-    // Main.ahk necesita estar corriendo ANTES de que la donante mande la
-    // solicitud (mas abajo) para poder aceptarla por su cuenta -- se lanza acá,
-    // apenas la instancia esta prendida, para darle tiempo a llegar al menu
-    // principal antes de que llegue la solicitud. La ruta es la carpeta
-    // personal de Kevin de CADA usuario (ruta_main_ahk, derivada de su Main
-    // Path), no una copia empaquetada con el bot.
-    const rutaMainAhkUsuario = await obtenerRutaMainAhk(interaction.user.id);
-    const yaEstabaCorriendo = estaMainAhkCorriendo();
-    if (!asegurarMainAhkCorriendo(ahkExe, rutaMainAhkUsuario)) {
-        return await interaction.followUp({ content: `❌ Could not start Main.ahk (checked \`${rutaMainAhkUsuario}\`). Set your **Main Path** in Settings if this looks wrong.`, ephemeral: true });
-    }
-    // A pedido explicito del usuario 2026-07-29: Main.ahk solo necesita estar
-    // vivo el tiempo justo para aceptar la solicitud pendiente -- 30s despues
-    // de arrancarlo se lo mata (mismo mecanismo de matarInstanciasAhkPrevias,
-    // por CommandLine), asi no se queda tocando la pantalla en paralelo con
-    // nuestros propios scripts mas adelante en el pipeline. Si YA estaba
-    // corriendo de antes (el usuario lo dejo abierto el solo), no se lo mata --
-    // solo se apaga el que nosotros mismos arrancamos recien.
-    // Convertido en Promise (a pedido explicito del usuario 2026-07-29): el
-    // pipeline tiene que ESPERAR a que Main.ahk realmente termine (acepte la
-    // solicitud) antes de seguir con send_trade_card en la donante -- antes
-    // corria en paralelo sin relacion, y a veces send_trade_card arrancaba
-    // sin que Main.ahk hubiera tenido tiempo de aceptar todavia.
-    const mainAhkListo = yaEstabaCorriendo
-        ? Promise.resolve()
-        : new Promise((resolve) => {
-              // Subido de 30s a 60s, a 80s, bajado a 70s, y vuelto a 80s
-              // (reporte del usuario 2026-07-29): la instancia tarda bastante
-              // en bootear Android + abrir el juego antes de que el timer
-              // arranque a contar.
-              setTimeout(() => {
-                  matarInstanciasAhkPrevias(rutaMainAhkUsuario);
-                  resolve();
-              }, 80000);
-          });
 
     try { await interaction.followUp({ content: `🔄 Running Main Trade (\`${fileName}\` → Main)... this may take several minutes and will close the current sessions on both instances.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
@@ -2616,39 +2740,61 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
     const tmp = () => path.join(os.tmpdir(), `mtrade_${index}_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`);
 
-    // _SendTradeCard.ahk / _FinalizeTradeCard.ahk (los mismos de Friend Trade)
-    // no escriben resultado a un archivo -- avisan por codigo de salida via
-    // spawnAhkConProteccion (ver ejecutarSendTradeCard/ejecutarFinalizeTradeCard
-    // mas arriba). Envueltos en Promise para poder mezclarlos en la misma lista
-    // secuencial de pasos sin tocar esos dos scripts ni su forma de reportar.
-    const ejecutarSendTradeCardPromise = (winTitle) => new Promise((resolve) => {
-        ejecutarSendTradeCard(winTitle, (ok, detalle) => resolve({ ok, resultado: detalle }));
-    });
-    const ejecutarFinalizeTradeCardPromise = (winTitle, instanceIndex) => new Promise((resolve) => {
-        ejecutarFinalizeTradeCard(winTitle, instanceIndex, (ok, detalle) => resolve({ ok, resultado: detalle }));
-    });
+    // Inyeccion de la donante: reemplaza _InjectXml.ahk (propio, ADB directo) por el
+    // MISMO mecanismo que ya usa Shinedust (2026-08-03, a pedido explicito del usuario) --
+    // _InjectAccount.ahk de Kevin via ejecutarInyeccionHeadless, probado extensamente hoy y
+    // mas confiable. sendFriendRequestAfterInject en '0' porque la solicitud de amistad la
+    // manda el paso 'send_friend_request' de mas abajo (script de Kevin aparte), no la
+    // inyeccion misma -- mandarla dos veces seria redundante.
+    async function ejecutarInjectDonante() {
+        const { rutaIni, rutaScript: rutaScriptInject } = await obtenerRutasInject(interaction.user.id);
+        try {
+            guardarXmlParaInyeccion(nombre, archivo, rutaIni);
+            actualizarIniInject({ sendFriendRequestAfterInject: '0' }, rutaIni);
+        } catch (e) {
+            return { ok: false, resultado: 'no_se_pudo_guardar_ini' };
+        }
+        return await new Promise((resolve) => {
+            ejecutarInyeccionHeadless((ok, detalle) => resolve({ ok, resultado: detalle }), rutaScriptInject);
+        });
+    }
+
+    // Semi-paralelo, segunda vuelta (2026-08-05, a pedido explicito del usuario): el
+    // crash de la vez pasada resulto ser el "am start" DENTRO del welcome de la donante
+    // (interrumpia la carga real ya iniciada por el inject) -- confirmado en vivo esta
+    // noche al sacarlo del todo. Ahora _WaitWelcomeScreens.ahk (donante/Shinedust) YA NO
+    // abre el juego para nada; solo la copia dedicada _WaitWelcomeScreensMain.ahk lo hace
+    // (Main no tiene inject que se lo abra solo). Con eso resuelto, se reintenta el
+    // paralelo: welcome de Main (con su propio am-start) corre a la vez que el inject +
+    // welcome de la donante -- recien cuando AMBOS terminan sigue el resto del pipeline
+    // (send_friend_request en adelante).
+    const promesaEsperaMain = new Promise((resolve) => ejecutarWaitWelcomeScreens(infoMain.name, (ok, detalle) => resolve({ ok, detalle }), RUTA_WAIT_WELCOME_SCREENS_MAIN_SCRIPT));
+    const promesaPrepDonante = (async () => {
+        const resInject = await ejecutarInjectDonante();
+        if (!resInject.ok) return resInject;
+        return await new Promise((resolve) => ejecutarWaitWelcomeScreens(nombre, (ok, detalle) => resolve({ ok, resultado: detalle })));
+    })();
+    const [esperaMain, prepDonante] = await Promise.all([promesaEsperaMain, promesaPrepDonante]);
+    if (!esperaMain.ok) {
+        return await enviarErrorMainTrade(interaction, `❌ Could not reach the main menu on instance **${infoMain.name}** (${esperaMain.detalle}).`, [botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre)]);
+    }
+    if (!prepDonante.ok) {
+        return await enviarErrorMainTrade(interaction, `❌ Could not prepare the donor instance **${nombre}** (${prepDonante.resultado}).`, [botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre)]);
+    }
 
     // Orden confirmado por el usuario 2026-07-29: despues de mandar la
     // solicitud, la donante ofrece la carta de la wishlist de Main
     // (_SendTradeCard.ahk, igual que en Friend Trade) ANTES de que Main
     // proponga la suya -- son dos ofertas de trade separadas, no una sola.
     const pasos = [
-        { nombre: 'inject_xml', script: RUTA_INJECT_XML_SCRIPT, args: [nombre, folderPath, archivo], timeoutMs: 3 * 60 * 1000 },
         { nombre: 'send_friend_request', script: RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, args: [nombre, folderPath, friendId], timeoutMs: 90 * 1000 },
-        // Espera a que Main.ahk termine (acepte la solicitud y se cierre solo,
-        // ver mainAhkListo mas arriba) ANTES de que la donante ofrezca la
-        // carta -- a pedido explicito del usuario 2026-07-29.
-        { nombre: 'esperar_main_ahk', promesa: () => mainAhkListo.then(() => ({ ok: true, resultado: 'OK' })) },
-        { nombre: 'send_trade_card', promesa: () => ejecutarSendTradeCardPromise(nombre) },
-        // Aceptar la solicitud ya NO es parte del pipeline (a pedido explicito del
-        // usuario 2026-07-29): Main.ahk (el bot de Kevin) corre aparte, en paralelo,
-        // se mata solo a los 80s de arrancar (ver mas arriba), y para cuando este
-        // paso llega ya paso ese tiempo -- por eso pasa directo a proponer la
-        // carta (ya no busca por nombre, ofrece la Favorita de Main).
-        { nombre: 'main_accept_propose', script: RUTA_MAIN_ACCEPT_TRADE_SCRIPT, args: ['Main', folderPath], timeoutMs: 2 * 60 * 1000 },
-        { nombre: 'donor_respond', script: RUTA_DONOR_RESPOND_SCRIPT, args: [nombre, folderPath, nombreCarta], timeoutMs: 2 * 60 * 1000 },
-        { nombre: 'main_finalize_cleanup', script: RUTA_MAIN_FINALIZE_SCRIPT, args: ['Main', folderPath], timeoutMs: 2 * 60 * 1000 },
-        { nombre: 'finalize_trade_card', promesa: () => ejecutarFinalizeTradeCardPromise(nombre, index) }
+        // Remapeados 2026-08-03/04 (coordenadas propias, ver header de cada script) --
+        // reemplazan Main.ahk + _SendTradeCard.ahk + _MainProposeFavoriteCard.ahk +
+        // _DonorRespondTrade.ahk + _MainFinalizeAndCleanup.ahk + _FinalizeTradeCard.ahk.
+        { nombre: 'main_accept_friend_request', script: RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, args: ['Main', folderPath], timeoutMs: 60 * 1000 },
+        { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 },
+        { nombre: 'main_accept_trade_offer', script: RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, args: ['Main', folderPath], timeoutMs: 2 * 60 * 1000 },
+        { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 }
     ];
 
     for (const paso of pasos) {
@@ -2657,9 +2803,10 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             : await ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, tmp());
         if (!ok) {
             const filaStop = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger)
+                new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId(`main_trade_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
             );
-            const mensaje = `❌ Main Trade failed at step **${paso.nombre}** (${resultado}). Press **🛑 Stop** to clean up before trying again.`;
+            const mensaje = `❌ Main Trade failed at step **${paso.nombre}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.`;
             try {
                 const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
                 if (canalRunInstance?.webhook_url) {
@@ -2669,7 +2816,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             } catch (e) {
                 console.error('DEBUG: error mandando el resultado de Main Trade al canal de trading:', e?.response?.data || e?.message || e);
             }
-            return await interaction.followUp({ content: mensaje, components: [filaStop], ephemeral: true });
+            return await interaction.followUp({ content: mensaje, components: [filaStop] });
         }
     }
 
@@ -2722,6 +2869,11 @@ function ejecutarFinalizeTradeCard(winTitle, instanceIndex, callback) {
 }
 
 const RUTA_WAIT_WELCOME_SCREENS_SCRIPT = path.join(__dirname, 'automation', '_WaitWelcomeScreens.ahk');
+// Copia dedicada para Main en Main Trade (2026-08-05, recreada a pedido del usuario):
+// unica que hace "am start" (Main no tiene inject que le abra el juego solo). El script
+// compartido de arriba (donante/Shinedust) NO abre el juego -- se saco de ahi porque
+// crasheaba al interrumpir la apertura que ya hace el inject.
+const RUTA_WAIT_WELCOME_SCREENS_MAIN_SCRIPT = path.join(__dirname, 'automation', '_WaitWelcomeScreensMain.ahk');
 const RUTA_COUNT_SHINEDUST_SCRIPT = path.join(__dirname, 'automation', '_CountShinedust.ahk');
 
 // Separado de ejecutarCountShinedust (2026-08-03) para poder reusar este chequeo desde
@@ -2729,14 +2881,20 @@ const RUTA_COUNT_SHINEDUST_SCRIPT = path.join(__dirname, 'automation', '_CountSh
 // acoplarlo a la logica puntual de cada uno. Espera hasta 70s a que el juego pase las
 // pantallas de bienvenida/carrusel post-inyeccion y llegue al menu principal.
 // callback(ok, detalle).
-function ejecutarWaitWelcomeScreens(winTitle, callback) {
+function ejecutarWaitWelcomeScreens(winTitle, callback, rutaScript = RUTA_WAIT_WELCOME_SCREENS_SCRIPT) {
     const ahkExe = rutaAutoHotkey();
     const folderPath = carpetaBaseMuMu();
-    if (!ahkExe || !folderPath || !fs.existsSync(RUTA_WAIT_WELCOME_SCREENS_SCRIPT)) {
+    if (!ahkExe || !folderPath || !fs.existsSync(rutaScript)) {
         return callback(false, 'faltan_archivos');
     }
     const outputFile = path.join(os.tmpdir(), `welcomescreens_${winTitle}_${Date.now()}.txt`);
-    spawnAhkConProteccion(ahkExe, [RUTA_WAIT_WELCOME_SCREENS_SCRIPT, winTitle, folderPath, outputFile], { windowsHide: false }, 90 * 1000, (ok, detalle) => {
+    // Subido de 90s a 150s (2026-08-05, a pedido del usuario): un ciclo real de
+    // crash+recuperacion (nuestro reintento de am start dentro del AHK) puede consumir gran
+    // parte del timeout interno de 70s, sin dejar margen para que el juego termine de
+    // cargar antes de que ESTE timeout externo mate el proceso. Ver timeoutMs subido a
+    // 130s dentro de _WaitWelcomeScreens.ahk/_WaitWelcomeScreensMain.ahk -- este externo
+    // tiene que ser mayor a ese para no matarlo antes de tiempo.
+    spawnAhkConProteccion(ahkExe, [rutaScript, winTitle, folderPath, outputFile], { windowsHide: false }, 150 * 1000, (ok, detalle) => {
         let resultado;
         try {
             resultado = fs.readFileSync(outputFile, 'utf8').trim();
@@ -2769,16 +2927,18 @@ function obtenerDatosInventarioCacheados(fileName) {
 }
 
 // Mismo orden en el que aparecen en el inventario real del juego.
+// Emojis personalizados TCGP (2026-08-05, a pedido explicito del usuario): subidos como
+// application emojis del bot (ver assets/element/*_TCGP.png) -- IDs fijos, no cambian.
 const ETIQUETAS_INVENTARIO = [
-    ['pokegold_nonpaid', '🪙 Poké Gold (non-paid)'],
-    ['pokegold_paid', '🪙 Poké Gold (paid)'],
-    ['shopticket', '🎫 Shop Ticket'],
-    ['specialshopticket', '🎟️ Special Shop Ticket'],
-    ['premiumticket', '🎫 Premium Ticket'],
-    ['packhourglass', '⏳ Pack Hourglass'],
-    ['wonderhourglass', '⏳ Wonder Hourglass'],
-    ['rewindwatch', '⏱️ Rewind Watch'],
-    ['tradehourglass', '⏳ Trade Hourglass'],
+    ['pokegold_nonpaid', '<:Pokelingote_TCGP:1534723128004055161> Poké Gold (non-paid)'],
+    ['pokegold_paid', '<:Pokelingote_TCGP:1534723128004055161> Poké Gold (paid)'],
+    ['shopticket', '<:Cupon_de_tienda_TCGP:1534723152914026569> Shop Ticket'],
+    ['specialshopticket', '<:Cupon_de_tienda_especial_TCGP:1534723156462403614> Special Shop Ticket'],
+    ['premiumticket', '<:Cupon_premium_TCGP:1534723160069640213> Premium Ticket'],
+    ['packhourglass', '<:Reloj_de_arena_de_sobres_TCGP:1534723131598569603> Pack Hourglass'],
+    ['wonderhourglass', '<:Reloj_de_arena_magico_TCGP:1534723135117463642> Wonder Hourglass'],
+    ['rewindwatch', '<:Retronometro_TCGP:1534723138963902644> Rewind Watch'],
+    ['tradehourglass', '<:Reloj_arena_intercambio_TCGP:1534723339115958322> Trade Hourglass'],
 ];
 
 // Solo incluye los campos que se pudieron leer bien (algunos pueden venir vacios si el OCR
@@ -3271,6 +3431,12 @@ dashboardApp.get('/account/:token', async (req, res) => {
 
         const escaparHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+        // Convierte el markup de emoji personalizado de Discord (<:nombre:id>, ver
+        // ETIQUETAS_INVENTARIO) a <img> del CDN de Discord -- a pedido explicito del usuario
+        // 2026-08-05, para que se vean los iconos reales en esta pagina web (el markup de
+        // Discord no se renderiza fuera de un cliente de Discord).
+        const emojiDiscordAImg = (s) => String(s).replace(/<a?:(\w+):(\d+)>/g, (_, nombre, id) => `<img src="https://cdn.discordapp.com/emojis/${id}.png?size=24" alt="${nombre}" class="icono-inventario">`);
+
         // Barra de filtros compacta (a pedido explicito del usuario
         // 2026-08-01): antes eran dos filas de botones (una por rareza, otra
         // por expansion) -- se probo con <select> nativo para que ocupe menos
@@ -3344,6 +3510,9 @@ dashboardApp.get('/account/:token', async (req, res) => {
     .card-tile img.rota + .badge { display: none; }
     .img-wrap:has(img.rota) { background: rgba(255,255,255,0.04); border-radius: 10px; aspect-ratio: 0.716; }
     .icono-rareza { height: 13px; vertical-align: middle; margin-right: 1px; }
+    .icono-inventario { height: 16px; width: 16px; vertical-align: middle; margin-right: 2px; }
+    .lista-inventario { margin: 4px 0; }
+    .lista-inventario div { padding: 2px 0; }
     .rareza-tag { display: flex; justify-content: center; margin-top: 8px; }
     .rareza-pill { display: inline-flex; align-items: center; }
     .card-tile img { cursor: zoom-in; }
@@ -3363,8 +3532,11 @@ dashboardApp.get('/account/:token', async (req, res) => {
 </div>
 <div class="lightbox" id="lightbox"><div class="lightbox-box"><img id="lightbox-img" src="" alt=""></div></div>
 <div class="sub">File: ${escaparHtml(accountData.metadata?.fileName || '')} — el link de esta pagina es privado, pero si lo compartís cualquiera con el enlace puede verlo. Para pasarle esto a alguien, mejor descargá el PDF y mandale el archivo.</div>
-<div class="sub">🎴 Total cards pulled: <strong>${totalCartas}</strong></div>
-${datosInventario ? `<div class="sub">👛 Shinedust: <strong>${escaparHtml(datosInventario.shinedust)}</strong>${camposInventarioEmbed(datosInventario).map(c => ` — ${escaparHtml(c.name)}: <strong>${escaparHtml(c.value)}</strong>`).join('')}</div>` : ''}
+<div class="sub"><img src="https://cdn.discordapp.com/emojis/1534731032400756807.png?size=24" alt="Cards" class="icono-inventario"> Total cards pulled: <strong>${totalCartas}</strong></div>
+${datosInventario ? `<div class="sub lista-inventario">
+    <div><img src="https://cdn.discordapp.com/emojis/1534723123914739802.png?size=24" alt="Shinedust" class="icono-inventario"> Shinedust: <strong>${escaparHtml(datosInventario.shinedust)}</strong></div>
+    ${camposInventarioEmbed(datosInventario).map(c => `<div>${emojiDiscordAImg(c.name)}: <strong>${escaparHtml(c.value)}</strong></div>`).join('\n    ')}
+</div>` : ''}
 <div class="filtros">
     <div class="dropdown" id="dropdown-expansion">
         <button type="button" class="dropdown-toggle" id="toggle-expansion"><span class="dropdown-toggle-texto">All expansions</span><span class="caret">▾</span></button>
@@ -3954,7 +4126,7 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
             new ButtonBuilder().setCustomId('wishlist_ver').setLabel('📋 View my Wishlist').setStyle(ButtonStyle.Primary)
         );
 
-        const bannerPath = path.join(__dirname, 'assets', 'embeds', 'wishlist_banner.png');
+        const bannerPath = elegirBannerWishlistAleatorio();
         const archivos = [];
         if (fs.existsSync(bannerPath)) {
             embed.setImage('attachment://wishlist_banner.png');
@@ -3973,7 +4145,7 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
             new ButtonBuilder().setCustomId('allcards_ver_expansiones').setLabel('📋 View All Expansions').setStyle(ButtonStyle.Primary)
         );
 
-        const bannerPath = path.join(__dirname, 'assets', 'embeds', 'card_banner.png');
+        const bannerPath = elegirBannerAllCardsAleatorio();
         const symbolPath = path.join(__dirname, 'assets', 'embeds', 'symbol.png');
         const archivos = [];
         if (fs.existsSync(bannerPath)) {
@@ -4500,7 +4672,7 @@ async function generarEmbedGeneral(estados, cartas, sobreTexto, rutaLogo, cardMa
     const embed = new EmbedBuilder()
         .setTitle('🌟 NEW VALUABLE CARD FOUND! 🌟')
         .setDescription(
-            '**An excellent trade has been detected.**\nSaved to the S4T database.\n\n' +
+            '**An excellent trade has been detected.**\nSaved in the S4T database.\n\n' +
             '*Preview — S4T general channel (all cards from the pack together).*'
         )
         .setColor(0xF1C40F)
@@ -4534,7 +4706,7 @@ async function generarEmbedRareza(estados, carta, sobreTexto, rutaLogo, cardMap,
     const embed = new EmbedBuilder()
         .setTitle('🌟 NEW VALUABLE CARD FOUND! 🌟')
         .setDescription(
-            '**An excellent trade has been detected.**\nSaved to the S4T database.\n\n' +
+            '**An excellent trade has been detected.**\nSaved in the S4T database.\n\n' +
             '*Preview — rarity channel (a single card).*'
         )
         .setColor(0xF1C40F)
@@ -4563,7 +4735,7 @@ async function generarEmbedWishlist(estados, carta, sobreTexto, rutaLogo, cardMa
 
     const embed = new EmbedBuilder()
         .setDescription(
-            '**A wishlist card has been detected.**\nSaved to the S4T database.\n\n' +
+            '💖 **A wishlist card has been detected.** 💖\nSaved in the S4T database.\n\n' +
             '*Preview — wishlist channel.*'
         )
         .setColor(0xE91E63)
@@ -5840,11 +6012,11 @@ client.on('interactionCreate', async interaction => {
                 // archivo adjunto de verdad.
                 { name: '💠 Data XML', value: `\`${path.basename(archivo)}\``, inline: true },
                 { name: '🗂️ Data Json', value: `\`${path.basename(archivoJson)}\``, inline: true },
-                { name: '🎴 Total Cards', value: `${totalCartas}`, inline: true }
+                { name: '<:Card_Back_TCGP:1534731032400756807> Total Cards', value: `${totalCartas}`, inline: true }
             )
             .setColor(0xE91E63);
         if (datosInventario) {
-            embed.addFields({ name: '👛 Shinedust', value: `${datosInventario.shinedust}`, inline: true });
+            embed.addFields({ name: '<:Polvo_iris_TCGP:1534723123914739802> Shinedust', value: `${datosInventario.shinedust}`, inline: true });
             embed.addFields(...camposInventarioEmbed(datosInventario));
         }
         embed.addFields({ name: '🔗 Pages we mentioned', value: paginas.join('\n') });
@@ -5989,6 +6161,30 @@ client.on('interactionCreate', async interaction => {
         return await enviarInfoAccounts(interaction, fileName, datosInventario);
     }
 
+    // Boton "Retry" de Main Trade (2026-08-05): reconstruye el mismo llamado que ya hacia
+    // card_trade_instancia:: en modo 'main', sin volver a pasar por el select de instancia.
+    if (interaction.isButton() && interaction.customId.startsWith('main_trade_retry::')) {
+        const [, cartaId, friendId, fileName, index, nombre] = interaction.customId.split('::');
+        await interaction.deferUpdate();
+        try { await interaction.followUp({ content: `🔄 Retrying Main Trade: restarting **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+        }
+        const instancias = obtenerInstanciasMuMu();
+        const infoMain = (instancias || []).find(i => i.name === 'Main');
+        if (!infoMain) {
+            return await interaction.followUp({ content: '❌ Could not find an instance named exactly "Main".', ephemeral: true });
+        }
+        // Apagado forzado real (no solo "asegurar prendida"): un Retry implica que algo
+        // quedo colgado -- la instancia puede seguir reportando Android como "prendido"
+        // aunque el juego este trabado adentro, asi que hay que reiniciarla de verdad
+        // antes de intentar de nuevo, no solo confiar en que ya esta encendida.
+        await Promise.all([asegurarInstanciaApagada(infoMain.index), asegurarInstanciaApagada(index)]);
+        return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre });
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_instancia::')) {
         const [, cartaId, friendId, fileName, modo] = interaction.customId.split('::');
         const [index, nombre] = interaction.values[0].split('::');
@@ -6003,7 +6199,12 @@ client.on('interactionCreate', async interaction => {
         // más de 3s la interacción expira en silencio y nunca llega a ejecutar
         // nada (bug real encontrado 2026-07-29: Main Trade no corría el AHK
         // porque la búsqueda del XML pasaba antes del primer update).
-        await interaction.update({ content: `🟢 Preparing instance **${nombre}**...`, components: [] });
+        // deferUpdate (no update) + followUp para el status (2026-08-03, a pedido
+        // explicito del usuario): "update" con components:[] borraba los botones de
+        // Friend/Main/Aggressive Trade del mensaje original de la carta en el canal
+        // de Trading -- deferUpdate no toca nada del mensaje, y el status va aparte.
+        await interaction.deferUpdate();
+        try { await interaction.followUp({ content: `🟢 Preparing instance **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
         const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
         const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
@@ -6121,7 +6322,7 @@ client.on('interactionCreate', async interaction => {
         marcarProgreso();
         const prendida = await asegurarInstanciaEncendida(index);
         if (!prendida) {
-            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
+            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
         }
         marcarProgreso();
 
@@ -6134,7 +6335,7 @@ client.on('interactionCreate', async interaction => {
         const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
         const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
         if (!archivo) {
-            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
         }
 
         const { rutaIni: rutaIniShinedust, rutaScript: rutaScriptShinedust } = await obtenerRutasInject(interaction.user.id);
@@ -6145,12 +6346,12 @@ client.on('interactionCreate', async interaction => {
             // "Add Friend" hay que apagarla, o la inyección la dispara igual.
             actualizarIniInject({ sendFriendRequestAfterInject: '0' }, rutaIniShinedust);
         } catch (e) {
-            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
+            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
         }
 
         ejecutarInyeccionHeadless(async (ok, detalle) => {
             if (!ok) {
-                try { await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
+                try { await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
                 return;
             }
             marcarProgreso();
@@ -6158,7 +6359,7 @@ client.on('interactionCreate', async interaction => {
             ejecutarWaitWelcomeScreens(nombre, async (okWelcome, motivoWelcome) => {
                 if (!okWelcome) {
                     apagarInstanciaMuMu(index);
-                    try { await interaction.followUp({ content: `❌ Could not reach the main menu after injecting (${motivoWelcome}).`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
+                    try { await interaction.followUp({ content: `❌ Could not reach the main menu after injecting (${motivoWelcome}).`, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
                     return;
                 }
                 marcarProgreso();
@@ -6170,7 +6371,7 @@ client.on('interactionCreate', async interaction => {
                     apagarInstanciaMuMu(index);
                     try {
                         if (!okOcr) {
-                            return await interaction.followUp({ content: `❌ Could not read the shinedust value (${datosOMotivo}).`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
+                            return await interaction.followUp({ content: `❌ Could not read the shinedust value (${datosOMotivo}).`, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
                         }
                         const datos = datosOMotivo;
                         const valorOMotivo = datos.shinedust;
@@ -6193,11 +6394,25 @@ client.on('interactionCreate', async interaction => {
                         const esCuentaGold = cuentasGold.some(r => r.fileName.replace(/\.xml$/i, '') === fileName);
                         const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
                         const payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
-                        payload.embeds[0].addFields({ name: '👛 Shinedust', value: `**${valorOMotivo}** (\`${fileName}\`)` });
-                        payload.embeds[0].addFields(...camposInventarioEmbed(datos));
+                        // Formato en columna (2026-08-05, a pedido explicito del usuario): el
+                        // archivo XML va primero (con su propio emoji), luego Shinedust. El
+                        // resto del inventario (Poke Gold, tickets, relojes) NO va aca -- solo
+                        // se muestra en Info Accounts; este resultado se queda solo con la
+                        // carta + archivo + shinedust, igual de simple que Extract XML.
+                        payload.embeds[0].addFields({ name: '📄 Account file', value: `\`${fileName}\`` });
+                        payload.embeds[0].addFields({ name: '<:Polvo_iris_TCGP:1534723123914739802> Shinedust', value: `**${valorOMotivo}**` });
                         payload.content = `<@${interaction.user.id}> Account \`${fileName}\` has **${valorOMotivo}** Shinedust.`;
+                        // Boton Trade (2026-08-05, a pedido explicito del usuario): antes
+                        // usaba su propio atajo (shinedust_result_trade::/
+                        // shinedust_result_trade_friendid::, mandaba un select-menu por
+                        // webhook aparte) que dejo de responder en vivo -- "Pokedex! didn't
+                        // respond in time" al elegir amigo, reproducido en vivo, sin ninguna
+                        // excepcion en el log ni con logging agregado a mano. Se cambia para
+                        // reusar EXACTAMENTE el mismo customId card_trade:: que ya usa el
+                        // flujo normal de /card (probado, funciona) -- vuelve a preguntar la
+                        // cuenta (redundante ya que Shinedust la conoce) pero es confiable.
                         payload.components = [new ActionRowBuilder().addComponents(
-                            new ButtonBuilder().setCustomId(`shinedust_result_trade::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
+                            new ButtonBuilder().setCustomId(`card_trade::${cartaId}`.slice(0, 100)).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
                             new ButtonBuilder().setCustomId(`shinedust_result_extract::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
                             new ButtonBuilder().setCustomId(`shinedust_result_info_accounts::${fileName}`.slice(0, 100)).setLabel('📋 Info Accounts').setStyle(ButtonStyle.Secondary)
                         )];
@@ -6239,7 +6454,7 @@ client.on('interactionCreate', async interaction => {
 
             apagarInstanciaMuMu(index);
             if (intento >= 3) {
-                try { await interaction.followUp({ content: `⏱️ Instance **${nombre}** got stuck (no progress for 90s) and already auto-retried ${intento - 1} time(s). Try again manually.`, ephemeral: true, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
+                try { await interaction.followUp({ content: `⏱️ Instance **${nombre}** got stuck (no progress for 90s) and already auto-retried ${intento - 1} time(s). Try again manually.`, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
                 return;
             }
             try { await interaction.followUp({ content: `⏱️ Instance **${nombre}** got stuck (no progress for 90s) -- retrying automatically...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
@@ -6266,59 +6481,6 @@ client.on('interactionCreate', async interaction => {
         const [, cartaId, fileName, index, nombre] = interaction.customId.split('::');
         await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
         await ejecutarFlujoShinedustConSupervisor(interaction, cartaId, fileName, index, nombre);
-        return;
-    }
-
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_result_trade_instancia::')) {
-        const [, cartaId, fileName] = interaction.customId.split('::');
-        const [index, nombre] = interaction.values[0].split('::');
-
-        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
-
-        const prendida = await asegurarInstanciaEncendida(index);
-        if (!prendida) {
-            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true });
-        }
-
-        try { await interaction.followUp({ content: `🔄 Running injection on instance **${nombre}**... this WILL CLOSE the current session and may take several minutes.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
-
-        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
-        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
-        if (!archivo) {
-            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
-        }
-
-        const { rutaIni: rutaIniTradeResult, rutaScript: rutaScriptTradeResult } = await obtenerRutasInject(interaction.user.id);
-        try {
-            guardarXmlParaInyeccion(nombre, archivo, rutaIniTradeResult);
-            actualizarIniInject({ sendFriendRequestAfterInject: '1' }, rutaIniTradeResult);
-        } catch (e) {
-            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
-        }
-
-        ejecutarInyeccionHeadless(async (ok, detalle) => {
-            try {
-                if (!ok) {
-                    return await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true });
-                }
-                const filaNext = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`mumu_nexttrade_${index}::${nombre}`).setLabel('▶️ Next Trade').setStyle(ButtonStyle.Success)
-                );
-                const mensaje = `✅ Injection completed on instance **${nombre}** (\`${fileName}\`).\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist.`;
-
-                const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
-                if (canalRunInstance?.webhook_url) {
-                    try {
-                        const webhookRunInstance = new WebhookClient({ url: canalRunInstance.webhook_url });
-                        await webhookRunInstance.send({ content: mensaje, components: [filaNext] });
-                        return await interaction.followUp({ content: '✅ Sent to your Run MumuPlayer channel.', ephemeral: true });
-                    } catch (e) {
-                        console.error('DEBUG: error mandando el resultado de Trade (desde Shinedust) al canal de run mumu:', e?.message || e);
-                    }
-                }
-                await interaction.followUp({ content: mensaje, components: [filaNext], ephemeral: true });
-            } catch (e) { /* interacción puede haber expirado */ }
-        }, rutaScriptTradeResult);
         return;
     }
 
@@ -6446,11 +6608,7 @@ client.on('interactionCreate', async interaction => {
             if (!fs.existsSync(ruta)) {
                 return await interaction.reply({ content: '❌ No tutorial available for this channel yet.', ephemeral: true });
             }
-            // El de Settings es el tutorial general (token/API) - a pedido del
-            // usuario, se descarga con un nombre mas descriptivo en vez del
-            // slug interno del tipo de canal.
-            const nombreDescarga = tipo === 'cmd_setup' ? 'TUTORIAL MONITOR POKEMON.pdf' : `${tipo}.pdf`;
-            return await interaction.reply({ files: [new AttachmentBuilder(ruta, { name: nombreDescarga })], ephemeral: true });
+            return await interaction.reply({ files: [new AttachmentBuilder(ruta, { name: nombreTutorialDescarga(tipo) })], ephemeral: true });
         }
 
         if (interaction.customId === 'extract_xml_abrir') {
@@ -6722,7 +6880,8 @@ client.on('interactionCreate', async interaction => {
             const cartaId = interaction.customId.replace('card_trade::', '');
             await interaction.deferReply({ ephemeral: true }); // armar la carta puede tardar más de 3s
             const fila = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`card_trade_friend::${cartaId}`).setLabel('🤝 Friend Trade').setStyle(ButtonStyle.Secondary),
+                // Deshabilitado a pedido explicito del usuario 2026-08-06.
+                new ButtonBuilder().setCustomId(`card_trade_friend::${cartaId}`).setLabel('🤝 Friend Trade').setStyle(ButtonStyle.Secondary).setDisabled(true),
                 new ButtonBuilder().setCustomId(`card_trade_main::${cartaId}`).setLabel('🏠 Main Trade').setStyle(ButtonStyle.Primary),
                 // Deshabilitado a pedido explicito del usuario 2026-07-29: todavia no
                 // esta implementado, se libera en un release futuro.
@@ -6956,7 +7115,8 @@ client.on('interactionCreate', async interaction => {
             const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
             const payloadEmbed = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
             payloadEmbed.components = [];
-            payloadEmbed.embeds[0].addFields({ name: '👛 Shinedust', value: `**${valorShinedust || '?'}** (\`${fileName}\`)` });
+            payloadEmbed.embeds[0].addFields({ name: '📄 Account file', value: `\`${fileName}\`` });
+            payloadEmbed.embeds[0].addFields({ name: '<:Polvo_iris_TCGP:1534723123914739802> Shinedust', value: `**${valorShinedust || '?'}**` });
 
             const archivos = [new AttachmentBuilder(archivo)];
             const deviceAccount = extraerDeviceAccount(archivo);
@@ -6984,73 +7144,6 @@ client.on('interactionCreate', async interaction => {
                 }
             }
             return await interaction.editReply({ ...payloadEmbed, content: contenidoTexto, files: [...(payloadEmbed.files || []), ...archivos] });
-        }
-
-        // Igual que card_trade:: (fix 2026-07-28): no ejecuta nada en el canal de
-        // Shinedust -- reenvía la misma carta (embed ya armado, con su valor de
-        // Shinedust) al canal de Trading, con el selector de amigo. Como acá ya
-        // se sabe la cuenta (fileName), se salta el paso de "elegir cuenta" y va
-        // directo a "elegir instancia" reusando card_trade_instancia::.
-        if (interaction.customId.startsWith('shinedust_result_trade::')) {
-            const [, cartaId, fileName] = interaction.customId.split('::');
-            await interaction.deferReply({ ephemeral: true }); // el envío por webhook puede tardar más de 3s
-
-            const { rutaIni } = await obtenerRutasInject(interaction.user.id);
-            const friends = parsearListaFriends(rutaIni);
-            if (!friends.length) {
-                return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.' });
-            }
-
-            const canalTrading = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
-            if (!canalTrading?.webhook_url) {
-                return await interaction.editReply({ content: '❌ Your **Trading** channel isn\'t set up yet. Run **Sync Channels** first.' });
-            }
-
-            const menu = new StringSelectMenuBuilder()
-                .setCustomId(`shinedust_result_trade_friendid::${cartaId}::${fileName}`.slice(0, 100))
-                .setPlaceholder('Select which friend to send the request to')
-                .addOptions(friends.slice(0, 25).map(f => ({
-                    label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
-                    value: f.id
-                })));
-
-            try {
-                const embedOriginal = interaction.message.embeds[0];
-                const webhookTrading = new WebhookClient({ url: canalTrading.webhook_url });
-                await webhookTrading.send({
-                    content: `<@${interaction.user.id}>`,
-                    embeds: embedOriginal ? [EmbedBuilder.from(embedOriginal)] : [],
-                    components: [new ActionRowBuilder().addComponents(menu)]
-                });
-                return await interaction.editReply({ content: '✅ Sent to your Trading channel.' });
-            } catch (e) {
-                console.error('DEBUG: error mandando el resultado de shinedust al canal de trading:', e?.message || e);
-                return await interaction.editReply({ content: '❌ Could not send to your Trading channel.' });
-            }
-        }
-
-        if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_result_trade_friendid::')) {
-            const [, cartaId, fileName] = interaction.customId.split('::');
-            const friendId = interaction.values[0];
-            await interaction.deferUpdate(); // MuMuManager puede tardar más de 3s
-
-            const instancias = obtenerInstanciasMuMu();
-            if (instancias === null) {
-                return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
-            }
-            if (!instancias.length) {
-                return await interaction.editReply({ content: '❌ No MuMuPlayer instances found.', components: [] });
-            }
-
-            const menu = new StringSelectMenuBuilder()
-                .setCustomId(`card_trade_instancia::${cartaId}::${friendId}::${fileName}::friend`.slice(0, 100))
-                .setPlaceholder('Select an instance')
-                .addOptions(instancias.slice(0, 25).map(i => ({
-                    label: `${i.index}. ${i.name}`.slice(0, 100),
-                    description: i.is_android_started ? 'On' : 'Off',
-                    value: `${i.index}::${i.name}`
-                })));
-            return await interaction.editReply({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu)] });
         }
 
         if (interaction.customId.startsWith('wishlist_xml::')) {
@@ -7318,6 +7411,7 @@ client.on('interactionCreate', async interaction => {
                             tipoCategoria: 'actualizaciones_categoria',
                             canales: [
                                 { tipo: 'actualizaciones', name: '🔔-updates' },
+                                { tipo: 'tutoriales', name: '📚-tutorials' },
                                 { tipo: 'apoyo', name: '☕-donate' },
                                 { tipo: 'cmd_feedback', name: '📝-feedback' }
                             ]
@@ -7393,8 +7487,31 @@ client.on('interactionCreate', async interaction => {
                     // resto (rareza, godpacks, s4t, heartbeat, wishlist-feed) no tiene ningún
                     // comando propio — meter un embed ahí es ruido innecesario en canales que
                     // además reciben cartas todo el tiempo.
+                    // Lista mostrada en el canal de Tutorials (2026-08-06, a pedido explicito
+                    // del usuario): un item por fila, cada uno con su boton para abrir el PDF
+                    // correspondiente reusando tutorial_pdf:: (mismo botón que ya usa cada
+                    // canal individual) -- si a algún tipo todavía no se le subió el PDF real,
+                    // el handler de tutorial_pdf:: ya responde "No tutorial available yet" solo.
+                    const TUTORIALES_LISTA = [
+                        { tipo: 'cmd_setup', label: 'Bot General' },
+                        { tipo: 'cmd_build_embed', label: 'Build Embed' },
+                        { tipo: 'cmd_build_webhooks', label: 'Build Webhooks' },
+                        { tipo: 'cmd_card_wishlist', label: 'Cards Wishlist' },
+                        { tipo: 'cmd_card_all', label: 'All Cards' },
+                        { tipo: 'cmd_extract_xlm', label: 'Extract XML' },
+                        { tipo: 'shinedust', label: 'Shinedust' },
+                        { tipo: 'cmd_card_gold', label: 'Gold Cards' },
+                        { tipo: 'info_accounts', label: 'Info Accounts' },
+                        { tipo: 'cmd_run_instance', label: 'Automatic Trading' }
+                    ];
+
                     const EMBEDS_BIENVENIDA_POR_TIPO = {
                         actualizaciones: { title: '🔔 Updates', description: 'You\'ll get notified here whenever there\'s a new bot update, with a button to install it right away.' },
+                        tutoriales: {
+                            title: '📚 Tutorials',
+                            description: 'Here you can find all the tutorials for the bot\'s commands and features:',
+                            fields: TUTORIALES_LISTA.map((t, i) => ({ name: `${i + 1}- ${t.label}`, value: '​', inline: false }))
+                        },
                         apoyo: { title: '☕ Donate', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
                         cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
                         cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
@@ -7495,6 +7612,17 @@ client.on('interactionCreate', async interaction => {
                                         type: 1,
                                         components: [{ type: 2, style: 5, label: '☕ Donate on Ko-fi', url: 'https://ko-fi.com/alecast' }]
                                     }];
+                                }
+                                if (tipo === 'tutoriales') {
+                                    const filasTutoriales = [];
+                                    for (let j = 0; j < TUTORIALES_LISTA.length; j += 5) {
+                                        filasTutoriales.push(new ActionRowBuilder().addComponents(
+                                            TUTORIALES_LISTA.slice(j, j + 5).map(t =>
+                                                new ButtonBuilder().setCustomId(`tutorial_pdf::${t.tipo}`).setLabel(`📄 ${t.label}`).setStyle(ButtonStyle.Secondary)
+                                            )
+                                        ));
+                                    }
+                                    payloadBienvenida.components = filasTutoriales;
                                 }
                                 await enviarOEditarInterfaz(interaction.user.id, tipo, webhook.url, payloadBienvenida);
                             }
