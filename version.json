@@ -1,7 +1,10 @@
 {
-  "version": "1.5.35",
-  "notesCount": 9,
+  "version": "1.5.36",
+  "notesCount": 3,
   "notes": [
+    "Fixed: the update process could get stuck in an infinite loop with a visible black console window if the old .exe was locked (e.g. by antivirus) - now caps retries and stays hidden like it should.",
+    "New: a \"🔴 Kill Everything\" button in the Control Panel to force-stop everything, including a stuck update window, without needing Task Manager.",
+    "Improved: HD image fetch failures now log the real reason (Drive permission issue vs. missing file) instead of one generic message.",
     "Fixed: Main Trade/Shinedust crashes caused by the bot re-opening the game on top of an already-open instance.",
     "Fixed: the Trade button on a Shinedust result could fail with \"didn't respond in time\" - now reuses the same reliable flow as the normal Trade button.",
     "Fixed: error messages could silently fail to show up if a Main Trade step took longer than Discord's 15-minute interaction window.",

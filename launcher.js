@@ -180,15 +180,25 @@ async function iniciarActualizacion() {
     const rutaExe = process.execPath;
     const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
     const rutaBat = path.join(__dirname, '_update.bat');
+    const rutaFalloUpdate = path.join(__dirname, 'update_fallo.txt');
     // Nota: "timeout" de Windows depende de tener una consola/stdin real y falla
     // (o se saltea) cuando corre sin ventana, como en nuestro caso — por eso las
     // esperas usan "ping" a localhost, el truco clásico que funciona sin consola.
+    //
+    // Reintento con limite (2026-08-06, bug real reportado por un usuario): si
+    // el .exe viejo queda bloqueado (antivirus escaneandolo, o tarda en soltar
+    // el handle), antes reintentaba "del" cada 2s PARA SIEMPRE -- ahora corta a
+    // los 30 intentos (~1 minuto) y deja un aviso en update_fallo.txt en vez de
+    // quedar en un loop infinito sin ningun indicio de que algo esta mal.
     const contenidoBat = [
         '@echo off',
         'ping 127.0.0.1 -n 4 >nul',
+        'set intentos=0',
         ':retry',
         `del "${rutaExe}" 2>nul`,
         `if exist "${rutaExe}" (`,
+        '  set /a intentos+=1',
+        '  if %intentos% GEQ 30 goto fallo',
         '  ping 127.0.0.1 -n 2 >nul',
         '  goto retry',
         ')',
@@ -198,11 +208,21 @@ async function iniciarActualizacion() {
         // que el relanzamiento tras actualizar quede igual de invisible.
         `powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '${rutaExe.replace(/'/g, "''")}' -WorkingDirectory '${__dirname.replace(/'/g, "''")}' -WindowStyle Hidden"`,
         'del "%~f0"',
+        'exit',
+        ':fallo',
+        `echo Could not replace MonitorPokemon.exe - the old file stayed locked for over a minute (likely antivirus). Close any antivirus scan on this folder and try Update Now again, or replace the .exe by hand with MonitorPokemon.new.exe. > "${rutaFalloUpdate}"`,
+        `powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '${rutaExe.replace(/'/g, "''")}' -WorkingDirectory '${__dirname.replace(/'/g, "''")}' -WindowStyle Hidden"`,
+        'del "%~f0"',
         ''
     ].join('\r\n');
     fs.writeFileSync(rutaBat, contenidoBat);
 
-    const proc = spawn('cmd.exe', ['/c', rutaBat], { cwd: __dirname, detached: true, stdio: 'ignore' });
+    // windowsHide (bug real reportado por un usuario, 2026-08-06): faltaba acá
+    // -- sin esto, cmd.exe SIEMPRE abre una consola visible al ejecutar el
+    // .bat (el "hidden" de mas abajo es solo para el relanzamiento final del
+    // programa, no para esta ventana de cmd en si), y si el reintento tardaba
+    // se veia como una ventana negra pegada en loop.
+    const proc = spawn('cmd.exe', ['/c', rutaBat], { cwd: __dirname, detached: true, stdio: 'ignore', windowsHide: true });
     proc.unref();
 
     setTimeout(() => process.exit(0), 500);

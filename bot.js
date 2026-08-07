@@ -1108,10 +1108,14 @@ async function refrescarMapaCarpetasDriveBot() {
             if (guion === -1) continue;
             mapa[f.name.substring(0, guion)] = f.id;
         }
+        if (Object.keys(mapa).length === 0) {
+            registrarErrorDriveHd('normal', '(listado de carpetas)', 'raiz_drive_vino_vacia', `la API respondio OK pero 0 subcarpetas -- la key probablemente no tiene acceso a la carpeta raiz del Drive (¿esta compartida como "Cualquiera con el enlace"?)`);
+        }
         _driveFolderMapCacheBot = mapa;
         fs.writeFileSync(DRIVE_FOLDER_MAP_PATH_BOT, JSON.stringify(mapa, null, 2));
         return mapa;
     } catch (e) {
+        registrarErrorDriveHd('normal', '(listado de carpetas)', 'excepcion_listando_raiz', `HTTP ${e?.response?.status || '?'} — ${e?.message || e}`);
         return _driveFolderMapCacheBot || {};
     }
 }
@@ -1220,10 +1224,14 @@ async function refrescarMapaCarpetasDriveGoldBot() {
             if (guion === -1) continue;
             mapa[f.name.substring(0, guion)] = f.id;
         }
+        if (Object.keys(mapa).length === 0) {
+            registrarErrorDriveHd('gold', '(listado de carpetas)', 'raiz_drive_vino_vacia', `la API respondio OK pero 0 subcarpetas -- la key probablemente no tiene acceso a la carpeta raiz "Gold Frames" del Drive`);
+        }
         _driveFolderMapCacheGoldBot = mapa;
         fs.writeFileSync(DRIVE_FOLDER_MAP_PATH_GOLD_BOT, JSON.stringify(mapa, null, 2));
         return mapa;
     } catch (e) {
+        registrarErrorDriveHd('gold', '(listado de carpetas)', 'excepcion_listando_raiz', `HTTP ${e?.response?.status || '?'} — ${e?.message || e}`);
         return _driveFolderMapCacheGoldBot || {};
     }
 }

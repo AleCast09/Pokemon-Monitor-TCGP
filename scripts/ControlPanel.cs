@@ -149,6 +149,48 @@ public class ControlPanelForm : Form {
         }
     }
 
+    // "Kill Everything" (2026-08-06, a pedido explicito del usuario -- un
+    // usuario real quedo con una ventana de actualizacion trabada en loop
+    // infinito, sin ninguna forma de pararla desde la app, solo yendo a
+    // Advanced\Quit Monitor Pokemon.bat a mano). A diferencia de "Stop"
+    // (que solo mata el PID guardado en .monitor.lock, con /T para el arbol
+    // de hijos), esto tambien caza el cmd.exe del _update.bat -- ese proceso
+    // se lanza "detached" a proposito (para sobrevivir al cierre del launcher
+    // durante una actualizacion), asi que /T nunca lo alcanza si ya quedo
+    // huerfano. Se filtra por CommandLine conteniendo esta misma carpeta,
+    // para no tocar ninguna otra ventana de cmd del usuario.
+    void MatarTodo() {
+        var confirmacion = MessageBox.Show(
+            "This force-stops Monitor Pokemon completely (engine, panel, and any stuck update window), even if something is frozen.\n\nUse this if Stop/Restart don't work, or a black console window is stuck looping.\n\nContinue?",
+            "Kill Everything",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning
+        );
+        if (confirmacion != DialogResult.Yes) return;
+
+        try {
+            var raizEscapada = raiz.Replace("'", "''");
+            var script =
+                "Get-Process MonitorPokemon,MonitorPokemonPanel -ErrorAction SilentlyContinue | Stop-Process -Force; " +
+                "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe'\" | " +
+                "Where-Object { $_.CommandLine -and $_.CommandLine.Contains('" + raizEscapada + "') } | " +
+                "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+            var psi = new ProcessStartInfo("powershell", "-NoProfile -WindowStyle Hidden -Command \"" + script + "\"") {
+                WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false, CreateNoWindow = true
+            };
+            Process.Start(psi).WaitForExit();
+        } catch (Exception ex) {
+            MessageBox.Show("Could not kill everything: " + ex.Message, "Monitor Pokemon");
+        }
+
+        try { File.Delete(rutaLock); } catch { }
+        try { File.Delete(Path.Combine(raiz, "_update.bat")); } catch { }
+        try { File.Delete(rutaPendienteRestart); } catch { }
+        try { File.Delete(Path.Combine(raiz, ".pending_update.json")); } catch { }
+
+        MessageBox.Show("Done. Everything was force-stopped.\n\nIf a MonitorPokemon.new.exe file exists in this folder, an update was mid-way through - delete MonitorPokemon.exe and rename MonitorPokemon.new.exe to MonitorPokemon.exe before pressing Start again.", "Monitor Pokemon");
+    }
+
     Dictionary<string, string> LeerEnv() {
         var valores = new Dictionary<string, string>();
         if (!File.Exists(rutaEnv)) return valores;
@@ -303,7 +345,7 @@ public class ControlPanelForm : Form {
 
     void ConstruirUI() {
         Text = "Monitor Pokemon";
-        ClientSize = new Size(650, 415);
+        ClientSize = new Size(650, 460);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -312,8 +354,8 @@ public class ControlPanelForm : Form {
 
         // Columna izquierda: Control y S4T/Heartbeat en sus propias cajas
         // ajustadas al contenido; el logo+version va suelto abajo, sin borde.
-        var seccionControl = NuevaSeccion("CONTROL", colorSeccionControl, 15, 15, 260, 185);
-        var seccionPuertos = NuevaSeccion("S4T / HEARTBEAT", colorSeccionDiscord, 15, 210, 260, 130);
+        var seccionControl = NuevaSeccion("CONTROL", colorSeccionControl, 15, 15, 260, 227);
+        var seccionPuertos = NuevaSeccion("S4T / HEARTBEAT", colorSeccionDiscord, 15, 252, 260, 130);
         var seccionDiscord = NuevaSeccion("DISCORD", colorSeccionDiscord, 290, 15, 345, 325);
 
         labelEstado = new Label { Font = new Font("Segoe UI", 10), AutoSize = true, Location = new Point(30, 34), ForeColor = colorTexto };
@@ -326,19 +368,22 @@ public class ControlPanelForm : Form {
         botonReiniciar = NuevoBoton("Restart", 30, 142, 225);
         botonReiniciar.Click += (s, e) => { ReiniciarBot(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
 
-        NuevoTitulo("S4T (paste in P BOT)", 30, 228);
-        txtS4t = NuevoCampo(30, 248, 225);
+        var botonMatarTodo = NuevoBoton("🔴 Kill Everything", 30, 184, 225);
+        botonMatarTodo.Click += (s, e) => { MatarTodo(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
+
+        NuevoTitulo("S4T (paste in P BOT)", 30, 270);
+        txtS4t = NuevoCampo(30, 290, 225);
         HacerCopiableAlClick(txtS4t);
-        NuevoTitulo("Heartbeat (paste in P BOT)", 30, 285);
-        txtHeartbeat = NuevoCampo(30, 305, 225);
+        NuevoTitulo("Heartbeat (paste in P BOT)", 30, 327);
+        txtHeartbeat = NuevoCampo(30, 347, 225);
         HacerCopiableAlClick(txtHeartbeat);
 
-        var pictureBox = new PictureBox { Size = new Size(46, 46), Location = new Point(30, 355), SizeMode = PictureBoxSizeMode.Zoom, BackColor = colorFondo };
+        var pictureBox = new PictureBox { Size = new Size(46, 46), Location = new Point(30, 397), SizeMode = PictureBoxSizeMode.Zoom, BackColor = colorFondo };
         if (File.Exists(rutaImagenPokemon)) pictureBox.Image = Image.FromFile(rutaImagenPokemon);
         Controls.Add(pictureBox);
         pictureBox.BringToFront();
 
-        labelVersion = new Label { Text = "Monitor Pokemon", Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = colorAcento, AutoSize = true, MaximumSize = new Size(180, 0), Location = new Point(85, 371) };
+        labelVersion = new Label { Text = "Monitor Pokemon", Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = colorAcento, AutoSize = true, MaximumSize = new Size(180, 0), Location = new Point(85, 413) };
         Controls.Add(labelVersion);
         labelVersion.BringToFront();
 
