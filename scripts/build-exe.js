@@ -186,14 +186,26 @@ function empaquetarSea() {
 }
 
 function generarAssetsZip() {
-    // Zip aparte, solo con la carpeta assets/ — el auto-update lo descarga y
+    // Zip aparte, con las carpetas assets/ Y automation/ — el auto-update lo descarga y
     // descomprime encima de la carpeta local además de reemplazar el .exe, así
     // los usuarios que ya tienen el programa instalado también reciben archivos
     // nuevos (emojis, logos, etc.) sin tener que volver a bajar el zip completo.
+    // automation/ (bug real reportado 2026-08-08 por un usuario: Main Trade/Shinedust/Trade
+    // fallaban con "faltan_archivos" o "scripts not found" DESPUES de actualizar in-app --
+    // esta carpeta con los AHK propios (inyeccion, trade, shinedust, welcome screens) nunca
+    // se sumaba a este zip, asi que una instalacion existente que se actualiza desde el
+    // Panel/Discord jamas la recibia -- solo la traia alguien que bajaba el zip completo de
+    // cero. Se agrega con el mismo mecanismo, en su propia carpeta dentro del zip.
     const zipPath = path.join(RAIZ, 'MonitorPokemon-assets.zip');
     if (fs.existsSync(zipPath)) fs.rmSync(zipPath);
     const assetsDir = path.join(DIST, 'assets');
-    const script = [
+    const automationDir = path.join(DIST, 'automation');
+
+    // Dos llamadas a powershell separadas (no una combinada) -- combinarlas en un solo
+    // -Command de una linea hacia que el bloque de automation/ se saltee en silencio (sin
+    // error, sin agregar nada) por una interaccion rara de parsing que no vale la pena
+    // perseguir mas -- separado, cada uno funciona de forma confiable y es mas facil de leer.
+    const scriptAssets = [
         `Add-Type -AssemblyName System.IO.Compression.FileSystem`,
         `$zip = [System.IO.Compression.ZipFile]::Open('${zipPath}', 'Create')`,
         `Get-ChildItem -Path '${assetsDir}' -Force -Recurse | Where-Object { -not $_.PSIsContainer } | ForEach-Object {`,
@@ -202,7 +214,20 @@ function generarAssetsZip() {
         `}`,
         `$zip.Dispose()`
     ].join('; ');
-    execSync(`powershell -Command "${script}"`);
+    execSync(`powershell -Command "${scriptAssets}"`);
+
+    if (fs.existsSync(automationDir)) {
+        const scriptAutomation = [
+            `Add-Type -AssemblyName System.IO.Compression.FileSystem`,
+            `$zip = [System.IO.Compression.ZipFile]::Open('${zipPath}', 'Update')`,
+            `Get-ChildItem -Path '${automationDir}' -Force -Recurse | Where-Object { -not $_.PSIsContainer -and $_.FullName -notmatch '\\\\Logs(\\\\|$)' } | ForEach-Object {`,
+            `    $relativePath = $_.FullName.Substring((Resolve-Path '${automationDir}').Path.Length + 1)`,
+            `    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, ('automation\\' + $relativePath), [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null`,
+            `}`,
+            `$zip.Dispose()`
+        ].join('; ');
+        execSync(`powershell -Command "${scriptAutomation}"`);
+    }
     return zipPath;
 }
 
