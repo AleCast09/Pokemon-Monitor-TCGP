@@ -1,7 +1,9 @@
 {
-  "version": "1.5.41",
+  "version": "1.5.42",
   "notesCount": 2,
   "notes": [
+    "Fixed: reading Shinedust or injecting an account could get stuck and time out (\"timeout_pantallas_bienvenida\") if the game showed an \"Update the App\"/\"a new version is available\" popup before reaching the main menu - now detects and dismisses these too, same as the other welcome-screen popups.",
+    "Fixed: the downloaded Account Report PDF showed a broken internal name (\"Pokelingote_TCGP\") instead of \"Poké Gold (non-paid)\"/\"(paid)\" for that field.",
     "Fixed a real bug affecting anyone running MuMu instances at a different resolution than Ale's own (e.g. smaller instances to fit more on screen): the Shinedust/inventory reading used fixed pixel coordinates calibrated only to Ale's resolution, so on a different resolution the crop for one field could bleed into the row below it (reported: \"Poké Gold (non-paid)\" read as \"0104\" instead of \"4\"). Now scales every crop proportionally to the actual screenshot size instead of assuming a fixed resolution.",
     "Temporary: Shinedust screenshots are kept in the automation\\Logs folder instead of being auto-deleted after each run, to help diagnose any remaining reading issues on other resolutions - will be reverted to auto-delete once confirmed working everywhere.",
     "Fixed a real bug affecting every user except Ale: the inventory icons (Poké Gold, Shinedust, tickets, hourglasses) on Info Accounts/Shinedust results used emoji IDs hardcoded to Ale's own bot application - since every user runs their own separate bot application, these always showed as broken plain text (\":Pokelingote_TCGP:\") for everyone else. Now uploads/resolves these icons per-server automatically, same as the rarity/type icons already did.",

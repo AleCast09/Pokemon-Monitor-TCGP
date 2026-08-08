@@ -170,6 +170,17 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
         } else if (buscarNeedleEnCaptura(pHaystack, "own_news_x")) {
             logDebugBienvenida("intento " . intento . " -- needle 'own_news_x' -> tap X (141,478)")
             tap(141, 478)
+        } else if (buscarNeedleEnCaptura(pHaystack, "own_updateapp_title")) {
+            ; Popup "How to Update the App" -- mapeado en vivo 2026-08-07 en la instancia
+            ; Main, needle nueva (nadie la reconocia todavia). Mismo boton X que "News".
+            logDebugBienvenida("intento " . intento . " -- needle 'own_updateapp_title' -> tap X (141,478)")
+            tap(141, 478)
+        } else if (buscarNeedleEnCaptura(pHaystack, "own_updateapp_store_title")) {
+            ; Popup "A new version of the app is available..." -- mapeado en vivo 2026-08-07
+            ; en Main, a pedido explicito del usuario. Toca "Tap here if you're unable to
+            ; update" (NO "To the Store", que sacaria de la app y romperia el flujo).
+            logDebugBienvenida("intento " . intento . " -- needle 'own_updateapp_store_title' -> tap 'unable to update' (141,312)")
+            tap(141, 312)
         } else if (buscarNeedleEnCaptura(pHaystack, "own_gameclosed")) {
             logDebugBienvenida("intento " . intento . " -- needle 'own_gameclosed' -> tap OK (150,369)")
             tap(150, 369)

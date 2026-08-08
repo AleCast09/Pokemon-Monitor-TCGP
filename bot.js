@@ -2941,6 +2941,55 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     return await interaction.followUp({ content: mensaje, ephemeral: true });
 }
 
+// Extraida del handler de card_trade_instancia:: (2026-08-08, a pedido explicito del
+// usuario: reusar el MISMO flujo de "Free Trade" desde la pagina web de cartas, no solo
+// desde Discord) -- mismo comportamiento de siempre (inyecta + manda solicitud de amistad,
+// el usuario termina el trade a mano con Next Trade), ahora como funcion aparte para poder
+// llamarla desde mas de un lugar sin duplicar la logica.
+async function ejecutarFreeTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre }) {
+    const prendida = await asegurarInstanciaEncendida(index);
+    if (!prendida) {
+        return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true });
+    }
+
+    try { await interaction.followUp({ content: `🔄 Running injection on instance **${nombre}**... this WILL CLOSE the current session and may take several minutes.`, ephemeral: true }); } catch (e) { /* interaccion puede haber expirado */ }
+
+    const { rutaIni: rutaIniTrade, rutaScript: rutaScriptTrade } = await obtenerRutasInject(interaction.user.id);
+    try {
+        guardarXmlParaInyeccion(nombre, archivo, rutaIniTrade);
+        actualizarIniInject({ sendFriendRequestAfterInject: '1', injectSelectedFriendIDs: friendId }, rutaIniTrade);
+    } catch (e) {
+        return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
+    }
+
+    ejecutarInyeccionHeadless(async (ok, detalle) => {
+        try {
+            if (!ok) {
+                return await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true });
+            }
+            const filaNext = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`mumu_nexttrade_${index}::${nombre}`).setLabel('▶️ Next Trade').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger)
+            );
+            const mensaje = `✅ Injection completed on instance **${nombre}** (\`${fileName}\`), friend request sent to \`${friendId}\`.\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist. If something went wrong, press **🛑 Stop**.`;
+
+            const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            if (canalRunInstance?.webhook_url) {
+                try {
+                    await axios.post(`${canalRunInstance.webhook_url}?wait=true`, {
+                        content: mensaje,
+                        components: [filaNext.toJSON()]
+                    }, { timeout: 10000 });
+                    return await interaction.followUp({ content: '✅ Sent to your Trading channel.', ephemeral: true });
+                } catch (e) {
+                    console.error('DEBUG: error mandando el resultado de Trade al canal de trading:', e?.response?.data || e?.message || e);
+                }
+            }
+            await interaction.followUp({ content: mensaje, components: [filaNext], ephemeral: true });
+        } catch (e) { /* interaccion puede haber expirado */ }
+    }, rutaScriptTrade);
+}
+
 const RUTA_SEND_TRADE_CARD_SCRIPT = path.join(__dirname, 'automation', '_SendTradeCard.ahk');
 const RUTA_FINALIZE_TRADE_CARD_SCRIPT = path.join(__dirname, 'automation', '_FinalizeTradeCard.ahk');
 
@@ -3291,9 +3340,9 @@ async function generarInfoAccountsPDF(rutaMasterPath, archivoJson, escalaRender 
     if (datosInventario) {
         doc.moveDown(0.3);
         doc.fontSize(11).fillColor(TEXTO_CLARO).text(`👛 Shinedust: ${datosInventario.shinedust}`);
-        for (const [clave, etiqueta] of ETIQUETAS_INVENTARIO) {
+        for (const [clave, , texto] of ETIQUETAS_INVENTARIO) {
             if (datosInventario[clave] && datosInventario[clave] !== '0') {
-                doc.fontSize(11).fillColor(TEXTO_CLARO).text(`${etiqueta}: ${datosInventario[clave]}`);
+                doc.fontSize(11).fillColor(TEXTO_CLARO).text(`${texto}: ${datosInventario[clave]}`);
             }
         }
     }
@@ -3390,9 +3439,13 @@ dashboardApp.use(express.json());
 // vacio de siempre, mismo criterio que ya usa elegirBannerAleatorio() en otros lados.
 dashboardApp.use('/wallpaper-img', express.static(CARPETA_FUNDAS_ALLCARDS));
 
-function generarTokenDashboard(rutaMasterPath, archivoJson, datosInventario = null) {
+// discordId y fileName agregados (2026-08-08, a pedido explicito del usuario): hacian falta
+// para el trade rapido desde la pagina de cartas (ver /account/:token/trade-data y
+// /account/:token/trade mas abajo) -- sin el discordId no se puede saber que amigos
+// guardados mostrar, y sin el fileName no se puede saber que cuenta XML inyectar.
+function generarTokenDashboard(rutaMasterPath, archivoJson, datosInventario = null, discordId = null, fileName = null) {
     const token = crypto.randomBytes(12).toString('hex');
-    _dashboardTokens.set(token, { rutaMasterPath, archivoJson, datosInventario });
+    _dashboardTokens.set(token, { rutaMasterPath, archivoJson, datosInventario, discordId, fileName });
     return token;
 }
 
@@ -3686,6 +3739,24 @@ dashboardApp.get('/account/:token', async (req, res) => {
        fija sin recortarse ni estirarse. */
     .lightbox-box { width: min(85vw, 460px); aspect-ratio: 0.716; }
     .lightbox img { width: 100%; height: 100%; object-fit: contain; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
+    /* Panel de trade dentro del lightbox (2026-08-08, a pedido explicito del usuario):
+       cursor normal (no zoom-out) y clicks propios no deben cerrar el lightbox -- el JS de
+       abajo le pone stopPropagation. */
+    .lightbox-content { display: flex; flex-direction: column; align-items: center; gap: 14px; cursor: default; }
+    .trade-toggle-btn { border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; padding: 10px 18px; border-radius: 12px; cursor: pointer; }
+    .trade-toggle-btn:hover { opacity: .92; }
+    .trade-form { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px; width: min(85vw, 340px); box-shadow: var(--shadow); }
+    .trade-form .campo { margin-bottom: 12px; }
+    .trade-form label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-dim); margin-bottom: 5px; }
+    /* Reusa el mismo componente .dropdown de los filtros de arriba (a pedido explicito
+       del usuario 2026-08-08: mismo look "lista con opciones" en vez de un <select> nativo)
+       -- solo se lo estira a 100% del ancho del form. */
+    .trade-form .dropdown { width: 100%; }
+    .trade-form .dropdown-toggle { width: 100%; min-width: 0; }
+    .trade-form .dropdown-panel { width: 100%; min-width: 0; }
+    .btn-enviar { border: none; background: var(--accent); color: #fff; padding: 11px 16px; border-radius: 12px; font-size: 13.5px; font-weight: 600; cursor: pointer; width: 100%; margin-top: 4px; }
+    .btn-enviar:disabled { opacity: .6; cursor: default; }
+    #tradeStatus { font-size: 12.5px; color: var(--text-dim); margin-top: 10px; text-align: center; }
     @media (max-width: 640px) { .top-bar h1 { width: 100%; } }
 </style></head><body>
 <div class="top-bar">
@@ -3707,7 +3778,40 @@ dashboardApp.get('/account/:token', async (req, res) => {
     <div class="spacer"></div>
     <a class="download-btn" href="/account/${req.params.token}/pdf" download>⬇ Download PDF</a>
 </div>
-<div class="lightbox" id="lightbox"><div class="lightbox-box"><img id="lightbox-img" src="" alt=""></div></div>
+<div class="lightbox" id="lightbox">
+  <div class="lightbox-content">
+    <div class="lightbox-box"><img id="lightbox-img" src="" alt=""></div>
+    <button class="trade-toggle-btn" id="tradeToggleBtn">🔄 Transfer this card</button>
+    <div class="trade-form" id="tradeForm" style="display:none">
+      <div class="campo">
+        <label>Mode</label>
+        <div class="dropdown" id="dropdown-trade-mode">
+          <button type="button" class="dropdown-toggle" id="toggle-trade-mode"><span class="dropdown-toggle-texto">Free Trade</span><span class="caret">▾</span></button>
+          <div class="dropdown-panel" id="panel-trade-mode">
+            <div class="dropdown-opcion activo" data-valor="friend"><span class="dropdown-opcion-texto">Free Trade</span></div>
+            <div class="dropdown-opcion" data-valor="main"><span class="dropdown-opcion-texto">Main Trade</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="campo">
+        <label>Instance</label>
+        <div class="dropdown" id="dropdown-trade-instance">
+          <button type="button" class="dropdown-toggle" id="toggle-trade-instance"><span class="dropdown-toggle-texto">Loading...</span><span class="caret">▾</span></button>
+          <div class="dropdown-panel" id="panel-trade-instance"></div>
+        </div>
+      </div>
+      <div class="campo">
+        <label>Friend</label>
+        <div class="dropdown" id="dropdown-trade-friend">
+          <button type="button" class="dropdown-toggle" id="toggle-trade-friend"><span class="dropdown-toggle-texto">Loading...</span><span class="caret">▾</span></button>
+          <div class="dropdown-panel" id="panel-trade-friend"></div>
+        </div>
+      </div>
+      <button class="btn-enviar" id="tradeStartBtn" type="button">🔄 Start Trade</button>
+      <div id="tradeStatus"></div>
+    </div>
+  </div>
+</div>
 <main>
 <div class="sub">File: ${escaparHtml(accountData.metadata?.fileName || '')} — el link de esta pagina es privado, pero si lo compartís cualquiera con el enlace puede verlo. Para pasarle esto a alguien, mejor descargá el PDF y mandale el archivo.</div>
 ${datosInventario ? `<div class="sub lista-inventario">
@@ -3764,7 +3868,7 @@ ${datosInventario ? `<div class="sub lista-inventario">
             for (const carta of porExpansion[expansion]) {
                 const iconosCarta = iconosRarezaHtml(carta.tipoRareza);
                 const faltante = carta.cantidad === 0;
-                html += `<div class="card-tile${faltante ? ' faltante' : ''}" data-rareza="${escaparHtml(carta.tipoRareza)}" data-tiene="${faltante ? '0' : '1'}"><div class="img-wrap"><img src="/img/${req.params.token}/${encodeURIComponent(carta.code)}" loading="lazy" alt="${escaparHtml(carta.nombre)}" onerror="this.classList.add('rota')">`;
+                html += `<div class="card-tile${faltante ? ' faltante' : ''}" data-rareza="${escaparHtml(carta.tipoRareza)}" data-tiene="${faltante ? '0' : '1'}"><div class="img-wrap"><img src="/img/${req.params.token}/${encodeURIComponent(carta.code)}" loading="lazy" alt="${escaparHtml(carta.nombre)}" data-code="${escaparHtml(carta.code)}" data-nombre="${escaparHtml(carta.nombre)}" data-tiene="${faltante ? '0' : '1'}" onerror="this.classList.add('rota')">`;
                 if (carta.cantidad > 0) html += `<div class="badge">x${carta.cantidad}</div>`;
                 html += `</div>`;
                 if (iconosCarta) html += `<div class="rareza-tag"><span class="rareza-pill">${iconosCarta}</span></div>`;
@@ -3818,6 +3922,10 @@ function actualizarStatExpansion(nombreExpansion) {
     }
     statExpansion.style.display = '';
 }
+// Delegado en el panel (en vez de bindear cada .dropdown-opcion al armar el dropdown) para
+// que sirva tanto para los filtros de arriba (opciones fijas desde el primer render) como
+// para los dropdowns de trade (instancia/amigo), cuyas opciones recien existen despues del
+// fetch a /trade-data -- sin esto, las opciones cargadas despues quedarian sin click.
 function armarDropdown(toggleId, panelId, atributoDataset, onElegir) {
     var toggle = document.getElementById(toggleId);
     var panel = document.getElementById(panelId);
@@ -3827,14 +3935,14 @@ function armarDropdown(toggleId, panelId, atributoDataset, onElegir) {
         document.querySelectorAll('.dropdown-panel').forEach(function (p) { if (p !== panel) p.classList.remove('abierto'); });
         panel.classList.toggle('abierto');
     });
-    panel.querySelectorAll('.dropdown-opcion').forEach(function (opcion) {
-        opcion.addEventListener('click', function () {
-            panel.querySelectorAll('.dropdown-opcion').forEach(function (o) { o.classList.remove('activo'); });
-            opcion.classList.add('activo');
-            textoToggle.textContent = opcion.querySelector('.dropdown-opcion-texto').textContent;
-            panel.classList.remove('abierto');
-            onElegir(opcion.dataset[atributoDataset]);
-        });
+    panel.addEventListener('click', function (e) {
+        var opcion = e.target.closest('.dropdown-opcion');
+        if (!opcion) return;
+        panel.querySelectorAll('.dropdown-opcion').forEach(function (o) { o.classList.remove('activo'); });
+        opcion.classList.add('activo');
+        textoToggle.textContent = opcion.querySelector('.dropdown-opcion-texto').textContent;
+        panel.classList.remove('abierto');
+        onElegir(opcion.dataset[atributoDataset]);
     });
 }
 document.addEventListener('click', function () {
@@ -3872,21 +3980,206 @@ armarDropdown('toggle-expansion', 'panel-expansion', 'filtroExp', function (filt
 });
 var lightbox = document.getElementById('lightbox');
 var lightboxImg = document.getElementById('lightbox-img');
+var tradeToggleBtn = document.getElementById('tradeToggleBtn');
+var tradeForm = document.getElementById('tradeForm');
+var tradeStartBtn = document.getElementById('tradeStartBtn');
+var tradeStatus = document.getElementById('tradeStatus');
+var cartaActualCode = null;
+var tradeDatosCache = null;
+var tradeModeValor = 'friend';
+var tradeInstanceValor = '';
+var tradeFriendValor = '';
+armarDropdown('toggle-trade-mode', 'panel-trade-mode', 'valor', function (valor) { tradeModeValor = valor; });
+armarDropdown('toggle-trade-instance', 'panel-trade-instance', 'valor', function (valor) { tradeInstanceValor = valor; });
+armarDropdown('toggle-trade-friend', 'panel-trade-friend', 'valor', function (valor) { tradeFriendValor = valor; });
+
+function cerrarLightbox() {
+    lightbox.classList.remove('abierto');
+    lightboxImg.src = '';
+    tradeForm.style.display = 'none';
+    tradeStatus.textContent = '';
+}
+
 document.querySelectorAll('.card-tile img').forEach(function (img) {
     img.addEventListener('click', function () {
         lightboxImg.src = img.src;
+        cartaActualCode = img.dataset.code;
+        tradeToggleBtn.style.display = img.dataset.tiene === '1' ? '' : 'none';
+        tradeForm.style.display = 'none';
+        tradeStatus.textContent = '';
         lightbox.classList.add('abierto');
     });
 });
-lightbox.addEventListener('click', function () {
-    lightbox.classList.remove('abierto');
-    lightboxImg.src = '';
+// El fondo del lightbox cierra al hacer click (comportamiento de siempre) -- pero el
+// panel de trade (botones/selects) tiene su propio stopPropagation mas abajo, asi que
+// clickear ahi adentro NO cierra el lightbox por error.
+lightbox.addEventListener('click', cerrarLightbox);
+document.querySelector('.lightbox-content').addEventListener('click', function (e) {
+    if (e.target.closest('#tradeForm') || e.target === tradeToggleBtn) e.stopPropagation();
+});
+
+// Trade rapido desde la pagina web (2026-08-08, a pedido explicito del usuario): mismo
+// flujo que ya existe en Discord (Main Trade / Free Trade), disparado desde la carta
+// directo, sin volver a abrir Discord para elegir instancia/amigo a mano.
+tradeToggleBtn.addEventListener('click', function () {
+    var mostrar = tradeForm.style.display === 'none';
+    tradeForm.style.display = mostrar ? '' : 'none';
+    if (mostrar && !tradeDatosCache) cargarDatosTrade();
+});
+
+function cargarDatosTrade() {
+    fetch('/account/${req.params.token}/trade-data')
+        .then(function (r) { return r.json(); })
+        .then(function (datos) {
+            if (!datos.instancias) { tradeStatus.textContent = 'Could not load instances/friends.'; return; }
+            tradeDatosCache = datos;
+            var panelInstance = document.getElementById('panel-trade-instance');
+            var textoInstance = document.querySelector('#toggle-trade-instance .dropdown-toggle-texto');
+            if (datos.instancias.length) {
+                panelInstance.innerHTML = datos.instancias.map(function (i, idx) {
+                    return '<div class="dropdown-opcion' + (idx === 0 ? ' activo' : '') + '" data-valor="' + i.index + '::' + i.name + '"><span class="dropdown-opcion-texto">' + i.name + '</span></div>';
+                }).join('');
+                tradeInstanceValor = datos.instancias[0].index + '::' + datos.instancias[0].name;
+                textoInstance.textContent = datos.instancias[0].name;
+            } else {
+                panelInstance.innerHTML = '<div class="dropdown-opcion activo" data-valor=""><span class="dropdown-opcion-texto">No instances found</span></div>';
+                tradeInstanceValor = '';
+                textoInstance.textContent = 'No instances found';
+            }
+            var panelFriend = document.getElementById('panel-trade-friend');
+            var textoFriend = document.querySelector('#toggle-trade-friend .dropdown-toggle-texto');
+            if (datos.amigos.length) {
+                panelFriend.innerHTML = datos.amigos.map(function (f, idx) {
+                    return '<div class="dropdown-opcion' + (idx === 0 ? ' activo' : '') + '" data-valor="' + f.id + '"><span class="dropdown-opcion-texto">' + (f.label || f.id) + '</span></div>';
+                }).join('');
+                tradeFriendValor = datos.amigos[0].id;
+                textoFriend.textContent = datos.amigos[0].label || datos.amigos[0].id;
+            } else {
+                panelFriend.innerHTML = '<div class="dropdown-opcion activo" data-valor=""><span class="dropdown-opcion-texto">No saved friends</span></div>';
+                tradeFriendValor = '';
+                textoFriend.textContent = 'No saved friends';
+            }
+        })
+        .catch(function () { tradeStatus.textContent = 'Could not load instances/friends.'; });
+}
+
+tradeStartBtn.addEventListener('click', function () {
+    var partesInstancia = (tradeInstanceValor || '').split('::');
+    var friendId = tradeFriendValor;
+    if (!partesInstancia[0] || !friendId) {
+        tradeStatus.textContent = 'Pick an instance and a friend first.';
+        return;
+    }
+    tradeStartBtn.disabled = true;
+    tradeStatus.textContent = 'Starting...';
+    fetch('/account/${req.params.token}/trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            cartaId: cartaActualCode,
+            mode: tradeModeValor,
+            index: partesInstancia[0],
+            nombre: partesInstancia[1],
+            friendId: friendId
+        })
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (datos) {
+            tradeStatus.textContent = datos.ok ? datos.mensaje : ('Error: ' + (datos.error || 'unknown'));
+        })
+        .catch(function () { tradeStatus.textContent = 'Could not start the trade.'; })
+        .then(function () { tradeStartBtn.disabled = false; });
 });
 </script></body></html>`;
         res.send(html);
     } catch (e) {
         console.error('DEBUG: error en dashboard /account:', e);
         res.status(500).send('Error generando el dashboard.');
+    }
+});
+
+// Interaccion "de mentira" (2026-08-08, a pedido explicito del usuario: trade rapido desde
+// la pagina web de cartas, sin volver a Discord) para poder reusar ejecutarMainTradeDesdeDiscord/
+// ejecutarFreeTradeDesdeDiscord tal cual -- esas funciones esperan un objeto interaction real
+// de discord.js (followUp, user.id, guild), pero un pedido HTTP normal no tiene nada de eso.
+// followUp/editReply mandan el texto al MISMO canal de Trading que ya usa Discord, asi el
+// usuario ve el progreso ahi (el trade real tarda varios minutos) sin necesidad de armar una
+// UI de progreso en vivo en la pagina web.
+function crearInteraccionWeb(discordId, canalWebhookUrl) {
+    const mandarAlCanal = async (payload) => {
+        if (!canalWebhookUrl) return;
+        try {
+            await axios.post(`${canalWebhookUrl}?wait=true`, {
+                content: typeof payload === 'string' ? payload : payload.content,
+                components: payload?.components?.map(c => (c.toJSON ? c.toJSON() : c))
+            }, { timeout: 10000 });
+        } catch (e) {
+            console.error('DEBUG: error mandando el progreso del trade web al canal de trading:', e?.response?.data || e?.message || e);
+        }
+    };
+    return {
+        user: { id: discordId },
+        guild: client.guilds.cache.first(),
+        deferUpdate: async () => {},
+        deferReply: async () => {},
+        followUp: mandarAlCanal,
+        editReply: mandarAlCanal
+    };
+}
+
+// Datos para armar el panel de trade (2026-08-08): instancias disponibles + amigos guardados
+// para ESTE usuario -- misma info que ya usa el selector de Discord, resuelta server-side
+// porque el navegador no tiene acceso directo a MuMu ni al InjectAccount.ini.
+dashboardApp.get('/account/:token/trade-data', async (req, res) => {
+    try {
+        const datos = _dashboardTokens.get(req.params.token);
+        if (!datos) return res.status(404).json({ error: 'invalido' });
+        if (!datos.discordId) return res.status(400).json({ error: 'sin_discord_id' });
+        const instancias = obtenerInstanciasMuMu() || [];
+        const { rutaIni } = await obtenerRutasInject(datos.discordId);
+        const amigos = parsearListaFriends(rutaIni);
+        res.json({ instancias: instancias.map(i => ({ index: i.index, name: i.name })), amigos });
+    } catch (e) {
+        console.error('DEBUG: error en /account/:token/trade-data:', e);
+        res.status(500).json({ error: 'error_interno' });
+    }
+});
+
+// Dispara el trade real (2026-08-08, a pedido explicito del usuario): mismo flujo que ya usa
+// Discord (Main Trade o Free Trade), triggereado desde el boton de la carta en la pagina web.
+// Responde de inmediato (el trade tarda minutos) -- el progreso real se ve en el canal de
+// Trading de Discord, igual que si se hubiera empezado desde ahi.
+dashboardApp.post('/account/:token/trade', async (req, res) => {
+    try {
+        const datos = _dashboardTokens.get(req.params.token);
+        if (!datos) return res.status(404).json({ error: 'invalido' });
+        if (!datos.discordId || !datos.fileName) return res.status(400).json({ error: 'sin_datos' });
+
+        const { cartaId, mode, index, nombre, friendId } = req.body || {};
+        if (!cartaId || !mode || index === undefined || index === null || !nombre || !friendId) {
+            return res.status(400).json({ error: 'faltan_campos' });
+        }
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, datos.fileName);
+        if (!archivo) return res.status(404).json({ error: 'archivo_no_encontrado' });
+
+        const canalTrading = await obtenerCanalComando(datos.discordId, 'cmd_run_instance');
+        const interaccionWeb = crearInteraccionWeb(datos.discordId, canalTrading?.webhook_url);
+
+        res.json({
+            ok: true,
+            mensaje: canalTrading?.webhook_url
+                ? 'Trade started — check your Trading channel in Discord for progress.'
+                : "Trade started, but your Trading channel isn't set up so you won't see progress messages."
+        });
+
+        const parametrosTrade = { cartaId, friendId, fileName: datos.fileName, archivo, index: String(index), nombre };
+        const ejecutor = mode === 'main' ? ejecutarMainTradeDesdeDiscord : ejecutarFreeTradeDesdeDiscord;
+        ejecutor(interaccionWeb, parametrosTrade).catch((e) => console.error('DEBUG: error en trade disparado desde la web:', e));
+    } catch (e) {
+        console.error('DEBUG: error en POST /account/:token/trade:', e);
+        res.status(500).json({ error: 'error_interno' });
     }
 });
 
@@ -6567,7 +6860,7 @@ client.on('interactionCreate', async interaction => {
         // (misma WiFi), y el tunel publico de Cloudflare si logro levantar
         // (cualquier red -- "no estoy en el mismo wifi", pedido explicito).
         const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson);
+        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson, null, interaction.user.id, fileName);
         const puertoActual = DASHBOARD_PORT_ACTUAL || DASHBOARD_PORT_BASE;
         const ipLan = obtenerIpLan();
         let texto = `📋 **Info Accounts — \`${fileName}\`**\n`;
@@ -6618,7 +6911,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson, datosInventario);
+        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson, datosInventario, interaction.user.id, fileName);
         const puertoActual = DASHBOARD_PORT_ACTUAL || DASHBOARD_PORT_BASE;
         const ipLan = obtenerIpLan();
         const paginas = [];
@@ -6859,54 +7152,7 @@ client.on('interactionCreate', async interaction => {
             return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre });
         }
 
-        const prendida = await asegurarInstanciaEncendida(index);
-        if (!prendida) {
-            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true });
-        }
-
-        try { await interaction.followUp({ content: `🔄 Running injection on instance **${nombre}**... this WILL CLOSE the current session and may take several minutes.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
-
-        // Revertido 2026-07-29 a la version original (Kevin, via ruta configurada
-        // por el usuario) -- la migracion a piezas propias se probo inestable en
-        // vivo, y esta version ya funcionaba bien confirmado por el usuario.
-        const { rutaIni: rutaIniTrade, rutaScript: rutaScriptTrade } = await obtenerRutasInject(interaction.user.id);
-        try {
-            guardarXmlParaInyeccion(nombre, archivo, rutaIniTrade);
-            // A pedido explicito del usuario 2026-07-27: la solicitud se manda SOLO
-            // al amigo elegido en este trade puntual (card_trade_friendid::), no a
-            // todos los que hayan quedado tildados de una vez anterior en el .ini.
-            actualizarIniInject({ sendFriendRequestAfterInject: '1', injectSelectedFriendIDs: friendId }, rutaIniTrade);
-        } catch (e) {
-            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
-        }
-
-        ejecutarInyeccionHeadless(async (ok, detalle) => {
-            try {
-                if (!ok) {
-                    return await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true });
-                }
-                const filaNext = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`mumu_nexttrade_${index}::${nombre}`).setLabel('▶️ Next Trade').setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger)
-                );
-                const mensaje = `✅ Injection completed on instance **${nombre}** (\`${fileName}\`), friend request sent to \`${friendId}\`.\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist. If something went wrong, press **🛑 Stop**.`;
-
-                const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
-                if (canalRunInstance?.webhook_url) {
-                    try {
-                        await axios.post(`${canalRunInstance.webhook_url}?wait=true`, {
-                            content: mensaje,
-                            components: [filaNext.toJSON()]
-                        }, { timeout: 10000 });
-                        return await interaction.followUp({ content: '✅ Sent to your Trading channel.', ephemeral: true });
-                    } catch (e) {
-                        console.error('DEBUG: error mandando el resultado de Trade al canal de trading:', e?.response?.data || e?.message || e);
-                    }
-                }
-                await interaction.followUp({ content: mensaje, components: [filaNext], ephemeral: true });
-            } catch (e) { /* interacción puede haber expirado */ }
-        }, rutaScriptTrade);
-        return;
+        return await ejecutarFreeTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre });
     }
 
     // Boton Stop (a pedido explicito del usuario 2026-07-27): corta la

@@ -199,6 +199,20 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
         } else if (buscarNeedleEnCaptura(pHaystack, "own_news_x")) {
             logDebugBienvenida("intento " . intento . " -- needle 'own_news_x' -> tap X (141,478)")
             tap(141, 478)  ; boton "X" del popup "News"
+        } else if (buscarNeedleEnCaptura(pHaystack, "own_updateapp_title")) {
+            ; Popup "How to Update the App" -- mapeado en vivo 2026-08-07, needle nueva
+            ; (nadie la reconocia todavia, se quedaba pegado esperando sin tocar nada). El
+            ; boton X cae en la MISMA posicion que el de "News" (mismo template de popup del
+            ; juego, confirmado por calculo de coordenadas contra la captura real).
+            logDebugBienvenida("intento " . intento . " -- needle 'own_updateapp_title' -> tap X (141,478)")
+            tap(141, 478)
+        } else if (buscarNeedleEnCaptura(pHaystack, "own_updateapp_store_title")) {
+            ; Popup "A new version of the app is available. Please download it from the
+            ; store." -- mapeado en vivo 2026-08-07, a pedido explicito del usuario. Tiene 2
+            ; botones ("To the Store" y "Tap here if you're unable to update") -- se toca el
+            ; segundo (deja seguir sin salir de la app a la tienda, que rompería el flujo).
+            logDebugBienvenida("intento " . intento . " -- needle 'own_updateapp_store_title' -> tap 'unable to update' (141,312)")
+            tap(141, 312)
         } else if (buscarNeedleEnCaptura(pHaystack, "own_gameclosed")) {
             ; Popup "The game closed, but you successfully obtained the items" -- puede
             ; aparecer despues de un force-stop/inyeccion. Needle mapeada en vivo 2026-08-04.
