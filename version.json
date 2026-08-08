@@ -1,7 +1,10 @@
 {
-  "version": "1.5.37",
-  "notesCount": 9,
+  "version": "1.5.38",
+  "notesCount": 4,
   "notes": [
+    "Fixed a real bug affecting most installs: injecting an account (Info Accounts, Trade, Shinedust, any card lookup) failed with \"faltan_archivos\" unless AutoHotkey was installed at the exact same version/folder as Ale's own PC - now finds any AutoHotkey version installed in the standard locations.",
+    "Improved: the account cards page (Info Accounts) got a full visual refresh - light blue theme matching the Tutorials page, a live stats bar, and a green progress ring around each expansion's logo showing how close it is to completion.",
+    "New: selecting a specific expansion on the account cards page now shows its own X/Y and % card in the top bar (separate from the account-wide total), with a mini progress ring next to it.",
     "Fixed: opening MonitorPokemon.exe directly (by accident, instead of through the Control Panel) showed a confusing console window in the taskbar and could loop reopening the setup page - it now always runs fully hidden in the background, same as when started from the Panel.",
     "Removed: MonitorPokemon.exe (the engine) no longer shows up in the folder at all - only the Control Panel is meant to be opened directly.",
     "Improved: Control Panel reorganized into 4 clear sections (Control, S4T/Heartbeat, Discord, and a new one with working Tutorials and Support buttons) - removed the 3 small unlabeled icons at the bottom, one of which was a leftover broken placeholder link.",

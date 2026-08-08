@@ -2037,12 +2037,44 @@ async function obtenerRutasInject(discordId) {
     };
 }
 
+// Bug real reportado 2026-08-08 (usuario "OMO"): la inyeccion fallaba con
+// "faltan_archivos" en TODA cuenta, no por un problema de esa cuenta puntual -- el chequeo
+// antes buscaba SOLO la version exacta v1.1.37.02 de AutoHotkey. Cualquiera que tenga una
+// version distinta instalada (comun, AutoHotkey no fuerza esa version especifica) se
+// encontraba con este error sin ninguna pista de la causa real. Ahora busca CUALQUIER
+// version dentro de C:\Program Files\AutoHotkey (con o sin carpeta "v1.2.3" adentro) y
+// tambien en Program Files (x86), antes de rendirse. Cacheado (una sola pasada por
+// ejecucion) porque se llama en cada intento de inyeccion.
+let _rutaAutoHotkeyCacheada;
 function rutaAutoHotkey() {
-    const candidatos = [
+    if (_rutaAutoHotkeyCacheada !== undefined) return _rutaAutoHotkeyCacheada;
+    const candidatosFijos = [
         'C:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU64.exe',
-        'C:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU32.exe'
+        'C:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU32.exe',
+        'C:\\Program Files\\AutoHotkey\\AutoHotkeyU64.exe',
+        'C:\\Program Files\\AutoHotkey\\AutoHotkeyU32.exe',
+        'C:\\Program Files\\AutoHotkey\\AutoHotkey.exe',
+        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU64.exe',
+        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU32.exe',
+        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkey.exe'
     ];
-    return candidatos.find(p => fs.existsSync(p)) || null;
+    let encontrado = candidatosFijos.find(p => fs.existsSync(p)) || null;
+    if (!encontrado) {
+        for (const carpetaBase of ['C:\\Program Files\\AutoHotkey', 'C:\\Program Files (x86)\\AutoHotkey']) {
+            if (encontrado || !fs.existsSync(carpetaBase)) continue;
+            try {
+                const subcarpetas = fs.readdirSync(carpetaBase, { withFileTypes: true }).filter(d => d.isDirectory());
+                for (const sub of subcarpetas) {
+                    const posibles = ['AutoHotkeyU64.exe', 'AutoHotkeyU32.exe', 'AutoHotkey.exe']
+                        .map(nombre => path.join(carpetaBase, sub.name, nombre));
+                    encontrado = posibles.find(p => fs.existsSync(p));
+                    if (encontrado) break;
+                }
+            } catch (e) { /* sin permiso para listar -- se sigue con el siguiente candidato */ }
+        }
+    }
+    _rutaAutoHotkeyCacheada = encontrado;
+    return encontrado;
 }
 
 // Plantilla por defecto de InjectAccount.ini (2026-08-06, bug real reportado
@@ -3540,56 +3572,87 @@ dashboardApp.get('/account/:token', async (req, res) => {
                 return `<div class="dropdown-opcion" data-filtro-exp="${escaparHtml(exp)}">${logoHtml}<span class="dropdown-opcion-texto">${escaparHtml(exp)}</span></div>`;
             }).join('');
 
+        // Totales globales para la barra superior (2026-08-08, a pedido explicito del
+        // usuario -- mismo estilo/paleta celeste que la pagina de Tutorials): cuantas
+        // cartas tiene la cuenta sobre el catalogo completo, y el % de completitud.
+        let totalCatalogoGlobal = 0, totalTenidasGlobal = 0;
+        for (const lista of Object.values(porExpansion)) {
+            totalCatalogoGlobal += lista.length;
+            totalTenidasGlobal += lista.filter(c => c.cantidad > 0).length;
+        }
+        const porcentajeCompletitud = totalCatalogoGlobal ? ((totalTenidasGlobal / totalCatalogoGlobal) * 100).toFixed(1) : '0.0';
+
         let html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Account Report - ${escaparHtml(accountData.deviceAccount || '')}</title>
 <style>
-    /* Estilo "glass" (a pedido explicito del usuario 2026-08-01): fondo con
-       degrade + paneles semitransparentes con backdrop-filter: blur en vez de
-       colores solidos planos -- el degrade de fondo es lo que le da "cuerpo"
-       al blur (sobre un color solido liso el efecto vidrio no se nota). */
-    body { font-family: -apple-system, Arial, sans-serif; color: #edf2ff; margin: 0; padding: 20px 24px 60px;
-        background: radial-gradient(circle at 15% 0%, #1c2b52 0%, #0b1020 45%), radial-gradient(circle at 85% 30%, #2a1f4d 0%, #0b1020 55%), #0b1020;
-        background-attachment: fixed; }
-    h1 { font-size: 20px; margin: 0 0 4px; }
-    .sub { color: #aeb9d4; font-size: 13px; margin-bottom: 12px; }
-    .sub:last-of-type { margin-bottom: 28px; }
-    .expansion { margin-bottom: 40px; }
+    /* Paleta celeste (2026-08-08, a pedido explicito del usuario): mismo lenguaje visual
+       que la pagina de Tutorials -- topbar con stats en vivo, tarjetas redondeadas con
+       borde/sombra en vez del estilo "glass" oscuro que tenia esta pagina antes. */
+    :root {
+        --bg: #eaf4fb; --surface: #ffffff; --surface2: #dceaf3; --border: #c3ddec;
+        --text: #1c2f3a; --text-dim: #5b7a8a; --accent: #2f8fc9; --accent-soft: rgba(47,143,201,.12);
+        --good: #3f9a52; --bad: #c0483f;
+        --shadow: 0 1px 2px rgba(28,47,58,.06), 0 8px 24px rgba(28,47,58,.08);
+    }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color: var(--text); margin: 0; background: var(--bg); }
+    main { padding: 22px 24px 60px; max-width: 1180px; margin: 0 auto; }
+    .top-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 22px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .top-bar h1 { font-size: 16px; margin: 0; font-weight: 700; margin-right: 6px; }
+    .stat { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-dim); white-space: nowrap; padding: 7px 12px; border-radius: 10px; background: var(--surface2); border: 1px solid var(--border); }
+    .stat b { color: var(--text); font-weight: 600; }
+    .top-bar .spacer { flex: 1; }
+    .sub { color: var(--text-dim); font-size: 12.5px; margin: 14px 22px 0; }
+    .sub:last-of-type { margin-bottom: 6px; }
+    .expansion { margin-bottom: 36px; }
     .expansion-header { display: flex; flex-direction: column; align-items: center; margin-bottom: 14px; }
-    .expansion-header img { max-height: 56px; max-width: 220px; margin-bottom: 8px; }
-    .expansion-header h2 { font-size: 14px; margin: 0; font-weight: 600; color: #cfe0ff; padding: 4px 14px; border-radius: 20px;
-        background: rgba(255,255,255,0.06); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.12); }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 16px; }
-    .card-tile { background: rgba(255,255,255,0.055); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-radius: 14px; padding: 8px; border: 1px solid rgba(255,255,255,0.12); }
+    .expansion-header img { max-height: 52px; max-width: 220px; margin-bottom: 8px; }
+    .expansion-header h2 { font-size: 12.5px; margin: 0; font-weight: 700; letter-spacing: .02em; color: var(--text-dim); padding: 6px 16px; border-radius: 20px;
+        background: var(--surface2); border: 1px solid var(--border); }
+    /* Anillo de progreso verde en la topbar (2026-08-08, a pedido explicito del usuario:
+       lo saco de la seccion de cada expansion y lo pongo chico arriba, al lado del
+       porcentaje) -- conic-gradient dibuja el arco relleno hasta el % de esa expansion, el
+       circulo interior mas chico (con el fondo de la tarjeta) tapa el centro dejando solo
+       el anillo visible. Tamaño mini para que entre comodo en la topbar. */
+    .logo-ring-mini { width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+        background: conic-gradient(var(--good) calc(var(--pct) * 1%), var(--border) 0); padding: 2.5px; }
+    .logo-ring-mini-inner { width: 100%; height: 100%; border-radius: 50%; background: var(--surface2);
+        display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 3px; }
+    .logo-ring-mini-inner img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .exp-rings-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .exp-rings-row .logo-ring-mini { cursor: pointer; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 14px; }
+    .card-tile { background: var(--surface); border-radius: 14px; padding: 8px; border: 1px solid var(--border); box-shadow: var(--shadow); }
     .img-wrap { position: relative; }
-    .card-tile img { width: 100%; border-radius: 10px; display: block; background: #1c2540; aspect-ratio: 0.716; object-fit: cover; }
-    .badge { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); color: #FFD700; font-weight: bold; font-size: 13px; padding: 3px 9px; border-radius: 10px; }
-    .top-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
-    .download-btn { background: rgba(44,102,232,0.55); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); color: #fff; text-decoration: none; font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 10px; white-space: nowrap; }
-    .download-btn:hover { background: rgba(61,120,255,0.65); }
-    .filtros { position: sticky; top: 0; z-index: 10; background: rgba(11,16,32,0.55); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); padding: 12px; margin: 0 -12px 8px; border-radius: 14px; display: flex; flex-wrap: wrap; gap: 10px; border: 1px solid rgba(255,255,255,0.1); }
+    .card-tile img { width: 100%; border-radius: 10px; display: block; background: var(--surface2); aspect-ratio: 0.716; object-fit: cover; }
+    .badge { position: absolute; bottom: 8px; right: 8px; background: rgba(20,30,38,.72); color: #ffd76b; font-weight: bold; font-size: 13px; padding: 3px 9px; border-radius: 10px; }
+    .download-btn { background: var(--accent); border: none; color: #fff; text-decoration: none; font-size: 13px; font-weight: 600; padding: 10px 16px; border-radius: 12px; white-space: nowrap; }
+    .download-btn:hover { opacity: .92; }
+    .filtros { position: sticky; top: 0; z-index: 10; background: var(--surface); padding: 14px 22px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid var(--border); }
     .dropdown { position: relative; }
-    .dropdown-toggle { display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: #edf2ff; font-size: 13px; padding: 8px 12px; border-radius: 10px; cursor: pointer; min-width: 160px; font-family: inherit; }
-    .dropdown-toggle:hover { background: rgba(255,255,255,0.1); }
+    .dropdown-toggle { display: flex; align-items: center; gap: 10px; background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-size: 13px; padding: 9px 14px; border-radius: 12px; cursor: pointer; min-width: 160px; font-family: inherit; }
+    .dropdown-toggle:hover { border-color: var(--accent); color: var(--accent); }
     .dropdown-toggle .caret { margin-left: auto; opacity: 0.7; font-size: 11px; }
-    .dropdown-panel { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; background: #171d33; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 6px; min-width: 220px; max-height: 320px; overflow-y: auto; box-shadow: 0 12px 30px rgba(0,0,0,0.4); }
+    .dropdown-panel { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 6px; min-width: 220px; max-height: 320px; overflow-y: auto; box-shadow: var(--shadow); }
     .dropdown-panel.abierto { display: block; }
-    .dropdown-opcion { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; white-space: nowrap; }
-    .dropdown-opcion:hover { background: rgba(255,255,255,0.08); }
-    .dropdown-opcion.activo { background: rgba(44,102,232,0.35); }
+    .dropdown-opcion { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+    .dropdown-opcion:hover { background: var(--accent-soft); }
+    .dropdown-opcion.activo { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
     .dropdown-logo { height: 20px; max-width: 60px; object-fit: contain; }
     .card-tile.oculta { display: none; }
     .expansion.oculta { display: none; }
     /* Cartas que la cuenta todavia no saco (a pedido explicito del usuario
-       2026-08-01, ver todo el catalogo y no solo lo que ya tiene) -- en gris,
+       2026-08-01, ver todo el catalogo y no solo lo que ya tiene) -- atenuadas,
        sin badge de cantidad, para distinguirlas de un vistazo. */
-    .card-tile.faltante img { filter: grayscale(1) brightness(0.5); }
-    .card-tile.faltante .rareza-pill { opacity: 0.4; filter: grayscale(1); }
+    .card-tile.faltante { opacity: .4; }
+    .card-tile.faltante img { filter: grayscale(.6); }
+    .card-tile.faltante .rareza-pill { opacity: 0.6; filter: grayscale(1); }
     /* Si ni siquiera hay imagen en disco/repositorio para esa carta (nadie la
        cacheo todavia), se oculta el <img> roto y se deja un placeholder liso
        en vez del icono feo de "imagen rota" del navegador. */
     .card-tile img.rota { visibility: hidden; }
     .card-tile img.rota + .badge { display: none; }
-    .img-wrap:has(img.rota) { background: rgba(255,255,255,0.04); border-radius: 10px; aspect-ratio: 0.716; }
+    .img-wrap:has(img.rota) { background: var(--surface2); border-radius: 10px; aspect-ratio: 0.716; }
     .icono-rareza { height: 13px; vertical-align: middle; margin-right: 1px; }
     .icono-inventario { height: 16px; width: 16px; vertical-align: middle; margin-right: 2px; }
     .lista-inventario { margin: 4px 0; }
@@ -3597,7 +3660,7 @@ dashboardApp.get('/account/:token', async (req, res) => {
     .rareza-tag { display: flex; justify-content: center; margin-top: 8px; }
     .rareza-pill { display: inline-flex; align-items: center; }
     .card-tile img { cursor: zoom-in; }
-    .lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100; align-items: center; justify-content: center; cursor: zoom-out; padding: 24px; }
+    .lightbox { display: none; position: fixed; inset: 0; background: rgba(15,23,29,0.85); z-index: 100; align-items: center; justify-content: center; cursor: zoom-out; padding: 24px; }
     .lightbox.abierto { display: flex; }
     /* Ancho/alto fijos (no max-width/max-height sueltos) para que toda carta
        se vea del MISMO tamaño en el zoom sin importar la resolucion real de
@@ -3606,16 +3669,31 @@ dashboardApp.get('/account/:token', async (req, res) => {
        fija sin recortarse ni estirarse. */
     .lightbox-box { width: min(85vw, 460px); aspect-ratio: 0.716; }
     .lightbox img { width: 100%; height: 100%; object-fit: contain; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
+    @media (max-width: 640px) { .top-bar h1 { width: 100%; } }
 </style></head><body>
 <div class="top-bar">
-    <h1>Account Report — ${escaparHtml(accountData.deviceAccount || path.basename(archivoJson, '.json'))}</h1>
+    <h1>${escaparHtml(accountData.deviceAccount || path.basename(archivoJson, '.json'))}</h1>
+    <div class="stat good"><b>${totalTenidasGlobal} / ${totalCatalogoGlobal}</b>&nbsp;cards</div>
+    <div class="stat">Completion <b>${porcentajeCompletitud}%</b></div>
+    <!-- Stat de la expansion elegida en el filtro (2026-08-08, a pedido explicito del
+         usuario): oculto hasta que se elija una expansion puntual -- el JS de mas abajo
+         lo llena con el anillo verde + X/Y + % de ESA expansion, separado del total de la
+         cuenta. Si el filtro esta en "todas", en cambio se muestra expRingsRow (abajo) con
+         el anillo mini de CADA expansion a la vez. -->
+    <div class="stat" id="statExpansion" style="display:none">
+        <div class="logo-ring-mini" id="statExpansionRing" style="display:none"><div class="logo-ring-mini-inner"><img id="statExpansionLogo"></div></div>
+        <b id="statExpansionTexto"></b>
+    </div>
+    <div class="exp-rings-row" id="expRingsRow"></div>
+    <div class="stat">Total pulled <b>${totalCartas}</b></div>
+    ${datosInventario ? `<div class="stat">Shinedust <b>${escaparHtml(datosInventario.shinedust)}</b></div>` : ''}
+    <div class="spacer"></div>
     <a class="download-btn" href="/account/${req.params.token}/pdf" download>⬇ Download PDF</a>
 </div>
 <div class="lightbox" id="lightbox"><div class="lightbox-box"><img id="lightbox-img" src="" alt=""></div></div>
+<main>
 <div class="sub">File: ${escaparHtml(accountData.metadata?.fileName || '')} — el link de esta pagina es privado, pero si lo compartís cualquiera con el enlace puede verlo. Para pasarle esto a alguien, mejor descargá el PDF y mandale el archivo.</div>
-<div class="sub"><img src="https://cdn.discordapp.com/emojis/1534731032400756807.png?size=24" alt="Cards" class="icono-inventario"> Total cards pulled: <strong>${totalCartas}</strong></div>
 ${datosInventario ? `<div class="sub lista-inventario">
-    <div><img src="https://cdn.discordapp.com/emojis/1534723123914739802.png?size=24" alt="Shinedust" class="icono-inventario"> Shinedust: <strong>${escaparHtml(datosInventario.shinedust)}</strong></div>
     ${camposInventarioEmbed(datosInventario).map(c => `<div>${emojiDiscordAImg(c.name)}: <strong>${escaparHtml(c.value)}</strong></div>`).join('\n    ')}
 </div>` : ''}
 <div class="filtros">
@@ -3637,6 +3715,11 @@ ${datosInventario ? `<div class="sub lista-inventario">
     </div>
 </div>`;
 
+        // Resumen por expansion (2026-08-08, a pedido explicito del usuario): mismos datos
+        // que ya se calculan para el encabezado de cada expansion, pero embebidos aparte
+        // para que el JS de abajo pueda mostrar el de la expansion elegida en el filtro
+        // arriba en la topbar (logo + X/Y + % de completitud), sin pisar el total de la cuenta.
+        const datosExpansionesResumen = [];
         for (const expansion of expansionesOrdenadas) {
             const rutaLogo = buscarLogoExpansionBot(expansion);
             // A pedido explicito del usuario 2026-08-01: en vez del nombre de
@@ -3647,9 +3730,17 @@ ${datosInventario ? `<div class="sub lista-inventario">
             const totalExpansion = porExpansion[expansion].length;
             const tenidas = porExpansion[expansion].filter(c => c.cantidad > 0).length;
             const textoHeader = rutaLogo ? `${tenidas}/${totalExpansion} cards` : `${escaparHtml(expansion)} — ${tenidas}/${totalExpansion} cards`;
+            const logoB64 = rutaLogo ? Buffer.from(expansion).toString('base64url') : null;
+            const porcentajeExpansion = totalExpansion ? ((tenidas / totalExpansion) * 100).toFixed(1) : '0.0';
+            datosExpansionesResumen.push({
+                nombre: expansion,
+                tenidas,
+                total: totalExpansion,
+                porcentaje: porcentajeExpansion,
+                logo: logoB64 ? `/logo/${logoB64}` : null
+            });
             html += `<div class="expansion" data-expansion="${escaparHtml(expansion)}"><div class="expansion-header">`;
             if (rutaLogo) {
-                const logoB64 = Buffer.from(expansion).toString('base64url');
                 html += `<img src="/logo/${logoB64}" alt="${escaparHtml(expansion)}">`;
             }
             html += `<h2>${textoHeader}</h2></div><div class="grid">`;
@@ -3665,6 +3756,51 @@ ${datosInventario ? `<div class="sub lista-inventario">
             html += `</div></div>`;
         }
         html += `<script>
+var DATOS_EXPANSIONES = ${JSON.stringify(datosExpansionesResumen)};
+var statExpansion = document.getElementById('statExpansion');
+var statExpansionRing = document.getElementById('statExpansionRing');
+var statExpansionLogo = document.getElementById('statExpansionLogo');
+var statExpansionTexto = document.getElementById('statExpansionTexto');
+var expRingsRow = document.getElementById('expRingsRow');
+
+// Fila con el anillo mini de CADA expansion (2026-08-08, a pedido explicito del usuario):
+// se arma una sola vez al cargar la pagina, se muestra cuando el filtro esta en "todas" y
+// se oculta cuando se elige una expansion puntual (ahi se muestra solo ESA, en statExpansion).
+DATOS_EXPANSIONES.forEach(function (datos) {
+    if (!datos.logo) return;
+    var ring = document.createElement('div');
+    ring.className = 'logo-ring-mini';
+    ring.style.setProperty('--pct', datos.porcentaje);
+    ring.title = datos.nombre + ': ' + datos.tenidas + ' / ' + datos.total + ' (' + datos.porcentaje + '%)';
+    ring.innerHTML = '<div class="logo-ring-mini-inner"><img src="' + datos.logo + '" alt="' + datos.nombre + '"></div>';
+    ring.addEventListener('click', function () {
+        document.querySelector('[data-filtro-exp="' + datos.nombre + '"]').click();
+    });
+    expRingsRow.appendChild(ring);
+});
+
+function actualizarStatExpansion(nombreExpansion) {
+    if (nombreExpansion === 'all') {
+        statExpansion.style.display = 'none';
+        expRingsRow.style.display = '';
+        return;
+    }
+    expRingsRow.style.display = 'none';
+    var datos = DATOS_EXPANSIONES.find(function (e) { return e.nombre === nombreExpansion; });
+    if (!datos) {
+        statExpansion.style.display = 'none';
+        return;
+    }
+    statExpansionTexto.textContent = datos.tenidas + ' / ' + datos.total + ' (' + datos.porcentaje + '%)';
+    if (datos.logo) {
+        statExpansionLogo.src = datos.logo;
+        statExpansionRing.style.setProperty('--pct', datos.porcentaje);
+        statExpansionRing.style.display = '';
+    } else {
+        statExpansionRing.style.display = 'none';
+    }
+    statExpansion.style.display = '';
+}
 function armarDropdown(toggleId, panelId, atributoDataset, onElegir) {
     var toggle = document.getElementById(toggleId);
     var panel = document.getElementById(panelId);
@@ -3715,6 +3851,7 @@ armarDropdown('toggle-expansion', 'panel-expansion', 'filtroExp', function (filt
         var coincide = (filtro === 'all' || exp.dataset.expansion === filtro);
         exp.classList.toggle('oculta', !coincide);
     });
+    actualizarStatExpansion(filtro);
 });
 var lightbox = document.getElementById('lightbox');
 var lightboxImg = document.getElementById('lightbox-img');
