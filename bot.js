@@ -36,6 +36,26 @@ if (!TOKEN) {
     process.exit(1);
 }
 
+// Limpieza de seguridad (2026-08-08, a pedido explicito del usuario): un usuario reporto
+// haber visto el token/API real en una captura del PDF viejo de tutoriales via Foxit PDF
+// Reader. Los tutoriales ya no se distribuyen como PDF (ver /tutorials + tutorial_pdf::),
+// pero cada instalacion existente todavia tiene esos PDF viejos en disco -- se borran solos
+// al arrancar para que no quede dando vueltas ninguna copia que pudo haber expuesto algo.
+// Corre siempre; despues de la primera vez no encuentra nada y no hace nada.
+try {
+    const carpetaTutorialesPdf = path.join(__dirname, 'assets', 'tutoriales');
+    if (fs.existsSync(carpetaTutorialesPdf)) {
+        for (const archivo of fs.readdirSync(carpetaTutorialesPdf)) {
+            if (/\.pdf$/i.test(archivo)) {
+                fs.unlinkSync(path.join(carpetaTutorialesPdf, archivo));
+                console.log(`Seguridad: PDF de tutorial viejo borrado del disco -- ${archivo}`);
+            }
+        }
+    }
+} catch (e) {
+    console.error('Seguridad: no se pudo borrar los PDF viejos de tutoriales:', e.message);
+}
+
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
@@ -158,9 +178,11 @@ const NOMBRES_TUTORIAL_DESCARGA = {
     info_accounts: 'Info Accounts',
     cmd_run_instance: 'Automatic Trading'
 };
-function nombreTutorialDescarga(tipo) {
-    return `${NOMBRES_TUTORIAL_DESCARGA[tipo] || tipo}.pdf`;
-}
+// Lista ordenada de tutoriales (2026-08-07, movida a nivel de modulo para
+// poder reusarla tanto en el mensaje de bienvenida del canal Tutorials como
+// en la pagina web nueva /tutorials) -- se deriva de NOMBRES_TUTORIAL_DESCARGA
+// para no mantener el mismo listado duplicado en dos lugares.
+const TUTORIALES_LISTA = Object.entries(NOMBRES_TUTORIAL_DESCARGA).map(([tipo, label]) => ({ tipo, label }));
 
 // Foto por defecto por tipo (misma logica que el nombre: solo pisa el generico
 // de siempre, nunca lo que un usuario ya se puso a mano con /webhook). Ruta
@@ -369,7 +391,7 @@ async function construirPanelListaWebhooks(userId) {
             })));
         componentes.push(new ActionRowBuilder().addComponents(menu));
     }
-    if (fs.existsSync(rutaTutorialPdf('cmd_build_webhooks'))) {
+    if (tutorialWebDisponible('cmd_build_webhooks')) {
         componentes.push(new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('tutorial_pdf::cmd_build_webhooks').setLabel('📄 Tutorial').setStyle(ButtonStyle.Secondary)
         ));
@@ -710,16 +732,18 @@ function advertenciaGoldSinApi() {
 
 const SYMBOL_EMBEDS_PATH = path.join(__dirname, 'assets', 'embeds', 'symbol.png');
 
-// Un PDF por tipo de canal (mismo criterio que un asset fijo) — se lee del
-// disco recién cuando alguien presiona el botón "Tutorial", nunca queda
-// pegado a un mensaje que se reubica/reenvía solo.
-function rutaTutorialPdf(tipo) {
-    return path.join(__dirname, 'assets', 'tutoriales', `${tipo}.pdf`);
+// Un set de pasos (PNG) por tipo de canal, ya no un PDF (2026-08-08, a pedido explicito del
+// usuario: se filtro un token/API en el pdf viejo -- se dejo de distribuir PDFs por completo,
+// todo pasa por /tutorials). Se lee del disco recien cuando hace falta mostrar el boton, nunca
+// queda pegado a un mensaje que se reubica/reenvia solo.
+function tutorialWebDisponible(tipo) {
+    const carpeta = path.join(__dirname, 'assets', 'tutoriales_web', tipo);
+    return fs.existsSync(carpeta) && fs.readdirSync(carpeta).some(f => /\.png$/i.test(f));
 }
 
 function filaBotonesConTutorial(tipoTutorial, ...botonesPrincipales) {
     const botones = [...botonesPrincipales];
-    if (fs.existsSync(rutaTutorialPdf(tipoTutorial))) {
+    if (tutorialWebDisponible(tipoTutorial)) {
         botones.push(new ButtonBuilder().setCustomId(`tutorial_pdf::${tipoTutorial}`).setLabel('📄 Tutorial').setStyle(ButtonStyle.Secondary));
     }
     return new ActionRowBuilder().addComponents(...botones);
@@ -2014,7 +2038,36 @@ function rutaAutoHotkey() {
     return candidatos.find(p => fs.existsSync(p)) || null;
 }
 
+// Plantilla por defecto de InjectAccount.ini (2026-08-06, bug real reportado
+// por un usuario): ese archivo lo crea normalmente la propia herramienta de
+// Kevin (_InjectAccount.ahk) la primera vez que se usa a mano -- un usuario
+// que jamás la abrio por su cuenta (todo lo hizo siempre a traves del bot) se
+// encontraba con "Could not save the friend to InjectAccount.ini" sin ninguna
+// pista de por que, ya que el archivo simplemente no existia todavia. Formato
+// confirmado en vivo contra un InjectAccount.ini recien creado por la propia
+// herramienta de Kevin (UTF-16LE con BOM, fin de linea CRLF).
+const PLANTILLA_INJECT_INI = [
+    '[UserSettings]',
+    'winTitle=1',
+    'fileName=name',
+    'selectedFilePath=""',
+    'sendFriendRequestAfterInject=0',
+    'favoriteFriendIDs=',
+    'favoriteFriendLabels=',
+    'injectSelectedFriendIDs=',
+    'injectExtraFriendIDs=',
+    'injectFriendRequestIds=',
+    ''
+].join('\r\n');
+
+function crearIniInjectSiNoExiste(rutaIni) {
+    if (fs.existsSync(rutaIni)) return;
+    fs.mkdirSync(path.dirname(rutaIni), { recursive: true });
+    fs.writeFileSync(rutaIni, String.fromCharCode(0xFEFF) + PLANTILLA_INJECT_INI, 'utf16le');
+}
+
 function actualizarIniInject(cambios, rutaIni = RUTA_INJECT_INI_DEFAULT) {
+    crearIniInjectSiNoExiste(rutaIni);
     let contenido = fs.readFileSync(rutaIni, 'utf16le');
     const tieneBOM = contenido.charCodeAt(0) === 0xFEFF;
     if (tieneBOM) contenido = contenido.slice(1);
@@ -3273,6 +3326,19 @@ const DASHBOARD_PORT_BASE = Number(process.env.DASHBOARD_PORT) || 3005;
 const dashboardApp = express();
 const _dashboardTokens = new Map();
 
+// Imagenes de los pasos de cada tutorial (2026-08-07, a pedido explicito del usuario --
+// reemplaza el PDF descargable por completo: "eso lo quitamos, no quiero exponer PDFs").
+// Cada pagina del PDF original se pre-rendea una sola vez a PNG (ver assets/tutoriales_web/)
+// y esta ruta las sirve estaticas para la pagina /tutorials.
+dashboardApp.use('/tutorial-img', express.static(path.join(__dirname, 'assets', 'tutoriales_web')));
+dashboardApp.use(express.json());
+// Fondos animados de la pantalla de bienvenida de /tutorials (2026-08-08, a pedido
+// explicito del usuario -- reusa el mismo repositorio local de wallpapers ya usado para el
+// banner de AllCards, CARPETA_FUNDAS_ALLCARDS). Si esa carpeta no existe (cualquier PC que
+// no sea la de Ale), simplemente no se sirve nada -- la pagina cae de vuelta al estado
+// vacio de siempre, mismo criterio que ya usa elegirBannerAleatorio() en otros lados.
+dashboardApp.use('/wallpaper-img', express.static(CARPETA_FUNDAS_ALLCARDS));
+
 function generarTokenDashboard(rutaMasterPath, archivoJson, datosInventario = null) {
     const token = crypto.randomBytes(12).toString('hex');
     _dashboardTokens.set(token, { rutaMasterPath, archivoJson, datosInventario });
@@ -3660,6 +3726,401 @@ lightbox.addEventListener('click', function () {
     } catch (e) {
         console.error('DEBUG: error en dashboard /account:', e);
         res.status(500).send('Error generando el dashboard.');
+    }
+});
+
+// Pagina de Tutorials (2026-08-07, a pedido explicito del usuario): reemplaza
+// el envio de PDFs por una pagina web -- misma idea de diseño que ya se probo
+// con el usuario (sidebar con los tutoriales, ventana modal con los pasos uno
+// abajo del otro, cada paso es la imagen de esa pagina del PDF original ya
+// pre-renderizada). Accesible desde el celular igual que Info Accounts
+// (mismo servidor, mismo bind a 0.0.0.0).
+dashboardApp.get('/tutorials', async (req, res) => {
+    try {
+        const datosTutoriales = TUTORIALES_LISTA.map(({ tipo, label }) => {
+            const carpeta = path.join(__dirname, 'assets', 'tutoriales_web', tipo);
+            let pasos = [];
+            if (fs.existsSync(carpeta)) {
+                pasos = fs.readdirSync(carpeta)
+                    .filter(f => /\.png$/i.test(f))
+                    .sort()
+                    .map(f => `/tutorial-img/${tipo}/${f}`);
+            }
+            return { tipo, label, pasos };
+        });
+
+        // Barra de estado arriba (2026-08-07, a pedido explicito del usuario): mismos datos
+        // que ya se ven en /setup por Discord, pero de un vistazo apenas se abre la pagina --
+        // servidor/bot vinculado, si la API key de Drive esta configurada, y si S4T/Heartbeat
+        // estan online (mismo chequeo real de PM2 que ya usa el resto del bot).
+        const nombreServidor = client.guilds.cache.first()?.name || '-';
+        const nombreBot = client.user?.tag || '-';
+        const driveHdOk = !!process.env.GOOGLE_DRIVE_API_KEY;
+        const [estadoS4T, estadoHeartbeat] = await Promise.all([
+            verificarEstadoPM2('trading', 's4t.js'),
+            verificarEstadoPM2('heartbeat', 'heartbeat.js')
+        ]);
+        const todoOk = estadoS4T.includes('ONLINE') && estadoHeartbeat.includes('ONLINE');
+
+        // Muro de tarjetas animado en el area principal (2026-08-08, a pedido explicito del
+        // usuario) -- reemplaza la vieja tarjeta de bienvenida por columnas de miniaturas del
+        // mismo repositorio de wallpapers ya usado en AllCards. Cada columna se desplaza sin
+        // fin verticalmente, alternando direccion (una sube, la siguiente baja), llenando
+        // todo el espacio libre en vez de dejarlo vacio.
+        const NUM_COLUMNAS_MURO = 6;
+        let columnasMuro = [];
+        try {
+            if (fs.existsSync(CARPETA_FUNDAS_ALLCARDS)) {
+                const todos = fs.readdirSync(CARPETA_FUNDAS_ALLCARDS)
+                    .filter(f => /\.(png|jpe?g|webp)$/i.test(f))
+                    .sort(() => Math.random() - 0.5);
+                const columnas = Array.from({ length: NUM_COLUMNAS_MURO }, () => []);
+                todos.forEach((f, i) => columnas[i % NUM_COLUMNAS_MURO].push(f));
+                columnasMuro = columnas.filter(col => col.length > 0);
+            }
+        } catch (e) { /* sin carpeta -- el area principal cae al estado vacio de siempre */ }
+
+        const escaparHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+        const botonesHtml = datosTutoriales.map(t =>
+            `<button class="tuto-btn" data-tipo="${t.tipo}">${escaparHtml(t.label)}</button>`
+        ).join('');
+
+        // Misma duracion para TODAS las columnas (2026-08-08, a pedido explicito del
+        // usuario: "que las velocidades sean mas sincronizadas") -- antes variaba segun
+        // cuantas imagenes le tocaban a cada columna y se veian desfasadas entre si.
+        const DURACION_MURO = 42;
+        const muroHtml = columnasMuro.map((col, i) => {
+            const imgs = col.concat(col); // duplicado para que el loop no corte
+            const direccion = i % 2 === 0 ? 'up' : 'down';
+            const tarjetas = imgs.map(f => `<div class="wall-card"><img src="/wallpaper-img/${encodeURIComponent(f)}"></div>`).join('');
+            return `<div class="marquee-col"><div class="marquee-track ${direccion}" style="animation-duration:${DURACION_MURO}s">${tarjetas}</div></div>`;
+        }).join('');
+
+        const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monitor Pokémon — Tutorials</title>
+<style>
+  :root {
+    --bg: #f2ece1; --surface: #fbf7ef; --surface2: #eee5d1; --border: #e0d5b9;
+    --text: #2b2620; --text-dim: #86795f; --accent: #c17f1c; --accent-soft: rgba(193,127,28,.12);
+    --shadow: 0 1px 2px rgba(43,38,32,.06), 0 8px 24px rgba(43,38,32,.08);
+  }
+  /* Modo noche (2026-08-08, a pedido explicito del usuario) -- mismos tonos casi-negro +
+     dorado ya aceptados como modo noche del Control Panel, para que se sienta la misma
+     marca en toda la app. Se activa con la clase .oscuro en <body> (toggle + localStorage). */
+  body.oscuro {
+    --bg:#15110a; --surface:#1f1910; --surface2:#100c07; --border:#3a2e1c;
+    --text:#f3ecdf; --text-dim:#b4a582; --accent:#f0a93a; --accent-soft:rgba(240,169,58,.16);
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.6);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI",system-ui,sans-serif; transition:background .15s ease, color .15s ease; }
+  .topbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:16px 22px; border-bottom:1px solid var(--border); background:var(--surface); }
+  .topbar .clock { display:flex; flex-direction:column; margin-right:14px; }
+  .topbar .clock .time { font-variant-numeric:tabular-nums; font-size:22px; font-weight:650; line-height:1; }
+  .topbar .clock .date { font-size:11.5px; color:var(--text-dim); margin-top:3px; }
+  .stat { display:flex; align-items:center; gap:7px; font-size:12.5px; color:var(--text-dim); white-space:nowrap; padding:7px 12px; border-radius:10px; background:var(--surface2); border:1px solid var(--border); }
+  .stat b { color:var(--text); font-weight:600; }
+  .stat.good { background:rgba(63,154,82,.1); border-color:rgba(63,154,82,.35); }
+  .stat.bad { background:rgba(192,72,63,.1); border-color:rgba(192,72,63,.35); }
+  .stat.good b { color:#3f9a52; }
+  .stat.bad b { color:#c0483f; }
+  .dot { width:7px; height:7px; border-radius:50%; background:#3f9a52; box-shadow:0 0 0 3px var(--accent-soft); }
+  .dot.bad { background:#c0483f; }
+  @media (prefers-reduced-motion: no-preference) { .dot.pulse { animation:pulse 2.2s ease-in-out infinite; } }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
+  .topbar .spacer { flex:1; }
+  .btn-tema, .btn-feedback { border:1px solid var(--border); background:var(--surface2); color:var(--text); padding:9px 14px; border-radius:12px; font-size:13px; cursor:pointer; }
+  .btn-tema { padding:9px 12px; font-size:15px; line-height:1; }
+  .btn-tema:hover, .btn-feedback:hover { border-color:var(--accent); color:var(--accent); }
+  .shell { display:flex; min-height:calc(100vh - 65px); }
+  aside { width:230px; flex-shrink:0; background:var(--surface2); border-right:1px solid var(--border); padding:22px 14px; display:flex; flex-direction:column; }
+  aside h1 { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--text-dim); margin:0 0 10px 6px; }
+  .tuto-btn { display:block; width:100%; text-align:left; padding:11px 12px; margin-bottom:8px; border-radius:12px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:13.5px; cursor:pointer; }
+  .tuto-btn:hover, .tuto-btn.activo { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+  .sidebar-hint { margin:0 6px 16px; font-size:12px; line-height:1.5; color:var(--text-dim); }
+  .sidebar-donate { margin-top:auto; padding-top:18px; }
+  .sidebar-donate p { margin:0 6px 10px; font-size:11.5px; line-height:1.5; color:var(--text-dim); }
+  .btn-donate { display:block; text-align:center; padding:12px; border-radius:12px; background:var(--accent); color:#fff; font-size:13.5px; font-weight:600; text-decoration:none; }
+  .btn-donate:hover { opacity:.9; }
+  main { flex:1; padding:24px; overflow:hidden; height:calc(100vh - 65px); }
+  .marquee-wall { display:flex; gap:14px; width:100%; height:100%; }
+  .marquee-col { flex:1; min-width:0; height:100%; overflow:hidden; -webkit-mask-image:linear-gradient(to bottom, transparent, black 10%, black 90%, transparent); mask-image:linear-gradient(to bottom, transparent, black 10%, black 90%, transparent); }
+  .marquee-track { display:flex; flex-direction:column; gap:14px; will-change:transform; animation-timing-function:linear; animation-iteration-count:infinite; }
+  .marquee-track.up { animation-name:marqueeUp; }
+  .marquee-track.down { animation-name:marqueeDown; transform:translateY(-50%); }
+  @keyframes marqueeUp { from { transform:translateY(0); } to { transform:translateY(-50%); } }
+  @keyframes marqueeDown { from { transform:translateY(-50%); } to { transform:translateY(0); } }
+  .wall-card { border-radius:16px; border:1px solid var(--border); background:var(--surface2); overflow:hidden; aspect-ratio:4/3; box-shadow:var(--shadow); flex-shrink:0; }
+  .wall-card img { width:100%; height:100%; object-fit:cover; display:block; opacity:.45; }
+  @media (prefers-reduced-motion: reduce) { .marquee-track.up, .marquee-track.down { animation:none; } }
+  .overlay { position:fixed; inset:0; background:rgba(30,25,15,.55); display:none; align-items:flex-start; justify-content:center; padding:32px 16px; overflow-y:auto; z-index:10; }
+  .overlay.abierto { display:flex; }
+  .modal { background:var(--surface); border-radius:20px; max-width:760px; width:100%; box-shadow:var(--shadow); overflow:hidden; transition:max-width .15s ease; }
+  .modal.expandido { max-width:960px; }
+  .overlay.expandido { padding:20px 16px; }
+  .modal-head { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--surface); }
+  .modal-head h2 { margin:0; font-size:16px; }
+  .modal-head .modal-head-botones { display:flex; gap:8px; }
+  .modal-head button { border:none; background:var(--surface2); width:32px; height:32px; border-radius:10px; font-size:16px; cursor:pointer; color:var(--text); }
+  .modal-head button:hover { color:var(--accent); }
+  .modal-body { padding:18px 20px 26px; display:flex; flex-direction:column; gap:16px; }
+  .modal-body img { width:100%; border-radius:14px; border:1px solid var(--border); display:block; cursor:zoom-in; }
+  .modal-body .vacio { color:var(--text-dim); font-size:14px; text-align:center; padding:30px 0; }
+  .tuto-lightbox { display:none; position:fixed; inset:0; background:rgba(20,16,10,.85); z-index:200; align-items:center; justify-content:center; cursor:zoom-out; padding:24px; }
+  .tuto-lightbox.abierto { display:flex; }
+  .tuto-lightbox img { max-width:90vw; max-height:90vh; border-radius:14px; border:1px solid var(--border); box-shadow:0 12px 40px rgba(0,0,0,.5); }
+  .campo { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
+  .campo label { font-size:12px; font-weight:600; color:var(--text-dim); }
+  .campo input, .campo textarea { font-family:inherit; font-size:13.5px; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:var(--bg); color:var(--text); resize:vertical; }
+  .btn-enviar { border:none; background:var(--accent); color:#fff; padding:11px 16px; border-radius:12px; font-size:13.5px; font-weight:600; cursor:pointer; width:100%; }
+  .btn-enviar:disabled { opacity:.6; cursor:default; }
+  .feedback-ok { color:#3f9a52; font-size:13px; text-align:center; padding:10px 0; }
+  .feedback-error { color:#c0483f; font-size:13px; text-align:center; padding:10px 0; }
+  @media (max-width:900px){ .marquee-col:nth-child(n+4){display:none;} }
+  @media (max-width:640px){ .shell{flex-direction:column;} aside{width:100%;border-right:none;border-bottom:1px solid var(--border);} .topbar{gap:14px;} main{height:320px;} .marquee-col:nth-child(n+3){display:none;} }
+</style>
+</head><body>
+  <div class="topbar">
+    <div class="clock"><span class="time" id="clockTime">--:--</span><span class="date" id="clockDate"></span></div>
+    <div class="stat ${todoOk ? 'good' : 'bad'}"><span class="dot pulse ${todoOk ? '' : 'bad'}"></span><b>${todoOk ? 'All systems normal' : 'Something needs attention'}</b></div>
+    <div class="stat">Server <b>${escaparHtml(nombreServidor)}</b></div>
+    <div class="stat">Bot <b>${escaparHtml(nombreBot)}</b></div>
+    <div class="stat ${driveHdOk ? 'good' : 'bad'}"><span class="dot pulse ${driveHdOk ? '' : 'bad'}"></span>Drive HD <b>${driveHdOk ? 'configured' : 'not configured'}</b></div>
+    <div class="stat ${estadoS4T.includes('ONLINE') ? 'good' : 'bad'}"><span class="dot pulse ${estadoS4T.includes('ONLINE') ? '' : 'bad'}"></span>S4T <b>${estadoS4T.includes('ONLINE') ? 'online' : 'offline'}</b></div>
+    <div class="stat ${estadoHeartbeat.includes('ONLINE') ? 'good' : 'bad'}"><span class="dot pulse ${estadoHeartbeat.includes('ONLINE') ? '' : 'bad'}"></span>Heartbeat <b>${estadoHeartbeat.includes('ONLINE') ? 'online' : 'offline'}</b></div>
+    <div class="spacer"></div>
+    <button class="btn-tema" id="toggleTema" aria-label="Toggle theme" title="Toggle theme">🌙</button>
+    <button class="btn-feedback" id="abrirFeedback">📝 Send Feedback</button>
+  </div>
+
+  <div class="shell">
+    <aside>
+      <h1>Tutorials</h1>
+      <p class="sidebar-hint">📚 Select a tutorial to see it step by step.</p>
+      ${botonesHtml}
+      <div class="sidebar-donate">
+        <p>If you liked what I made, I hope I can count on a donation as support for the work!! 💛</p>
+        <a class="btn-donate" href="https://ko-fi.com/alecast" target="_blank" rel="noopener">☕ Donate on Ko-fi</a>
+      </div>
+    </aside>
+    <main>
+      <div class="marquee-wall">${muroHtml}</div>
+    </main>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <div class="modal" id="modalCaja">
+      <div class="modal-head">
+        <h2 id="modalTitulo"></h2>
+        <div class="modal-head-botones">
+          <button id="expandirModal" aria-label="Expand">⛶</button>
+          <button id="cerrarModal" aria-label="Close">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" id="modalCuerpo"></div>
+    </div>
+  </div>
+
+  <div class="tuto-lightbox" id="tutoLightbox"><img id="tutoLightboxImg" src="" alt=""></div>
+
+  <div class="overlay" id="overlayFeedback">
+    <div class="modal" style="max-width:420px">
+      <div class="modal-head">
+        <h2>📝 Send Feedback</h2>
+        <button id="cerrarFeedback" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="formFeedback">
+          <div class="campo">
+            <label for="fbTitulo">Title</label>
+            <input id="fbTitulo" maxlength="80" required>
+          </div>
+          <div class="campo">
+            <label for="fbTexto">Message</label>
+            <textarea id="fbTexto" rows="5" maxlength="1500" required></textarea>
+          </div>
+          <button class="btn-enviar" type="submit" id="btnEnviarFeedback">Send to Ale</button>
+        </form>
+        <div id="feedbackResultado"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const DATOS = ${JSON.stringify(datosTutoriales)};
+  const overlay = document.getElementById('overlay');
+  const modalTitulo = document.getElementById('modalTitulo');
+  const modalCuerpo = document.getElementById('modalCuerpo');
+
+  function abrirTutorial(tipo) {
+    const t = DATOS.find(d => d.tipo === tipo);
+    if (!t) return;
+    modalTitulo.textContent = t.label;
+    modalCuerpo.innerHTML = '';
+    if (!t.pasos.length) {
+      const p = document.createElement('div');
+      p.className = 'vacio';
+      p.textContent = "This tutorial isn't uploaded yet — check back soon!";
+      modalCuerpo.appendChild(p);
+    } else {
+      // Sin loading="lazy" a proposito (bug real reportado por el usuario, 2026-08-08):
+      // en un modal que estaba oculto (display:none) y recien se muestra, el navegador a
+      // veces no dispara la carga diferida a tiempo -- el modal quedaba vacio aunque los
+      // datos SI estaban bien. Como las imagenes ya se crean solo cuando el usuario abre
+      // ESE tutorial puntual, no hace falta lazy loading de todos modos.
+      for (const src of t.pasos) {
+        const img = document.createElement('img');
+        img.src = src;
+        img.addEventListener('click', () => {
+          tutoLightboxImg.src = img.src;
+          tutoLightbox.classList.add('abierto');
+        });
+        modalCuerpo.appendChild(img);
+      }
+    }
+    overlay.classList.add('abierto');
+    overlay.scrollTop = 0;
+  }
+
+  const tutoLightbox = document.getElementById('tutoLightbox');
+  const tutoLightboxImg = document.getElementById('tutoLightboxImg');
+  tutoLightbox.addEventListener('click', () => {
+    tutoLightbox.classList.remove('abierto');
+    tutoLightboxImg.src = '';
+  });
+
+  // Deep-link (2026-08-07): el boton "Tutorial" de cada canal de Discord manda
+  // /tutorials?open=<tipo> -- abre directo el modal de ESE tutorial (y resalta su boton
+  // en el sidebar) en vez de dejar al usuario buscarlo a mano en la lista.
+  const tipoInicial = new URLSearchParams(location.search).get('open');
+  if (tipoInicial) {
+    const btnInicial = document.querySelector('.tuto-btn[data-tipo="' + tipoInicial + '"]');
+    if (btnInicial) btnInicial.classList.add('activo');
+    abrirTutorial(tipoInicial);
+  }
+
+  // Modo noche (2026-08-08, a pedido explicito del usuario) -- se guarda la eleccion en
+  // localStorage para que quede recordada entre visitas.
+  const TEMA_KEY = 'tutorialesTema';
+  const btnTema = document.getElementById('toggleTema');
+  function aplicarTema(oscuro) {
+    document.body.classList.toggle('oscuro', oscuro);
+    btnTema.textContent = oscuro ? '☀️' : '🌙';
+  }
+  aplicarTema(localStorage.getItem(TEMA_KEY) === 'oscuro');
+  btnTema.addEventListener('click', () => {
+    const oscuro = !document.body.classList.contains('oscuro');
+    aplicarTema(oscuro);
+    localStorage.setItem(TEMA_KEY, oscuro ? 'oscuro' : 'claro');
+  });
+
+  document.querySelectorAll('.tuto-btn').forEach(btn => {
+    btn.addEventListener('click', () => abrirTutorial(btn.getAttribute('data-tipo')));
+  });
+
+  const modalCaja = document.getElementById('modalCaja');
+  function cerrarModalPrincipal() {
+    overlay.classList.remove('abierto', 'expandido');
+    modalCaja.classList.remove('expandido');
+  }
+  document.getElementById('cerrarModal').addEventListener('click', cerrarModalPrincipal);
+  document.getElementById('expandirModal').addEventListener('click', () => {
+    overlay.classList.toggle('expandido');
+    modalCaja.classList.toggle('expandido');
+  });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cerrarModalPrincipal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { cerrarModalPrincipal(); overlayFeedback.classList.remove('abierto'); tutoLightbox.classList.remove('abierto'); } });
+
+  function tick() {
+    const ahora = new Date();
+    document.getElementById('clockTime').textContent = ahora.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    document.getElementById('clockDate').textContent = ahora.toLocaleDateString([], { weekday:'long', day:'numeric', month:'long' });
+  }
+  tick();
+  setInterval(tick, 30000);
+
+  const overlayFeedback = document.getElementById('overlayFeedback');
+  document.getElementById('abrirFeedback').addEventListener('click', () => overlayFeedback.classList.add('abierto'));
+  document.getElementById('cerrarFeedback').addEventListener('click', () => overlayFeedback.classList.remove('abierto'));
+  overlayFeedback.addEventListener('click', (e) => { if (e.target === overlayFeedback) overlayFeedback.classList.remove('abierto'); });
+
+  document.getElementById('formFeedback').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const boton = document.getElementById('btnEnviarFeedback');
+    const resultado = document.getElementById('feedbackResultado');
+    boton.disabled = true;
+    boton.textContent = 'Sending...';
+    resultado.innerHTML = '';
+    try {
+      const resp = await fetch('/tutorials/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          titulo: document.getElementById('fbTitulo').value,
+          texto: document.getElementById('fbTexto').value
+        })
+      });
+      const datos = await resp.json();
+      if (datos.ok) {
+        resultado.innerHTML = '<div class="feedback-ok">✅ Thanks! Your feedback was sent.</div>';
+        document.getElementById('formFeedback').reset();
+        setTimeout(() => overlayFeedback.classList.remove('abierto'), 1200);
+      } else {
+        resultado.innerHTML = '<div class="feedback-error">❌ ' + (datos.error || 'Could not send it, try again.') + '</div>';
+      }
+    } catch (err) {
+      resultado.innerHTML = '<div class="feedback-error">❌ Could not send it, try again.</div>';
+    }
+    boton.disabled = false;
+    boton.textContent = 'Send to Ale';
+  });
+</script>
+</body></html>`;
+        res.send(html);
+    } catch (e) {
+        console.error('DEBUG: error en pagina /tutorials:', e);
+        res.status(500).send('Error generando la pagina de tutoriales.');
+    }
+});
+
+// Feedback desde la pagina web de Tutorials (2026-08-07, a pedido explicito del usuario:
+// "un boton de enviar send feedback para que me envie a mi"). Manda al MISMO webhook que ya
+// usa /feedback de Discord -- ahi no hay identidad de Discord (es un visitante web sin
+// login), asi que el campo "From" queda como "Web (Tutorials page)" en vez de un usuario.
+// Cooldown simple por IP en memoria (sin discord_id disponible para usar la tabla real).
+const _feedbackWebUltimoEnvio = new Map();
+dashboardApp.post('/tutorials/feedback', async (req, res) => {
+    try {
+        const titulo = String(req.body?.titulo || '').trim().slice(0, 80);
+        const texto = String(req.body?.texto || '').trim().slice(0, 1500);
+        if (!titulo || !texto) return res.status(400).json({ ok: false, error: 'Title and message are required.' });
+
+        const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+        const ultimoEnvio = _feedbackWebUltimoEnvio.get(ip) || 0;
+        if (Date.now() - ultimoEnvio < 60000) {
+            return res.status(429).json({ ok: false, error: 'Wait a bit before sending another one.' });
+        }
+
+        await axios.post(`${FEEDBACK_WEBHOOK_URL}?wait=true`, {
+            embeds: [{
+                title: `📝 ${titulo}`,
+                description: texto,
+                color: 0x5865F2,
+                fields: [
+                    { name: 'From', value: 'Web (Tutorials page)', inline: true },
+                    { name: 'Server', value: client.guilds.cache.first()?.name || 'Unknown', inline: true }
+                ],
+                timestamp: new Date().toISOString()
+            }]
+        }, { timeout: 10000 });
+
+        _feedbackWebUltimoEnvio.set(ip, Date.now());
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('DEBUG: error mandando feedback desde /tutorials:', e?.response?.data || e.message);
+        res.status(500).json({ ok: false, error: 'Could not send it, try again later.' });
     }
 });
 
@@ -4786,7 +5247,7 @@ async function generarPanelBuildEmbed(userId, guild = null) {
     }
 
     const botonesGuardar = [new ButtonBuilder().setCustomId('build_guardar').setLabel('💾 Save').setStyle(ButtonStyle.Success)];
-    if (fs.existsSync(rutaTutorialPdf('cmd_build_embed'))) {
+    if (tutorialWebDisponible('cmd_build_embed')) {
         botonesGuardar.push(new ButtonBuilder().setCustomId('tutorial_pdf::cmd_build_embed').setLabel('📄 Tutorial').setStyle(ButtonStyle.Secondary));
     }
     filas.push(new ActionRowBuilder().addComponents(...botonesGuardar));
@@ -4851,7 +5312,7 @@ async function generarPanelControl(userId) {
         new ButtonBuilder().setCustomId('btn_ruta_raiz').setLabel('📂 Main Path').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('btn_check_updates').setLabel('🔄 Check for Updates').setStyle(ButtonStyle.Secondary)
     ];
-    if (fs.existsSync(rutaTutorialPdf('cmd_setup'))) {
+    if (tutorialWebDisponible('cmd_setup')) {
         botonesGestion.push(new ButtonBuilder().setCustomId('tutorial_pdf::cmd_setup').setLabel('📄 Tutorial').setStyle(ButtonStyle.Secondary));
     }
     const filaGestion = new ActionRowBuilder().addComponents(...botonesGestion);
@@ -5710,8 +6171,15 @@ client.on('interactionCreate', async interaction => {
                 await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, 'local', ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET webhook_url = ?`, [interaction.user.id, tipo, valor, valor]);
             }
 
+            // InjectAccount.ini/script agregados al aviso (2026-08-06, bug real
+            // reportado por un usuario): antes se calculaban y guardaban igual,
+            // pero no se mostraban -- si esta ruta derivada no correspondia a un
+            // archivo real (estructura de carpetas distinta a la de Ale), la
+            // unica forma de notarlo era esperar a que "Add Friend" fallara con
+            // un error generico, sin ninguna pista de la ruta real usada.
+            const injectIniExiste = fs.existsSync(derivadas.injectIni) ? '' : ' ⚠️ **not found**';
             return await interaction.editReply({
-                content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\`\n📂 Main.ahk: \`${derivadas.mainAhk}\``
+                content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\`\n📂 Main.ahk: \`${derivadas.mainAhk}\`\n📂 InjectAccount.ini: \`${derivadas.injectIni}\`${injectIniExiste}`
             });
         }
 
@@ -6610,13 +7078,29 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply(payload);
         }
 
+        // Ya NO manda el PDF como archivo adjunto (2026-08-07, a pedido explicito del
+        // usuario -- "eso lo quitamos, no quiero exponer PDFs"): en su lugar manda el link a
+        // la pagina /tutorials, que abre DIRECTO ese tutorial (?open=<tipo>) mostrando los
+        // pasos como imagenes dentro de una ventana, sin ningun archivo descargable de por
+        // medio. Mismo patron de 3 links (localhost/LAN/tunel publico) que ya usa Info
+        // Accounts, para que funcione igual desde el celular que desde la PC.
         if (interaction.customId.startsWith('tutorial_pdf::')) {
             const [, tipo] = interaction.customId.split('::');
-            const ruta = rutaTutorialPdf(tipo);
-            if (!fs.existsSync(ruta)) {
+            if (!tutorialWebDisponible(tipo)) {
                 return await interaction.reply({ content: '❌ No tutorial available for this channel yet.', ephemeral: true });
             }
-            return await interaction.reply({ files: [new AttachmentBuilder(ruta, { name: nombreTutorialDescarga(tipo) })], ephemeral: true });
+            const puertoActual = DASHBOARD_PORT_ACTUAL || DASHBOARD_PORT_BASE;
+            const ipLan = obtenerIpLan();
+            let texto = `📚 **${NOMBRES_TUTORIAL_DESCARGA[tipo] || tipo} — Tutorial**\n`;
+            if (DASHBOARD_PUBLIC_URL) {
+                texto += `Desde cualquier red: ${DASHBOARD_PUBLIC_URL}/tutorials?open=${tipo}\n`;
+            } else {
+                texto += `-# Tunel publico no disponible ahora mismo -- usá alguno de estos (misma red):\n`;
+            }
+            texto += `En esta PC: http://localhost:${puertoActual}/tutorials?open=${tipo}\n`;
+            if (ipLan) texto += `Misma WiFi: http://${ipLan}:${puertoActual}/tutorials?open=${tipo}\n`;
+            texto += `-# Los links dejan de funcionar si reiniciás el bot.`;
+            return await interaction.reply({ content: texto, ephemeral: true });
         }
 
         if (interaction.customId === 'extract_xml_abrir') {
@@ -7500,18 +7984,8 @@ client.on('interactionCreate', async interaction => {
                     // correspondiente reusando tutorial_pdf:: (mismo botón que ya usa cada
                     // canal individual) -- si a algún tipo todavía no se le subió el PDF real,
                     // el handler de tutorial_pdf:: ya responde "No tutorial available yet" solo.
-                    const TUTORIALES_LISTA = [
-                        { tipo: 'cmd_setup', label: 'Bot General' },
-                        { tipo: 'cmd_build_embed', label: 'Build Embed' },
-                        { tipo: 'cmd_build_webhooks', label: 'Build Webhooks' },
-                        { tipo: 'cmd_card_wishlist', label: 'Cards Wishlist' },
-                        { tipo: 'cmd_card_all', label: 'All Cards' },
-                        { tipo: 'cmd_extract_xlm', label: 'Extract XML' },
-                        { tipo: 'shinedust', label: 'Shinedust' },
-                        { tipo: 'cmd_card_gold', label: 'Gold Cards' },
-                        { tipo: 'info_accounts', label: 'Info Accounts' },
-                        { tipo: 'cmd_run_instance', label: 'Automatic Trading' }
-                    ];
+                    // TUTORIALES_LISTA ahora vive a nivel de modulo (ver mas arriba) -- se
+                    // reusa tambien en la pagina web /tutorials.
 
                     const EMBEDS_BIENVENIDA_POR_TIPO = {
                         actualizaciones: { title: '🔔 Updates', description: 'You\'ll get notified here whenever there\'s a new bot update, with a button to install it right away.' },

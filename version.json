@@ -1,7 +1,13 @@
 {
-  "version": "1.5.36",
-  "notesCount": 3,
+  "version": "1.5.37",
+  "notesCount": 6,
   "notes": [
+    "Security: removed PDF tutorials entirely after one showed up with a leaked screenshot - the bot now also auto-deletes any old tutorial PDFs still sitting in your install folder on startup.",
+    "New: Tutorials channels now open a proper in-app page instead of a PDF, works from your phone or PC - step-by-step images, click one to zoom in, light/dark mode, and a Donate button.",
+    "New: Trade button on Gold Cards results and the Friend Trade button are now disabled (known issues being worked on).",
+    "New: Gold Cards shows an apology message instead of the un-golded image when a card's gold border isn't uploaded yet.",
+    "New: All Cards/Wishlist banners now pick a random wallpaper from the shared image repository each time.",
+    "Improved: HD image fetch failures now log the real reason (Drive permission issue vs. missing file) to a simple drive_hd_errores.txt file for easier troubleshooting.",
     "Fixed: the update process could get stuck in an infinite loop with a visible black console window if the old .exe was locked (e.g. by antivirus) - now caps retries and stays hidden like it should.",
     "New: a \"🔴 Kill Everything\" button in the Control Panel to force-stop everything, including a stuck update window, without needing Task Manager.",
     "Improved: HD image fetch failures now log the real reason (Drive permission issue vs. missing file) instead of one generic message.",
