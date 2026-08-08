@@ -7,10 +7,12 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Net.NetworkInformation;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -37,14 +39,66 @@ public class ControlPanelForm : Form {
     string raiz;
     string rutaLock, rutaPendienteRestart, rutaExe, rutaStartBat, rutaReconfigureBat, rutaIcono, rutaImagenPokemon, rutaEnv;
 
-    Color colorFondo = Color.FromArgb(30, 30, 30);
-    Color colorTexto = Color.White;
-    Color colorAcento = Color.White;
-    Color colorCampoFondo = Color.FromArgb(20, 20, 24);
-    Color colorSeccionControl = Color.FromArgb(95, 210, 130);
-    Color colorSeccionInfo = Color.FromArgb(235, 155, 65);
-    Color colorSeccionDiscord = Color.FromArgb(150, 160, 250);
-    Color colorBotonFondo = Color.FromArgb(225, 225, 225);
+    // Paleta reskin (2026-08-07, a pedido explicito del usuario -- referencia visual:
+    // dashboard de control climatico tipo smart-home, con modo dia/noche real). Tarjetas
+    // redondeadas en vez de cajas con borde recto, un unico acento dorado (mismo tono base
+    // 0xF0A93A que ya usan los embeds de Gold Cards/Settings en Discord) en vez de la
+    // mezcla verde/naranja/azul de antes por seccion. Los valores reales se asignan en
+    // AplicarPaleta() -- ver ahi las dos variantes (clara/oscura).
+    Color colorFondo, colorSuperficie, colorSuperficie2, colorBorde, colorTexto, colorTextoDim, colorAcento, colorPeligro;
+    Color colorBotonFondo, colorBotonTexto;
+    Color colorSeccionControl, colorSeccionDiscord; // titulo de cada tarjeta -- en el tema oscuro son los colores de la version original (verde/azul-violeta); en el claro, las dos son el mismo acento
+    bool temaOscuro = false;
+
+    void AplicarPaleta(bool oscuro) {
+        temaOscuro = oscuro;
+        if (oscuro) {
+            // Modo noche (2026-08-07): pareja del tema claro cream+gold, no la version con
+            // los colores retro de la primera version del panel -- esa se probo a pedido del
+            // usuario pero no convencio ("que feo"), asi que el modo noche real queda como
+            // esta variante casi-negra con el mismo acento dorado que el modo dia.
+            colorFondo = Color.FromArgb(21, 17, 10);
+            colorSuperficie = Color.FromArgb(31, 25, 16);
+            colorSuperficie2 = Color.FromArgb(16, 12, 7);
+            colorBorde = Color.FromArgb(58, 46, 28);
+            colorTexto = Color.FromArgb(243, 236, 223);
+            colorTextoDim = Color.FromArgb(156, 144, 128);
+            colorAcento = Color.FromArgb(240, 169, 58);
+            colorPeligro = Color.FromArgb(214, 95, 87);
+            colorBotonFondo = colorSuperficie2;
+            colorBotonTexto = colorTexto;
+            colorSeccionControl = colorAcento;
+            colorSeccionDiscord = colorAcento;
+        } else {
+            colorFondo = Color.FromArgb(242, 236, 225);
+            colorSuperficie = Color.FromArgb(251, 247, 239);
+            colorSuperficie2 = Color.FromArgb(238, 229, 209);
+            colorBorde = Color.FromArgb(224, 213, 185);
+            colorTexto = Color.FromArgb(43, 38, 32);
+            colorTextoDim = Color.FromArgb(134, 121, 95);
+            colorAcento = Color.FromArgb(224, 163, 74);
+            colorPeligro = Color.FromArgb(192, 72, 63);
+            colorBotonFondo = colorSuperficie2;
+            colorBotonTexto = colorTexto;
+            colorSeccionControl = colorAcento;
+            colorSeccionDiscord = colorAcento;
+        }
+    }
+
+    // Los botones/iconos se recrean enteros al cambiar de tema (ver ToggleTema), asi que
+    // este calculo corre de nuevo con la paleta ya actualizada -- sin closures viejas
+    // apuntando a colores del tema anterior. Se decide oscurecer/aclarar segun la
+    // LUMINOSIDAD del color base en si (no del tema de pagina) -- necesario desde que
+    // colorBotonFondo puede ser un gris claro incluso en el tema oscuro (paleta original),
+    // y un boton claro siempre debe oscurecer al pasar el mouse, nunca aclarar mas.
+    Color ColorHover(Color baseColor) {
+        bool esClaro = (baseColor.R + baseColor.G + baseColor.B) > 380;
+        return esClaro ? ControlPaint.Dark(baseColor, 0.06f) : ControlPaint.Light(baseColor, 0.25f);
+    }
+    Color ColorPresionado(Color baseColor) {
+        bool esClaro = (baseColor.R + baseColor.G + baseColor.B) > 380;
+        return esClaro ? ControlPaint.Dark(baseColor, 0.12f) : ControlPaint.Light(baseColor, 0.4f);
+    }
 
     Label labelEstado, labelVersion, labelTokenEstado, labelApiEstado, labelBotNombre, labelServidorNombre, labelUsuarioNombre;
     TextBox txtToken, txtApi, txtS4t, txtHeartbeat;
@@ -73,7 +127,12 @@ public class ControlPanelForm : Form {
 
         envConocido = LeerEnv();
 
+        AplicarPaleta(false); // clara por default, a pedido explicito del usuario
         ConstruirUI();
+        // Reforzado en Load (2026-08-07): pedir el atributo DWM demasiado temprano (antes de
+        // que la ventana este realmente compuesta) a veces no tiene efecto visual -- se
+        // vuelve a pedir aca, que es el momento estandar recomendado para esto.
+        this.Load += (s, e) => AplicarTemaBarraTitulo(this.Handle);
 
         // Solo arranca el bot solo al abrir el panel si ya hay un token guardado -
         // si no, el motor abriria el wizard del navegador sin que el usuario haya
@@ -88,6 +147,22 @@ public class ControlPanelForm : Form {
         timer.Interval = 2000;
         timer.Tick += (s, e) => RefrescarEstado();
         timer.Start();
+    }
+
+    // Barra de titulo nativa en oscuro (2026-08-07, parte del reskin completo):
+    // sin esto, Windows sigue dibujando la barra de titulo clara de siempre
+    // encima de una ventana con contenido oscuro -- se ve cortado a la mitad.
+    // DWMWA_USE_IMMERSIVE_DARK_MODE (20 en builds recientes de Win10/Win11).
+    // Si falla (Windows viejo sin soporte), no rompe nada -- solo se queda con
+    // la barra de titulo clara de siempre.
+    [DllImport("dwmapi.dll")]
+    static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    void AplicarTemaBarraTitulo(IntPtr hwnd) {
+        try {
+            int valor = temaOscuro ? 1 : 0;
+            DwmSetWindowAttribute(hwnd, 20, ref valor, sizeof(int));
+        } catch { }
     }
 
     // ---------- Logica de proceso / puertos ----------
@@ -191,6 +266,38 @@ public class ControlPanelForm : Form {
         MessageBox.Show("Done. Everything was force-stopped.\n\nIf a MonitorPokemon.new.exe file exists in this folder, an update was mid-way through - delete MonitorPokemon.exe and rename MonitorPokemon.new.exe to MonitorPokemon.exe before pressing Start again.", "Monitor Pokemon");
     }
 
+    // "Quit" (2026-08-06, a pedido explicito del usuario): mismo comportamiento
+    // que Advanced\Quit Monitor Pokemon.bat, ahora tambien como boton -- para
+    // cuando el usuario ya termino de usarlo y no quiere que se abra solo la
+    // proxima vez que prende la PC (a diferencia de Kill Everything, que es
+    // para desatascar algo trabado sin dejar de usar el programa).
+    void SalirDeMonitorPokemon() {
+        var confirmacion = MessageBox.Show(
+            "This stops Monitor Pokemon and turns off automatic startup with Windows.\n\nYour token and settings stay saved - you can open \"Start Monitor Pokemon.bat\" (in Advanced) anytime to use it again.\n\nContinue?",
+            "Quit Monitor Pokemon",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question
+        );
+        if (confirmacion != DialogResult.Yes) return;
+
+        try {
+            var rutaAcceso = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "Monitor Pokemon.lnk");
+            var script =
+                "Get-Process MonitorPokemon,MonitorPokemonPanel -ErrorAction SilentlyContinue | Stop-Process -Force; " +
+                "Remove-Item -Path '" + rutaAcceso.Replace("'", "''") + "' -ErrorAction SilentlyContinue";
+            var psi = new ProcessStartInfo("powershell", "-NoProfile -WindowStyle Hidden -Command \"" + script + "\"") {
+                WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false, CreateNoWindow = true
+            };
+            Process.Start(psi).WaitForExit();
+        } catch (Exception ex) {
+            MessageBox.Show("Could not quit: " + ex.Message, "Monitor Pokemon");
+        }
+
+        try { File.Delete(rutaLock); } catch { }
+
+        MessageBox.Show("Monitor Pokemon is stopped and will no longer start automatically when Windows starts.\n\nYour token and settings are still saved.", "Monitor Pokemon");
+    }
+
     Dictionary<string, string> LeerEnv() {
         var valores = new Dictionary<string, string>();
         if (!File.Exists(rutaEnv)) return valores;
@@ -261,10 +368,9 @@ public class ControlPanelForm : Form {
             Size = new Size(340, 34),
             Location = new Point(20, 80),
             FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(225, 225, 225),
-            ForeColor = Color.Black
+            Cursor = Cursors.Hand
         };
-        btnDescargar.FlatAppearance.BorderColor = Color.FromArgb(150, 150, 150);
+        AplicarEstiloPrimario(btnDescargar);
         dialogo.Controls.Add(btnDescargar);
 
         var btnDiscord = new Button {
@@ -272,11 +378,14 @@ public class ControlPanelForm : Form {
             Size = new Size(340, 34),
             Location = new Point(20, 122),
             FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(225, 225, 225),
-            ForeColor = Color.Black
+            BackColor = colorSuperficie2,
+            ForeColor = colorTexto,
+            Cursor = Cursors.Hand
         };
-        btnDiscord.FlatAppearance.BorderColor = Color.FromArgb(150, 150, 150);
+        btnDiscord.FlatAppearance.BorderColor = colorBorde;
         dialogo.Controls.Add(btnDiscord);
+
+        AplicarTemaBarraTitulo(dialogo.Handle);
 
         btnDiscord.Click += (s, e) => {
             var destino = !string.IsNullOrEmpty(discordChannelUrl) ? discordChannelUrl : "https://discord.com/app";
@@ -345,57 +454,63 @@ public class ControlPanelForm : Form {
 
     void ConstruirUI() {
         Text = "Monitor Pokemon";
-        ClientSize = new Size(650, 460);
+        ClientSize = new Size(650, 505);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = colorFondo;
         if (File.Exists(rutaIcono)) Icon = new Icon(rutaIcono);
 
-        // Columna izquierda: Control y S4T/Heartbeat en sus propias cajas
-        // ajustadas al contenido; el logo+version va suelto abajo, sin borde.
-        var seccionControl = NuevaSeccion("CONTROL", colorSeccionControl, 15, 15, 260, 227);
-        var seccionPuertos = NuevaSeccion("S4T / HEARTBEAT", colorSeccionDiscord, 15, 252, 260, 130);
-        var seccionDiscord = NuevaSeccion("DISCORD", colorSeccionDiscord, 290, 15, 345, 325);
+        // Columna izquierda: Control y S4T/Heartbeat en sus propias tarjetas
+        // redondeadas ajustadas al contenido; el logo+version va suelto abajo, sin borde.
+        // El titulo de cada tarjeta ahora va ADENTRO (arriba a la izquierda), no encima
+        // del borde -- por eso el contenido de cada una arranca 40px mas abajo que antes.
+        var seccionControl = NuevaSeccion("CONTROL", 15, 15, 260, 242, colorSeccionControl);
+        var seccionPuertos = NuevaSeccion("S4T / HEARTBEAT", 15, 267, 260, 157, colorSeccionDiscord);
+        var seccionDiscord = NuevaSeccion("DISCORD", 290, 15, 345, 332, colorSeccionDiscord);
 
-        labelEstado = new Label { Font = new Font("Segoe UI", 10), AutoSize = true, Location = new Point(30, 34), ForeColor = colorTexto };
+        labelEstado = new Label { Font = new Font("Segoe UI", 10), AutoSize = true, Location = new Point(30, 55), ForeColor = colorTexto };
         Controls.Add(labelEstado);
 
-        botonIniciar = NuevoBoton("Start", 30, 58, 225);
+        botonIniciar = NuevoBoton("Start", 30, 79, 225);
+        AplicarEstiloPrimario(botonIniciar);
         botonIniciar.Click += (s, e) => { IniciarBot(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
-        botonApagar = NuevoBoton("Stop", 30, 100, 225);
+        botonApagar = NuevoBoton("Stop", 30, 121, 225);
         botonApagar.Click += (s, e) => { ApagarBot(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
-        botonReiniciar = NuevoBoton("Restart", 30, 142, 225);
+        botonReiniciar = NuevoBoton("Restart", 30, 163, 225);
         botonReiniciar.Click += (s, e) => { ReiniciarBot(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
 
-        var botonMatarTodo = NuevoBoton("🔴 Kill Everything", 30, 184, 225);
+        var botonMatarTodo = NuevoBoton("🔴 Kill Everything", 30, 205, 135);
+        AplicarEstiloPeligro(botonMatarTodo);
         botonMatarTodo.Click += (s, e) => { MatarTodo(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
+        var botonSalir = NuevoBoton("Quit", 170, 205, 85);
+        botonSalir.Click += (s, e) => { SalirDeMonitorPokemon(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
 
-        NuevoTitulo("S4T (paste in P BOT)", 30, 270);
-        txtS4t = NuevoCampo(30, 290, 225);
+        NuevoTitulo("S4T (paste in P BOT)", 30, 307);
+        txtS4t = NuevoCampo(30, 327, 225);
         HacerCopiableAlClick(txtS4t);
-        NuevoTitulo("Heartbeat (paste in P BOT)", 30, 327);
-        txtHeartbeat = NuevoCampo(30, 347, 225);
+        NuevoTitulo("Heartbeat (paste in P BOT)", 30, 364);
+        txtHeartbeat = NuevoCampo(30, 384, 225);
         HacerCopiableAlClick(txtHeartbeat);
 
-        var pictureBox = new PictureBox { Size = new Size(46, 46), Location = new Point(30, 397), SizeMode = PictureBoxSizeMode.Zoom, BackColor = colorFondo };
+        var pictureBox = new PictureBox { Size = new Size(46, 46), Location = new Point(30, 439), SizeMode = PictureBoxSizeMode.Zoom, BackColor = colorFondo };
         if (File.Exists(rutaImagenPokemon)) pictureBox.Image = Image.FromFile(rutaImagenPokemon);
         Controls.Add(pictureBox);
         pictureBox.BringToFront();
 
-        labelVersion = new Label { Text = "Monitor Pokemon", Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = colorAcento, AutoSize = true, MaximumSize = new Size(180, 0), Location = new Point(85, 413) };
+        labelVersion = new Label { Text = "Monitor Pokemon", Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = colorAcento, AutoSize = true, MaximumSize = new Size(180, 0), Location = new Point(85, 455) };
         Controls.Add(labelVersion);
         labelVersion.BringToFront();
 
-        NuevoTitulo("Token", 305, 32);
-        txtToken = NuevoCampo(305, 52, 315);
-        labelTokenEstado = NuevaEtiquetaInfo(305, 80);
+        NuevoTitulo("Token", 305, 55);
+        txtToken = NuevoCampo(305, 75, 315);
+        labelTokenEstado = NuevaEtiquetaInfo(305, 103);
 
-        NuevoTitulo("Google Drive API Key", 305, 112);
-        txtApi = NuevoCampo(305, 132, 315);
-        labelApiEstado = NuevaEtiquetaInfo(305, 160);
+        NuevoTitulo("Google Drive API Key", 305, 135);
+        txtApi = NuevoCampo(305, 155, 315);
+        labelApiEstado = NuevaEtiquetaInfo(305, 183);
 
-        botonAbrirConfig = NuevoBoton("Open Token / API Settings", 305, 192, 315);
+        botonAbrirConfig = NuevoBoton("Open Token / API Settings", 305, 215, 315);
         botonAbrirConfig.Click += (s, e) => {
             try {
                 Process.Start(new ProcessStartInfo { FileName = rutaReconfigureBat, WorkingDirectory = raiz, UseShellExecute = true });
@@ -404,71 +519,156 @@ public class ControlPanelForm : Form {
             }
         };
 
-        labelBotNombre = NuevaEtiquetaInfo(305, 244);
-        labelServidorNombre = NuevaEtiquetaInfo(305, 267);
-        labelUsuarioNombre = NuevaEtiquetaInfo(305, 290);
+        labelBotNombre = NuevaEtiquetaInfo(305, 267);
+        labelServidorNombre = NuevaEtiquetaInfo(305, 290);
+        labelUsuarioNombre = NuevaEtiquetaInfo(305, 313);
 
-        // Afuera de la caja de Discord (debajo), asi la caja se puede achicar
-        // al tamano real de su contenido en vez de quedar estirada por estos.
-        NuevoIconoLink(Path.Combine(raiz, "assets", "element", "coin_bag_3.png"), "Support the project (Ko-fi)", "https://ko-fi.com/alecast", 305, 355, 52);
-        // TODO: reemplazar por el link real de la pagina de tutoriales
-        // (Notion) cuando Ale la tenga armada - por ahora un placeholder.
-        NuevoIconoTexto("?", "Tutorials", "https://www.notion.so", 372, 355, 52);
+        // Cuarta tarjeta (2026-08-08, a pedido explicito del usuario: los 3 iconos
+        // circulares de abajo confundian -- el de "?" encima era un placeholder de Notion
+        // que nunca se reemplazo. Ahora son botones normales con texto, mismo estilo que
+        // el resto del panel, y el link de Tutorials abre la pagina real (no el placeholder).
+        var seccionMas = NuevaSeccion("MORE", 290, 362, 345, 100, colorSeccionDiscord);
+        var botonTutoriales = NuevoBoton("📚 Tutorials", 305, 397, 150);
+        botonTutoriales.Click += (s, e) => {
+            try { Process.Start(new ProcessStartInfo { FileName = "http://localhost:3005/tutorials", UseShellExecute = true }); } catch { }
+        };
+        var botonDonar = NuevoBoton("☕ Support (Ko-fi)", 465, 397, 155);
+        botonDonar.Click += (s, e) => {
+            try { Process.Start(new ProcessStartInfo { FileName = "https://ko-fi.com/alecast", UseShellExecute = true }); } catch { }
+        };
+
+        // Toggle dia/noche (reubicado 2026-08-08 -- antes vivia en la fila de iconos que
+        // se saco de abajo): un icono chico en la esquina, discreto, no un boton principal.
+        // Letra ASCII simple, no emoji -- los emoji a color salen como icono roto en este
+        // Label (GDI+ clasico), a diferencia de un Button normal que si los renderiza bien.
+        NuevoIconoAccion(temaOscuro ? "L" : "D", "Switch to " + (temaOscuro ? "light" : "dark") + " mode", (s, e) => ToggleTema(), 605, 15, 30);
+
+        AplicarTemaBarraTitulo(this.Handle);
     }
 
-    Panel NuevaSeccion(string titulo, Color colorTitulo, int x, int y, int ancho, int alto) {
-        var panel = new Panel { Location = new Point(x, y), Size = new Size(ancho, alto) };
+    // Tarjeta redondeada (2026-08-07): antes era una caja rectangular con el
+    // titulo cortando el borde de arriba (estilo GroupBox clasico) -- ahora es
+    // una superficie con esquinas redondeadas de verdad (Region recortada con
+    // GraphicsPath) y el titulo va ADENTRO, arriba a la izquierda, como en la
+    // referencia visual que uso el usuario. El contenido (botones/campos) se
+    // sigue agregando aparte, directo al Form -- la tarjeta es solo el fondo.
+    GraphicsPath RutaRedondeada(int w, int h, int radio) {
+        var path = new GraphicsPath();
+        int d = radio * 2;
+        path.AddArc(0, 0, d, d, 180, 90);
+        path.AddArc(Math.Max(0, w - d), 0, d, d, 270, 90);
+        path.AddArc(Math.Max(0, w - d), Math.Max(0, h - d), d, d, 0, 90);
+        path.AddArc(0, Math.Max(0, h - d), d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    Panel NuevaSeccion(string titulo, int x, int y, int ancho, int alto, Color colorTitulo) {
+        const int radio = 16;
+        var panel = new Panel { Location = new Point(x, y), Size = new Size(ancho, alto), BackColor = colorSuperficie };
+        using (var region = RutaRedondeada(ancho, alto, radio)) {
+            panel.Region = new Region(region);
+        }
         panel.Paint += (s, e) => {
-            using (var pen = new Pen(Color.White, 1)) {
-                e.Graphics.DrawRectangle(pen, 0, 8, panel.Width - 1, panel.Height - 9);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var borde = RutaRedondeada(panel.Width - 1, panel.Height - 1, radio))
+            using (var pen = new Pen(colorBorde, 1)) {
+                e.Graphics.DrawPath(pen, borde);
             }
         };
         Controls.Add(panel);
 
         var lbl = new Label {
-            Text = "  " + titulo + "  ",
+            Text = titulo,
             Font = new Font("Segoe UI", 8, FontStyle.Bold),
             ForeColor = colorTitulo,
-            BackColor = colorFondo,
+            BackColor = Color.Transparent,
             AutoSize = true,
-            Location = new Point(x + 10, y - 2)
+            Location = new Point(x + 16, y + 13)
         };
         Controls.Add(lbl);
         lbl.BringToFront();
         return panel;
     }
 
+    void AplicarEstiloPrimario(Button b) {
+        b.BackColor = colorAcento;
+        b.ForeColor = Color.FromArgb(26, 18, 4);
+        b.FlatAppearance.BorderColor = colorAcento;
+        b.FlatAppearance.MouseOverBackColor = ControlPaint.Light(colorAcento, 0.15f);
+        b.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(colorAcento, 0.1f);
+    }
+
+    void AplicarEstiloPeligro(Button b) {
+        b.ForeColor = colorPeligro;
+        b.FlatAppearance.BorderColor = colorPeligro;
+    }
+
     Button NuevoBoton(string texto, int x, int y, int ancho) {
+        const int radio = 10;
         var boton = new Button {
             Text = texto,
             Size = new Size(ancho, 36),
             Location = new Point(x, y),
             Font = new Font("Segoe UI", 10),
             FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(225, 225, 225),
-            ForeColor = Color.Black
+            BackColor = colorBotonFondo,
+            ForeColor = colorBotonTexto,
+            Cursor = Cursors.Hand
         };
-        boton.FlatAppearance.BorderColor = Color.FromArgb(150, 150, 150);
-        boton.FlatAppearance.BorderSize = 1;
-        boton.FlatAppearance.MouseOverBackColor = Color.FromArgb(190, 222, 246);
-        boton.FlatAppearance.MouseDownBackColor = Color.FromArgb(160, 200, 235);
+        boton.FlatAppearance.BorderSize = 0; // el borde redondeado se dibuja a mano abajo, no con el borde recto nativo
+        boton.FlatAppearance.MouseOverBackColor = ColorHover(colorBotonFondo);
+        boton.FlatAppearance.MouseDownBackColor = ColorPresionado(colorBotonFondo);
+        using (var region = RutaRedondeada(ancho, 36, radio)) {
+            boton.Region = new Region(region);
+        }
+        boton.Paint += (s, e) => {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var borde = RutaRedondeada(boton.Width - 1, boton.Height - 1, radio))
+            using (var pen = new Pen(colorBorde, 1)) {
+                e.Graphics.DrawPath(pen, borde);
+            }
+        };
         Controls.Add(boton);
         boton.BringToFront();
         return boton;
     }
 
+    const int RADIO_CAMPO = 8;
+
+    // TextBox es un control nativo de Windows -- ponerle Region propia para redondearlo
+    // resulto poco confiable (el borde dibujado aparte quedaba desalineado y se veia
+    // cortado en un lado, bug real visto en captura). Patron mas solido: un Panel propio
+    // (SI se redondea bien, ver NuevaSeccion) hace de fondo+borde, y el TextBox va METIDO
+    // adentro con un margen chico y sin su propio borde -- sus esquinas rectas quedan
+    // siempre dentro del area redondeada del panel, nunca asoman.
     TextBox NuevoCampo(int x, int y, int ancho) {
-        var txt = new TextBox {
-            Location = new Point(x, y),
-            Size = new Size(ancho, 24),
-            ReadOnly = true,
-            BorderStyle = BorderStyle.FixedSingle,
-            BackColor = colorCampoFondo,
-            ForeColor = colorAcento,
-            Font = new Font("Consolas", 10)
+        int alto = 24;
+        var contenedor = new Panel { Location = new Point(x, y), Size = new Size(ancho, alto), BackColor = colorSuperficie2 };
+        using (var region = RutaRedondeada(ancho, alto, RADIO_CAMPO)) {
+            contenedor.Region = new Region(region);
+        }
+        contenedor.Paint += (s, e) => {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var borde = RutaRedondeada(contenedor.Width - 1, contenedor.Height - 1, RADIO_CAMPO))
+            using (var pen = new Pen(colorBorde, 1)) {
+                e.Graphics.DrawPath(pen, borde);
+            }
         };
-        Controls.Add(txt);
-        txt.BringToFront();
+        Controls.Add(contenedor);
+        contenedor.BringToFront();
+
+        var txt = new TextBox {
+            Location = new Point(3, 2),
+            Size = new Size(Math.Max(10, ancho - 6), alto - 4),
+            ReadOnly = true,
+            BorderStyle = BorderStyle.None,
+            BackColor = colorSuperficie2,
+            ForeColor = colorAcento,
+            Font = new Font("Consolas", 10),
+            Tag = contenedor // referencia al panel contenedor, usada por AjustarAnchoAlTexto
+        };
+        contenedor.Controls.Add(txt);
         return txt;
     }
 
@@ -512,65 +712,64 @@ public class ControlPanelForm : Form {
     // necesario.
     void AjustarAnchoAlTexto(TextBox txt) {
         var medida = TextRenderer.MeasureText(txt.Text, txt.Font);
-        txt.Width = medida.Width + 14;
+        int anchoContenedor = medida.Width + 14;
+        var contenedor = txt.Tag as Panel;
+        if (contenedor != null) {
+            contenedor.Width = anchoContenedor;
+            using (var region = RutaRedondeada(contenedor.Width, contenedor.Height, RADIO_CAMPO)) {
+                contenedor.Region = new Region(region);
+            }
+            contenedor.Invalidate();
+        }
+        txt.Width = Math.Max(10, anchoContenedor - 6);
     }
 
-    // Icono circular clickeable que abre un link (mismo estilo que la fila
-    // de iconos de Discord/Ayuda/Config de "Arturo's PTCGP BOT") - acá se usa
-    // para el link de apoyo/donacion (Ko-fi).
-    Panel NuevoIconoBase(string tooltipTexto, string url, int x, int y, int tamano) {
+    // Icono circular chico que dispara una accion propia (no una URL) -- usado para el
+    // toggle de tema dia/noche.
+    Panel NuevoIconoAccion(string texto, string tooltipTexto, EventHandler alClick, int x, int y, int tamano) {
         var contenedor = new Panel {
             Size = new Size(tamano, tamano),
             Location = new Point(x, y),
             BackColor = colorBotonFondo,
             Cursor = Cursors.Hand
         };
+        using (var region = RutaRedondeada(tamano, tamano, tamano / 2)) {
+            contenedor.Region = new Region(region);
+        }
         var tooltip = new ToolTip();
         tooltip.SetToolTip(contenedor, tooltipTexto);
-
-        EventHandler abrir = (s, e) => {
-            try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); } catch { }
-        };
-        contenedor.Click += abrir;
-
-        EventHandler resaltar = (s, e) => contenedor.BackColor = Color.FromArgb(190, 222, 246);
+        contenedor.Click += alClick;
+        EventHandler resaltar = (s, e) => contenedor.BackColor = ColorHover(colorBotonFondo);
         EventHandler apagar = (s, e) => contenedor.BackColor = colorBotonFondo;
         contenedor.MouseEnter += resaltar;
         contenedor.MouseLeave += apagar;
-
-        Controls.Add(contenedor);
-        contenedor.BringToFront();
-        return contenedor;
-    }
-
-    void NuevoIconoLink(string rutaImagen, string tooltipTexto, string url, int x, int y, int tamano = 28) {
-        var contenedor = NuevoIconoBase(tooltipTexto, url, x, y, tamano);
-        var pic = new PictureBox {
-            Dock = DockStyle.Fill,
-            SizeMode = PictureBoxSizeMode.Zoom,
-            Padding = new Padding(6),
-            Cursor = Cursors.Hand,
-            Enabled = false // los clicks los maneja el contenedor, no la imagen
-        };
-        if (File.Exists(rutaImagen)) pic.Image = Image.FromFile(rutaImagen);
-        contenedor.Controls.Add(pic);
-    }
-
-    // Version con un caracter simple (ej. "?") en vez de imagen - un caracter
-    // ASCII normal SI se dibuja bien con GDI+ clasico (a diferencia de los
-    // emoji a color, que salian como icono roto).
-    void NuevoIconoTexto(string texto, string tooltipTexto, string url, int x, int y, int tamano = 28) {
-        var contenedor = NuevoIconoBase(tooltipTexto, url, x, y, tamano);
         var lbl = new Label {
             Text = texto,
             Dock = DockStyle.Fill,
-            Font = new Font("Segoe UI", (float)(tamano / 3.2), FontStyle.Bold),
-            ForeColor = colorTexto,
+            Font = new Font("Segoe UI", (float)(tamano / 3.0), FontStyle.Bold),
+            ForeColor = colorBotonTexto,
             BackColor = Color.Transparent,
             TextAlign = ContentAlignment.MiddleCenter,
             Enabled = false
         };
         contenedor.Controls.Add(lbl);
+        Controls.Add(contenedor);
+        contenedor.BringToFront();
+        return contenedor;
+    }
+
+    // Alterna toda la paleta y reconstruye la UI entera desde cero con los colores
+    // nuevos -- mas simple y confiable que ir a buscar cada control ya creado para
+    // recolorearlo a mano, y esta ventana no tiene tantos controles como para que
+    // reconstruirla entera se note lento.
+    void ToggleTema() {
+        var controlesViejos = Controls.Cast<Control>().ToList();
+        Controls.Clear();
+        foreach (var c in controlesViejos) c.Dispose();
+        AplicarPaleta(!temaOscuro);
+        ConstruirUI();
+        RefrescarEstado();
+        PintarInfoDiscord();
     }
 
     void NuevoTitulo(string texto, int x, int y) {

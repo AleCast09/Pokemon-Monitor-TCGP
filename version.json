@@ -1,7 +1,10 @@
 {
   "version": "1.5.37",
-  "notesCount": 6,
+  "notesCount": 9,
   "notes": [
+    "Fixed: opening MonitorPokemon.exe directly (by accident, instead of through the Control Panel) showed a confusing console window in the taskbar and could loop reopening the setup page - it now always runs fully hidden in the background, same as when started from the Panel.",
+    "Removed: MonitorPokemon.exe (the engine) no longer shows up in the folder at all - only the Control Panel is meant to be opened directly.",
+    "Improved: Control Panel reorganized into 4 clear sections (Control, S4T/Heartbeat, Discord, and a new one with working Tutorials and Support buttons) - removed the 3 small unlabeled icons at the bottom, one of which was a leftover broken placeholder link.",
     "Security: removed PDF tutorials entirely after one showed up with a leaked screenshot - the bot now also auto-deletes any old tutorial PDFs still sitting in your install folder on startup.",
     "New: Tutorials channels now open a proper in-app page instead of a PDF, works from your phone or PC - step-by-step images, click one to zoom in, light/dark mode, and a Donate button.",
     "New: Trade button on Gold Cards results and the Friend Trade button are now disabled (known issues being worked on).",

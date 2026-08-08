@@ -1,4 +1,4 @@
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { necesitaConfiguracion, ejecutarWizard } = require('./setup-wizard.js');
@@ -7,6 +7,37 @@ let esSea = false;
 try { esSea = require('node:sea').isSea(); } catch (e) { esSea = false; }
 
 const ENTRY_PATH = path.join(__dirname, 'entry.js');
+
+// Ventana propia oculta (2026-08-08, bug real reportado): si alguien abre MonitorPokemon.exe
+// directo por accidente -- en vez de por el Control Panel, que ya lo abre con
+// WindowStyle.Hidden -- se veia una consola negra con "Monitor Pokemon" en la barra de
+// tareas, y si encima no habia token configurado, el wizard se reabria en bucle sin que
+// quedara claro que estaba pasando. Antes el codigo ya DECIA "normally stays hidden" pero
+// nada lo ocultaba realmente en este camino. Ahora se relanza a si mismo como proceso hijo
+// oculto (windowsHide) y esta copia visible se cierra al toque -- el trabajo real sigue en
+// la copia oculta, con el mismo log de siempre (logLinea ya escribe a archivo, no solo consola).
+if (!process.env.MONITOR_LAUNCHER_HIDDEN) {
+    const argsRelanzar = esSea ? [] : [ENTRY_PATH];
+    spawn(process.execPath, argsRelanzar, {
+        cwd: __dirname,
+        stdio: 'ignore',
+        detached: true,
+        windowsHide: true,
+        env: { ...process.env, MONITOR_LAUNCHER_HIDDEN: '1' }
+    }).unref();
+    process.exit(0);
+}
+
+// Ocultar el .exe motor de la vista (2026-08-08, a pedido explicito del usuario: no quiere
+// que los usuarios vean/toquen MonitorPokemon.exe directo, solo el Panel) -- atributo Hidden
+// de Windows, se reaplica en cada arranque por si el zip no lo preservo al descomprimir.
+try {
+    for (const nombre of ['MonitorPokemon.exe', 'bundle.js']) {
+        const ruta = path.join(__dirname, nombre);
+        if (fs.existsSync(ruta)) execSync(`attrib +h "${ruta}"`);
+    }
+} catch (e) { /* no critico -- si falla, el archivo sigue funcionando, solo queda visible */ }
+
 const PENDING_UPDATE_PATH = path.join(__dirname, '.pending_update.json');
 const PENDING_RESTART_PATH = path.join(__dirname, '.pending_restart.json');
 const LOCK_PATH = path.join(__dirname, '.monitor.lock');
@@ -133,6 +164,11 @@ function iniciarProceso(def) {
         // internos raros ("Expected values to be equals", "Invalid string
         // length") en vez de un error de red normal -- confirmado en una PC
         // limpia, sin antivirus. Quitado: rompe mas de lo que arregla.
+        // windowsHide (bug real reportado 2026-08-08: cada proceso hijo -- bot,
+        // trading, heartbeat -- re-lanza el mismo .exe empaquetado, y sin esto
+        // cada uno abre su propia ventana de consola visible en la barra de
+        // tareas, confundiendo a la gente pensando que es una app aparte).
+        windowsHide: true,
         env: { ...process.env, MONITOR_ROLE: def.rol }
     });
 
@@ -308,7 +344,37 @@ function cerrarTodo() {
     process.exit(0);
 }
 
+// Limpieza de seguridad (2026-08-08, a pedido explicito del usuario): un usuario reporto
+// haber visto el token/API real en una captura del PDF viejo de tutoriales via Foxit PDF
+// Reader. Los tutoriales ya no se distribuyen como PDF, pero cada instalacion existente
+// todavia tiene esos PDF viejos en disco. Se hace ACA (no solo en bot.js) porque launcher.js
+// es el entrypoint real de un doble click -- si todavia no hay token configurado, el wizard
+// se abre en un loop y bot.js nunca llega a correr, asi que la limpieza de bot.js sola no
+// alcanzaba para instalaciones sin configurar. Corre siempre, en cada arranque; despues de
+// la primera vez no encuentra nada y no hace nada.
+function borrarPdfTutorialesViejos() {
+    try {
+        const carpetaTutorialesPdf = path.join(__dirname, 'assets', 'tutoriales');
+        if (fs.existsSync(carpetaTutorialesPdf)) {
+            for (const archivo of fs.readdirSync(carpetaTutorialesPdf)) {
+                if (/\.pdf$/i.test(archivo)) {
+                    fs.unlinkSync(path.join(carpetaTutorialesPdf, archivo));
+                    console.log(`Seguridad: PDF de tutorial viejo borrado del disco -- ${archivo}`);
+                }
+            }
+        }
+        const pdfSuelto = path.join(__dirname, 'TUTORIAL MONITOR POKEMON.pdf');
+        if (fs.existsSync(pdfSuelto)) {
+            fs.unlinkSync(pdfSuelto);
+            console.log('Seguridad: PDF de tutorial viejo borrado del disco -- TUTORIAL MONITOR POKEMON.pdf');
+        }
+    } catch (e) {
+        console.error('Seguridad: no se pudo borrar los PDF viejos de tutoriales:', e.message);
+    }
+}
+
 async function main() {
+    borrarPdfTutorialesViejos();
     if (yaHayUnaCopiaAbierta()) {
         logLinea('⚠️ Monitor Pokémon is already open — not opening a second copy.');
         avisarYaAbierto();

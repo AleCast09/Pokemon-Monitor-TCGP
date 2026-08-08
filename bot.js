@@ -29,13 +29,6 @@ const { obtenerMapaEmojisGuild, FUENTES_EMOJIS } = require('./guild-emojis.js');
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
 iniciarAutoSyncCardTypes();
 
-const TOKEN = process.env.DISCORD_BOT_TOKEN;
-const CLIENT_ID = process.env.DISCORD_CLIENT_ID || null;
-if (!TOKEN) {
-    console.error('❌ DISCORD_BOT_TOKEN is not set. Create a .env file with DISCORD_BOT_TOKEN or set the environment variable.');
-    process.exit(1);
-}
-
 // Limpieza de seguridad (2026-08-08, a pedido explicito del usuario): un usuario reporto
 // haber visto el token/API real en una captura del PDF viejo de tutoriales via Foxit PDF
 // Reader. Los tutoriales ya no se distribuyen como PDF (ver /tutorials + tutorial_pdf::),
@@ -52,8 +45,22 @@ try {
             }
         }
     }
+    // Copia suelta en la carpeta principal (versiones viejas la ponian ahi para que se vea
+    // apenas se extrae el zip, antes de abrir Discord) -- mismo contenido, mismo riesgo.
+    const pdfSuelto = path.join(__dirname, 'TUTORIAL MONITOR POKEMON.pdf');
+    if (fs.existsSync(pdfSuelto)) {
+        fs.unlinkSync(pdfSuelto);
+        console.log('Seguridad: PDF de tutorial viejo borrado del disco -- TUTORIAL MONITOR POKEMON.pdf');
+    }
 } catch (e) {
     console.error('Seguridad: no se pudo borrar los PDF viejos de tutoriales:', e.message);
+}
+
+const TOKEN = process.env.DISCORD_BOT_TOKEN;
+const CLIENT_ID = process.env.DISCORD_CLIENT_ID || null;
+if (!TOKEN) {
+    console.error('❌ DISCORD_BOT_TOKEN is not set. Create a .env file with DISCORD_BOT_TOKEN or set the environment variable.');
+    process.exit(1);
 }
 
 const client = new Client({
