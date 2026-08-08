@@ -1,7 +1,9 @@
 {
-  "version": "1.5.40",
-  "notesCount": 1,
+  "version": "1.5.41",
+  "notesCount": 2,
   "notes": [
+    "Fixed a real bug affecting anyone running MuMu instances at a different resolution than Ale's own (e.g. smaller instances to fit more on screen): the Shinedust/inventory reading used fixed pixel coordinates calibrated only to Ale's resolution, so on a different resolution the crop for one field could bleed into the row below it (reported: \"Poké Gold (non-paid)\" read as \"0104\" instead of \"4\"). Now scales every crop proportionally to the actual screenshot size instead of assuming a fixed resolution.",
+    "Temporary: Shinedust screenshots are kept in the automation\\Logs folder instead of being auto-deleted after each run, to help diagnose any remaining reading issues on other resolutions - will be reverted to auto-delete once confirmed working everywhere.",
     "Fixed a real bug affecting every user except Ale: the inventory icons (Poké Gold, Shinedust, tickets, hourglasses) on Info Accounts/Shinedust results used emoji IDs hardcoded to Ale's own bot application - since every user runs their own separate bot application, these always showed as broken plain text (\":Pokelingote_TCGP:\") for everyone else. Now uploads/resolves these icons per-server automatically, same as the rarity/type icons already did.",
     "Fixed a real bug affecting every existing install updating in-app (not a fresh download): the automation folder (the AHK scripts behind account injection, Trade, Main Trade and Shinedust) was never included in the auto-update package, only in a brand new zip download - anyone who updated through the Panel or Discord instead of downloading fresh kept hitting \"faltan_archivos\" / \"scripts not found\" no matter what. Now included in every update.",
     "Fixed a real bug affecting most installs: injecting an account (Info Accounts, Trade, Shinedust, any card lookup) failed with \"faltan_archivos\" unless AutoHotkey was installed at the exact same version/folder as Ale's own PC - now finds any AutoHotkey version installed in the standard locations.",

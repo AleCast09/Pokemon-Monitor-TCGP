@@ -154,23 +154,51 @@ leerCampoOcr(pBitmapOriginal, x, y, w, h, resize := 300, contrast := 75) {
     return valor
 }
 
+; Recortes resolucion-independientes (2026-08-08, a pedido explicito del usuario: "hagamos
+; que tambien trabaje a la resolucion de cualquiera... hay gente que usa las instancias mas
+; pequeñas para que ocupen menos espacio en su pantalla"). Todas las coordenadas de abajo se
+; calibraron a mano contra una captura de referencia de 540x960 (misma resolucion que usa
+; tap(), ver _AdbUtils.ahk). Si la instancia de otro usuario esta configurada a otra
+; resolucion Android (mas chica, para que quepan mas instancias en pantalla), el screenshot
+; real viene en OTRO tamaño en pixeles -- sin escalar, el mismo recorte caia en un lugar
+; distinto y agarraba parte de la fila de al lado (reporte real: "Poke Gold (non-paid)"
+; leyendo "0104" en vez de "4", mezclado con la fila de "paid" de abajo). Se asume la misma
+; proporcion de aspecto que 540x960 (las resoluciones estandar de Android la respetan). Para
+; quien ya esta en 540x960 (como Ale) la escala da exactamente 1.0 -- cero cambio de
+; comportamiento, mismo resultado que antes.
+REF_ANCHO_OCR := 540
+REF_ALTO_OCR := 960
+leerCampoOcrEscalado(pBitmapOriginal, refX, refY, refW, refH, resize := 300, contrast := 75) {
+    global REF_ANCHO_OCR, REF_ALTO_OCR
+    escalaX := Gdip_GetImageWidth(pBitmapOriginal) / REF_ANCHO_OCR
+    escalaY := Gdip_GetImageHeight(pBitmapOriginal) / REF_ALTO_OCR
+    return leerCampoOcr(pBitmapOriginal, Round(refX * escalaX), Round(refY * escalaY), Round(refW * escalaX), Round(refH * escalaY), resize, contrast)
+}
+
 pBitmapOriginal := Gdip_CreateBitmapFromFile(shinedustScreenshotFile)
 
-shineDustValue      := leerCampoOcr(pBitmapOriginal, 385, 310, 150, 27)
+shineDustValue      := leerCampoOcrEscalado(pBitmapOriginal, 385, 310, 150, 27)
 ; Recorte ancho (fila completa, con la etiqueta) en vez de solo el numero -- confirmado en
 ; vivo que asi el OCR SI detecta un digito solo como "9" (con el recorte angosto de antes no
 ; lo detectaba nunca, sin importar contraste/resize).
-pokeGoldNoPagado    := leerCampoOcr(pBitmapOriginal, 20, 145, 500, 40, 200, 75)
-pokeGoldPagado      := leerCampoOcr(pBitmapOriginal, 380, 190, 140, 30)
-cuponTienda         := leerCampoOcr(pBitmapOriginal, 380, 425, 140, 30)
-cuponTiendaEspecial := leerCampoOcr(pBitmapOriginal, 380, 534, 140, 30)
-cuponPremium        := leerCampoOcr(pBitmapOriginal, 20, 600, 500, 70, 200, 0)
-packHourglass       := leerCampoOcr(pBitmapOriginal, 55, 845, 100, 35)
+pokeGoldNoPagado    := leerCampoOcrEscalado(pBitmapOriginal, 20, 145, 500, 40, 200, 75)
+pokeGoldPagado      := leerCampoOcrEscalado(pBitmapOriginal, 380, 190, 140, 30)
+cuponTienda         := leerCampoOcrEscalado(pBitmapOriginal, 380, 425, 140, 30)
+cuponTiendaEspecial := leerCampoOcrEscalado(pBitmapOriginal, 380, 534, 140, 30)
+cuponPremium        := leerCampoOcrEscalado(pBitmapOriginal, 20, 600, 500, 70, 200, 0)
+packHourglass       := leerCampoOcrEscalado(pBitmapOriginal, 55, 845, 100, 35)
 
 Gdip_DisposeImage(pBitmapOriginal)
 
-if (FileExist(shinedustScreenshotFile))
-    FileDelete, %shinedustScreenshotFile%
+; ============ DEBUG TEMPORAL (2026-08-08) ============
+; Comentado a proposito, NO borrar sin querer: se esta diagnosticando un problema real de
+; lectura de Poke Gold en otras resoluciones (reporte de un usuario, OCR devolvia "0104" en
+; vez de "4") -- mientras se investiga, el screenshot se queda en Logs en vez de borrarse,
+; asi se puede pedir el archivo real a cualquier usuario que reporte un problema sin
+; depender de que edite el script a mano. Volver a activar el FileDelete una vez que el
+; problema este resuelto y confirmado (ver Task #12).
+;if (FileExist(shinedustScreenshotFile))
+;    FileDelete, %shinedustScreenshotFile%
 
 ; ============ Swipe + segunda captura (parte de abajo del inventario) ============
 ; AdbSwipePropio solo acepta un X fijo (swipe vertical puro, ver _AdbUtils.ahk) -- el swipe
@@ -191,17 +219,18 @@ rewindWatch := ""
 tradeHourglass := ""
 pBitmapOriginal2 := Gdip_CreateBitmapFromFile(shinedustScreenshotFile2)
 if (pBitmapOriginal2) {
-    wonderHourglass := leerCampoOcr(pBitmapOriginal2, 55, 495, 100, 35)
-    rewindWatch     := leerCampoOcr(pBitmapOriginal2, 55, 650, 100, 35)
+    wonderHourglass := leerCampoOcrEscalado(pBitmapOriginal2, 55, 495, 100, 35)
+    rewindWatch     := leerCampoOcrEscalado(pBitmapOriginal2, 55, 650, 100, 35)
     ; Contraste 50 en vez de 75 (confirmado en vivo 2026-08-03: este campo puntual fallaba
     ; justo con 75 pero funcionaba con 0/25/50/100 -- no se entendio del todo por que, se
     ; evita ese valor especifico en vez de insistir).
-    tradeHourglass  := leerCampoOcr(pBitmapOriginal2, 55, 805, 100, 35, 300, 50)
+    tradeHourglass  := leerCampoOcrEscalado(pBitmapOriginal2, 55, 805, 100, 35, 300, 50)
     Gdip_DisposeImage(pBitmapOriginal2)
 }
 
-if (FileExist(shinedustScreenshotFile2))
-    FileDelete, %shinedustScreenshotFile2%
+; DEBUG TEMPORAL (2026-08-08): comentado, mismo motivo que el FileDelete de arriba.
+;if (FileExist(shinedustScreenshotFile2))
+;    FileDelete, %shinedustScreenshotFile2%
 
 ; Solo el Shinedust es critico (es lo unico que ya se usaba antes) -- si algun otro campo
 ; no se pudo leer bien, se asume "0" en vez de hacer fallar todo el resultado. Confirmado en
