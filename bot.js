@@ -3027,29 +3027,41 @@ function obtenerDatosInventarioCacheados(fileName) {
 }
 
 // Mismo orden en el que aparecen en el inventario real del juego.
-// Emojis personalizados TCGP (2026-08-05, a pedido explicito del usuario): subidos como
-// application emojis del bot (ver assets/element/*_TCGP.png) -- IDs fijos, no cambian.
+// Emojis personalizados TCGP (2026-08-05, actualizado 2026-08-08): antes tenian el ID de
+// emoji hardcodeado (aplicacion de bot de Ale) -- se rompian como texto plano
+// (":Pokelingote_TCGP:") para cualquier otro usuario, ya que cada uno corre su PROPIA
+// aplicacion de bot sin esos emojis. Ahora son claves de FUENTES_EMOJIS (guild-emojis.js),
+// resueltas por servidor en tiempo real via emojiTag() -- mismo mecanismo ya usado para los
+// iconos de rareza/tipo, que nunca tuvieron este problema.
 const ETIQUETAS_INVENTARIO = [
-    ['pokegold_nonpaid', '<:Pokelingote_TCGP:1534723128004055161> Poké Gold (non-paid)'],
-    ['pokegold_paid', '<:Pokelingote_TCGP:1534723128004055161> Poké Gold (paid)'],
-    ['shopticket', '<:Cupon_de_tienda_TCGP:1534723152914026569> Shop Ticket'],
-    ['specialshopticket', '<:Cupon_de_tienda_especial_TCGP:1534723156462403614> Special Shop Ticket'],
-    ['premiumticket', '<:Cupon_premium_TCGP:1534723160069640213> Premium Ticket'],
-    ['packhourglass', '<:Reloj_de_arena_de_sobres_TCGP:1534723131598569603> Pack Hourglass'],
-    ['wonderhourglass', '<:Reloj_de_arena_magico_TCGP:1534723135117463642> Wonder Hourglass'],
-    ['rewindwatch', '<:Retronometro_TCGP:1534723138963902644> Rewind Watch'],
-    ['tradehourglass', '<:Reloj_arena_intercambio_TCGP:1534723339115958322> Trade Hourglass'],
+    ['pokegold_nonpaid', 'Pokelingote_TCGP', 'Poké Gold (non-paid)'],
+    ['pokegold_paid', 'Pokelingote_TCGP', 'Poké Gold (paid)'],
+    ['shopticket', 'Cupon_de_tienda_TCGP', 'Shop Ticket'],
+    ['specialshopticket', 'Cupon_de_tienda_especial_TCGP', 'Special Shop Ticket'],
+    ['premiumticket', 'Cupon_premium_TCGP', 'Premium Ticket'],
+    ['packhourglass', 'Reloj_de_arena_de_sobres_TCGP', 'Pack Hourglass'],
+    ['wonderhourglass', 'Reloj_de_arena_magico_TCGP', 'Wonder Hourglass'],
+    ['rewindwatch', 'Retronometro_TCGP', 'Rewind Watch'],
+    ['tradehourglass', 'Reloj_arena_intercambio_TCGP', 'Trade Hourglass'],
 ];
+
+// Arma el tag <:nombre:id> a partir del mapa ya resuelto para ESE servidor -- si por algun
+// motivo el emoji no se pudo subir/resolver (permiso faltante, limite de 50 emojis del
+// servidor alcanzado, etc.), se omite en vez de mostrar un tag roto.
+function emojiTag(mapaEmojis, nombre) {
+    const id = mapaEmojis?.[nombre];
+    return id ? `<:${nombre}:${id}>` : '';
+}
 
 // Solo incluye los campos que se pudieron leer bien (algunos pueden venir vacios si el OCR
 // no los reconocio esa corrida -- ver leerCampoOcr en _CountShinedust.ahk).
-function camposInventarioEmbed(datos) {
+function camposInventarioEmbed(datos, mapaEmojis) {
     // Solo mayor a 0 (a pedido explicito del usuario 2026-08-03): un campo en "0" no aporta
     // nada y satura el embed -- ya sea que el OCR lo haya leido bien o que sea el default
     // aplicado cuando no se pudo leer (ver conValorODefaultCero en _CountShinedust.ahk).
     return ETIQUETAS_INVENTARIO
         .filter(([clave]) => datos[clave] && datos[clave] !== '0')
-        .map(([clave, etiqueta]) => ({ name: etiqueta, value: datos[clave], inline: true }));
+        .map(([clave, nombreEmoji, texto]) => ({ name: `${emojiTag(mapaEmojis, nombreEmoji)} ${texto}`.trim(), value: datos[clave], inline: true }));
 }
 
 // Corre nuestro propio script de OCR (ver automation/_CountShinedust.ahk) sobre una
@@ -3474,6 +3486,11 @@ dashboardApp.get('/account/:token', async (req, res) => {
         const accountData = leerJsonSeguro(archivoJson);
         if (!accountData || !Array.isArray(accountData.pulls)) return res.status(404).send('No se pudo leer la cuenta.');
 
+        // Mismo mapa de emojis por servidor que usa el embed de Discord (2026-08-08, bug
+        // real): esta pagina web tambien convierte los tags <:nombre:id> a <img> del CDN de
+        // Discord (emojiDiscordAImg), asi que necesita el ID real de ESTE servidor tambien.
+        const mapaEmojisAccountPage = await obtenerMapaEmojisGuild(client.guilds.cache.first());
+
         const conteoPorCodigo = {};
         for (const pull of accountData.pulls) {
             if (!Array.isArray(pull.cards)) continue;
@@ -3694,7 +3711,7 @@ dashboardApp.get('/account/:token', async (req, res) => {
 <main>
 <div class="sub">File: ${escaparHtml(accountData.metadata?.fileName || '')} — el link de esta pagina es privado, pero si lo compartís cualquiera con el enlace puede verlo. Para pasarle esto a alguien, mejor descargá el PDF y mandale el archivo.</div>
 ${datosInventario ? `<div class="sub lista-inventario">
-    ${camposInventarioEmbed(datosInventario).map(c => `<div>${emojiDiscordAImg(c.name)}: <strong>${escaparHtml(c.value)}</strong></div>`).join('\n    ')}
+    ${camposInventarioEmbed(datosInventario, mapaEmojisAccountPage).map(c => `<div>${emojiDiscordAImg(c.name)}: <strong>${escaparHtml(c.value)}</strong></div>`).join('\n    ')}
 </div>` : ''}
 <div class="filtros">
     <div class="dropdown" id="dropdown-expansion">
@@ -6622,6 +6639,7 @@ client.on('interactionCreate', async interaction => {
         // vistazo que un parrafo con todo junto. Shinedust/inventario (si hay) van justo
         // despues de Total Cards, antes de los links -- pedido explicito del usuario
         // 2026-08-03 ("preferible que vaya esto debajo de total cartas").
+        const mapaEmojisInventario = await obtenerMapaEmojisGuild(interaction.guild);
         const embed = new EmbedBuilder()
             .setTitle('📋 Info Accounts')
             .setDescription(`Hi <@${interaction.user.id}>, the account data is attached!`)
@@ -6632,12 +6650,12 @@ client.on('interactionCreate', async interaction => {
                 // archivo adjunto de verdad.
                 { name: '💠 Data XML', value: `\`${path.basename(archivo)}\``, inline: true },
                 { name: '🗂️ Data Json', value: `\`${path.basename(archivoJson)}\``, inline: true },
-                { name: '<:Card_Back_TCGP:1534731032400756807> Total Cards', value: `${totalCartas}`, inline: true }
+                { name: `${emojiTag(mapaEmojisInventario, 'Card_Back_TCGP')} Total Cards`.trim(), value: `${totalCartas}`, inline: true }
             )
             .setColor(0xE91E63);
         if (datosInventario) {
-            embed.addFields({ name: '<:Polvo_iris_TCGP:1534723123914739802> Shinedust', value: `${datosInventario.shinedust}`, inline: true });
-            embed.addFields(...camposInventarioEmbed(datosInventario));
+            embed.addFields({ name: `${emojiTag(mapaEmojisInventario, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: `${datosInventario.shinedust}`, inline: true });
+            embed.addFields(...camposInventarioEmbed(datosInventario, mapaEmojisInventario));
         }
         embed.addFields({ name: '🔗 Pages we mentioned', value: paginas.join('\n') });
         embed.setFooter({ text: 'Links stop working if the bot restarts.' });
@@ -7020,7 +7038,8 @@ client.on('interactionCreate', async interaction => {
                         // se muestra en Info Accounts; este resultado se queda solo con la
                         // carta + archivo + shinedust, igual de simple que Extract XML.
                         payload.embeds[0].addFields({ name: '📄 Account file', value: `\`${fileName}\`` });
-                        payload.embeds[0].addFields({ name: '<:Polvo_iris_TCGP:1534723123914739802> Shinedust', value: `**${valorOMotivo}**` });
+                        const mapaEmojisShinedust = await obtenerMapaEmojisGuild(interaction.guild);
+                        payload.embeds[0].addFields({ name: `${emojiTag(mapaEmojisShinedust, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: `**${valorOMotivo}**` });
                         payload.content = `<@${interaction.user.id}> Account \`${fileName}\` has **${valorOMotivo}** Shinedust.`;
                         // Boton Trade (2026-08-05, a pedido explicito del usuario): antes
                         // usaba su propio atajo (shinedust_result_trade::/
@@ -7752,7 +7771,8 @@ client.on('interactionCreate', async interaction => {
             const payloadEmbed = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
             payloadEmbed.components = [];
             payloadEmbed.embeds[0].addFields({ name: '📄 Account file', value: `\`${fileName}\`` });
-            payloadEmbed.embeds[0].addFields({ name: '<:Polvo_iris_TCGP:1534723123914739802> Shinedust', value: `**${valorShinedust || '?'}**` });
+            const mapaEmojisShinedustCard = await obtenerMapaEmojisGuild(interaction.guild);
+            payloadEmbed.embeds[0].addFields({ name: `${emojiTag(mapaEmojisShinedustCard, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: `**${valorShinedust || '?'}**` });
 
             const archivos = [new AttachmentBuilder(archivo)];
             const deviceAccount = extraerDeviceAccount(archivo);

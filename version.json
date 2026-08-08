@@ -1,7 +1,8 @@
 {
-  "version": "1.5.39",
+  "version": "1.5.40",
   "notesCount": 1,
   "notes": [
+    "Fixed a real bug affecting every user except Ale: the inventory icons (Poké Gold, Shinedust, tickets, hourglasses) on Info Accounts/Shinedust results used emoji IDs hardcoded to Ale's own bot application - since every user runs their own separate bot application, these always showed as broken plain text (\":Pokelingote_TCGP:\") for everyone else. Now uploads/resolves these icons per-server automatically, same as the rarity/type icons already did.",
     "Fixed a real bug affecting every existing install updating in-app (not a fresh download): the automation folder (the AHK scripts behind account injection, Trade, Main Trade and Shinedust) was never included in the auto-update package, only in a brand new zip download - anyone who updated through the Panel or Discord instead of downloading fresh kept hitting \"faltan_archivos\" / \"scripts not found\" no matter what. Now included in every update.",
     "Fixed a real bug affecting most installs: injecting an account (Info Accounts, Trade, Shinedust, any card lookup) failed with \"faltan_archivos\" unless AutoHotkey was installed at the exact same version/folder as Ale's own PC - now finds any AutoHotkey version installed in the standard locations.",
     "Improved: the account cards page (Info Accounts) got a full visual refresh - light blue theme matching the Tutorials page, a live stats bar, and a green progress ring around each expansion's logo showing how close it is to completion.",

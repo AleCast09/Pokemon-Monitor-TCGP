@@ -44,7 +44,22 @@ const FUENTES_EMOJIS = {
     leyenda: 'element/Leyenda.png',
     paquete: 'element/Paquete_DBPR.png',
     tarjeta_puntos: 'element/Tarjeta_de_puntos_grande.png',
-    estrella_tienda: 'element/fFIdmpWM6662789b86b3d_1717729435_420x420.png'
+    estrella_tienda: 'element/fFIdmpWM6662789b86b3d_1717729435_420x420.png',
+    // Iconos de inventario/Shinedust (2026-08-08, bug real reportado por un usuario): antes
+    // vivian hardcodeados como <:Nombre:ID> con el ID de la aplicacion de bot de Ale -- para
+    // cualquier otro usuario (su propia aplicacion de bot, sin ese emoji) Discord no podia
+    // resolverlos y se veian como texto plano (":Pokelingote_TCGP:"). Mismo mecanismo que el
+    // resto de FUENTES_EMOJIS: se sube solo a cada servidor la primera vez que hace falta.
+    Card_Back_TCGP: 'element/Card Back.PNG',
+    Polvo_iris_TCGP: 'element/Polvo_iris_TCGP.png',
+    Pokelingote_TCGP: 'element/Pokélingote_TCGP.png',
+    Cupon_de_tienda_TCGP: 'element/Cupón_de_tienda_TCGP.png',
+    Cupon_de_tienda_especial_TCGP: 'element/Cupón_de_tienda_especial_TCGP.png',
+    Cupon_premium_TCGP: 'element/Cupón_prémium_TCGP.png',
+    Reloj_de_arena_de_sobres_TCGP: 'element/Reloj_de_arena_de_sobres_TCGP.png',
+    Reloj_de_arena_magico_TCGP: 'element/Reloj_de_arena_mágico_TCGP.png',
+    Retronometro_TCGP: 'element/Retronómetro_TCGP.png',
+    Reloj_arena_intercambio_TCGP: 'element/Reloj_de_arena_de_intercambio_TCGP.png'
 };
 
 // El link de invitación de OAuth2 no es secreto, y cada usuario final corre su
