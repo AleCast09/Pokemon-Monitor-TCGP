@@ -107,6 +107,7 @@ public class ControlPanelForm : Form {
 
     Dictionary<string, string> envConocido;
     bool enTransicion = false;
+    bool arranqueAutoIntentado = false;
     DateTime horaCambioDetectado;
     InfoDiscord infoDiscord;
     bool avisoActualizacionMostrado = false;
@@ -806,14 +807,26 @@ public class ControlPanelForm : Form {
             envActual.TryGetValue("GOOGLE_DRIVE_API_KEY", out apiNuevo);
             if (tokenViejo != tokenNuevo || apiViejo != apiNuevo) {
                 enTransicion = true;
+                arranqueAutoIntentado = false;
                 horaCambioDetectado = DateTime.Now;
             }
         }
 
         if (enTransicion) {
-            labelTokenEstado.Text = "Token changed - restarting...";
+            // Bug real (2026-08-08, reproducido en vivo): si el motor todavia NUNCA se
+            // habia arrancado (instalacion recien descomprimida, se guarda el token antes
+            // de tocar "Start"), el .env cambia igual pero no hay ningun proceso vivo que
+            // vaya a notar ".pending_restart.json" -- se quedaba mostrando "restarting..."
+            // para siempre, sin arrancar nada nunca. Si detectamos que no esta corriendo,
+            // arrancamos directo (una sola vez por cambio) en vez de esperar un reinicio
+            // que nunca va a pasar solo.
+            if (!corriendo && !arranqueAutoIntentado) {
+                arranqueAutoIntentado = true;
+                IniciarBot();
+            }
+            labelTokenEstado.Text = corriendo ? "Token changed - restarting..." : "Token saved - starting...";
             labelTokenEstado.ForeColor = Color.FromArgb(240, 170, 60);
-            labelApiEstado.Text = "Restarting...";
+            labelApiEstado.Text = corriendo ? "Restarting..." : "Starting...";
             labelApiEstado.ForeColor = Color.FromArgb(240, 170, 60);
             if ((DateTime.Now - horaCambioDetectado).TotalSeconds >= 5 && corriendo) {
                 envConocido = envActual;

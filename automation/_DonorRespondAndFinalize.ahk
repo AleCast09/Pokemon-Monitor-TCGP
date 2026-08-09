@@ -114,9 +114,10 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
     }
 }
 
-; Igual que esperarNeedleYTap pero para el swipe del paso 4 (no hay tap fijo, hay que
-; esperar la needle y despues ejecutar el gesto en vez de un tap).
-esperarNeedleLuegoSwipe(nombreNeedle, variation, x, y1, y2, duracionMs, timeoutMs := 15000) {
+; Igual que esperarNeedleYTap pero sin ninguna accion al encontrarla (2026-08-09, a pedido
+; explicito del usuario: sacar la foto real de la carta justo antes del swipe que la manda --
+; deja la pantalla intacta para que el caller saque su propia captura antes de actuar).
+esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
@@ -135,10 +136,8 @@ esperarNeedleLuegoSwipe(nombreNeedle, variation, x, y1, y2, duracionMs, timeoutM
                 Gdip_DisposeImage(pBitmap)
             }
         }
-        if (encontrado) {
-            AdbSwipePropio(adbPath, puerto, x, y1, y2, duracionMs)
+        if (encontrado)
             return true
-        }
         if (A_TickCount - inicio > timeoutMs)
             return false
         Sleep, 500
@@ -152,11 +151,19 @@ if (!esperarNeedleYTap("own_donorfinalize_tradeforcard_title", 30, 206, 459))
 if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 199, 365))
     ExitConError("no_aparecio_confirmar_finalizar_paso3")
 
+; Foto real del trade (2026-08-09, a pedido explicito del usuario: "antes de hacer el
+; swipe" -- justo cuando aparece la instruccion "Swipe the card to send it to your trade
+; partner", la carta que se esta por enviar todavia se ve completa en pantalla). Nombre
+; derivado del outputFile (mismo que ya recibe este script como 3er argumento) para que
+; bot.js sepa exactamente donde buscarla sin necesitar coordinarse por otro lado.
+if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000))
+    ExitConError("no_aparecio_instruccion_swipe_paso4")
+AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_TradePhoto.png"))
+
 ; Swipe rapido para enviar la carta (142,397)->(145,157) en logico, convertido a
 ; dispositivo -- a pedido explicito del usuario, duracion corta (150ms) para que
 ; registre como swipe real y no como un tap.
-if (!esperarNeedleLuegoSwipe("own_donorfinalize_swipe_instruction", 30, 274, 702, 230, 150))
-    ExitConError("no_aparecio_instruccion_swipe_paso4")
+AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
 Sleep, 3000
 
 if (!esperarNeedleYTap("own_donorfinalize_tap_to_proceed", 30, 152, 486))

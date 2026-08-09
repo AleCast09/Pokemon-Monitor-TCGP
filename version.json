@@ -1,7 +1,11 @@
 {
-  "version": "1.5.42",
-  "notesCount": 2,
+  "version": "1.5.43",
+  "notesCount": 4,
   "notes": [
+    "Fixed a real bug affecting every user: the \"Total Cards\" icon never uploaded (Discord rejected it as too large for a custom emoji) - the source image is now resized before uploading, same as every other custom icon.",
+    "Fixed: reading Shinedust or a Main Trade could get stuck and time out (\"timeout_pantallas_bienvenida\") if the game showed a loading error popup before reaching the main menu - now detects it and fails with a clear Retry button instead of hanging (a full restart is more reliable than trying to recover mid-run).",
+    "New: a warning now shows when starting Main Trade on a PC with less than 8GB of RAM, recommending Friend Trade instead (it only needs 1 instance running, much lighter).",
+    "Improved: the Poké Gold reading now double-checks itself (reads twice a second apart and compares) instead of trusting a single capture - helps on slower PCs where the screen might not be fully done rendering yet.",
     "Fixed: reading Shinedust or injecting an account could get stuck and time out (\"timeout_pantallas_bienvenida\") if the game showed an \"Update the App\"/\"a new version is available\" popup before reaching the main menu - now detects and dismisses these too, same as the other welcome-screen popups.",
     "Fixed: the downloaded Account Report PDF showed a broken internal name (\"Pokelingote_TCGP\") instead of \"Poké Gold (non-paid)\"/\"(paid)\" for that field.",
     "Fixed a real bug affecting anyone running MuMu instances at a different resolution than Ale's own (e.g. smaller instances to fit more on screen): the Shinedust/inventory reading used fixed pixel coordinates calibrated only to Ale's resolution, so on a different resolution the crop for one field could bleed into the row below it (reported: \"Poké Gold (non-paid)\" read as \"0104\" instead of \"4\"). Now scales every crop proportionally to the actual screenshot size instead of assuming a fixed resolution.",

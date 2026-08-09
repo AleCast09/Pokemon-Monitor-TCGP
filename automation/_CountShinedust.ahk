@@ -140,16 +140,36 @@ Sleep, 500
 ; pero no siempre para "0" (sigue fallando en pokegold_paid/specialshopticket incluso asi).
 ; Donde no se puede arreglar del todo, se deja vacio (no se manda un dato incorrecto) en vez
 ; de forzar un "0" a ciegas.
-leerCampoOcr(pBitmapOriginal, x, y, w, h, resize := 300, contrast := 75) {
+; etiqueta (2026-08-08, DEBUG TEMPORAL): parametro opcional solo para diagnostico -- si se
+; pasa, vuelca el texto CRUDO del OCR (antes del RegExReplace que se queda solo con digitos)
+; a LogsDir\<winTitle>_OcrDebug.txt. Se agrega para investigar reportes reales de usuarios
+; con "Poke Gold (non-paid)" leyendo basura tipo "0104"/"0105" en vez del numero real (un
+; solo digito) -- la sospecha es que el recorte ancho (que incluye el TEXTO de la etiqueta,
+; agregado para ayudar a detectar digitos aislados, ver comentario mas abajo) esta haciendo
+; que el motor de OCR confunda letras de la etiqueta con digitos, y el RegExReplace actual
+; se come esa evidencia sin dejar rastro. No cambia el VALOR devuelto (mismo comportamiento
+; de siempre) -- solo agrega este log para poder confirmar o descartar la teoria la proxima
+; vez que alguien lo reporte, sin depender de conseguir el PNG original. Quitar junto con el
+; resto del modo debug una vez que Task #12 este resuelto y confirmado.
+leerCampoOcr(pBitmapOriginal, x, y, w, h, resize := 300, contrast := 75, etiqueta := "") {
+    global LogsDir, g_winTitle
     valor := ""
+    crudo := ""
     try {
         allowedChars := "0123456789,. "
         pBitmapFormatted := Gdip_CropResizeGreyscaleContrast(pBitmapOriginal, x, y, w, h, resize, contrast)
-        valor := GetTextFromBitmap(pBitmapFormatted, allowedChars)
+        crudo := GetTextFromBitmap(pBitmapFormatted, allowedChars)
         Gdip_DisposeImage(pBitmapFormatted)
-        valor := RegExReplace(valor, "[^\d,]", "")
+        valor := RegExReplace(crudo, "[^\d,]", "")
     } catch e {
         valor := ""
+    }
+    if (etiqueta != "") {
+        try {
+            crudoEscapado := StrReplace(StrReplace(crudo, "`r", "\r"), "`n", "\n")
+            FileAppend, %A_Now% | %etiqueta% | crop=(%x%`,%y%`,%w%`,%h%) | crudo="%crudoEscapado%" | limpio="%valor%"`n, % LogsDir . "\" . g_winTitle . "_OcrDebug.txt"
+        } catch e {
+        }
     }
     return valor
 }
@@ -168,11 +188,44 @@ leerCampoOcr(pBitmapOriginal, x, y, w, h, resize := 300, contrast := 75) {
 ; comportamiento, mismo resultado que antes.
 REF_ANCHO_OCR := 540
 REF_ALTO_OCR := 960
-leerCampoOcrEscalado(pBitmapOriginal, refX, refY, refW, refH, resize := 300, contrast := 75) {
+leerCampoOcrEscalado(pBitmapOriginal, refX, refY, refW, refH, resize := 300, contrast := 75, etiqueta := "") {
     global REF_ANCHO_OCR, REF_ALTO_OCR
     escalaX := Gdip_GetImageWidth(pBitmapOriginal) / REF_ANCHO_OCR
     escalaY := Gdip_GetImageHeight(pBitmapOriginal) / REF_ALTO_OCR
-    return leerCampoOcr(pBitmapOriginal, Round(refX * escalaX), Round(refY * escalaY), Round(refW * escalaX), Round(refH * escalaY), resize, contrast)
+    return leerCampoOcr(pBitmapOriginal, Round(refX * escalaX), Round(refY * escalaY), Round(refW * escalaX), Round(refH * escalaY), resize, contrast, etiqueta)
+}
+
+; Lee-espera-vuelve a leer y compara (2026-08-09, a pedido explicito del usuario): sospecha
+; real de que el campo de Poke Gold lee basura en dispositivos LENTOS (ej. una laptop con
+; menos recursos) porque la captura se saca antes de que el numero termine de renderizarse en
+; pantalla -- no un problema de posicion/escala del recorte (ya resuelto), sino de TIMING. En
+; vez de adivinar un tiempo de espera fijo que le alcance a cualquier dispositivo (de sobra en
+; una PC rapida, quizas insuficiente en una laptop lenta), saca una captura FRESCA por
+; intento (no reusa pBitmapOriginal) y compara contra la anterior -- dos lecturas iguales
+; seguidas confirman que el texto ya esta estable. Si nunca coinciden en 3 intentos, se queda
+; con la ultima (mejor un valor posiblemente malo que ninguno, mismo criterio que el resto de
+; los campos no criticos).
+leerCampoOcrVerificado(refX, refY, refW, refH, resize := 300, contrast := 75, etiqueta := "") {
+    global adbPath, puerto, LogsDir, g_winTitle
+    tempFile := LogsDir . "\_ocr_verificado_" . g_winTitle . ".png"
+    ultimo := ""
+    Loop, 3 {
+        AdbScreenshot(adbPath, puerto, tempFile)
+        pBitmap := FileExist(tempFile) ? Gdip_CreateBitmapFromFile(tempFile) : 0
+        if (FileExist(tempFile))
+            FileDelete, %tempFile%
+        if (!pBitmap) {
+            Sleep, 1000
+            continue
+        }
+        actual := leerCampoOcrEscalado(pBitmap, refX, refY, refW, refH, resize, contrast, etiqueta)
+        Gdip_DisposeImage(pBitmap)
+        if (A_Index > 1 && actual = ultimo && actual != "")
+            return actual
+        ultimo := actual
+        Sleep, 1000
+    }
+    return ultimo
 }
 
 pBitmapOriginal := Gdip_CreateBitmapFromFile(shinedustScreenshotFile)
@@ -180,8 +233,10 @@ pBitmapOriginal := Gdip_CreateBitmapFromFile(shinedustScreenshotFile)
 shineDustValue      := leerCampoOcrEscalado(pBitmapOriginal, 385, 310, 150, 27)
 ; Recorte ancho (fila completa, con la etiqueta) en vez de solo el numero -- confirmado en
 ; vivo que asi el OCR SI detecta un digito solo como "9" (con el recorte angosto de antes no
-; lo detectaba nunca, sin importar contraste/resize).
-pokeGoldNoPagado    := leerCampoOcrEscalado(pBitmapOriginal, 20, 145, 500, 40, 200, 75)
+; lo detectaba nunca, sin importar contraste/resize). Version VERIFICADA (2026-08-09, ver
+; leerCampoOcrVerificado arriba) -- toma sus PROPIAS capturas frescas en vez de reusar
+; pBitmapOriginal, para poder comparar dos lecturas separadas en el tiempo.
+pokeGoldNoPagado    := leerCampoOcrVerificado(20, 145, 500, 40, 200, 75, "pokeGoldNoPagado")
 pokeGoldPagado      := leerCampoOcrEscalado(pBitmapOriginal, 380, 190, 140, 30)
 cuponTienda         := leerCampoOcrEscalado(pBitmapOriginal, 380, 425, 140, 30)
 cuponTiendaEspecial := leerCampoOcrEscalado(pBitmapOriginal, 380, 534, 140, 30)

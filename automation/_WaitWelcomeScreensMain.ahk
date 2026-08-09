@@ -181,6 +181,21 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
             ; update" (NO "To the Store", que sacaria de la app y romperia el flujo).
             logDebugBienvenida("intento " . intento . " -- needle 'own_updateapp_store_title' -> tap 'unable to update' (141,312)")
             tap(141, 312)
+        } else if (buscarNeedleEnCaptura(pHaystack, "own_ingame_error_popup")) {
+            ; Popup generico "Error / Error code: XXX-XXX-XXXXX / An error has occurred" --
+            ; reportado en vivo 2026-08-09 en la instancia Main, aparece cuando el juego tarda
+            ; en cargar (conexion lenta del lado del usuario, no un bug de la automatizacion).
+            ; Needle recorta SOLO el titulo "Error" (el codigo de abajo puede variar entre
+            ; errores distintos).
+            ;
+            ; A proposito NO se toca "To Title Screen" para intentar recuperarse solo en el
+            ; mismo intento (a pedido explicito del usuario, 2026-08-09): confiar en que el
+            ; MISMO proceso ya degradado se termine de cargar bien es un 50/50 -- reiniciar
+            ; TODO el flujo de cero da mucha mas confianza de que la segunda vez cargue bien.
+            ; Se corta con error claro -- el caller ya tiene su propio boton de Retry.
+            logDebugBienvenida("intento " . intento . " -- needle 'own_ingame_error_popup' -> corta con error, mejor reiniciar todo el flujo")
+            Gdip_DisposeImage(pHaystack)
+            ExitConError("popup_error_juego")
         } else if (buscarNeedleEnCaptura(pHaystack, "own_gameclosed")) {
             logDebugBienvenida("intento " . intento . " -- needle 'own_gameclosed' -> tap OK (150,369)")
             tap(150, 369)

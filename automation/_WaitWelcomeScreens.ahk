@@ -213,6 +213,22 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
             ; segundo (deja seguir sin salir de la app a la tienda, que rompería el flujo).
             logDebugBienvenida("intento " . intento . " -- needle 'own_updateapp_store_title' -> tap 'unable to update' (141,312)")
             tap(141, 312)
+        } else if (buscarNeedleEnCaptura(pHaystack, "own_ingame_error_popup")) {
+            ; Popup generico "Error / Error code: XXX-XXX-XXXXX / An error has occurred" --
+            ; reportado en vivo 2026-08-09, aparece cuando el juego tarda en cargar (conexion
+            ; lenta del lado del usuario, no un bug de la automatizacion). Needle recorta SOLO
+            ; el titulo "Error" (el codigo de abajo puede variar entre errores distintos).
+            ;
+            ; A proposito NO se toca "To Title Screen" para intentar recuperarse solo en el
+            ; mismo intento (a pedido explicito del usuario, 2026-08-09): confiar en que el
+            ; MISMO proceso ya degradado se termine de cargar bien es un 50/50 -- reiniciar
+            ; TODO el flujo de cero (instancias apagadas y prendidas de nuevo, sesion nueva)
+            ; da mucha mas confianza de que la segunda vez cargue bien. Se corta con error
+            ; claro -- el caller ya tiene su propio boton de Retry para esto (mismo mecanismo
+            ; que cualquier otra falla real del pipeline).
+            logDebugBienvenida("intento " . intento . " -- needle 'own_ingame_error_popup' -> corta con error, mejor reiniciar todo el flujo")
+            Gdip_DisposeImage(pHaystack)
+            ExitConError("popup_error_juego")
         } else if (buscarNeedleEnCaptura(pHaystack, "own_gameclosed")) {
             ; Popup "The game closed, but you successfully obtained the items" -- puede
             ; aparecer despues de un force-stop/inyeccion. Needle mapeada en vivo 2026-08-04.

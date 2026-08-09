@@ -59,7 +59,12 @@ const FUENTES_EMOJIS = {
     Reloj_de_arena_de_sobres_TCGP: 'element/Reloj_de_arena_de_sobres_TCGP.png',
     Reloj_de_arena_magico_TCGP: 'element/Reloj_de_arena_mágico_TCGP.png',
     Retronometro_TCGP: 'element/Retronómetro_TCGP.png',
-    Reloj_arena_intercambio_TCGP: 'element/Reloj_de_arena_de_intercambio_TCGP.png'
+    Reloj_arena_intercambio_TCGP: 'element/Reloj_de_arena_de_intercambio_TCGP.png',
+    // Panel de trade rapido desde la pagina web (2026-08-08, a pedido explicito del usuario):
+    // icono del boton "Start Trade" y los check/cruz del log en vivo de la ejecucion.
+    Ficha_de_intercambio_TCGP: 'element/Ficha_de_intercambio_TCGP.png',
+    nice: 'element/nice.png',
+    bad: 'element/bad.png'
 };
 
 // El link de invitación de OAuth2 no es secreto, y cada usuario final corre su
@@ -96,12 +101,21 @@ function guardarCacheEnDisco(mapa) {
     }
 }
 
+// Bug real encontrado 2026-08-09 (logs de un usuario probando en vivo): "Card_Back_TCGP"
+// nunca se subia para NADIE -- Discord devolvia "Invalid Form Body / File cannot be larger
+// than 2048.0 kb" porque el asset de origen (element/Card Back.PNG) es el arte completo de
+// una carta (1214x1695px, 2.5MB), pensado para otro uso, no un emoji. Los emoji de Discord
+// tienen que entrar en 128x128 y bien por debajo del limite de tamaño del servidor -- se
+// redimensiona siempre antes de subir (manteniendo proporcion, sin agrandar los que ya son
+// chicos) para que cualquier asset futuro que tampoco venga pre-recortado a tamaño de emoji
+// no rompa la subida de la misma forma.
 async function subirEmojiFaltante(guild, nombre, rutaRelativa) {
     const rutaAbsoluta = path.join(__dirname, 'assets', rutaRelativa);
-    let buffer = fs.readFileSync(rutaAbsoluta);
-    if (/\.(avif|webp)$/i.test(rutaRelativa)) {
-        buffer = await sharp(buffer).png().toBuffer();
-    }
+    const bufferOriginal = fs.readFileSync(rutaAbsoluta);
+    const buffer = await sharp(bufferOriginal)
+        .resize(128, 128, { fit: 'inside', withoutEnlargement: true })
+        .png({ compressionLevel: 9 })
+        .toBuffer();
     const nuevo = await guild.emojis.create({ attachment: buffer, name: nombre });
     return nuevo.id;
 }

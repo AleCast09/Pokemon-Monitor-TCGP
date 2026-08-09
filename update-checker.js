@@ -7,6 +7,7 @@ const db = require('./database.js');
 
 const VERSION_PATH = path.join(__dirname, 'version.json');
 const PENDING_UPDATE_PATH = path.join(__dirname, '.pending_update.json');
+const UPDATE_FALLO_PATH = path.join(__dirname, 'update_fallo.txt');
 const ASSETS_ZIP_TEMP_PATH = path.join(__dirname, 'assets-actualizacion.zip');
 const VERSION_URL_REMOTA = 'https://raw.githubusercontent.com/AleCast09/Pokemon-Monitor-TCGP/main/version.json';
 // Respaldo por si raw.githubusercontent.com esta bloqueado por el ISP del
@@ -204,6 +205,44 @@ async function avisarActualizacionAplicadaSiHaceFalta(client) {
     }
 }
 
+// Aviso de "el reemplazo del .exe fallo" (2026-08-08, a pedido explicito del usuario:
+// "como le avisariamos al usuario que hubo falla al actualizar" -- hasta ahora
+// launcher.js dejaba escrito update_fallo.txt en la carpeta cuando el .exe viejo se
+// quedaba bloqueado mas de un minuto (ej. un antivirus escaneandolo), pero nadie lo iba
+// a ver ahi -- el bot seguia arrancando en la version VIEJA sin ningun aviso en Discord,
+// como si la actualizacion nunca se hubiera intentado. launcher.js no tiene cliente de
+// discord.js propio (por eso escribe el .txt en vez de avisar el mismo), asi que el aviso
+// real se manda aca, en el primer arranque de bot.js despues del intento fallido -- mismo
+// destino/mencion que ya usa avisarActualizacionAplicadaSiHaceFalta. Se borra el .txt
+// despues de avisar para no repetir el mismo aviso en cada reinicio siguiente.
+async function avisarActualizacionFallidaSiHaceFalta(client) {
+    try {
+        if (!fs.existsSync(UPDATE_FALLO_PATH)) return;
+        const motivo = fs.readFileSync(UPDATE_FALLO_PATH, 'utf8').trim();
+        fs.unlinkSync(UPDATE_FALLO_PATH);
+
+        const destino = await obtenerDestinoNotificacion(client);
+        if (!destino) return;
+
+        const local = obtenerVersionLocal();
+        const embed = {
+            title: '⚠️ Update failed to apply',
+            color: 0xE67E22,
+            description: `${motivo}\n\nStill running on **v${local.version}** (the update was never applied) — nothing is broken, but you'll want to close any antivirus scan on this folder and press **Update Now** again in \`/setup\` or the Control Panel.`
+        };
+
+        if (destino.tipo === 'webhook') {
+            const contenido = destino.ownerId ? `<@${destino.ownerId}>` : undefined;
+            await axios.post(`${destino.webhookUrl}?wait=true`, { embeds: [embed], content: contenido }, { timeout: 15000 });
+        } else {
+            const usuario = await client.users.fetch(destino.userId);
+            await usuario.send({ embeds: [embed] });
+        }
+    } catch (e) {
+        console.error('DEBUG: error avisando actualizacion fallida:', describirError(e));
+    }
+}
+
 // A diferencia del .exe (bloqueado por Windows mientras el proceso corre y
 // por eso necesita el paso de _actualizar.bat en launcher.js), la carpeta
 // assets/ no está en uso exclusivo — se puede sobrescribir en caliente, sin
@@ -302,6 +341,7 @@ async function descargarActualizacion(remota) {
 module.exports = {
     chequearActualizaciones,
     avisarActualizacionAplicadaSiHaceFalta,
+    avisarActualizacionFallidaSiHaceFalta,
     descargarActualizacion,
     obtenerVersionLocal,
     obtenerVersionRemota,
