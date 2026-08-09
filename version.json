@@ -1,7 +1,10 @@
 {
-  "version": "1.5.43",
-  "notesCount": 4,
+  "version": "1.5.44",
+  "notesCount": 3,
   "notes": [
+    "Fixed a real bug affecting every Main Trade attempt: one of the reference images used to detect Main's main menu was broken and never matched anything, so Main Trade could fail at that step no matter how long it waited. Replaced it with a verified one.",
+    "Improved: injecting an account now times out in 90 seconds instead of 5 minutes if it genuinely hangs, so a stuck run fails fast with a Retry button instead of a long silent wait.",
+    "New: Main Trade now captures a photo of both cards (the one sent and the one received) during the trade, shown on the account's web page once the trade finishes.",
     "Fixed a real bug affecting every user: the \"Total Cards\" icon never uploaded (Discord rejected it as too large for a custom emoji) - the source image is now resized before uploading, same as every other custom icon.",
     "Fixed: reading Shinedust or a Main Trade could get stuck and time out (\"timeout_pantallas_bienvenida\") if the game showed a loading error popup before reaching the main menu - now detects it and fails with a clear Retry button instead of hanging (a full restart is more reliable than trying to recover mid-run).",
     "New: a warning now shows when starting Main Trade on a PC with less than 8GB of RAM, recommending Friend Trade instead (it only needs 1 instance running, much lighter).",

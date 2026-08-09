@@ -170,7 +170,12 @@ esperarAceptarOYaAmigos(timeoutMs := 15000) {
     }
 }
 
-if (!esperarNeedleYTap("own_mainmenu_navbar", 30, 146, 504))
+; Timeout subido de 15s (default de la funcion) a 35s (2026-08-09, bug real reproducido en
+; vivo): Main SI estaba en el menu principal poco despues de que este paso fallara con
+; timeout -- solo tardo un poco mas en asentarse de lo que 15s le daba de margen. Mismo
+; criterio que el resto de la sesion: mas margen para pantallas que a veces tardan un poco
+; mas en renderizar, sin cambiar nada para quien ya la reconoce rapido (sigue apenas la ve).
+if (!esperarNeedleYTap("own_mainmenu_navbar", 30, 146, 504, 35000))
     ExitConError("no_aparecio_menu_principal_paso1")
 if (!esperarNeedleYTap("own_mainaccept_friends_icon", 30, 39, 463))
     ExitConError("no_aparecio_pantalla_comunidad_paso2")

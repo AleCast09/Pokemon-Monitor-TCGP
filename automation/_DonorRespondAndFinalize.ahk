@@ -146,23 +146,26 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000) {
 
 if (!esperarNeedleYTap("own_donorfinalize_waiting_title", 30, 222, 373))
     ExitConError("no_aparecio_waiting_response_paso1")
-if (!esperarNeedleYTap("own_donorfinalize_tradeforcard_title", 30, 206, 459))
+
+; Foto real del trade (2026-08-09, a pedido explicito del usuario -- corregida: se movio de
+; la pantalla del swipe a ESTA, "Trade for This Card?", porque ahi se ven las DOS cartas a la
+; vez -- la que se manda Y la que se recibe -- en vez de una sola como en el swipe). Se saca
+; ANTES de tocar para seguir, mientras la pantalla todavia esta completa. Nombre derivado del
+; outputFile (mismo que ya recibe este script como 3er argumento) para que bot.js sepa
+; exactamente donde buscarla sin necesitar coordinarse por otro lado.
+if (!esperarNeedleSinAccion("own_donorfinalize_tradeforcard_title", 30, 15000))
     ExitConError("no_aparecio_tradeforcard_paso2")
+AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_TradePhoto.png"))
+tap(206, 459)
+
 if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 199, 365))
     ExitConError("no_aparecio_confirmar_finalizar_paso3")
-
-; Foto real del trade (2026-08-09, a pedido explicito del usuario: "antes de hacer el
-; swipe" -- justo cuando aparece la instruccion "Swipe the card to send it to your trade
-; partner", la carta que se esta por enviar todavia se ve completa en pantalla). Nombre
-; derivado del outputFile (mismo que ya recibe este script como 3er argumento) para que
-; bot.js sepa exactamente donde buscarla sin necesitar coordinarse por otro lado.
-if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000))
-    ExitConError("no_aparecio_instruccion_swipe_paso4")
-AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_TradePhoto.png"))
 
 ; Swipe rapido para enviar la carta (142,397)->(145,157) en logico, convertido a
 ; dispositivo -- a pedido explicito del usuario, duracion corta (150ms) para que
 ; registre como swipe real y no como un tap.
+if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000))
+    ExitConError("no_aparecio_instruccion_swipe_paso4")
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
 Sleep, 3000
 

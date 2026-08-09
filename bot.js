@@ -2458,6 +2458,13 @@ function ejecutarFixInstanceWindow(winTitle, callback) {
     spawnAhkConProteccion(ahkExe, [RUTA_FIX_INSTANCE_WINDOW_SCRIPT, winTitle], { windowsHide: false }, 30 * 1000, callback);
 }
 
+// Timeout bajado de 5 minutos a 90s (2026-08-09, a pedido explicito del usuario: la
+// inyeccion en si (este paso puntual, sin contar el welcome-screens que sigue despues por
+// separado) normalmente tarda unos 20s -- 5 minutos de margen antes de avisar que algo esta
+// mal es demasiado tiempo de espera a ciegas si el script de Kevin se cuelga de verdad
+// (reproducido en vivo hoy: hubo que matar el proceso a mano porque nadie queria esperar los
+// 5 minutos completos). 90s le da margen de sobra para una inyeccion lenta sin hacer
+// esperar tanto ante un colgado real.
 function ejecutarInyeccionHeadless(callback, rutaScript = RUTA_INJECT_ACCOUNT_SCRIPT_DEFAULT) {
     const ahkExe = rutaAutoHotkey();
     if (!ahkExe || !fs.existsSync(rutaScript)) {
@@ -2467,7 +2474,7 @@ function ejecutarInyeccionHeadless(callback, rutaScript = RUTA_INJECT_ACCOUNT_SC
         ahkExe,
         [rutaScript, '--headless'],
         { windowsHide: false, cwd: path.dirname(rutaScript) },
-        5 * 60 * 1000,
+        90 * 1000,
         callback
     );
 }
