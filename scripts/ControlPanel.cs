@@ -30,6 +30,7 @@ public class InfoDiscord {
     public string usuarioNombre;
     public string s4tUrl;
     public string heartbeatUrl;
+    public string tutorialsUrl;
     public bool updateAvailable;
     public string remoteVersion;
     public string discordChannelUrl;
@@ -111,6 +112,17 @@ public class ControlPanelForm : Form {
     DateTime horaCambioDetectado;
     InfoDiscord infoDiscord;
     bool avisoActualizacionMostrado = false;
+
+    // Bloqueo de "Start" (2026-08-10, a pedido explicito del usuario): un usuario real le dio
+    // "Start" en vez de "Restart" despues de cambiar el token, y terminaron abriendose varias
+    // ventanas de cmd (el motor viejo seguia vivo mientras arrancaba uno nuevo encima -- mismo
+    // sintoma que el Task de "doble arranque del engine"). "Start" ahora arranca deshabilitado
+    // SIEMPRE que se abre el panel, y solo se vuelve a habilitar cuando el usuario aprieta
+    // "Restart" -- Stop y Kill Everything lo vuelven a deshabilitar. La idea es forzar a que el
+    // (re)arranque despues de cualquier cambio o corte pase siempre por el mismo camino
+    // (ReiniciarBot(), que ya sabe distinguir "estaba corriendo" de "estaba parado"), nunca por
+    // un click de Start hecho de apuro sin leer el aviso en pantalla.
+    bool startHabilitado = false;
 
     public ControlPanelForm() {
         // El .exe vive directo en la raiz del proyecto (o en dist/, tambien
@@ -477,13 +489,13 @@ public class ControlPanelForm : Form {
         AplicarEstiloPrimario(botonIniciar);
         botonIniciar.Click += (s, e) => { IniciarBot(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
         botonApagar = NuevoBoton("Stop", 30, 121, 225);
-        botonApagar.Click += (s, e) => { ApagarBot(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
+        botonApagar.Click += (s, e) => { ApagarBot(); startHabilitado = false; System.Threading.Thread.Sleep(500); RefrescarEstado(); };
         botonReiniciar = NuevoBoton("Restart", 30, 163, 225);
-        botonReiniciar.Click += (s, e) => { ReiniciarBot(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
+        botonReiniciar.Click += (s, e) => { ReiniciarBot(); startHabilitado = true; System.Threading.Thread.Sleep(500); RefrescarEstado(); };
 
         var botonMatarTodo = NuevoBoton("🔴 Kill Everything", 30, 205, 135);
         AplicarEstiloPeligro(botonMatarTodo);
-        botonMatarTodo.Click += (s, e) => { MatarTodo(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
+        botonMatarTodo.Click += (s, e) => { MatarTodo(); startHabilitado = false; System.Threading.Thread.Sleep(500); RefrescarEstado(); };
         var botonSalir = NuevoBoton("Quit", 170, 205, 85);
         botonSalir.Click += (s, e) => { SalirDeMonitorPokemon(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
 
@@ -531,7 +543,12 @@ public class ControlPanelForm : Form {
         var seccionMas = NuevaSeccion("MORE", 290, 362, 345, 100, colorSeccionDiscord);
         var botonTutoriales = NuevoBoton("📚 Tutorials", 305, 397, 150);
         botonTutoriales.Click += (s, e) => {
-            try { Process.Start(new ProcessStartInfo { FileName = "http://localhost:3005/tutorials", UseShellExecute = true }); } catch { }
+            // Puerto leido de panel-info.js en vez de hardcodeado (2026-08-13, bug real
+            // encontrado en auditoria): si esta PC tiene DASHBOARD_PORT distinto en el .env,
+            // el boton abria una pagina muerta. infoDiscord puede ser null si panel-info.js
+            // todavia no corrio -- 3005 queda de fallback para ese caso.
+            var url = (infoDiscord != null && !string.IsNullOrEmpty(infoDiscord.tutorialsUrl)) ? infoDiscord.tutorialsUrl : "http://localhost:3005/tutorials";
+            try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); } catch { }
         };
         var botonDonar = NuevoBoton("☕ Support (Ko-fi)", 465, 397, 155);
         botonDonar.Click += (s, e) => {
@@ -789,6 +806,8 @@ public class ControlPanelForm : Form {
     // ---------- Refresco de estado ----------
 
     void RefrescarEstado() {
+        botonIniciar.Enabled = startHabilitado;
+
         bool corriendo = EstaCorriendo();
         if (corriendo) {
             labelEstado.Text = "Status: Running";
@@ -823,6 +842,9 @@ public class ControlPanelForm : Form {
             if (!corriendo && !arranqueAutoIntentado) {
                 arranqueAutoIntentado = true;
                 IniciarBot();
+                // Arranco solo (instalacion recien descomprimida, nunca hubo un "Restart" para
+                // apretar) -- cuenta igual como el (re)arranque legitimo que desbloquea "Start".
+                startHabilitado = true;
             }
             labelTokenEstado.Text = corriendo ? "Token changed - restarting..." : "Token saved - starting...";
             labelTokenEstado.ForeColor = Color.FromArgb(240, 170, 60);

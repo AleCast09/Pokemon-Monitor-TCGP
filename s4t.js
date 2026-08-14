@@ -44,6 +44,14 @@ function obtenerMapa(rutaMaster) {
     try {
         const cardmaster = cargarJson(path.join(rutaMaster, 'cardmaster.json'));
         const en_US = cargarJson(path.join(rutaMaster, 'en_US.json'));
+        // ExpansionID NO vive en cardmaster.json (ahi solo hay Name/Rarity/IllustrationID) --
+        // vive en cardmap.json, el mismo archivo que ya usa el resto del bot para las fotos HD
+        // de Drive. Se carga aca tambien para poder desempatar reimpresiones (ver mas abajo).
+        let cardmapExpansiones = {};
+        try {
+            const cardmapPath = path.join(rutaMaster, 'cardmap.json');
+            if (fs.existsSync(cardmapPath)) cardmapExpansiones = cargarJson(cardmapPath);
+        } catch (e) { /* sin cardmap.json, expansionId queda undefined y no se desempata por expansion */ }
         let mapa = {};
         // Un mismo nombre puede tener varias variantes/rarezas (ej. "Pikachu" común
         // y "Pikachu" 1-star); se guardan TODAS para poder elegir la correcta según
@@ -53,7 +61,13 @@ function obtenerMapa(rutaMaster) {
             if (nombreIngles) {
                 const clave = normalizeText(nombreIngles);
                 if (!mapa[clave]) mapa[clave] = [];
-                mapa[clave].push({ code: id, rarity: cardmaster[id].Rarity, illustrationId: cardmaster[id].IllustrationID });
+                // expansionId sumado (2026-08-14, bug real reportado: "Lillie" del sobre Deluxe
+                // Pack: ex salio con el arte de la Lillie de Celestial Guardians) -- antes, cuando
+                // habia mas de una carta con el mismo nombre+rareza pero de EXPANSIONES distintas
+                // (reimpresiones), no habia forma de distinguirlas aca y quedaba a la suerte del
+                // orden del objeto. Ahora resolverImagen puede preferir la que sea de la expansion
+                // real del sobre antes de resignarse a "la primera que aparezca".
+                mapa[clave].push({ code: id, rarity: cardmaster[id].Rarity, illustrationId: cardmaster[id].IllustrationID, expansionId: cardmapExpansiones[id]?.ExpansionID });
             }
         }
         return mapa;
@@ -234,6 +248,42 @@ function obtenerTagTipoPorNombre(nombreIngles, code, cardmaster) {
 const EXPANSIONS_DIR = path.join(__dirname, 'assets', 'expansions');
 function normalizarNombreExpansion(texto) {
     return texto.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// Mismo criterio que construirMapaExpansiones() de bot.js: en_US.json guarda el nombre largo de
+// cada expansion bajo la clave EXPANSION_NAME_LONG_<n>, y el CODIGO real (el que usan
+// ExpansionID en cardmaster.json) bajo EXPANSION_NAME_<n> -- hay que cruzar ambas.
+function construirMapaExpansiones(en_US) {
+    const mapa = {};
+    if (!en_US) return mapa;
+    for (const key of Object.keys(en_US)) {
+        const match = key.match(/^EXPANSION_NAME_(\d+)$/);
+        if (match) {
+            const codigo = en_US[key];
+            mapa[codigo] = en_US[`EXPANSION_NAME_LONG_${match[1]}`] || codigo;
+        }
+    }
+    return mapa;
+}
+
+// Convierte el nombre del sobre leido en pantalla (ej. "Deluxe (12)") en el ExpansionID real
+// (2026-08-14, bug real reportado: cuando una carta con el mismo nombre+rareza existe en mas de
+// una expansion -- reimpresiones tipo "Lillie" -- el emparejamiento por nombre solo no alcanza
+// para saber cual arte mostrar). Devuelve null si no hay match, para que el que llama caiga de
+// vuelta al comportamiento de siempre.
+function resolverExpansionIdPorSobre(sobreTexto, en_US) {
+    if (!sobreTexto || !en_US) return null;
+    const nombreSobre = sobreTexto.replace(/\s*\([^)]*\)\s*$/, '').trim();
+    if (!nombreSobre) return null;
+    const objetivo = normalizarNombreExpansion(nombreSobre);
+    const mapaExpansiones = construirMapaExpansiones(en_US);
+    for (const [expansionId, nombreLargo] of Object.entries(mapaExpansiones)) {
+        const normalizado = normalizarNombreExpansion(nombreLargo);
+        if (normalizado === objetivo || normalizado.includes(objetivo) || objetivo.includes(normalizado)) {
+            return expansionId;
+        }
+    }
+    return null;
 }
 
 function buscarLogoExpansion(sobreTexto) {
@@ -873,8 +923,14 @@ async function obtenerImagenHD(cardMap, code) {
     }
 }
 
-async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, mapa, cardMap) {
+async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, mapa, cardMap, sobre = null) {
     if (!rutaMaster || !data) return null;
+    // ExpansionID del sobre real que se abrio (2026-08-14, bug real reportado: "Lillie" del
+    // sobre Deluxe Pack: ex salio con el arte de la Lillie de Celestial Guardians) -- se usa
+    // mas abajo para desempatar cuando el mismo nombre+rareza existe en mas de una expansion
+    // (reimpresiones). Puede ser null si no se pudo resolver; en ese caso todo sigue igual que
+    // antes.
+    const expansionIdObjetivo = resolverExpansionIdPorSobre(sobre, masterData?.en_US);
 
     // Se guarda el mejor illustrationId encontrado en el camino (aunque
     // encontrarImagen no lo haya encontrado localmente) para poder probar el
@@ -930,11 +986,19 @@ async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, map
         // Un mismo nombre puede tener variantes en varias rarezas (ej. "Pikachu"
         // común y "Pikachu" 1-star) — se prioriza la que coincide con la rareza
         // detectada, para no mandar la imagen de una variante equivocada.
-        let elegida = null;
+        let candidatas = variantesPorNombre;
         if (data.rareza) {
-            elegida = variantesPorNombre.find(v => mapearRarezaNumerica(v.rarity, v.code) === data.rareza);
+            const porRareza = variantesPorNombre.filter(v => mapearRarezaNumerica(v.rarity, v.code) === data.rareza);
+            if (porRareza.length) candidatas = porRareza;
         }
-        if (!elegida) elegida = variantesPorNombre[0];
+        // Mismo nombre+rareza puede repetirse en varias expansiones (reimpresiones, ej. "Lillie"
+        // en Celestial Guardians Y en Deluxe Pack: ex) -- si sabemos de que sobre salio, se
+        // prioriza la variante de ESA expansion antes de resignarse a la primera de la lista.
+        let elegida = null;
+        if (expansionIdObjetivo && candidatas.length > 1) {
+            elegida = candidatas.find(v => v.expansionId === expansionIdObjetivo);
+        }
+        if (!elegida) elegida = candidatas[0];
         const imagenHD = await obtenerImagenHD(cardMap, elegida.code);
         if (imagenHD) return imagenHD;
         mejorIllustrationId = mejorIllustrationId || elegida.illustrationId;
@@ -951,11 +1015,21 @@ async function resolverImagen(rutaMaster, data, cartasPorCodigo, masterData, map
             const itemCode = normalizeText(key);
             return itemEnglish === nombreNormalizado || itemNameKey === nombreNormalizado || itemCode === nombreNormalizado;
         });
-        let matchingMasterKey = null;
+        let candidatasMaster = matchingKeys;
         if (data.rareza) {
-            matchingMasterKey = matchingKeys.find(key => mapearRarezaNumerica(masterData.cardmaster[key].Rarity, key) === data.rareza);
+            const porRareza = matchingKeys.filter(key => mapearRarezaNumerica(masterData.cardmaster[key].Rarity, key) === data.rareza);
+            if (porRareza.length) candidatasMaster = porRareza;
         }
-        if (!matchingMasterKey) matchingMasterKey = matchingKeys[0];
+        // Mismo desempate por expansion que en variantesPorNombre mas arriba -- este camino es
+        // el que realmente disparo el bug reportado (Lillie de la expansion equivocada), porque
+        // se llega aca cuando el emparejamiento contra el pull real no encontro nada.
+        // ExpansionID no vive en masterData.cardmaster (ahi solo hay Name/Rarity/IllustrationID) --
+        // vive en cardMap (cardmap.json), por eso se consulta ahi para el desempate.
+        let matchingMasterKey = null;
+        if (expansionIdObjetivo && candidatasMaster.length > 1 && cardMap) {
+            matchingMasterKey = candidatasMaster.find(key => cardMap[key]?.ExpansionID === expansionIdObjetivo);
+        }
+        if (!matchingMasterKey) matchingMasterKey = candidatasMaster[0];
         if (matchingMasterKey) {
             const imagenHD = await obtenerImagenHD(cardMap, matchingMasterKey);
             if (imagenHD) return imagenHD;
@@ -1466,7 +1540,7 @@ app.post('/', upload.any(), async (req, res) => {
                 const esWishlist = [];
                 const cantidades = [];
                 for (const cartaItem of listaCartas) {
-                    const imagePath = await resolverImagen(rutaMasterCfg?.webhook_url, cartaItem, cartasPorCodigo, masterData, mapa, cardMap);
+                    const imagePath = await resolverImagen(rutaMasterCfg?.webhook_url, cartaItem, cartasPorCodigo, masterData, mapa, cardMap, sobre);
                     if (imagePath) {
                         buffers.push(fs.readFileSync(imagePath));
                         esWishlist.push(!!cartaItem.isWishlist);
@@ -1483,7 +1557,7 @@ app.post('/', upload.any(), async (req, res) => {
                     bufferImagen = await componerCollageImagenes(buffers, esWishlist, cantidades);
                 }
             } else {
-                imgPath = await resolverImagen(rutaMasterCfg?.webhook_url, data, cartasPorCodigo, masterData, mapa, cardMap);
+                imgPath = await resolverImagen(rutaMasterCfg?.webhook_url, data, cartasPorCodigo, masterData, mapa, cardMap, sobre);
                 if (imgPath) {
                     bufferImagen = fs.readFileSync(imgPath);
                 }

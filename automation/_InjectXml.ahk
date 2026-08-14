@@ -19,6 +19,15 @@ global g_folderPath := A_Args[2]
 global g_xmlPath    := A_Args[3]
 global g_outputFile := A_Args[4]
 
+; Guarda de seguridad (2026-08-13, bug real encontrado en auditoria): g_xmlPath se pegaba
+; sin escapar dentro de un RunWait %ComSpec% /c "..." mas abajo (cmdPush) -- una ruta con
+; una comilla adentro podia inyectar comandos extra de shell. Este script hoy es codigo
+; muerto (bot.js ya no lo llama, ver inyectarCuentaPorAdb en Node), pero se deja blindado
+; por si se reactiva sin que quien lo toque note el riesgo.
+if (InStr(g_xmlPath, """")) {
+    ExitApp, 2
+}
+
 #Include %A_ScriptDir%\_AdbUtils.ahk
 #Include %A_ScriptDir%\_OcrUtils.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk

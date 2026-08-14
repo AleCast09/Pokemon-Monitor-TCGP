@@ -102,6 +102,15 @@ function leerUrlsPBot(env) {
     return { s4tUrl: `http://localhost:${base.S4T}`, heartbeatUrl: `http://localhost:${base.Heartbeat}` };
 }
 
+// Puerto del dashboard (2026-08-13, bug real encontrado en auditoria): el boton
+// "Tutorials" del panel tenia el puerto pisado a mano en el .cs (3005), asi que si esta PC
+// tiene DASHBOARD_PORT distinto en el .env, el boton abria una pagina muerta. Mismo criterio
+// que DASHBOARD_PORT_BASE en bot.js -- no cubre el auto-fallback en vivo por puerto ocupado
+// (eso solo lo sabe el proceso del bot ya corriendo), pero si el override manual del .env.
+function leerPuertoDashboard(env) {
+    return Number(env.DASHBOARD_PORT) || 3005;
+}
+
 async function main() {
     const env = leerEnv();
     const urlsPBot = leerUrlsPBot(env);
@@ -115,6 +124,7 @@ async function main() {
         usuarioNombre: null,
         s4tUrl: urlsPBot.s4tUrl,
         heartbeatUrl: urlsPBot.heartbeatUrl,
+        tutorialsUrl: `http://localhost:${leerPuertoDashboard(env)}/tutorials`,
         updateAvailable: false,
         remoteVersion: null,
         discordChannelUrl: null

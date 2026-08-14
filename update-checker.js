@@ -348,5 +348,6 @@ module.exports = {
     esVersionMasNueva,
     describirError,
     notasParaEmbed,
+    obtenerDestinoNotificacion,
     PENDING_UPDATE_PATH
 };

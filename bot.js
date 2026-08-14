@@ -24,7 +24,7 @@ const db = require('./database.js');
 
 const heartbeatScript = require('./heartbeat.js');
 const configScript = require('./config.js');
-const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, avisarActualizacionFallidaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion, describirError, notasParaEmbed } = require('./update-checker.js');
+const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, avisarActualizacionFallidaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion, describirError, notasParaEmbed, obtenerDestinoNotificacion } = require('./update-checker.js');
 const { obtenerMapaEmojisGuild, FUENTES_EMOJIS } = require('./guild-emojis.js');
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
 iniciarAutoSyncCardTypes();
@@ -428,16 +428,6 @@ async function construirPanelDetalleWebhook(userId, tipo, opciones = {}) {
         ? `https://cdn.discordapp.com/avatars/${infoWebhook.id}/${infoWebhook.avatar}.png`
         : null;
 
-    // Ojo: TODO webhook auto-creado ya sale con un avatar de placeholder puesto
-    // desde su creación (ver createWebhook({avatar: 'https://i.imgur.com/...'})),
-    // así que "¿tiene avatar?" es casi siempre true — no alcanza para saber si
-    // el USUARIO lo personalizó a propósito con /webhook. Se chequea contra el
-    // registro real de personalización guardado (guardarPersonalizacionWebhook)
-    // en vez de la sola presencia de un avatar en el webhook en vivo.
-    const filaPersonalizado = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [userId, `webhook_custom_${tipo}`]);
-    let tienePersonalizacion = false;
-    try { tienePersonalizacion = !!(filaPersonalizado && JSON.parse(filaPersonalizado.estado)?.avatarUrl); } catch (e) { tienePersonalizacion = false; }
-
     const embed = new EmbedBuilder()
         .setTitle(`🔗 Webhook - ${etiquetaTipoWebhook(tipo)}`)
         .setColor(opciones.guardado ? 0x2ECC71 : 0x5865F2)
@@ -446,12 +436,16 @@ async function construirPanelDetalleWebhook(userId, tipo, opciones = {}) {
             (opciones.error ? `❌ **${opciones.error}**\n\n` : '') +
             `**Channel:** <#${fila.canal_id}>\n**Current name:** ${nombreActual}`
         );
-    // Si el usuario ya personalizó el avatar con /webhook, mostrar ESE (útil
-    // para ver qué foto tiene antes de cambiarla) — el logo genérico de
-    // Pokémon queda solo como respaldo mientras siga con el placeholder
-    // de fábrica.
+    // Muestra siempre el avatar REAL y actual del webhook (2026-08-12, a pedido explicito
+    // del usuario -- antes se ocultaba detras del logo generico de Pokemon salvo que el
+    // usuario ya lo hubiera personalizado a mano con /webhook, porque el placeholder de
+    // fabrica de entonces era una imagen generica fea. ya no: cada tipo de webhook tiene su
+    // propio icono por defecto (Poke Ball, Ultra Ball, Master Ball, etc. -- ver
+    // AVATARES_DEFAULT_WEBHOOK), asi que mostrarlo siempre es mas util que taparlo). El
+    // logo generico queda solo como respaldo para el caso raro de que el webhook no tenga
+    // NINGUN avatar en vivo.
     const archivos = [];
-    if (tienePersonalizacion && avatarUrl) {
+    if (avatarUrl) {
         embed.setThumbnail(avatarUrl);
     } else if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
         embed.setThumbnail('attachment://symbol.png');
@@ -546,6 +540,28 @@ function resolverArchivoWishlist(rutaWishlist) {
         return fs.existsSync(inferida) ? inferida : null;
     }
     return rutaWishlist;
+}
+
+// Marcar como wishlist desde un boton de Discord (2026-08-11, a pedido explicito del
+// usuario): mismo archivo/formato que ya lee obtenerCartasWishlist y que tambien
+// escribe el dashboard de Lean cuando marca un corazon ahi -- escribir desde un boton
+// de Discord es seguro porque Discord ya verifica quien lo aprieta (a diferencia de la
+// pagina web /account/:token, que es un link sin login: cualquiera con el link hubiera
+// podido tocar un corazon ahi y editar la wishlist real de otra persona).
+function agregarCartaAWishlist(rutaWishlistCfg, cartaId, nombre) {
+    const archivoWishlist = resolverArchivoWishlist(rutaWishlistCfg?.webhook_url);
+    if (!archivoWishlist) return { ok: false, motivo: 'sin_archivo_configurado' };
+    const data = leerJsonSeguro(archivoWishlist) || { version: 1, cards: [] };
+    if (!Array.isArray(data.cards)) data.cards = [];
+    if (data.cards.some((c) => c?.id === cartaId)) return { ok: true, yaExistia: true };
+    data.cards.push({ id: cartaId, name: nombre });
+    data.updatedAt = new Date().toISOString();
+    try {
+        fs.writeFileSync(archivoWishlist, JSON.stringify(data, null, 2));
+        return { ok: true, yaExistia: false };
+    } catch (e) {
+        return { ok: false, motivo: 'error_escritura' };
+    }
 }
 
 function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
@@ -648,19 +664,21 @@ async function obtenerCartasGoldCacheadas(discordId) {
     const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
     const claveCache = `${rutaMasterPath}::${rutaJsonCfg?.webhook_url || ''}::${umbral}`;
     if (!_cartasGoldCacheBot || _cartasGoldCacheBot.clave !== claveCache) {
-        const mapaCopias = construirMapaCopiasPorCarta(rutaJsonCfg?.webhook_url);
+        const mapaCopias = construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url);
         const cartasGold = mapaCopias ? cartas.filter(c => cuentasGoldParaCarta(mapaCopias, c.id, umbral).length > 0) : [];
         _cartasGoldCacheBot = { clave: claveCache, cartas: cartasGold, mapaCopias };
     }
     return { cartas: _cartasGoldCacheBot.cartas, rutaMasterPath, mapaCopias: _cartasGoldCacheBot.mapaCopias, umbral };
 }
 
-// Banners al azar (2026-08-06, a pedido explicito del usuario): en vez del
-// banner fijo, cada vez que se corre el comando se elige una imagen distinta
-// de una carpeta de ilustraciones local (misma PC, subidas tambien a
-// github.com/AleCast09/Pokemon-Icon-Wallpapers). Si la carpeta no esta
-// disponible (o esta vacia), cae de vuelta al banner fijo pasado como default.
-function elegirBannerAleatorio(carpeta, rutaDefault) {
+// Banners al azar (2026-08-06, a pedido explicito del usuario; ampliado 2026-08-13 -- las
+// imagenes ya estaban subidas a github.com/AleCast09/Pokemon-Icon-Wallpapers desde el
+// principio, pero el codigo nunca las pedia de ahi, solo leia la carpeta local, asi que
+// unicamente esta PC tenia variedad de banners). Orden: carpeta local primero (atajo rapido,
+// sin red, solo existe en la PC de Ale), si no hay se pide una lista a la API de GitHub del
+// repo publico (cacheada 1h en memoria para no pegarle de mas) y se baja/cachea en disco la
+// imagen elegida, si todo eso falla cae al banner fijo pasado como default.
+function elegirBannerLocalAleatorio(carpeta) {
     try {
         if (fs.existsSync(carpeta)) {
             const archivos = fs.readdirSync(carpeta).filter(f => /\.(png|jpe?g|webp)$/i.test(f));
@@ -671,24 +689,55 @@ function elegirBannerAleatorio(carpeta, rutaDefault) {
         }
     } catch (e) {
     }
+    return null;
+}
+const REPO_WALLPAPERS_BOT = 'AleCast09/Pokemon-Icon-Wallpapers';
+const TTL_LISTADO_WALLPAPERS_MS = 60 * 60 * 1000;
+const _cacheListadoWallpapers = new Map(); // carpetaRepo -> { archivos, ts }
+async function obtenerListaWallpapersRepo(carpetaRepo) {
+    const cache = _cacheListadoWallpapers.get(carpetaRepo);
+    if (cache && (Date.now() - cache.ts) < TTL_LISTADO_WALLPAPERS_MS) return cache.archivos;
+    try {
+        const resp = await axios.get(`https://api.github.com/repos/${REPO_WALLPAPERS_BOT}/contents/${encodeURIComponent(carpetaRepo)}`, { timeout: 8000 });
+        const archivos = (resp.data || [])
+            .filter((item) => item.type === 'file' && /\.(png|jpe?g|webp)$/i.test(item.name))
+            .map((item) => ({ name: item.name, url: item.download_url }));
+        _cacheListadoWallpapers.set(carpetaRepo, { archivos, ts: Date.now() });
+        return archivos;
+    } catch (e) {
+        return cache ? cache.archivos : []; // si la API falla pero habia cache viejo, mejor eso que nada
+    }
+}
+async function elegirBannerRepoAleatorio(carpetaRepo) {
+    const archivos = await obtenerListaWallpapersRepo(carpetaRepo);
+    if (!archivos.length) return null;
+    const elegido = archivos[Math.floor(Math.random() * archivos.length)];
+    const dirCache = path.join(__dirname, 'assets', 'wallpapers_cache', carpetaRepo);
+    const rutaLocal = path.join(dirCache, elegido.name);
+    if (fs.existsSync(rutaLocal)) return rutaLocal;
+    try {
+        const resp = await axios.get(elegido.url, { responseType: 'arraybuffer', timeout: 8000 });
+        fs.mkdirSync(dirCache, { recursive: true });
+        fs.writeFileSync(rutaLocal, resp.data);
+        return rutaLocal;
+    } catch (e) {
+        return null;
+    }
+}
+async function elegirBannerConRespaldoRepo(carpetaLocal, carpetaRepo, rutaDefault) {
+    const local = elegirBannerLocalAleatorio(carpetaLocal);
+    if (local) return local;
+    const remoto = await elegirBannerRepoAleatorio(carpetaRepo);
+    if (remoto) return remoto;
     return rutaDefault;
 }
 const CARPETA_FUNDAS_ALLCARDS = 'C:\\Users\\Ale TCG\\Pictures\\pokemon\\Pokemon Fundas';
-function elegirBannerAllCardsAleatorio() {
-    return elegirBannerAleatorio(CARPETA_FUNDAS_ALLCARDS, path.join(__dirname, 'assets', 'embeds', 'card_banner.png'));
+async function elegirBannerAllCardsAleatorio() {
+    return elegirBannerConRespaldoRepo(CARPETA_FUNDAS_ALLCARDS, 'Pokemon Fundas', path.join(__dirname, 'assets', 'embeds', 'card_banner.png'));
 }
 const CARPETA_PORTADAS_WISHLIST = 'C:\\Users\\Ale TCG\\Pictures\\pokemon\\Pokemon Portadas';
-function elegirBannerWishlistAleatorio() {
-    return elegirBannerAleatorio(CARPETA_PORTADAS_WISHLIST, path.join(__dirname, 'assets', 'embeds', 'wishlist_banner.png'));
-}
-// Imagen "de disculpa" (2026-08-06, a pedido explicito del usuario): cuando
-// una carta buscada en Gold Cards todavia no tiene su borde dorado subido al
-// Drive, en vez de mostrar la version SIN dorar (confuso -- parece que ya
-// califica) se muestra una imagen al azar de nuestro propio repositorio de
-// ilustraciones + un aviso pidiendo disculpas.
-const CARPETA_ICONS_GOLD_SORRY = 'C:\\Users\\Ale TCG\\Pictures\\pokemon\\Pokemon Icons';
-function elegirImagenDisculpaGoldAleatoria() {
-    return elegirBannerAleatorio(CARPETA_ICONS_GOLD_SORRY, null);
+async function elegirBannerWishlistAleatorio() {
+    return elegirBannerConRespaldoRepo(CARPETA_PORTADAS_WISHLIST, 'Pokemon Portadas', path.join(__dirname, 'assets', 'embeds', 'wishlist_banner.png'));
 }
 
 function construirEmbedAllCardsInicio(user) {
@@ -1179,6 +1228,45 @@ async function driveHdRegularHabilitado() {
 // escribe cada falla a un .txt simple abrible con doble click, para
 // diagnosticar sin pedirles que abran CMD/PowerShell.
 const RUTA_LOG_DRIVE_HD = path.join(__dirname, 'drive_hd_errores.txt');
+
+// Auto-apagado + aviso (2026-08-11, bug real reportado por el usuario: tenia Drive HD
+// prendido con una API key configurada pero SIN acceso concedido a la carpeta compartida
+// -- cada busqueda de carta pagaba un 403 o un timeout de 8s por CADA carta antes de caer
+// a la imagen local, volviendo lentisimo cualquier listado. Antes esto solo quedaba en un
+// .txt que nadie miraba -- ahora, despues de varios fallos seguidos, se apaga Drive HD
+// solo (mismo interruptor que /setup) y se avisa por Discord, en vez de seguir pagando el
+// costo de 8s por carta para siempre sin que el usuario se entere de que esta roto.
+const UMBRAL_FALLOS_DRIVE_HD_AUTO_APAGAR = 5;
+let _fallosDriveHdSeguidos = 0;
+let _avisoDriveHdRotoEnviado = false;
+async function apagarDriveHdYAvisar(motivoResumen) {
+    try {
+        await db.run(`INSERT INTO estados_modulos (nombre, status) VALUES ('drive_hd_regular', 'off') ON CONFLICT(nombre) DO UPDATE SET status = excluded.status`);
+    } catch (e) {
+        console.error('❌ No se pudo apagar Drive HD automaticamente:', e?.message || e);
+        return;
+    }
+    if (_avisoDriveHdRotoEnviado) return; // uno solo por corrida, no floodear
+    _avisoDriveHdRotoEnviado = true;
+    try {
+        const destino = await obtenerDestinoNotificacion(client);
+        if (!destino) return;
+        const embed = {
+            title: '⚠️ Drive HD turned off automatically',
+            color: 0xE67E22,
+            description: `Drive HD kept failing (${motivoResumen}) — normally that means the API key doesn't have access to the shared Drive folder yet (ask whoever manages it to share it with you), or the key itself is wrong.\n\nTurned it off for now so card lookups stay fast (falls back to the normal local images). Re-enable it in \`/setup\` once the access is sorted out.`
+        };
+        if (destino.tipo === 'webhook') {
+            const contenido = destino.ownerId ? `<@${destino.ownerId}>` : undefined;
+            await axios.post(`${destino.webhookUrl}?wait=true`, { embeds: [embed], content: contenido }, { timeout: 15000 });
+        } else {
+            const usuario = await client.users.fetch(destino.userId);
+            await usuario.send({ embeds: [embed] });
+        }
+    } catch (e) {
+        console.error('❌ No se pudo avisar que Drive HD se apago solo:', e?.message || e);
+    }
+}
 function registrarErrorDriveHd(origen, cartaId, motivo, detalle = '') {
     try {
         const linea = `[${new Date().toLocaleString()}] (${origen}) carta=${cartaId} motivo=${motivo}${detalle ? ' — ' + detalle : ''}\n`;
@@ -1186,6 +1274,12 @@ function registrarErrorDriveHd(origen, cartaId, motivo, detalle = '') {
     } catch (e) {
     }
     console.log(`DEBUG: Drive HD (${origen}) carta=${cartaId} motivo=${motivo}`, detalle);
+
+    _fallosDriveHdSeguidos++;
+    if (_fallosDriveHdSeguidos >= UMBRAL_FALLOS_DRIVE_HD_AUTO_APAGAR) {
+        _fallosDriveHdSeguidos = 0;
+        apagarDriveHdYAvisar(`${UMBRAL_FALLOS_DRIVE_HD_AUTO_APAGAR} fallos seguidos, ultimo: ${motivo}`);
+    }
 }
 
 async function obtenerImagenHDBot(cardMap, cartaId, forzar = false) {
@@ -1226,6 +1320,7 @@ async function obtenerImagenHDBot(cardMap, cartaId, forzar = false) {
         });
         fs.mkdirSync(dirCache, { recursive: true });
         fs.writeFileSync(rutaCache, descarga.data);
+        _fallosDriveHdSeguidos = 0; // corto la racha de fallos -- esta SI funciono
         return rutaCache;
     } catch (e) {
         registrarErrorDriveHd('normal', cartaId, 'excepcion', `HTTP ${e?.response?.status || '?'} — ${e?.message || e}`);
@@ -1328,6 +1423,24 @@ async function obtenerImagenGoldBot(cardMap, cartaId) {
 // las cuentas JSON una sola vez (no por-carta) y arma un mapa cartaId -> lista
 // de cuentas que la tienen, para poder filtrar la lista de seleccion de
 // /goldcards a solo las cartas que YA califican en al menos una cuenta.
+//
+// Cacheado con TTL corto (2026-08-11, bug real reportado por el usuario: elegir una
+// categoria de rareza en /card /wishlist /allcards /goldcards demoraba bastante) --
+// esta funcion antes releia y parseaba TODOS los JSON de cuentas del disco (puede ser
+// mas de 1000 archivos) CADA VEZ que se llamaba, y se llama en casi cualquier
+// interaccion de cartas. 90s de margen: bastante para no notar el delay navegando
+// categorias/cartas seguidas, corto para que un pull/trade reciente no tarde
+// demasiado en reflejarse.
+const TTL_CACHE_MAPA_COPIAS_MS = 90 * 1000;
+let _mapaCopiasCacheBot = null;
+function construirMapaCopiasPorCartaCacheado(rutaJsonCuentas) {
+    if (_mapaCopiasCacheBot && _mapaCopiasCacheBot.ruta === rutaJsonCuentas && Date.now() - _mapaCopiasCacheBot.ts < TTL_CACHE_MAPA_COPIAS_MS) {
+        return _mapaCopiasCacheBot.mapa;
+    }
+    const mapa = construirMapaCopiasPorCarta(rutaJsonCuentas);
+    _mapaCopiasCacheBot = { ruta: rutaJsonCuentas, mapa, ts: Date.now() };
+    return mapa;
+}
 function construirMapaCopiasPorCarta(rutaJsonCuentas) {
     if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
     const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
@@ -1632,16 +1745,18 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const expansionNombre = info?.ExpansionID ? (expansiones[info.ExpansionID] || info.ExpansionID) : 'Unknown';
     const categoria = resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis);
     // datosGold (solo lo pasa /goldcards) -- usa la imagen con borde dorado si
-    // existe para esa carta. Si NO existe (2026-08-06, a pedido explicito del
-    // usuario), YA NO cae a la version sin dorar (confundia -- parecia que la
-    // carta ya calificaba) -- en su lugar se marca sinBordeGold y mas abajo se
-    // muestra una imagen de disculpa + aviso en vez de la carta.
+    // existe para esa carta. Si NO existe, se marca sinBordeGold y se cae a la
+    // artwork normal (misma cadena de busqueda que el resto: HD del Drive ->
+    // carpeta local -> repositorio de cartas) en vez de una imagen de disculpa
+    // generica (2026-08-13, a pedido explicito del usuario: "que use una imagen
+    // del repositorio normal" en vez del wallpaper de disculpa).
     let sinBordeGold = false;
     let imagenPath;
     if (datosGold) {
         imagenPath = await obtenerImagenGoldBot(cardMap, cartaId);
         if (!imagenPath) sinBordeGold = true;
-    } else {
+    }
+    if (!datosGold || sinBordeGold) {
         imagenPath = (await obtenerImagenHDBot(cardMap, cartaId))
             || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID)
             || (await obtenerImagenRepoCartasBot(rutaMasterPath, info?.IllustrationID));
@@ -1672,7 +1787,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     let cantidadTotal = 0;
     if (!datosGold) {
         const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-        const mapaCopias = construirMapaCopiasPorCarta(rutaJsonCfg?.webhook_url);
+        const mapaCopias = construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url);
         cantidadTotal = sumaCopiasCarta(mapaCopias, cartaId);
     }
 
@@ -1686,7 +1801,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         embed.addFields({ name: `🏆 Gold Accounts (${datosGold.umbral}+ copies)`, value: listaGold.slice(0, 1024) });
     }
     if (sinBordeGold) {
-        embed.addFields({ name: '😔 Gold border not available yet', value: "Sorry, we don't have this card's gold border yet. We'll update it as soon as we do!" });
+        embed.addFields({ name: '✨ Coming soon in HD and golden borders!', value: "We don't have this card's gold border yet — showing the regular artwork for now." });
     }
 
     // En Gold Cards, "XML" tiene que mostrar SOLO las cuentas que ya califican
@@ -1738,20 +1853,17 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         // Deshabilitado en Gold Cards a pedido explicito del usuario 2026-08-06.
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
+        // Marcar como wishlist (2026-08-11, a pedido explicito del usuario): desde un
+        // boton de Discord en vez de la pagina web -- Discord ya sabe quien lo aprieta,
+        // asi que a diferencia de un corazon en /account/:token (un link sin login que
+        // cualquiera podria tocar) esto es seguro sin necesitar ningun codigo/PIN.
+        new ButtonBuilder().setCustomId(`card_wishlist_add::${cartaId}`.slice(0, 100)).setLabel('💖 Wishlist').setStyle(ButtonStyle.Secondary)
     );
 
     const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
     const archivosPayload = [];
-    if (sinBordeGold) {
-        // Sin logo/badge compuestos encima -- esta imagen no es la carta real,
-        // superponerle el logo de la expansion daria a entender que si lo es.
-        const imagenDisculpa = elegirImagenDisculpaGoldAleatoria();
-        if (imagenDisculpa) {
-            embed.setImage('attachment://carta.png');
-            archivosPayload.push(new AttachmentBuilder(imagenDisculpa, { name: 'carta.png' }));
-        }
-    } else if (imagenPath) {
+    if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
         // que ya usa s4t.js/el preview de /embed), en vez de una miniatura
         // aparte en la esquina.
@@ -1820,7 +1932,7 @@ function obtenerInstanciasMuMu() {
     const managerPath = rutaMuMuManager();
     if (!managerPath) return null;
     try {
-        const salida = execSync(`"${managerPath}" info -v all`, { windowsHide: true }).toString();
+        const salida = execFileSync(managerPath, ['info', '-v', 'all'], { windowsHide: true }).toString();
         const data = JSON.parse(salida);
         return Object.values(data)
             .filter(i => i.name !== 'NO TOCAR')
@@ -1834,7 +1946,11 @@ function lanzarInstanciaMuMu(index) {
     const managerPath = rutaMuMuManager();
     if (!managerPath) return false;
     try {
-        execSync(`"${managerPath}" control launch -v ${index}`, { windowsHide: true });
+        // execFileSync con argumentos separados (no un string armado a mano) — un "index" con
+        // espacios/&/| no puede inyectar nada porque nunca pasa por un shell (bug real de
+        // seguridad encontrado en auditoria 2026-08-13: esto era un execSync con template
+        // string, explotable via el "index" del trade disparado desde la pagina web).
+        execFileSync(managerPath, ['control', 'launch', '-v', String(index)], { windowsHide: true });
         return true;
     } catch (e) {
         // Antes se tragaba el error en silencio — si MuMuManager rechaza el
@@ -1893,7 +2009,7 @@ function apagarInstanciaMuMu(index) {
     const managerPath = rutaMuMuManager();
     if (!managerPath) return false;
     try {
-        execSync(`"${managerPath}" control shutdown -v ${index}`, { windowsHide: true });
+        execFileSync(managerPath, ['control', 'shutdown', '-v', String(index)], { windowsHide: true });
         return true;
     } catch (e) {
         console.error(`DEBUG: MuMuManager rechazó "control shutdown -v ${index}":`, e?.stderr?.toString() || e?.message || e);
@@ -3419,10 +3535,25 @@ async function generarInfoAccountsPDF(rutaMasterPath, archivoJson, escalaRender 
     // no hay, no se agrega nada (mismo criterio que el embed de Discord).
     if (datosInventario) {
         doc.moveDown(0.3);
-        doc.fontSize(11).fillColor(TEXTO_CLARO).text(`👛 Shinedust: ${datosInventario.shinedust}`);
-        for (const [clave, , texto] of ETIQUETAS_INVENTARIO) {
+        // Mismos iconos que ya se suben como emoji custom de Discord (FUENTES_EMOJIS/
+        // guild-emojis.js) — pdfkit no puede dibujar emoji Unicode (fuente estandar sin esos
+        // glifos, sale como bytes corruptos), asi que se dibuja el PNG de origen directo.
+        const ANCHO_ICONO_INV = 12, GAP_ICONO_INV = 5;
+        function lineaConIcono(nombreEmoji, texto) {
+            const rutaRelativa = nombreEmoji ? FUENTES_EMOJIS[nombreEmoji] : null;
+            const rutaIcono = rutaRelativa ? path.join(__dirname, 'assets', rutaRelativa) : null;
+            const y = doc.y;
+            if (rutaIcono && fs.existsSync(rutaIcono) && /\.(png|jpe?g)$/i.test(rutaIcono)) {
+                doc.image(rutaIcono, doc.x, y, { width: ANCHO_ICONO_INV, height: ANCHO_ICONO_INV });
+                doc.fontSize(11).fillColor(TEXTO_CLARO).text(texto, doc.x + ANCHO_ICONO_INV + GAP_ICONO_INV, y);
+            } else {
+                doc.fontSize(11).fillColor(TEXTO_CLARO).text(texto);
+            }
+        }
+        lineaConIcono('Polvo_iris_TCGP', `Shinedust: ${datosInventario.shinedust}`);
+        for (const [clave, nombreEmoji, texto] of ETIQUETAS_INVENTARIO) {
             if (datosInventario[clave] && datosInventario[clave] !== '0') {
-                doc.fontSize(11).fillColor(TEXTO_CLARO).text(`${texto}: ${datosInventario[clave]}`);
+                lineaConIcono(nombreEmoji, `${texto}: ${datosInventario[clave]}`);
             }
         }
     }
@@ -3540,6 +3671,20 @@ function generarTokenDashboard(rutaMasterPath, archivoJson, datosInventario = nu
     const token = crypto.randomBytes(12).toString('hex');
     _dashboardTokens.set(token, { rutaMasterPath, archivoJson, datosInventario, discordId, fileName });
     return token;
+}
+
+// Bloquea el trade en CUALQUIER acceso que no sea localhost (2026-08-11, bug real de
+// seguridad encontrado por el usuario): el boton "Transfer this card" ejecutaba un trade
+// REAL desde una pagina sin login -- cualquiera con el link publico podia iniciar una
+// transferencia de una carta ajena. Regla explicita del usuario: "los tradeos funcionan
+// UNICAMENTE mediante localhost desde tu PC" -- no alcanza con distinguir solo el tunel
+// publico, un celular en la MISMA WiFi (accediendo por la IP local, ej. 192.168.x.x) tiene
+// que bloquearse igual, porque un telefono nunca puede llegar a mostrar "localhost" de la
+// PC (localhost en un celular es el celular mismo) -- por eso alcanza con chequear el Host
+// header del request: solo pasa si es literalmente localhost/127.0.0.1.
+function esAccesoPublico(req) {
+    const host = (req.hostname || '').toLowerCase();
+    return host !== 'localhost' && host !== '127.0.0.1';
 }
 
 function obtenerIpLan() {
@@ -3660,7 +3805,8 @@ dashboardApp.get('/account/:token', async (req, res) => {
                     nombre: carta.nombre,
                     cantidad: conteoPorCodigo[carta.id] || 0,
                     code: carta.id,
-                    tipoRareza: carta.tipoRareza
+                    tipoRareza: carta.tipoRareza,
+                    expansion: carta.expansion
                 });
             }
         } else {
@@ -3676,16 +3822,69 @@ dashboardApp.get('/account/:token', async (req, res) => {
                 const nombreCarta = (infoMaster?.Name && en_US?.[infoMaster.Name]) || infoMaster?.Name || code;
                 const tipoRareza = tipoRarezaDesdeInfo(infoMaster) || '';
                 if (!porExpansion[nombreExpansion]) porExpansion[nombreExpansion] = [];
-                porExpansion[nombreExpansion].push({ nombre: nombreCarta, cantidad, code, tipoRareza });
+                porExpansion[nombreExpansion].push({ nombre: nombreCarta, cantidad, code, tipoRareza, expansion: nombreExpansion });
             }
         }
         for (const lista of Object.values(porExpansion)) lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
         const expansionesOrdenadas = Object.keys(porExpansion).sort();
 
-        // Total de cartas (a pedido explicito del usuario 2026-08-01): suma de
-        // TODOS los pulls, cada copia repetida cuenta -- no es "cartas unicas",
-        // es "cuantas cartas en total salieron de sobres" (ej. 1029).
-        const totalCartas = Object.values(conteoPorCodigo).reduce((s, n) => s + n, 0);
+        // Historial de sobres (2026-08-10, a pedido explicito del usuario): al lado de la
+        // grilla de expansiones, mostrar los pulls tal cual vienen en el JSON de la cuenta
+        // (fecha + que cartas salieron de ese sobre) -- accountData.pulls ya tiene esto listo
+        // (timestamp, pack, cards[]), solo hace falta cruzar cada codigo de carta con
+        // porExpansion para sacarle nombre/rareza. Ojo: los pulls MAS VIEJOS de una cuenta
+        // (la primera importacion, antes de que el bot empezara a trackear sobre por sobre)
+        // pueden traer decenas de cartas en un solo pull -- no son "un sobre real", son un
+        // volcado historico completo. Los pulls nuevos (los que arma el bot con la automatizacion)
+        // si son 1 pull = 1 sobre real (5 cartas). Se muestra tal cual viene, mas reciente
+        // primero, sin fingir que todos son sobres de 5 cartas.
+        const cartaPorCodigo = {};
+        for (const lista of Object.values(porExpansion)) {
+            for (const carta of lista) cartaPorCodigo[carta.code] = carta;
+        }
+
+        // Boton "Wishlist" al lado del buscador (2026-08-11, a pedido explicito del usuario):
+        // mismo archivo/wishlist.json ya usado por el comando /wishlist de Discord (una sola
+        // wishlist global, no por cuenta) -- reusa obtenerCartasWishlist tal cual, cruzando
+        // cada carta contra ESTA cuenta puntual (cartaPorCodigo) para mostrar si ya la tiene
+        // y cuantas copias, en vez del conteo cruzado entre todas las cuentas que usa el
+        // comando de Discord.
+        const rutaWishlistCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_wishlist'`);
+        const cartasWishlist = (obtenerCartasWishlist(rutaWishlistCfg, { webhook_url: rutaMasterPath }) || []).map((carta) => ({
+            code: carta.id,
+            nombre: carta.nombre,
+            tipoRareza: cartaPorCodigo[carta.id]?.tipoRareza || carta.tipoRareza || '',
+            cantidad: cartaPorCodigo[carta.id]?.cantidad || 0
+        }));
+        // Se resuelve la expansion de cada sobre a partir de sus propias cartas (no de
+        // pull.pack, que es un codigo corto tipo "B3b" que no siempre matchea 1 a 1 con el
+        // nombre de expansion que ya usa el resto de la pagina) -- alcanza con la primera
+        // carta del pull que se pueda resolver, todas las de un mismo sobre son de la misma
+        // expansion. Limite POR expansion (no global): asi al entrar a una expansion puntual
+        // siempre hay algo de historial que mostrar, en vez de depender de que esa expansion
+        // haya tenido suerte de aparecer entre los ultimos N sobres de la cuenta entera.
+        const LIMITE_SOBRES_POR_EXPANSION = 10;
+        const pullsResueltos = accountData.pulls.map((pull) => {
+            const cartas = (Array.isArray(pull.cards) ? pull.cards : []).map((code) => ({
+                code,
+                nombre: cartaPorCodigo[code]?.nombre || code,
+                tipoRareza: cartaPorCodigo[code]?.tipoRareza || '',
+                // Total de copias que tiene la cuenta de ESTA carta (no cuantas salieron de
+                // este sobre puntual) -- mismo dato/mismo badge que ya usa el catalogo normal
+                // de abajo, asi las cartas se ven identicas esten donde esten en la pagina.
+                cantidad: cartaPorCodigo[code]?.cantidad || 1
+            }));
+            const expansion = (Array.isArray(pull.cards) ? pull.cards : [])
+                .map((code) => cartaPorCodigo[code]?.expansion).find(Boolean) || null;
+            return { timestamp: pull.timestamp, pack: pull.pack, cartas, expansion };
+        }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const conteoPorExpansionHistorial = {};
+        const historialSobres = [];
+        for (const pull of pullsResueltos) {
+            const clave = pull.expansion || '_desconocida';
+            conteoPorExpansionHistorial[clave] = (conteoPorExpansionHistorial[clave] || 0) + 1;
+            if (conteoPorExpansionHistorial[clave] <= LIMITE_SOBRES_POR_EXPANSION) historialSobres.push(pull);
+        }
 
         // Filtro por rareza (a pedido explicito del usuario 2026-07-31): los
         // MISMOS iconos que ya usa el bot en Discord (RAREZA_ICONOS_CARTAS +
@@ -3737,13 +3936,6 @@ dashboardApp.get('/account/:token', async (req, res) => {
                 return `<div class="dropdown-opcion" data-filtro="${valor}">${iconos} <span class="dropdown-opcion-texto">${escaparHtml(sufijo)}</span></div>`;
             }).join('');
 
-        const opcionesExpansionHtml = `<div class="dropdown-opcion activo" data-filtro-exp="all"><span class="dropdown-opcion-texto">All expansions</span></div>` +
-            expansionesOrdenadas.map(exp => {
-                const rutaLogo = buscarLogoExpansionBot(exp);
-                const logoHtml = rutaLogo ? `<img src="/logo/${Buffer.from(exp).toString('base64url')}" class="dropdown-logo">` : '';
-                return `<div class="dropdown-opcion" data-filtro-exp="${escaparHtml(exp)}">${logoHtml}<span class="dropdown-opcion-texto">${escaparHtml(exp)}</span></div>`;
-            }).join('');
-
         // Totales globales para la barra superior (2026-08-08, a pedido explicito del
         // usuario -- mismo estilo/paleta celeste que la pagina de Tutorials): cuantas
         // cartas tiene la cuenta sobre el catalogo completo, y el % de completitud.
@@ -3768,7 +3960,7 @@ dashboardApp.get('/account/:token', async (req, res) => {
     }
     * { box-sizing: border-box; }
     body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color: var(--text); margin: 0; background: var(--bg); }
-    main { padding: 22px 24px 60px; max-width: 1180px; margin: 0 auto; }
+    main { padding: 22px 24px 60px; max-width: 1680px; margin: 0 auto; }
     .top-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 22px; border-bottom: 1px solid var(--border); background: var(--surface); }
     .top-bar h1 { font-size: 16px; margin: 0; font-weight: 700; margin-right: 6px; }
     .stat { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-dim); white-space: nowrap; padding: 7px 12px; border-radius: 10px; background: var(--surface2); border: 1px solid var(--border); }
@@ -3791,8 +3983,54 @@ dashboardApp.get('/account/:token', async (req, res) => {
     .logo-ring-mini-inner { width: 100%; height: 100%; border-radius: 50%; background: var(--surface2);
         display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 3px; }
     .logo-ring-mini-inner img { max-width: 100%; max-height: 100%; object-fit: contain; }
-    .exp-rings-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .exp-rings-row .logo-ring-mini { cursor: pointer; }
+    /* Grilla de expansiones (2026-08-10, a pedido explicito del usuario, reemplaza el
+       dropdown de texto de antes): una tarjeta grande por expansion con su logo, el mismo
+       anillo verde de % (conic-gradient, igual que logo-ring-mini pero mas grande) y un link
+       "Open" para filtrar el catalogo de abajo a esa expansion sola. */
+    /* Historial de sobres al lado de la grilla (2026-08-10, a pedido explicito del usuario --
+       varias vueltas: primero columna angosta con miniaturas chicas ("se ve todo cuadrado",
+       las cartas eran cuadraditos de 42px sin detalle), despues ancho completo con cartas
+       grandes (no era la posicion que queria), version final: columna angosta EN POSICION
+       pero con las cartas reales del catalogo (.card-tile, con arte/nombre visibles) en vez
+       de miniaturas -- 2 por fila en vez de 4-5 chiquitas. */
+    /* Ancho de la columna calculado para que un sobre normal (5 cartas) entre en UNA sola
+       fila sin scroll ni wrap (2026-08-10, tercer ajuste a pedido explicito del usuario: nada
+       de scroll horizontal -- "quiero que se vea la imagen completa... que se vea todas las
+       cartas" de una. Los pulls viejos/masivos de 20+ cartas SI wrappean a mas filas -- no hay
+       ancho razonable que evite eso, pero los sobres reales de 5 entran comodos en una fila). */
+    .page-layout { display: flex; gap: 20px; align-items: flex-start; }
+    .page-main { flex: 1 1 auto; min-width: 0; padding: 18px 0 4px 22px; }
+    .pack-history { flex: 0 0 560px; width: 560px; padding: 18px 18px 4px 0; max-height: calc(100vh - 32px); overflow-y: auto; position: sticky; top: 16px; }
+    .pack-history-titulo { font-size: 12.5px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 12px; }
+    .pack-entry { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow); }
+    .pack-entry.oculto { display: none; }
+    .pack-entry-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .pack-entry-fecha { font-size: 12px; font-weight: 600; color: var(--text); }
+    .pack-entry-pack { font-size: 11px; color: var(--text-dim); background: var(--surface2); border-radius: 8px; padding: 2px 8px; white-space: nowrap; }
+    .pack-entry-logo { max-height: 20px; max-width: 100px; object-fit: contain; }
+    .pack-entry-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+    .exp-search-row { display: flex; gap: 10px; align-items: center; max-width: 500px; margin-bottom: 16px; }
+    .exp-search { flex: 1; min-width: 0; font-family: inherit; font-size: 13.5px; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); margin-bottom: 0; }
+    .exp-search:focus { outline: none; border-color: var(--accent); }
+    .wishlist-btn { flex-shrink: 0; font-family: inherit; font-size: 13px; font-weight: 600; padding: 11px 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; white-space: nowrap; }
+    .wishlist-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .exp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+    /* Toda la tarjeta es clickeable (2026-08-10, a pedido explicito del usuario: en vez de un
+       link chico "Open", que se ilumine al pasar el mouse y se pueda clickear en cualquier
+       parte) -- transition + hover en el borde/sombra/elevacion, no solo en el texto. */
+    .exp-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px 18px; text-align: center; box-shadow: var(--shadow); cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .15s; }
+    .exp-card:hover { border-color: var(--accent); box-shadow: 0 4px 16px rgba(47,143,201,.25); transform: translateY(-2px); }
+    .exp-card.oculta { display: none; }
+    .exp-card-ring { width: 92px; height: 92px; border-radius: 50%; margin: 0 auto 14px; flex-shrink: 0;
+        background: conic-gradient(var(--good) calc(var(--pct) * 1%), var(--border) 0); padding: 5px; }
+    .exp-card-ring-inner { width: 100%; height: 100%; border-radius: 50%; background: var(--surface2); display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 8px; }
+    .exp-card-ring-inner img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .exp-card-nombre { font-size: 15px; font-weight: 600; margin-bottom: 5px; }
+    .exp-card-conteo { font-size: 13px; color: var(--text-dim); }
+    /* Boton para volver a la grilla desde el catalogo de una expansion (2026-08-10, a pedido
+       explicito del usuario: "Open" reemplaza la grilla en vez de solo scrollear mas abajo). */
+    .exp-back-btn { border: none; background: var(--surface2); color: var(--accent); font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 9px 16px; border-radius: 12px; margin: 18px 22px 0; }
+    .exp-back-btn:hover { background: var(--border); }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 14px; }
     .card-tile { background: var(--surface); border-radius: 14px; padding: 8px; border: 1px solid var(--border); box-shadow: var(--shadow); }
     .img-wrap { position: relative; }
@@ -3815,7 +4053,6 @@ dashboardApp.get('/account/:token', async (req, res) => {
        atenuados y sin poder elegirlos hasta que Task #7/#8 esten terminados. */
     .dropdown-opcion-disabled { opacity: .45; cursor: not-allowed; }
     .dropdown-opcion-disabled:hover { background: none; }
-    .dropdown-logo { height: 20px; max-width: 60px; object-fit: contain; }
     .card-tile.oculta { display: none; }
     .expansion.oculta { display: none; }
     /* Cartas que la cuenta todavia no saco (a pedido explicito del usuario
@@ -3830,7 +4067,17 @@ dashboardApp.get('/account/:token', async (req, res) => {
     .card-tile img.rota { visibility: hidden; }
     .card-tile img.rota + .badge { display: none; }
     .img-wrap:has(img.rota) { background: var(--surface2); border-radius: 10px; aspect-ratio: 0.716; }
-    .icono-rareza { height: 13px; vertical-align: middle; margin-right: 1px; }
+    /* Causa real del "diamante torcido" reportado por el usuario (2026-08-11): la regla
+       generica ".card-tile img" (pensada para la imagen grande de la carta) tiene la MISMA
+       especificidad CSS que cualquier selector de un solo tag+clase -- como esta pertenece a
+       un .card-tile (el mismo componente se reusa para las cartas del historial de sobres),
+       width:100%/aspect-ratio:0.716/object-fit:cover del arte de la carta se le pegaban
+       tambien al icono de rareza (que vive adentro del mismo .card-tile), aplastandolo dentro
+       de una caja con forma de carta en vez de dejarlo con su propia proporcion. ".rareza-pill
+       img" tiene la MISMA especificidad pero aparece despues en la hoja de estilos, asi que
+       gana y cancela esas propiedades. */
+    .rareza-pill img { width: auto; aspect-ratio: auto; object-fit: contain; border-radius: 0; background: transparent; }
+    .icono-rareza { height: 13px; vertical-align: middle; margin-right: 2px; flex-shrink: 0; }
     .icono-inventario { height: 16px; width: 16px; vertical-align: middle; margin-right: 2px; }
     .lista-inventario { margin: 4px 0; }
     .lista-inventario div { padding: 2px 0; }
@@ -3844,20 +4091,40 @@ dashboardApp.get('/account/:token', async (req, res) => {
        trade al lado, no la imagen a pantalla completa con todo apilado abajo). Fondo claro
        (no el fondo oscuro del lightbox), cursor normal y clicks propios no cierran el
        lightbox -- el JS de abajo le pone stopPropagation a los clicks dentro del modal. */
-    .lightbox-modal { position: relative; background: var(--surface); border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); padding: 16px; max-width: min(90vw, 560px); max-height: 85vh; overflow-y: auto; cursor: default; }
-    .lightbox-close { position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface2); color: var(--text-dim); font-size: 16px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .lightbox-modal { position: relative; background: var(--surface); border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); padding: 20px; max-width: min(92vw, 760px); max-height: 90vh; overflow-y: auto; cursor: default; }
+    /* Adentro del modal pero con mas margen (2026-08-11, a pedido explicito del usuario --
+       antes quedaba a medio camino sobre el borde redondeado, se veia desprolija). Probado
+       afuera con offset negativo primero, pero .lightbox-modal tiene overflow-y:auto -- eso
+       fuerza a overflow-x:auto tambien (regla real de CSS: no se puede mezclar visible con
+       no-visible en los dos ejes), asi que un boton sobresaliendo disparaba un scroll
+       horizontal no deseado. Mas simple: adentro, con margen generoso. */
+    .lightbox-close { position: absolute; top: 14px; right: 14px; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface2); color: var(--text-dim); font-size: 16px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
     .lightbox-close:hover { color: var(--text); }
-    .lightbox-modal-body { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; justify-content: center; }
+    .lightbox-modal-body { display: flex; align-items: flex-start; gap: 26px; flex-wrap: wrap; justify-content: center; }
     /* Ancho/alto fijos (no max-width/max-height sueltos) para que toda carta se vea del
        MISMO tamaño sin importar la resolucion real de origen (Drive HD/local/repositorio
        traen tamaños nativos distintos) -- object-fit: contain hace que la imagen se ajuste
-       adentro de esa caja fija sin recortarse ni estirarse. Notablemente mas chica que antes
-       (era casi la pantalla completa) para que entre al lado del panel de trade. */
-    .lightbox-img-col { width: min(50vw, 190px); aspect-ratio: 0.716; flex-shrink: 0; }
+       adentro de esa caja fija sin recortarse ni estirarse. Agrandado (2026-08-11, a pedido
+       explicito del usuario) de 190px a 280px de ancho. */
+    .lightbox-img-col { width: min(60vw, 280px); aspect-ratio: 0.716; flex-shrink: 0; }
     .lightbox-img-col img { width: 100%; height: 100%; object-fit: contain; border-radius: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
-    .lightbox-panel { display: flex; flex-direction: column; gap: 12px; width: min(80vw, 230px); padding-top: 4px; }
+    /* flex-shrink:0 (2026-08-11, mismo bug de fondo que ya paso con los iconos de rareza):
+       sin esto, si la ventana/DevTools deja poco ancho, el flexbox achica este panel hasta
+       colapsarlo a practicamente 0px en vez de mandarlo a una fila nueva (que es lo que
+       flex-wrap:wrap en .lightbox-modal-body ya deberia hacer) -- el boton/formulario de
+       trade quedaban invisibles (ancho:100% de un padre con ancho 0). */
+    /* padding-top mas grande (2026-08-11, a pedido explicito del usuario: la X chocaba con
+       el boton "Transfer this card" de arriba) -- deja hueco libre para la X sin superponerse. */
+    .lightbox-panel { display: flex; flex-direction: column; gap: 12px; width: min(80vw, 300px); flex-shrink: 0; padding-top: 32px; }
     .trade-toggle-btn { border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; padding: 11px 18px; border-radius: 12px; cursor: pointer; width: 100%; }
     .trade-toggle-btn:hover { opacity: .92; }
+    .trade-blocked { background: var(--surface2); border: 1px solid var(--border); border-radius: 16px; padding: 16px; width: 100%; box-sizing: border-box; }
+    .trade-blocked-titulo { font-size: 13.5px; font-weight: 700; margin-bottom: 8px; }
+    .trade-blocked p { font-size: 12.5px; color: var(--text-dim); margin: 0 0 8px; line-height: 1.4; }
+    .trade-blocked-opciones { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .trade-blocked-opcion { font-size: 12px; color: var(--text); margin-bottom: 6px; line-height: 1.4; }
+    .trade-blocked-opcion b { color: var(--accent); }
+    .trade-blocked-opcion code { background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; font-size: 11.5px; }
     .trade-form { background: var(--surface2); border: 1px solid var(--border); border-radius: 16px; padding: 16px; width: 100%; box-sizing: border-box; }
     .trade-form .campo { margin-bottom: 12px; }
     .trade-form label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-dim); margin-bottom: 5px; }
@@ -3881,32 +4148,62 @@ dashboardApp.get('/account/:token', async (req, res) => {
     .trade-log-paso img, .trade-log-paso .trade-log-icono-txt { width: 18px; height: 18px; flex-shrink: 0; text-align: center; }
     .trade-log-paso.error { color: var(--bad); }
     @media (max-width: 640px) { .top-bar h1 { width: 100%; } }
+    /* Boton para abrir el historial como panel deslizable en celular (2026-08-11, a pedido
+       explicito del usuario, con dibujo a mano de como lo queria: "solo apareceran los
+       cuadros rojos que seran las expansiones, arriba en el cuadro verde una columna que al
+       presionar deslizara y mostrara el historial de pulls"). Oculto en desktop -- ahi el
+       historial ya se ve normal, al costado, sin necesitar este boton. */
+    .pack-history-toggle-btn { display: none; }
+    .pack-history-overlay { display: none; }
+    @media (max-width: 900px) {
+        /* En celular el default es SOLO la grilla de expansiones (.page-main) -- el
+           historial (.pack-history) deja de estar en el flujo normal de la pagina, pasa a
+           ser un panel fijo que arranca afuera de la pantalla (translateX) y se desliza
+           adentro solo cuando se abre con el boton. */
+        .page-main { padding: 18px 22px 4px; width: 100%; }
+        .pack-history-toggle-btn { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 18px; cursor: pointer; flex-shrink: 0; }
+        .pack-history { position: fixed; top: 0; right: 0; height: 100vh; width: min(86vw, 380px); z-index: 60; transform: translateX(100%); transition: transform .25s ease; box-shadow: -8px 0 28px rgba(0,0,0,.35); background: var(--bg); padding: 18px; max-height: none; overflow-y: auto; }
+        .pack-history.abierto { transform: translateX(0); }
+        .pack-history-overlay.abierto { display: block; position: fixed; inset: 0; background: rgba(15,23,29,.5); z-index: 55; }
+        .pack-entry-cards { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); }
+        .exp-search-row { max-width: none; }
+        .lightbox-modal-body { flex-direction: column; align-items: center; }
+        .lightbox-panel { width: 100%; max-width: 300px; }
+    }
 </style></head><body>
 <div class="top-bar">
     <h1>${escaparHtml(accountData.deviceAccount || path.basename(archivoJson, '.json'))}</h1>
-    <div class="stat good"><b>${totalTenidasGlobal} / ${totalCatalogoGlobal}</b>&nbsp;cards</div>
-    <div class="stat">Completion <b>${porcentajeCompletitud}%</b></div>
+    <div class="stat good"><b>${totalTenidasGlobal} / ${totalCatalogoGlobal}</b>&nbsp;cards&nbsp;<b>(${porcentajeCompletitud}%)</b></div>
     <!-- Stat de la expansion elegida en el filtro (2026-08-08, a pedido explicito del
          usuario): oculto hasta que se elija una expansion puntual -- el JS de mas abajo
          lo llena con el anillo verde + X/Y + % de ESA expansion, separado del total de la
-         cuenta. Si el filtro esta en "todas", en cambio se muestra expRingsRow (abajo) con
-         el anillo mini de CADA expansion a la vez. -->
+         cuenta. La fila de anillos mini que antes iba aca (expRingsRow) se saco 2026-08-10 --
+         quedo redundante con la grilla grande de expansiones de mas abajo en <main>. -->
     <div class="stat" id="statExpansion" style="display:none">
         <div class="logo-ring-mini" id="statExpansionRing" style="display:none"><div class="logo-ring-mini-inner"><img id="statExpansionLogo"></div></div>
         <b id="statExpansionTexto"></b>
     </div>
-    <div class="exp-rings-row" id="expRingsRow"></div>
-    <div class="stat">Total pulled <b>${totalCartas}</b></div>
     ${datosInventario ? `<div class="stat">Shinedust <b>${escaparHtml(datosInventario.shinedust)}</b></div>` : ''}
     <div class="spacer"></div>
+    <button type="button" class="pack-history-toggle-btn" id="packHistoryToggleBtn" title="Pack history">📋</button>
     <a class="download-btn" href="/account/${req.params.token}/pdf" download>⬇ Download PDF</a>
 </div>
+<div class="pack-history-overlay" id="packHistoryOverlay"></div>
 <div class="lightbox" id="lightbox">
   <div class="lightbox-modal">
     <button class="lightbox-close" id="lightboxClose" type="button" aria-label="Close">×</button>
     <div class="lightbox-modal-body">
       <div class="lightbox-img-col"><img id="lightbox-img" src="" alt=""></div>
       <div class="lightbox-panel">
+        <div class="trade-blocked" id="tradeBlocked" style="display:none">
+          <div class="trade-blocked-titulo">🔒 Trading isn't available here</div>
+          <p>For security, trades can only be started by the account owner, from a trusted connection — not from a link opened over the public network.</p>
+          <p>You can still browse every card and image normally.</p>
+          <div class="trade-blocked-opciones">
+            <div class="trade-blocked-opcion"><b>On your PC:</b> open this same page via <code>localhost</code> to trade directly.</div>
+            <div class="trade-blocked-opcion"><b>From anywhere else:</b> use the <b>Trade</b> button on the card in Discord instead.</div>
+          </div>
+        </div>
         <button class="trade-toggle-btn" id="tradeToggleBtn">Transfer this card</button>
         <div class="trade-form" id="tradeForm" style="display:none">
           <div class="campo">
@@ -3951,11 +4248,25 @@ dashboardApp.get('/account/:token', async (req, res) => {
 ${datosInventario ? `<div class="sub lista-inventario">
     ${camposInventarioEmbed(datosInventario, mapaEmojisAccountPage).map(c => `<div>${emojiDiscordAImg(c.name)}: <strong>${escaparHtml(c.value)}</strong></div>`).join('\n    ')}
 </div>` : ''}
-<div class="filtros">
-    <div class="dropdown" id="dropdown-expansion">
-        <button type="button" class="dropdown-toggle" id="toggle-expansion"><span class="dropdown-toggle-texto">All expansions</span><span class="caret">▾</span></button>
-        <div class="dropdown-panel" id="panel-expansion">${opcionesExpansionHtml}</div>
+${/* Grilla de expansiones (2026-08-10, a pedido explicito del usuario, reemplaza el dropdown
+     de expansion de arriba): cada tarjeta muestra el logo, el anillo verde de % completado
+     (mismo dato que ya se usaba para expRingsRow) y un boton "Open" para filtrar a esa
+     expansion -- mas visual que un dropdown de texto. Se arma vacia aca (el contenido real lo
+     llena el JS de mas abajo desde DATOS_EXPANSIONES, mismo dato que ya se calcula) para no
+     tener que reordenar el calculo de datosExpansionesResumen, que hoy pasa DESPUES de este
+     punto del HTML. El buscador filtra estas tarjetas en vivo por nombre mientras se escribe.
+*/ ''}
+<div class="page-layout">
+<div class="page-main">
+<div class="exp-picker" id="expPickerSection">
+    <div class="exp-search-row">
+        <input type="text" id="expSearchInput" class="exp-search" placeholder="Search expansion...">
+        <button type="button" class="wishlist-btn" id="wishlistBtn">💖 Wishlist</button>
     </div>
+    <div class="exp-grid" id="expGrid"></div>
+</div>
+<button type="button" class="exp-back-btn" id="expBackBtn" style="display:none">← Back to expansions</button>
+<div class="filtros" id="filtrosBar" style="display:none">
     <div class="dropdown" id="dropdown-rareza">
         <button type="button" class="dropdown-toggle" id="toggle-rareza"><span class="dropdown-toggle-texto">All rarities</span><span class="caret">▾</span></button>
         <div class="dropdown-panel" id="panel-rareza">${opcionesRarezaHtml}</div>
@@ -3994,7 +4305,10 @@ ${datosInventario ? `<div class="sub lista-inventario">
                 porcentaje: porcentajeExpansion,
                 logo: logoB64 ? `/logo/${logoB64}` : null
             });
-            html += `<div class="expansion" data-expansion="${escaparHtml(expansion)}"><div class="expansion-header">`;
+            // Arranca oculta (2026-08-10, a pedido explicito del usuario): antes se mostraban
+            // las 22 expansiones apiladas de una, pagina interminable -- ahora solo aparece
+            // el catalogo de UNA expansion cuando se la elige en la grilla de arriba.
+            html += `<div class="expansion oculta" data-expansion="${escaparHtml(expansion)}"><div class="expansion-header">`;
             if (rutaLogo) {
                 html += `<img src="/logo/${logoB64}" alt="${escaparHtml(expansion)}">`;
             }
@@ -4010,37 +4324,99 @@ ${datosInventario ? `<div class="sub lista-inventario">
             }
             html += `</div></div>`;
         }
+
+        // Seccion de Wishlist (2026-08-11, a pedido explicito del usuario): mismo componente
+        // que el catalogo de una expansion (.expansion/.grid/.card-tile), asi que se pudo
+        // reusar filtrarPorExpansion tal cual pasandole "__wishlist__" como filtro -- no hace
+        // falta logica de mostrar/ocultar nueva, el JS de mas abajo ya sabe ocultar la grilla
+        // y mostrar cualquier .expansion cuyo data-expansion matchee el filtro elegido.
+        html += `<div class="expansion oculta" data-expansion="__wishlist__"><div class="expansion-header"><h2>💖 Wishlist (${cartasWishlist.length} cards)</h2></div><div class="grid">`;
+        if (!cartasWishlist.length) {
+            html += `<div class="sub" style="margin:0">No cards saved in the wishlist yet.</div>`;
+        }
+        for (const carta of cartasWishlist) {
+            const iconosCarta = iconosRarezaHtml(carta.tipoRareza);
+            const faltante = carta.cantidad === 0;
+            html += `<div class="card-tile${faltante ? ' faltante' : ''}" data-rareza="${escaparHtml(carta.tipoRareza)}" data-tiene="${faltante ? '0' : '1'}"><div class="img-wrap"><img src="/img/${req.params.token}/${encodeURIComponent(carta.code)}" loading="lazy" alt="${escaparHtml(carta.nombre)}" data-code="${escaparHtml(carta.code)}" data-nombre="${escaparHtml(carta.nombre)}" data-tiene="${faltante ? '0' : '1'}" onerror="this.classList.add('rota')">`;
+            if (carta.cantidad > 0) html += `<div class="badge">x${carta.cantidad}</div>`;
+            html += `</div>`;
+            if (iconosCarta) html += `<div class="rareza-tag"><span class="rareza-pill">${iconosCarta}</span></div>`;
+            html += `</div>`;
+        }
+        html += `</div></div>`;
+
+        html += `</div>`; // cierra .page-main
+
+        // Panel de historial de sobres (2026-08-10, a pedido explicito del usuario): columna
+        // angosta al lado del contenido principal -- no se oculta nunca, el JS de mas abajo
+        // filtra sus tarjetas por data-expansion cuando el usuario entra a una expansion
+        // puntual. El logo de cada tarjeta sale del mismo mapa de logos que ya arma
+        // datosExpansionesResumen. Badge con la cantidad REAL que tiene la cuenta de esa
+        // carta (mismo dato que usa el badge del catalogo normal).
+        html += `<div class="pack-history" id="packHistory">
+    <div class="pack-history-titulo">📦 Pack history</div>
+    ${historialSobres.length ? historialSobres.map((pull) => {
+        const logoExpansion = pull.expansion ? datosExpansionesResumen.find((e) => e.nombre === pull.expansion)?.logo : null;
+        return `<div class="pack-entry" data-expansion="${escaparHtml(pull.expansion || '')}">
+            <div class="pack-entry-header">
+                <span class="pack-entry-fecha">${escaparHtml(pull.timestamp)}</span>
+                ${logoExpansion ? `<img class="pack-entry-logo" src="${logoExpansion}" alt="${escaparHtml(pull.expansion)}">` : (pull.pack ? `<span class="pack-entry-pack">${escaparHtml(pull.pack)}</span>` : '')}
+            </div>
+            <div class="pack-entry-cards">
+                ${pull.cartas.map((carta) => `<div class="card-tile">
+                    <div class="img-wrap">
+                        <img src="/img/${req.params.token}/${encodeURIComponent(carta.code)}" loading="lazy" alt="${escaparHtml(carta.nombre)}" data-code="${escaparHtml(carta.code)}" data-nombre="${escaparHtml(carta.nombre)}" data-tiene="1" onerror="this.classList.add('rota')">
+                        <div class="badge">x${carta.cantidad}</div>
+                    </div>
+                    ${iconosRarezaHtml(carta.tipoRareza) ? `<div class="rareza-tag"><span class="rareza-pill">${iconosRarezaHtml(carta.tipoRareza)}</span></div>` : ''}
+                </div>`).join('')}
+            </div>
+        </div>`;
+    }).join('') : `<div class="sub" style="margin:0">No packs on record yet.</div>`}
+</div>`;
+        html += `</div>`; // cierra .page-layout
+
         html += `<script>
+var ES_ACCESO_PUBLICO = ${esAccesoPublico(req) ? 'true' : 'false'};
 var DATOS_EXPANSIONES = ${JSON.stringify(datosExpansionesResumen)};
 var statExpansion = document.getElementById('statExpansion');
 var statExpansionRing = document.getElementById('statExpansionRing');
 var statExpansionLogo = document.getElementById('statExpansionLogo');
 var statExpansionTexto = document.getElementById('statExpansionTexto');
-var expRingsRow = document.getElementById('expRingsRow');
 
-// Fila con el anillo mini de CADA expansion (2026-08-08, a pedido explicito del usuario):
-// se arma una sola vez al cargar la pagina, se muestra cuando el filtro esta en "todas" y
-// se oculta cuando se elige una expansion puntual (ahi se muestra solo ESA, en statExpansion).
+// Grilla de expansiones (2026-08-10, a pedido explicito del usuario, reemplaza el dropdown
+// de texto de antes): una tarjeta grande por expansion, logo + anillo verde de % + boton
+// "Open" que llama filtrarPorExpansion directo. El buscador de arriba filtra estas tarjetas
+// en vivo por nombre mientras se escribe (no toca el catalogo de cartas de abajo).
+var expGrid = document.getElementById('expGrid');
 DATOS_EXPANSIONES.forEach(function (datos) {
-    if (!datos.logo) return;
-    var ring = document.createElement('div');
-    ring.className = 'logo-ring-mini';
-    ring.style.setProperty('--pct', datos.porcentaje);
-    ring.title = datos.nombre + ': ' + datos.tenidas + ' / ' + datos.total + ' (' + datos.porcentaje + '%)';
-    ring.innerHTML = '<div class="logo-ring-mini-inner"><img src="' + datos.logo + '" alt="' + datos.nombre + '"></div>';
-    ring.addEventListener('click', function () {
-        document.querySelector('[data-filtro-exp="' + datos.nombre + '"]').click();
+    var card = document.createElement('div');
+    card.className = 'exp-card';
+    card.dataset.nombre = datos.nombre.toLowerCase();
+    var logoHtml = datos.logo ? '<img src="' + datos.logo + '" alt="' + datos.nombre + '">' : '';
+    card.innerHTML =
+        '<div class="exp-card-ring" style="--pct:' + datos.porcentaje + '"><div class="exp-card-ring-inner">' + logoHtml + '</div></div>' +
+        '<div class="exp-card-nombre"></div>' +
+        '<div class="exp-card-conteo">' + datos.tenidas + ' / ' + datos.total + ' cards</div>';
+    card.querySelector('.exp-card-nombre').textContent = datos.nombre;
+    card.addEventListener('click', function () {
+        filtrarPorExpansion(datos.nombre);
     });
-    expRingsRow.appendChild(ring);
+    expGrid.appendChild(card);
+});
+var expSearchInput = document.getElementById('expSearchInput');
+expSearchInput.addEventListener('input', function () {
+    var termino = expSearchInput.value.trim().toLowerCase();
+    expGrid.querySelectorAll('.exp-card').forEach(function (card) {
+        card.classList.toggle('oculta', termino !== '' && card.dataset.nombre.indexOf(termino) === -1);
+    });
 });
 
 function actualizarStatExpansion(nombreExpansion) {
     if (nombreExpansion === 'all') {
         statExpansion.style.display = 'none';
-        expRingsRow.style.display = '';
         return;
     }
-    expRingsRow.style.display = 'none';
     var datos = DATOS_EXPANSIONES.find(function (e) { return e.nombre === nombreExpansion; });
     if (!datos) {
         statExpansion.style.display = 'none';
@@ -4105,13 +4481,58 @@ armarDropdown('toggle-estado', 'panel-estado', 'filtroEstado', function (filtro)
     filtroEstadoActual = filtro;
     aplicarFiltrosTarjeta();
 });
-armarDropdown('toggle-expansion', 'panel-expansion', 'filtroExp', function (filtro) {
+// Extraida de lo que antes era el callback del dropdown de expansion (2026-08-10, a pedido
+// explicito del usuario: reemplazado por la grilla de tarjetas de mas abajo) -- ahora es una
+// funcion aparte para que tanto una tarjeta de la grilla como un anillo mini de la topbar
+// puedan llamarla directo, sin depender de clickear un elemento de dropdown que ya no existe.
+// "all" ya no muestra TODAS las expansiones a la vez (2026-08-10, a pedido explicito del
+// usuario: la pagina arrancaba mostrando el catalogo COMPLETO de cada expansion apiladas una
+// abajo de otra, pagina larguisima) -- ahora "all" oculta todo por igual; el catalogo de una
+// expansion puntual solo se muestra cuando se la elige de la grilla de arriba.
+function filtrarPorExpansion(filtro) {
     document.querySelectorAll('.expansion').forEach(function (exp) {
-        var coincide = (filtro === 'all' || exp.dataset.expansion === filtro);
+        var coincide = (filtro !== 'all' && exp.dataset.expansion === filtro);
         exp.classList.toggle('oculta', !coincide);
     });
     actualizarStatExpansion(filtro);
+    // "Open" reemplaza la grilla en vez de solo scrollear mas abajo (2026-08-10, a pedido
+    // explicito del usuario) -- se oculta la grilla/buscador y aparece el catalogo + el
+    // boton "Back" para volver; los filtros de rareza/estado tampoco tienen sentido sin
+    // ninguna expansion elegida, se muestran junto con el catalogo.
+    var abriendoExpansion = (filtro !== 'all');
+    document.getElementById('expPickerSection').style.display = abriendoExpansion ? 'none' : '';
+    document.getElementById('expBackBtn').style.display = abriendoExpansion ? '' : 'none';
+    document.getElementById('filtrosBar').style.display = abriendoExpansion ? '' : 'none';
+    // El historial de sobres NUNCA se oculta del todo (2026-08-10, a pedido explicito del
+    // usuario): al entrar a una expansion puntual, se filtra a solo los sobres de ESA
+    // expansion en vez de desaparecer junto con la grilla.
+    document.querySelectorAll('.pack-entry').forEach(function (entry) {
+        var coincide = (filtro === 'all' || entry.dataset.expansion === filtro);
+        entry.classList.toggle('oculto', !coincide);
+    });
+}
+document.getElementById('expBackBtn').addEventListener('click', function () {
+    filtrarPorExpansion('all');
 });
+document.getElementById('wishlistBtn').addEventListener('click', function () {
+    filtrarPorExpansion('__wishlist__');
+});
+// Panel deslizable del historial en celular (2026-08-11, a pedido explicito del usuario):
+// solo se ve el botoncito/overlay en pantallas angostas (CSS los oculta en desktop), pero
+// el JS es el mismo siempre -- no hace nada raro si estos elementos no son visibles.
+var packHistoryPanel = document.getElementById('packHistory');
+var packHistoryToggleBtn = document.getElementById('packHistoryToggleBtn');
+var packHistoryOverlay = document.getElementById('packHistoryOverlay');
+function abrirPackHistoryMovil() {
+    packHistoryPanel.classList.add('abierto');
+    packHistoryOverlay.classList.add('abierto');
+}
+function cerrarPackHistoryMovil() {
+    packHistoryPanel.classList.remove('abierto');
+    packHistoryOverlay.classList.remove('abierto');
+}
+packHistoryToggleBtn.addEventListener('click', abrirPackHistoryMovil);
+packHistoryOverlay.addEventListener('click', cerrarPackHistoryMovil);
 var lightbox = document.getElementById('lightbox');
 var lightboxImg = document.getElementById('lightbox-img');
 var tradeToggleBtn = document.getElementById('tradeToggleBtn');
@@ -4121,6 +4542,16 @@ var tradeStatus = document.getElementById('tradeStatus');
 var tradeLog = document.getElementById('tradeLog');
 var tradeLogTitulo = document.getElementById('tradeLogTitulo');
 var tradeLogPasos = document.getElementById('tradeLogPasos');
+// Bloqueo de seguridad (2026-08-11, a pedido explicito del usuario): saca el boton del DOM
+// (no solo lo esconde) para que no haya forma de reactivarlo desde la consola del
+// navegador -- tradeToggleBtn.remove() lo desprende del documento, pero la variable JS
+// sigue apuntando a un elemento real (no null), asi que el resto del script (que le toca
+// .style.display en el click de cada carta) sigue andando sin romperse, simplemente sin
+// efecto visible porque ya no esta en la pagina.
+if (ES_ACCESO_PUBLICO) {
+    document.getElementById('tradeBlocked').style.display = '';
+    tradeToggleBtn.remove();
+}
 var EMOJI_NICE = '${urlEmojiNice}';
 var EMOJI_BAD = '${urlEmojiBad}';
 var cartaActualCode = null;
@@ -4153,7 +4584,12 @@ function cerrarLightbox() {
     detenerPollingTrade();
 }
 
-document.querySelectorAll('.card-tile img').forEach(function (img) {
+// ".pack-card-mini img" (2026-08-10, a pedido explicito del usuario: poder ver mas grande
+// una carta clickeando su miniatura en el historial de sobres) reusa el MISMO lightbox que
+// ya abren las cartas del catalogo -- misma logica de datos (code/nombre/tiene), asi que
+// el boton de trade tambien funciona igual desde aca (data-tiene="1" siempre, porque una
+// carta que salio de un sobre es, por definicion, una que la cuenta ya tiene).
+document.querySelectorAll('.card-tile img, .pack-card-mini img').forEach(function (img) {
     img.addEventListener('click', function () {
         lightboxImg.src = img.src;
         cartaActualCode = img.dataset.code;
@@ -4353,6 +4789,12 @@ function crearInteraccionWeb(discordId, canalWebhookUrl) {
 // porque el navegador no tiene acceso directo a MuMu ni al InjectAccount.ini.
 dashboardApp.get('/account/:token/trade-data', async (req, res) => {
     try {
+        // Mismo criterio que esAccesoPublico() del HTML (2026-08-13, bug real de seguridad
+        // encontrado en auditoria): antes SOLO se escondia el boton en el navegador -- este
+        // endpoint (y el POST de abajo) respondian igual a cualquiera que le pegara directo,
+        // sin pasar por la UI, incluso desde el link publico. El gate tiene que estar en el
+        // servidor, no solo en el cliente.
+        if (esAccesoPublico(req)) return res.status(403).json({ error: 'solo_localhost' });
         const datos = _dashboardTokens.get(req.params.token);
         if (!datos) return res.status(404).json({ error: 'invalido' });
         if (!datos.discordId) return res.status(400).json({ error: 'sin_discord_id' });
@@ -4372,6 +4814,11 @@ dashboardApp.get('/account/:token/trade-data', async (req, res) => {
 // Trading de Discord, igual que si se hubiera empezado desde ahi.
 dashboardApp.post('/account/:token/trade', async (req, res) => {
     try {
+        // Mismo gate que /trade-data (2026-08-13, bug real de seguridad encontrado en
+        // auditoria): este era el endpoint que de verdad disparaba el trade -- sin este
+        // chequeo, cualquiera con el token (link publico o WiFi/LAN) podia mandarle un POST
+        // directo y saltarse por completo el boton removido en el HTML.
+        if (esAccesoPublico(req)) return res.status(403).json({ error: 'solo_localhost' });
         const datos = _dashboardTokens.get(req.params.token);
         if (!datos) return res.status(404).json({ error: 'invalido' });
         if (!datos.discordId || !datos.fileName) return res.status(400).json({ error: 'sin_datos' });
@@ -4379,6 +4826,22 @@ dashboardApp.post('/account/:token/trade', async (req, res) => {
         const { cartaId, mode, index, nombre, friendId } = req.body || {};
         if (!cartaId || !mode || index === undefined || index === null || !nombre || !friendId) {
             return res.status(400).json({ error: 'faltan_campos' });
+        }
+        // El index viaja hasta execSync (lanzarInstanciaMuMu/apagarInstanciaMuMu) -- sin
+        // validar que sea un entero, un valor con espacios/&/| llegaba tal cual a un comando
+        // de shell (bug real de seguridad encontrado en auditoria: inyeccion de comandos).
+        if (!/^\d+$/.test(String(index))) {
+            return res.status(400).json({ error: 'index_invalido' });
+        }
+        // El nombre viaja como argumento a varios scripts .ahk (_SendFriendRequest,
+        // _DonorOfferCard, _DonorRespondAndFinalize) que lo insertan entre comillas sin
+        // escapar (MumuHelper.ahk: MuMuQuoteArg) antes de mandarlo a MuMuManager.exe -- un
+        // nombre con una comilla adentro podia inyectar argumentos extra (bug real de
+        // seguridad encontrado en segunda auditoria, 2026-08-13). Se valida cruzandolo contra
+        // el nombre REAL de esa instancia en vez de solo sanitizar caracteres.
+        const instanciaReal = (obtenerInstanciasMuMu() || []).find(i => String(i.index) === String(index));
+        if (!instanciaReal || instanciaReal.name !== nombre) {
+            return res.status(400).json({ error: 'nombre_invalido' });
         }
 
         // Aggressive Trade y Gold Card Trade (2026-08-08, a pedido explicito del usuario: se
@@ -5247,7 +5710,7 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
                 if (prefijo === 'goldcards') {
                     const umbral = await obtenerUmbralGold(userId);
                     const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-                    const mapaCopias = construirMapaCopiasPorCarta(rutaJsonCfg?.webhook_url);
+                    const mapaCopias = construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url);
                     datosGold = { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral };
                 }
                 const payloadReconstruido = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterPath, volver, guild, datosGold);
@@ -5343,7 +5806,7 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
             new ButtonBuilder().setCustomId('wishlist_ver').setLabel('📋 View my Wishlist').setStyle(ButtonStyle.Primary)
         );
 
-        const bannerPath = elegirBannerWishlistAleatorio();
+        const bannerPath = await elegirBannerWishlistAleatorio();
         const archivos = [];
         if (fs.existsSync(bannerPath)) {
             embed.setImage('attachment://wishlist_banner.png');
@@ -5362,7 +5825,7 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
             new ButtonBuilder().setCustomId('allcards_ver_expansiones').setLabel('📋 View All Expansions').setStyle(ButtonStyle.Primary)
         );
 
-        const bannerPath = elegirBannerAllCardsAleatorio();
+        const bannerPath = await elegirBannerAllCardsAleatorio();
         const symbolPath = path.join(__dirname, 'assets', 'embeds', 'symbol.png');
         const archivos = [];
         if (fs.existsSync(bannerPath)) {
@@ -6109,7 +6572,7 @@ const FUENTES_CARTAS = {
             return {
                 cartas: obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg),
                 rutaMasterPath: rutaMasterCfg?.webhook_url,
-                mapaCopias: construirMapaCopiasPorCarta(rutaJsonCfg?.webhook_url)
+                mapaCopias: construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url)
             };
         }
     },
@@ -6121,7 +6584,7 @@ const FUENTES_CARTAS = {
         obtenerCartas: async () => {
             const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
             const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-            return { cartas, rutaMasterPath, mapaCopias: construirMapaCopiasPorCarta(rutaJsonCfg?.webhook_url) };
+            return { cartas, rutaMasterPath, mapaCopias: construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url) };
         }
     },
     goldcards: {
@@ -7309,13 +7772,22 @@ client.on('interactionCreate', async interaction => {
         return await interaction.update({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
+    // Boton "Retry" para el flujo de Info Accounts con datos (2026-08-12, mismo patron que
+    // botonReintentarShinedust): si algo falla el usuario puede reintentar sin volver a
+    // navegar el select de cuentas desde cero.
+    function botonReintentarInfoAccounts(fileName, index, nombre) {
+        return new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`info_accounts_instancia_retry::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+        );
+    }
+
     // Mismos pasos que ejecutarFlujoShinedust (prender, arreglar ventana, inyectar, esperar
     // pantallas de bienvenida, leer inventario) pero sin nada especifico de carta/Trade al
     // final -- termina mandando el PDF de Info Accounts con los datos ya leidos.
     async function ejecutarFlujoInfoAccountsConDatos(interaction, fileName, index, nombre) {
         const prendida = await asegurarInstanciaEncendida(index);
         if (!prendida) {
-            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, ephemeral: true });
+            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, components: [botonReintentarInfoAccounts(fileName, index, nombre)] });
         }
 
         try { await interaction.followUp({ content: `🛠️ Fixing instance **${nombre}**'s window before injecting...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
@@ -7326,7 +7798,7 @@ client.on('interactionCreate', async interaction => {
         const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
         const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
         if (!archivo) {
-            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, components: [botonReintentarInfoAccounts(fileName, index, nombre)] });
         }
 
         const { rutaIni, rutaScript } = await obtenerRutasInject(interaction.user.id);
@@ -7334,19 +7806,19 @@ client.on('interactionCreate', async interaction => {
             guardarXmlParaInyeccion(nombre, archivo, rutaIni);
             actualizarIniInject({ sendFriendRequestAfterInject: '0' }, rutaIni);
         } catch (e) {
-            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
+            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', components: [botonReintentarInfoAccounts(fileName, index, nombre)] });
         }
 
         ejecutarInyeccionHeadless(async (ok, detalle) => {
             if (!ok) {
-                try { await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+                try { await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, components: [botonReintentarInfoAccounts(fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
                 return;
             }
 
             ejecutarWaitWelcomeScreens(nombre, async (okWelcome, motivoWelcome) => {
                 if (!okWelcome) {
                     apagarInstanciaMuMu(index);
-                    try { await interaction.followUp({ content: `❌ Could not reach the main menu after injecting (${motivoWelcome}).`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+                    try { await interaction.followUp({ content: `❌ Could not reach the main menu after injecting (${motivoWelcome}).`, components: [botonReintentarInfoAccounts(fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
                     return;
                 }
 
@@ -7355,7 +7827,7 @@ client.on('interactionCreate', async interaction => {
                 ejecutarCountShinedust(nombre, async (okOcr, datosOMotivo) => {
                     apagarInstanciaMuMu(index);
                     if (!okOcr) {
-                        try { await interaction.followUp({ content: `❌ Could not read the account data (${datosOMotivo}).`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+                        try { await interaction.followUp({ content: `❌ Could not read the account data (${datosOMotivo}).`, components: [botonReintentarInfoAccounts(fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
                         return;
                     }
                     cacheDatosInventario.set(fileName, { datos: datosOMotivo, ts: Date.now() });
@@ -7370,6 +7842,13 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('info_accounts_instancia::')) {
         const fileName = interaction.customId.replace('info_accounts_instancia::', '');
         const [index, nombre] = interaction.values[0].split('::');
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+        await ejecutarFlujoInfoAccountsConDatos(interaction, fileName, index, nombre);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('info_accounts_instancia_retry::')) {
+        const [, fileName, index, nombre] = interaction.customId.split('::');
         await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
         await ejecutarFlujoInfoAccountsConDatos(interaction, fileName, index, nombre);
         return;
@@ -8232,6 +8711,26 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply(construirSelectXmlPaginado(fileNames, cartaId, 0, 'card_extract_cuenta'));
         }
 
+        // Marcar como wishlist (2026-08-11, a pedido explicito del usuario): escribe
+        // directo al mismo wishlist.json que ya lee /wishlist -- seguro porque viene de
+        // un boton de Discord (interaction.user ya esta verificado), a diferencia de la
+        // pagina web que es un link sin login.
+        if (interaction.customId.startsWith('card_wishlist_add::')) {
+            const cartaId = interaction.customId.replace('card_wishlist_add::', '');
+            await interaction.deferReply({ ephemeral: true });
+            const rutaWishlistCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_wishlist'`);
+            const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+            const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+            const resultado = agregarCartaAWishlist(rutaWishlistCfg, cartaId, nombreCarta);
+            if (!resultado.ok) {
+                return await interaction.editReply({ content: '❌ Could not find the configured **Wishlist Path**. Check it in the panel/`/setup`.' });
+            }
+            if (resultado.yaExistia) {
+                return await interaction.editReply({ content: `💖 \`${nombreCarta}\` was already in your wishlist.` });
+            }
+            return await interaction.editReply({ content: `💖 \`${nombreCarta}\` added to your wishlist!` });
+        }
+
         // Atajo directo a Info Accounts desde el detalle de carta (a pedido
         // explicito del usuario 2026-07-31) -- mismo selector de cuenta que
         // Extract XML, pero con su propio customId de seleccion
@@ -8966,6 +9465,23 @@ client.once('ready', async () => {
     avisarActualizacionAplicadaSiHaceFalta(client);
     avisarActualizacionFallidaSiHaceFalta(client);
 
+    // Chequeo al arrancar (2026-08-11, a pedido explicito del usuario): si Drive HD
+    // regular esta prendido pero no hay NINGUNA API key configurada (ej. la borraron del
+    // .env despues de haberlo prendido), ni siquiera tiene sentido intentar -- se apaga
+    // solo antes de que la primera busqueda de carta pague el costo de fallar por cada
+    // una. El caso de "hay key pero esta rota/sin acceso" (403 repetidos) lo cubre el
+    // contador de fallos seguidos en registrarErrorDriveHd, que recien se entera en vivo.
+    (async () => {
+        try {
+            const fila = await db.get(`SELECT status FROM estados_modulos WHERE nombre = 'drive_hd_regular'`);
+            if (fila?.status === 'on' && !GOOGLE_DRIVE_API_KEY_BOT) {
+                await apagarDriveHdYAvisar('no hay ninguna API key configurada');
+            }
+        } catch (e) {
+            console.error('❌ Error chequeando Drive HD al arrancar:', e?.message || e);
+        }
+    })();
+
     // El bot está pensado para quedarse prendido semanas sin reiniciarse —
     // si el chequeo de actualización solo corriera acá (una sola vez al
     // arrancar), alguien que nunca lo reinicia nunca se enteraría de una
@@ -8982,6 +9498,25 @@ client.once('ready', async () => {
     // igual de bien para algo que en la práctica no cambia segundo a segundo.
     chequearWebhooksCaidos(client);
     setInterval(() => chequearWebhooksCaidos(client), 5 * 60 * 1000);
+
+    // Refresco periodico del cache de emojis custom para s4t.js (2026-08-14, bug real
+    // reportado: el icono de rareza salia como texto roto ":rareza_estrella:" en vez del
+    // emoji para varios usuarios). s4t.js no tiene conexion propia a Discord -- lee el
+    // archivo assets/guild_emojis_cache.json tal cual quedo la ultima vez que
+    // obtenerMapaEmojisGuild() corrio, y eso antes SOLO pasaba cuando alguien usaba un
+    // comando de Discord a mano. Si un emoji se borraba/recreaba en el servidor (ej.
+    // limpiando espacio cerca del limite de 50), el ID viejo quedaba invalido en ese
+    // archivo indefinidamente para cualquiera que dejara S4T corriendo de fondo sin tocar
+    // comandos. Ahora se refresca solo, cada 10 minutos (mismo TTL que el cache en
+    // memoria de guild-emojis.js), asi se autocorrige sin depender de que alguien use el
+    // bot manualmente.
+    const refrescarEmojisTodosLosGuilds = () => {
+        for (const guild of client.guilds.cache.values()) {
+            obtenerMapaEmojisGuild(guild).catch((e) => console.error(`❌ Error refrescando emojis de ${guild.name}:`, e?.message || e));
+        }
+    };
+    refrescarEmojisTodosLosGuilds();
+    setInterval(refrescarEmojisTodosLosGuilds, 10 * 60 * 1000);
 });
 
 client.on('guildCreate', async (guild) => {

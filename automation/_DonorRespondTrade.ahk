@@ -19,6 +19,16 @@ global g_folderPath := A_Args[2]
 global g_cardName   := A_Args[3]
 global g_outputFile := A_Args[4]
 
+; Guarda de seguridad (2026-08-13, bug real encontrado en auditoria): g_cardName llega hasta
+; AdbInputText -> AdbEjecutar (_AdbUtils.ahk), que lo pega sin escapar dentro de un RunWait
+; %ComSpec% /c "..." -- un nombre con una comilla adentro podia inyectar comandos extra de
+; shell. Este script hoy es codigo muerto (bot.js ya no lo llama, el trade real usa
+; _DonorOfferCard.ahk + _DonorRespondAndFinalize.ahk con la carta "Favorita", no busqueda por
+; nombre), pero se deja blindado por si se reactiva sin que quien lo toque note el riesgo.
+if (InStr(g_cardName, """")) {
+    ExitApp, 2
+}
+
 #Include %A_ScriptDir%\_AdbUtils.ahk
 #Include %A_ScriptDir%\_OcrUtils.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk

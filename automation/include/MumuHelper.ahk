@@ -162,6 +162,11 @@ MuMuJsonStringValue(json, key) {
     return value
 }
 
+; Se sacan las comillas internas antes de encerrar el valor entre comillas (2026-08-13, bug
+; real de seguridad encontrado en auditoria): antes se pegaba "value" tal cual, asi que un
+; valor con una comilla adentro (ej. "nombre" de instancia llegando sin validar desde afuera)
+; rompia el limite del argumento e inyectaba argumentos extra a MuMuManager.exe. Ningun valor
+; legitimo (indice, nombre de instancia, clave/valor de setting) deberia tener comillas.
 MuMuQuoteArg(value) {
-    return """" . value . """"
+    return """" . StrReplace(value, """", "") . """"
 }

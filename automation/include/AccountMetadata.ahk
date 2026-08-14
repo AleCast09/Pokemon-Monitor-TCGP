@@ -34,6 +34,13 @@ AccountMetadata_AccountHasPulls(deviceAccount) {
 AccountMetadata_FormatAccount(deviceAccount) {
     if (deviceAccount = "")
         return false
+    ; Guarda de seguridad (2026-08-13, bug real encontrado en auditoria): deviceAccount se
+    ; pegaba sin escapar dentro de este RunWait -- un valor con una comilla adentro podia
+    ; inyectar argumentos extra a carddb.exe. deviceAccount sale del XML de la cuenta (campo
+    ; "deviceAccount"), asi que en la practica no es alcanzable desde la web publica, pero se
+    ; blinda igual por las dudas.
+    if (InStr(deviceAccount, """"))
+        return false
     helperPath := AccountMetadata_HelperPath()
     if (!FileExist(helperPath))
         return false

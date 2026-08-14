@@ -1,7 +1,15 @@
 {
-  "version": "1.5.44",
-  "notesCount": 3,
+  "version": "1.5.45",
+  "notesCount": 8,
   "notes": [
+    "Fixed a real security bug: the web trade panel (Info Accounts page) only blocked the \"Transfer this card\" button from showing outside localhost, but the server endpoints that actually run the trade never checked - anyone with the link (public tunnel or same WiFi) could bypass the button entirely and trigger a real trade, and an unvalidated instance/account field could even inject extra commands. Both closed server-side now.",
+    "Fixed: Gold Cards without a golden border yet used to show a generic apology image - now shows the card's real (non-gold) artwork instead, with a \"Coming soon in HD and golden borders!\" note.",
+    "Fixed a real bug: a card reprinted across multiple expansions with the same name and rarity (e.g. Lillie) could show the artwork from the wrong set in S4T trade notifications - now matches against the expansion the pack was actually opened from.",
+    "Fixed: the \"auto-refreshing\" custom emoji cache from v1.5.7 only refreshed when a Discord command was used after its 10-minute window - if you left the bot running with S4T in the background and rarely touched commands, a deleted/recreated emoji could stay broken indefinitely. Now refreshes on a real background timer every 10 minutes, independent of any command usage.",
+    "Fixed: a corrupted icon (shown as garbled text) on the Shinedust line of the downloaded Account Report PDF - now uses the real icon like the rest of the fields.",
+    "New: All Cards/Wishlist banners and the Gold Cards fallback artwork now come from a shared image repository instead of a local-only folder, so every user gets the same variety, not just Ale.",
+    "Fixed: the Control Panel's Tutorials button opened a dead page if the dashboard wasn't running on its default port - now reads the real port.",
+    "Updated: Bot General and Build Webhooks tutorials refreshed, and a new Info Accounts tutorial added.",
     "Fixed a real bug affecting every Main Trade attempt: one of the reference images used to detect Main's main menu was broken and never matched anything, so Main Trade could fail at that step no matter how long it waited. Replaced it with a verified one.",
     "Improved: injecting an account now times out in 90 seconds instead of 5 minutes if it genuinely hangs, so a stuck run fails fast with a Retry button instead of a long silent wait.",
     "New: Main Trade now captures a photo of both cards (the one sent and the one received) during the trade, shown on the account's web page once the trade finishes.",
