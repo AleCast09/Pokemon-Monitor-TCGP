@@ -205,10 +205,10 @@ const AVATARES_DEFAULT_WEBHOOK = {
     'cmd_build_embed': path.join(__dirname, 'assets', 'element', 'settings.png'),
     'cmd_build_webhooks': path.join(__dirname, 'assets', 'element', 'settings.png'),
     'cmd_setup': path.join(__dirname, 'assets', 'element', 'settings.png'),
-    '3-diamond': path.join(__dirname, 'assets', 'element', 'Poké_Ball_EP.png'),
-    '4-diamond': path.join(__dirname, 'assets', 'element', 'Poké_Ball_EP.png'),
-    '1-star': path.join(__dirname, 'assets', 'element', 'Poké_Ball_EP.png'),
-    '1-star-shiny': path.join(__dirname, 'assets', 'element', 'Poké_Ball_EP.png'),
+    '3-diamond': path.join(__dirname, 'assets', 'element', 'Poke_Ball_EP.png'),
+    '4-diamond': path.join(__dirname, 'assets', 'element', 'Poke_Ball_EP.png'),
+    '1-star': path.join(__dirname, 'assets', 'element', 'Poke_Ball_EP.png'),
+    '1-star-shiny': path.join(__dirname, 'assets', 'element', 'Poke_Ball_EP.png'),
     '2-star-trainer': path.join(__dirname, 'assets', 'element', 'Ultra_Ball_EP.png'),
     '2-star-rainbow': path.join(__dirname, 'assets', 'element', 'Ultra_Ball_EP.png'),
     '2-star-full-art': path.join(__dirname, 'assets', 'element', 'Ultra_Ball_EP.png'),
@@ -220,14 +220,14 @@ const AVATARES_DEFAULT_WEBHOOK = {
     's4t': path.join(__dirname, 'assets', 'element', 'pokerotom.png'),
     'godpack-general': path.join(__dirname, 'assets', 'element', 'Moneda_set_especial_02_TCGP.png'),
     'godpack-alive': path.join(__dirname, 'assets', 'element', 'Moneda_set_especial_01_TCGP.png'),
-    'godpack-dead': path.join(__dirname, 'assets', 'element', 'Moneda_Poké_Ball_TCGP.png'),
+    'godpack-dead': path.join(__dirname, 'assets', 'element', 'Moneda_Poke_Ball_TCGP.png'),
     'cmd_run_instance': path.join(__dirname, 'assets', 'element', 'Ficha_de_intercambio_TCGP.png'),
     'cmd_extract_xlm': path.join(__dirname, 'assets', 'element', 'Rango_Principiante_TCGP.png'),
     'cmd_card_all': path.join(__dirname, 'assets', 'element', 'Rango_Super_Ball_TCGP.png'),
     'cmd_card_wishlist': path.join(__dirname, 'assets', 'element', 'Rango_Master_Ball_TCGP.png'),
     'cmd_card_gold': path.join(__dirname, 'assets', 'element', 'Rango_Ultra_Ball_TCGP.png'),
     'shinedust': path.join(__dirname, 'assets', 'element', 'Rango_Master_Ball_TCGP.png'),
-    'info_accounts': path.join(__dirname, 'assets', 'element', 'Rango_Poké_Ball_TCGP.png')
+    'info_accounts': path.join(__dirname, 'assets', 'element', 'Rango_Poke_Ball_TCGP.png')
 };
 function avatarDefaultWebhook(tipo) {
     return AVATARES_DEFAULT_WEBHOOK[tipo] || 'https://i.imgur.com/gK1q9yS.png';
