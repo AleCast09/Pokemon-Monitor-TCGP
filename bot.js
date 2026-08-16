@@ -9675,20 +9675,33 @@ client.once('ready', async () => {
         const previo = avisoEmojisFaltantesPorGuild.get(guild.id);
         if (previo && previo.firma === firma && Date.now() - previo.ts < 24 * 60 * 60 * 1000) return;
         avisoEmojisFaltantesPorGuild.set(guild.id, { firma, ts: Date.now() });
+
+        const errores = obtenerErroresEmojisGuild(guild.id);
+        const primerMotivo = errores[faltantes[0]];
+        const lineaMotivo = primerMotivo ? `\nReal error from Discord: \`${primerMotivo}\`` : '';
+        const mensaje = `⚠️ **${faltantes.length} icon(s) couldn't be created in "${guild.name}"**: \`${faltantes.slice(0, 15).join('`, `')}\`${faltantes.length > 15 ? '...' : ''}\n` +
+            `This usually means the bot's role is missing permission to create emojis in this server. Check **Server Settings → Roles → (your bot's role)** and make sure **Administrator** is enabled, then it'll fix itself automatically within a few minutes.${lineaMotivo}`;
+
+        // Cambiado de DM directo a reusar el mismo canal/mecanismo que ya usa el aviso de
+        // actualizaciones (2026-08-15, bug real reportado: dos usuarios con Administrador Y
+        // dueño real del servidor confirmados igual NUNCA recibieron el DM, ni una vez, en dos
+        // actualizaciones distintas) -- los DM de bots pueden quedar bloqueados por privacidad
+        // sin ningun aviso visible ni para el bot ni para el usuario, mientras que el canal de
+        // Updates SI les llega (por eso supieron actualizar en primer lugar). obtenerDestinoNotificacion
+        // ya prioriza ese webhook y cae a DM del dueño de la aplicacion solo si no hay uno
+        // configurado -- mismo patron ya probado y confiable, no uno nuevo.
         try {
-            const owner = await guild.fetchOwner();
-            const errores = obtenerErroresEmojisGuild(guild.id);
-            // Motivo real de Discord, no solo la lista de nombres (2026-08-15, bug real:
-            // dos usuarios con Administrador confirmado igual no podian crear el lote --
-            // sin el error real no hay forma de seguir diagnosticando a ciegas).
-            const primerMotivo = errores[faltantes[0]];
-            const lineaMotivo = primerMotivo ? `\nReal error from Discord: \`${primerMotivo}\`` : '';
-            await owner.send(
-                `⚠️ **${faltantes.length} icon(s) couldn't be created in "${guild.name}"**: \`${faltantes.slice(0, 15).join('`, `')}\`${faltantes.length > 15 ? '...' : ''}\n` +
-                `This usually means the bot's role is missing permission to create emojis in this server. Check **Server Settings → Roles → (your bot's role)** and make sure **Administrator** is enabled, then it'll fix itself automatically within a few minutes.${lineaMotivo}`
-            );
+            const destino = await obtenerDestinoNotificacion(client);
+            if (!destino) return;
+            if (destino.tipo === 'webhook') {
+                const contenido = destino.ownerId ? `<@${destino.ownerId}>` : undefined;
+                await axios.post(`${destino.webhookUrl}?wait=true`, { content: contenido ? `${contenido} ${mensaje}` : mensaje }, { timeout: 15000 });
+            } else {
+                const usuario = await client.users.fetch(destino.userId);
+                await usuario.send(mensaje);
+            }
         } catch (e) {
-            console.error(`❌ No se pudo avisar por DM sobre emojis faltantes en ${guild.name}:`, e?.message || e);
+            console.error(`❌ No se pudo avisar sobre emojis faltantes en ${guild.name}:`, e?.message || e);
         }
     }
 
