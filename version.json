@@ -1,7 +1,16 @@
 {
-  "version": "1.5.45",
-  "notesCount": 8,
+  "version": "1.5.46",
+  "notesCount": 9,
   "notes": [
+    "Fixed: Shinedust could freeze with no warning if a step ran long - the retry watchdog now waits 200s instead of misfiring at 90s, and always DMs you directly if the normal alert can't get through.",
+    "Fixed: Shinedust misreading large numbers (e.g. \"41,690\" read as \",690\") - widened the OCR crop for more context, same trick already used for Poké Gold.",
+    "Fixed: heartbeat could get stuck in an endless restart loop if you intentionally stopped an instance's AHK/closed it - now leaves manually-stopped instances alone.",
+    "Reverted: frozen-instance detection back to 10 minutes (5 was too aggressive with larger friend lists).",
+    "New: frozen-instance \"auto-recovered\" messages now auto-delete after 30s so they don't bury your heartbeat summary.",
+    "New: a Reply button on feedback reports lets you DM the reporter directly, no need to share a server with them.",
+    "New: the Tutorials page feedback form now supports attaching a screenshot.",
+    "New: the bot now DMs you if it can't create a required icon, including the real Discord error, instead of failing silently forever.",
+    "New: Shinedust tutorial added to the Tutorials page, plus left/right arrow-key navigation when zoomed into any tutorial image.",
     "Fixed a real security bug: the web trade panel (Info Accounts page) only blocked the \"Transfer this card\" button from showing outside localhost, but the server endpoints that actually run the trade never checked - anyone with the link (public tunnel or same WiFi) could bypass the button entirely and trigger a real trade, and an unvalidated instance/account field could even inject extra commands. Both closed server-side now.",
     "Fixed: Gold Cards without a golden border yet used to show a generic apology image - now shows the card's real (non-gold) artwork instead, with a \"Coming soon in HD and golden borders!\" note.",
     "Fixed a real bug: a card reprinted across multiple expansions with the same name and rarity (e.g. Lillie) could show the artwork from the wrong set in S4T trade notifications - now matches against the expansion the pack was actually opened from.",

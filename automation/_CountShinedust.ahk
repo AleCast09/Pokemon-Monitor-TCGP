@@ -158,6 +158,20 @@ leerCampoOcr(pBitmapOriginal, x, y, w, h, resize := 300, contrast := 75, etiquet
     try {
         allowedChars := "0123456789,. "
         pBitmapFormatted := Gdip_CropResizeGreyscaleContrast(pBitmapOriginal, x, y, w, h, resize, contrast)
+        ; DEBUG TEMPORAL (2026-08-15, bug real reportado: dos lecturas verificadas seguidas
+        ; coincidieron en un valor invalido para shineDustValue, ",690" en vez de "41,690") --
+        ; leerCampoOcrVerificado saca sus PROPIAS capturas y borra el archivo temporal antes de
+        ; que se pueda inspeccionar, asi que hasta ahora no habia forma de ver la imagen EXACTA
+        ; que realmente vio el OCR cuando fallaba (solo se podia reconstruir el recorte a mano
+        ; sobre OTRA captura distinta, que dio un resultado correcto y no reprodujo el fallo).
+        ; Guarda el bitmap YA procesado (mismo que recibe el OCR) para poder comparar pixel a
+        ; pixel la proxima vez. Quitar junto con el resto del debug una vez resuelto.
+        if (etiqueta != "") {
+            try {
+                Gdip_SaveBitmapToFile(pBitmapFormatted, LogsDir . "\" . g_winTitle . "_" . etiqueta . "_debug.png")
+            } catch e {
+            }
+        }
         crudo := GetTextFromBitmap(pBitmapFormatted, allowedChars)
         Gdip_DisposeImage(pBitmapFormatted)
         valor := RegExReplace(crudo, "[^\d,]", "")
@@ -230,7 +244,20 @@ leerCampoOcrVerificado(refX, refY, refW, refH, resize := 300, contrast := 75, et
 
 pBitmapOriginal := Gdip_CreateBitmapFromFile(shinedustScreenshotFile)
 
-shineDustValue      := leerCampoOcrEscalado(pBitmapOriginal, 385, 310, 150, 27)
+; Bug real reportado por el usuario 2026-08-14: una cuenta con 41,690 shinedust leia siempre
+; ",690" (perdiendo "41" enteros), confirmado reproducible dos lecturas verificadas seguidas
+; IGUALES -- no era un glitch de una sola vez. Se guardo a disco el bitmap YA procesado que
+; realmente recibe el OCR (ver el "if (etiqueta != "")" en leerCampoOcr) y se confirmo pixel a
+; pixel que el "41" esta ahi, tan nitido y oscuro como el resto -- el motor de OCR de Windows
+; simplemente no lo reconocia como texto en un recorte angosto que SOLO tiene el numero (mismo
+; problema, ya documentado mas abajo, que pokeGoldNoPagado tenia con un digito aislado). El
+; recorte ancho -- fila completa, con la etiqueta "Shinedust" -- que ya se usa ahi le da al OCR
+; el contexto que le faltaba: probado en vivo contra el archivo real, paso de leer ",690" a
+; "Shinedust 41 ,690" (la palabra y los espacios se descartan solos en el RegExReplace de mas
+; abajo, no hace falta tocar nada mas). Shinedust es el UNICO campo critico de este script (el
+; resto cae a "0" si falla), asi que ademas se mantiene la version VERIFICADA (dos lecturas
+; frescas iguales antes de aceptar).
+shineDustValue      := leerCampoOcrVerificado(20, 285, 500, 60, 200, 75, "shineDustValue")
 ; Recorte ancho (fila completa, con la etiqueta) en vez de solo el numero -- confirmado en
 ; vivo que asi el OCR SI detecta un digito solo como "9" (con el recorte angosto de antes no
 ; lo detectaba nunca, sin importar contraste/resize). Version VERIFICADA (2026-08-09, ver

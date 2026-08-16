@@ -120,9 +120,20 @@ async function subirEmojiFaltante(guild, nombre, rutaRelativa) {
     return nuevo.id;
 }
 
+// Ultimo motivo de fallo por emoji, por guild (2026-08-15, bug real reportado: dos usuarios
+// con permiso de Administrador confirmado igual no podian crear todo un lote de emojis, sin
+// forma de saber POR QUE mas alla de un console.error que ellos nunca ven). Se guarda aca
+// (no en el mapa devuelto) para no mezclar datos con FUENTES_EMOJIS -- bot.js lo lee aparte al
+// armar el aviso por DM, para mostrar el error real de Discord en vez de seguir adivinando.
+const erroresPorGuild = new Map();
+function obtenerErroresEmojisGuild(guildId) {
+    return erroresPorGuild.get(guildId) || {};
+}
+
 async function construirMapaEmojisGuild(guild) {
     const existentes = await guild.emojis.fetch();
     const mapa = {};
+    const errores = {};
     for (const [nombre, rutaRelativa] of Object.entries(FUENTES_EMOJIS)) {
         const existente = existentes.find((e) => e.name === nombre);
         if (existente) {
@@ -132,9 +143,12 @@ async function construirMapaEmojisGuild(guild) {
         try {
             mapa[nombre] = await subirEmojiFaltante(guild, nombre, rutaRelativa);
         } catch (e) {
-            console.error(`❌ No se pudo crear el emoji "${nombre}" en ${guild.name}:`, e?.message || e);
+            const motivo = e?.message || String(e);
+            console.error(`❌ No se pudo crear el emoji "${nombre}" en ${guild.name}:`, motivo);
+            errores[nombre] = motivo;
         }
     }
+    erroresPorGuild.set(guild.id, errores);
     return mapa;
 }
 
@@ -165,4 +179,4 @@ async function obtenerMapaEmojisGuild(guild) {
     return promesa;
 }
 
-module.exports = { obtenerMapaEmojisGuild, FUENTES_EMOJIS };
+module.exports = { obtenerMapaEmojisGuild, FUENTES_EMOJIS, obtenerErroresEmojisGuild };

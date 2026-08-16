@@ -25,7 +25,7 @@ const db = require('./database.js');
 const heartbeatScript = require('./heartbeat.js');
 const configScript = require('./config.js');
 const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, avisarActualizacionFallidaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion, describirError, notasParaEmbed, obtenerDestinoNotificacion } = require('./update-checker.js');
-const { obtenerMapaEmojisGuild, FUENTES_EMOJIS } = require('./guild-emojis.js');
+const { obtenerMapaEmojisGuild, FUENTES_EMOJIS, obtenerErroresEmojisGuild } = require('./guild-emojis.js');
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
 iniciarAutoSyncCardTypes();
 
@@ -5119,6 +5119,10 @@ dashboardApp.get('/tutorials', async (req, res) => {
             <label for="fbTexto">Message</label>
             <textarea id="fbTexto" rows="5" maxlength="1500" required></textarea>
           </div>
+          <div class="campo">
+            <label for="fbImagen">Screenshot (optional)</label>
+            <input type="file" id="fbImagen" accept="image/*">
+          </div>
           <button class="btn-enviar" type="submit" id="btnEnviarFeedback">Send to Ale</button>
         </form>
         <div id="feedbackResultado"></div>
@@ -5148,15 +5152,13 @@ dashboardApp.get('/tutorials', async (req, res) => {
       // veces no dispara la carga diferida a tiempo -- el modal quedaba vacio aunque los
       // datos SI estaban bien. Como las imagenes ya se crean solo cuando el usuario abre
       // ESE tutorial puntual, no hace falta lazy loading de todos modos.
-      for (const src of t.pasos) {
+      pasosLightboxActuales = t.pasos;
+      t.pasos.forEach((src, i) => {
         const img = document.createElement('img');
         img.src = src;
-        img.addEventListener('click', () => {
-          tutoLightboxImg.src = img.src;
-          tutoLightbox.classList.add('abierto');
-        });
+        img.addEventListener('click', () => abrirLightbox(i));
         modalCuerpo.appendChild(img);
-      }
+      });
     }
     overlay.classList.add('abierto');
     overlay.scrollTop = 0;
@@ -5164,6 +5166,23 @@ dashboardApp.get('/tutorials', async (req, res) => {
 
   const tutoLightbox = document.getElementById('tutoLightbox');
   const tutoLightboxImg = document.getElementById('tutoLightboxImg');
+  // Navegacion con flechas del teclado dentro del lightbox (2026-08-15, a pedido explicito
+  // del usuario): "cuando alguien agranda la imagen, tambien podemos hacer que avance a la
+  // siguiente pagina con las teclas de izquierda y derecha". pasosLightboxActuales/indice
+  // quedan en el scope del script (no de abrirTutorial) porque el listener de teclado tiene
+  // que poder leerlos en cualquier momento mientras el lightbox este abierto.
+  let pasosLightboxActuales = [];
+  let indiceLightboxActual = 0;
+  function abrirLightbox(indice) {
+    indiceLightboxActual = indice;
+    tutoLightboxImg.src = pasosLightboxActuales[indice];
+    tutoLightbox.classList.add('abierto');
+  }
+  function moverLightbox(delta) {
+    if (!pasosLightboxActuales.length) return;
+    indiceLightboxActual = (indiceLightboxActual + delta + pasosLightboxActuales.length) % pasosLightboxActuales.length;
+    tutoLightboxImg.src = pasosLightboxActuales[indiceLightboxActual];
+  }
   tutoLightbox.addEventListener('click', () => {
     tutoLightbox.classList.remove('abierto');
     tutoLightboxImg.src = '';
@@ -5209,7 +5228,13 @@ dashboardApp.get('/tutorials', async (req, res) => {
     modalCaja.classList.toggle('expandido');
   });
   overlay.addEventListener('click', (e) => { if (e.target === overlay) cerrarModalPrincipal(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { cerrarModalPrincipal(); overlayFeedback.classList.remove('abierto'); tutoLightbox.classList.remove('abierto'); } });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { cerrarModalPrincipal(); overlayFeedback.classList.remove('abierto'); tutoLightbox.classList.remove('abierto'); }
+    if (tutoLightbox.classList.contains('abierto')) {
+      if (e.key === 'ArrowRight') moverLightbox(1);
+      if (e.key === 'ArrowLeft') moverLightbox(-1);
+    }
+  });
 
   function tick() {
     const ahora = new Date();
@@ -5232,12 +5257,30 @@ dashboardApp.get('/tutorials', async (req, res) => {
     boton.textContent = 'Sending...';
     resultado.innerHTML = '';
     try {
+      const archivoImagen = document.getElementById('fbImagen').files[0];
+      let imagenBase64 = null, imagenTipo = null;
+      if (archivoImagen) {
+        if (archivoImagen.size > 8 * 1024 * 1024) {
+          resultado.innerHTML = '<div class="feedback-error">❌ Image is too big (max 8MB).</div>';
+          boton.disabled = false;
+          boton.textContent = 'Send to Ale';
+          return;
+        }
+        imagenBase64 = await new Promise((resolve, reject) => {
+          const lector = new FileReader();
+          lector.onload = () => resolve(lector.result.split(',')[1]);
+          lector.onerror = reject;
+          lector.readAsDataURL(archivoImagen);
+        });
+        imagenTipo = archivoImagen.type;
+      }
       const resp = await fetch('/tutorials/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           titulo: document.getElementById('fbTitulo').value,
-          texto: document.getElementById('fbTexto').value
+          texto: document.getElementById('fbTexto').value,
+          imagenBase64, imagenTipo
         })
       });
       const datos = await resp.json();
@@ -5269,7 +5312,10 @@ dashboardApp.get('/tutorials', async (req, res) => {
 // login), asi que el campo "From" queda como "Web (Tutorials page)" en vez de un usuario.
 // Cooldown simple por IP en memoria (sin discord_id disponible para usar la tabla real).
 const _feedbackWebUltimoEnvio = new Map();
-dashboardApp.post('/tutorials/feedback', async (req, res) => {
+// Limite propio de este endpoint (2026-08-14, a pedido explicito del usuario: "deberia haber
+// la opcion de añadir imagen") -- el limite global de dashboardApp.use(express.json()) es de
+// 100kb, insuficiente para una captura en base64 (~1.37x el tamaño real del archivo).
+dashboardApp.post('/tutorials/feedback', express.json({ limit: '12mb' }), async (req, res) => {
     try {
         const titulo = String(req.body?.titulo || '').trim().slice(0, 80);
         const texto = String(req.body?.texto || '').trim().slice(0, 1500);
@@ -5281,18 +5327,33 @@ dashboardApp.post('/tutorials/feedback', async (req, res) => {
             return res.status(429).json({ ok: false, error: 'Wait a bit before sending another one.' });
         }
 
-        await axios.post(`${FEEDBACK_WEBHOOK_URL}?wait=true`, {
-            embeds: [{
-                title: `📝 ${titulo}`,
-                description: texto,
-                color: 0x5865F2,
-                fields: [
-                    { name: 'From', value: 'Web (Tutorials page)', inline: true },
-                    { name: 'Server', value: client.guilds.cache.first()?.name || 'Unknown', inline: true }
-                ],
-                timestamp: new Date().toISOString()
-            }]
-        }, { timeout: 10000 });
+        const embed = {
+            title: `📝 ${titulo}`,
+            description: texto,
+            color: 0x5865F2,
+            fields: [
+                { name: 'From', value: 'Web (Tutorials page)', inline: true },
+                { name: 'Server', value: client.guilds.cache.first()?.name || 'Unknown', inline: true }
+            ],
+            timestamp: new Date().toISOString()
+        };
+
+        const imagenTipo = String(req.body?.imagenTipo || '');
+        const imagenBase64 = req.body?.imagenBase64;
+        if (imagenBase64 && imagenTipo.startsWith('image/')) {
+            const buffer = Buffer.from(imagenBase64, 'base64');
+            if (buffer.length > 8 * 1024 * 1024) {
+                return res.status(400).json({ ok: false, error: 'Image is too big (max 8MB).' });
+            }
+            const extension = imagenTipo.split('/')[1]?.split('+')[0] || 'png';
+            embed.image = { url: `attachment://feedback.${extension}` };
+            const form = new FormData();
+            form.append('payload_json', JSON.stringify({ embeds: [embed] }));
+            form.append('files[0]', buffer, { filename: `feedback.${extension}` });
+            await axios.post(`${FEEDBACK_WEBHOOK_URL}?wait=true`, form, { headers: form.getHeaders(), timeout: 15000 });
+        } else {
+            await axios.post(`${FEEDBACK_WEBHOOK_URL}?wait=true`, { embeds: [embed] }, { timeout: 10000 });
+        }
 
         _feedbackWebUltimoEnvio.set(ip, Date.now());
         res.json({ ok: true });
@@ -7132,7 +7193,42 @@ client.on('interactionCreate', async interaction => {
         return await interaction.showModal(modal);
     }
 
+    // Boton "Reply" del feedback (2026-08-14, a pedido explicito del usuario: "como
+    // enviarles un mensaje de ayuda") -- ver el comentario junto al boton mas arriba, donde
+    // se arma el embed de /feedback: quien reporta casi nunca comparte servidor con el canal
+    // privado de feedback, asi que hace falta mandarle un DM directo en vez de un reply comun.
+    if (interaction.isButton() && interaction.customId.startsWith('feedback_responder::')) {
+        if (!tienePermisosGestion(interaction)) {
+            return await interaction.reply({ content: "❌ You don't have permission to reply to feedback.", ephemeral: true });
+        }
+        const destinoId = interaction.customId.split('::')[1];
+        const modal = new ModalBuilder()
+            .setCustomId(`modal_feedback_responder::${destinoId}`)
+            .setTitle('Reply by DM')
+            .addComponents(
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('input_feedback_respuesta').setLabel('Message')
+                        .setStyle(TextInputStyle.Paragraph).setMinLength(1).setMaxLength(1500)
+                )
+            );
+        return await interaction.showModal(modal);
+    }
+
     if (interaction.isModalSubmit()) {
+        if (interaction.customId.startsWith('modal_feedback_responder::')) {
+            const destinoId = interaction.customId.split('::')[1];
+            const respuesta = interaction.fields.getTextInputValue('input_feedback_respuesta').trim();
+            await interaction.deferReply({ ephemeral: true });
+            try {
+                const usuarioDestino = await client.users.fetch(destinoId);
+                await usuarioDestino.send(`💬 **Reply about your feedback:**\n${respuesta}`);
+                return await interaction.editReply({ content: `✅ Sent to ${usuarioDestino.tag}.` });
+            } catch (e) {
+                console.error(`DEBUG: error mandando DM de respuesta de feedback a ${destinoId}:`, e?.message || e);
+                return await interaction.editReply({ content: "❌ Couldn't send the DM (they may have DMs closed, or no longer share a server with the bot)." });
+            }
+        }
+
         if (interaction.customId === 'modal_feedback') {
             const filaCooldown = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = 'feedback_ultimo_envio'`, [interaction.user.id]);
             const ultimoEnvio = filaCooldown ? Number(filaCooldown.estado) : 0;
@@ -7161,7 +7257,12 @@ client.on('interactionCreate', async interaction => {
                             { name: 'Server', value: `${interaction.guild?.name || 'Unknown'} (\`${interaction.guildId}\`)`, inline: true }
                         ],
                         timestamp: new Date().toISOString()
-                    }]
+                    }],
+                    // Boton para poder contestarle por DM directo (2026-08-14, a pedido explicito
+                    // del usuario) -- este feedback siempre llega al canal privado del dueño (ver
+                    // FEEDBACK_WEBHOOK_URL), donde quien reporto casi nunca es miembro, asi que un
+                    // "reply" comun de Discord nunca le llegaria.
+                    components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: `feedback_responder::${interaction.user.id}`, label: '↩️ Reply', emoji: { name: '💬' } }] }]
                 }, { timeout: 10000 });
 
                 await db.run(
@@ -8100,22 +8201,45 @@ client.on('interactionCreate', async interaction => {
     // aparece. marcarProgreso() se llama en cada paso real de ejecutarFlujoShinedust; si
     // pasan 90s sin que se llame ninguna, se asume que quedó trabada y se reintenta sola
     // (hasta 3 veces en total, para no quedar reintentando para siempre).
+    // Bug real reportado 2026-08-14 ("el boton de shinedust no funciona, lleva congelado buen
+    // rato y no me manda reporte"): dos problemas encontrados juntos.
+    // 1) El umbral de 90s era MENOR que pasos legitimos del propio flujo (esperar pantallas de
+    //    bienvenida puede tardar hasta 150s, leer el OCR hasta 180s -- ver los timeouts de
+    //    ejecutarWaitWelcomeScreens/ejecutarCountShinedust) -- el watchdog se disparaba en medio
+    //    de un paso que en realidad iba bien, apagaba la instancia a mitad de camino y lanzaba
+    //    un reintento superpuesto sobre el mismo AHK ya corriendo. Subido a 200s (por encima del
+    //    paso mas largo real) para que solo dispare ante un freeze de verdad.
+    // 2) El aviso final ("se quedo trabada") dependia solo de interaction.followUp() -- el token
+    //    de una interaccion de Discord expira a los 15 minutos, y 3 rondas de reintento con
+    //    pasos de hasta 200s cada una pueden superar eso facil. Si followUp falla por token
+    //    vencido, ahora se manda un DM directo de respaldo (mismo mecanismo que el boton
+    //    "Reply" de feedback) para no dejar al usuario sin ningun aviso.
+    const UMBRAL_WATCHDOG_SHINEDUST_MS = 200000;
     async function ejecutarFlujoShinedustConSupervisor(interaction, cartaId, fileName, index, nombre, intento = 1) {
         let ultimoProgreso = Date.now();
         let activo = true;
         const marcarProgreso = () => { ultimoProgreso = Date.now(); };
 
         const watchdog = setInterval(async () => {
-            if (!activo || Date.now() - ultimoProgreso < 90000) return;
+            if (!activo || Date.now() - ultimoProgreso < UMBRAL_WATCHDOG_SHINEDUST_MS) return;
             activo = false;
             clearInterval(watchdog);
 
             apagarInstanciaMuMu(index);
             if (intento >= 3) {
-                try { await interaction.followUp({ content: `⏱️ Instance **${nombre}** got stuck (no progress for 90s) and already auto-retried ${intento - 1} time(s). Try again manually.`, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
+                const contenido = `⏱️ Instance **${nombre}** got stuck (no progress for ${Math.round(UMBRAL_WATCHDOG_SHINEDUST_MS / 1000)}s) and already auto-retried ${intento - 1} time(s). Try again manually.`;
+                const components = [botonReintentarShinedust(cartaId, fileName, index, nombre)];
+                try {
+                    await interaction.followUp({ content: contenido, components });
+                } catch (e) {
+                    try {
+                        const usuario = await client.users.fetch(interaction.user.id);
+                        await usuario.send({ content: contenido, components });
+                    } catch (e2) { console.error('DEBUG: no se pudo avisar el freeze de Shinedust ni por followUp ni por DM:', e2?.message || e2); }
+                }
                 return;
             }
-            try { await interaction.followUp({ content: `⏱️ Instance **${nombre}** got stuck (no progress for 90s) -- retrying automatically...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+            try { await interaction.followUp({ content: `⏱️ Instance **${nombre}** got stuck (no progress for ${Math.round(UMBRAL_WATCHDOG_SHINEDUST_MS / 1000)}s) -- retrying automatically...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
             await ejecutarFlujoShinedustConSupervisor(interaction, cartaId, fileName, index, nombre, intento + 1);
         }, 5000);
 
@@ -8303,23 +8427,38 @@ client.on('interactionCreate', async interaction => {
                 return await interaction.reply({ content: "❌ You don't have permission to run control actions.", ephemeral: true });
             }
             const index = interaction.customId.split('::')[1];
-            await interaction.deferUpdate();
-            const ok = ejecutarAccionAhkInstancia(index, 'reload');
-            if (ok) {
-                // A pedido del usuario: una vez reparada, el aviso se borra
-                // solo — si no, se van acumulando y terminan enterrando el
-                // panel principal de heartbeat (que se edita in situ, en su
-                // posición original, y no se reubica solo como los paneles de
-                // comando).
-                return await interaction.deleteReply().catch(() => {});
+            // Bug real reportado 2026-08-14 (un usuario probando en vivo): si dos clics del
+            // mismo boton llegaban casi juntos (doble clic, o el mensaje ya fue borrado/editado
+            // por el primer clic), deferUpdate()/editReply() tiraban una excepcion sin atrapar
+            // -- Discord le mostraba el error generico "This interaction failed" en vez de un
+            // mensaje nuestro, y no habia forma de saber que paso. Todo el handler ahora esta
+            // blindado: cualquier fallo termina en un mensaje efimero claro, nunca en el error
+            // opaco de Discord.
+            try {
+                await interaction.deferUpdate();
+                const ok = ejecutarAccionAhkInstancia(index, 'reload');
+                if (ok) {
+                    // A pedido del usuario: una vez reparada, el aviso se borra
+                    // solo — si no, se van acumulando y terminan enterrando el
+                    // panel principal de heartbeat (que se edita in situ, en su
+                    // posición original, y no se reubica solo como los paneles de
+                    // comando).
+                    return await interaction.deleteReply();
+                }
+                const embedOriginal = interaction.message?.embeds?.[0];
+                const embedActualizado = embedOriginal ? EmbedBuilder.from(embedOriginal) : new EmbedBuilder();
+                embedActualizado.setColor(0xE74C3C);
+                embedActualizado.setDescription(
+                    `❌ Could not reload the AHK for **Instance ${index}** — its window wasn't found (maybe it's already closed).\n\n${embedOriginal?.description || ''}`
+                );
+                return await interaction.editReply({ embeds: [embedActualizado] });
+            } catch (e) {
+                console.error(`DEBUG: error en heartbeat_reload_ahk::${index}:`, e?.message || e);
+                try {
+                    return await interaction.followUp({ content: `❌ Something went wrong reloading **Instance ${index}** (${e?.message || 'unknown error'}). The instance/AHK state wasn't changed — try again.`, ephemeral: true });
+                } catch (e2) { /* interaccion ya expirada, nada mas que hacer */ }
             }
-            const embedOriginal = interaction.message?.embeds?.[0];
-            const embedActualizado = embedOriginal ? EmbedBuilder.from(embedOriginal) : new EmbedBuilder();
-            embedActualizado.setColor(0xE74C3C);
-            embedActualizado.setDescription(
-                `❌ Could not reload the AHK for **Instance ${index}** — its window wasn't found (maybe it's already closed).\n\n${embedOriginal?.description || ''}`
-            );
-            return await interaction.editReply({ embeds: [embedActualizado] });
+            return;
         }
 
         if (interaction.customId.startsWith('heartbeat_cerrar::')) {
@@ -8331,33 +8470,42 @@ client.on('interactionCreate', async interaction => {
                 return await interaction.reply({ content: "❌ You don't have permission to run control actions.", ephemeral: true });
             }
             const index = interaction.customId.split('::')[1];
-            await interaction.deferUpdate();
-            const mumuOk = apagarInstanciaMuMu(index);
-            const ahkOk = ejecutarAccionAhkInstancia(index, 'close');
-            // Si el AHK quedó realmente colgado por dentro (no solo esperando
-            // cuentas), la señal 0x500 se queda en cola y el script no la
-            // procesa hasta que "respira" de nuevo — confirmado en vivo que
-            // reabrir el MuMu lo destraba (probablemente por el fallo de ADB
-            // al reconectar). Por eso, como respaldo, reabrimos y volvemos a
-            // cerrar el MuMu unos segundos después: si el AHK ya cerró solo
-            // esto no hace nada malo (solo prende y apaga MuMu de nuevo), y si
-            // seguía colgado, esto lo fuerza a cerrar también.
-            setTimeout(() => {
-                lanzarInstanciaMuMu(index);
+            // Mismo blindaje que heartbeat_reload_ahk:: (ver comentario ahi arriba).
+            try {
+                await interaction.deferUpdate();
+                const mumuOk = apagarInstanciaMuMu(index);
+                const ahkOk = ejecutarAccionAhkInstancia(index, 'close');
+                // Si el AHK quedó realmente colgado por dentro (no solo esperando
+                // cuentas), la señal 0x500 se queda en cola y el script no la
+                // procesa hasta que "respira" de nuevo — confirmado en vivo que
+                // reabrir el MuMu lo destraba (probablemente por el fallo de ADB
+                // al reconectar). Por eso, como respaldo, reabrimos y volvemos a
+                // cerrar el MuMu unos segundos después: si el AHK ya cerró solo
+                // esto no hace nada malo (solo prende y apaga MuMu de nuevo), y si
+                // seguía colgado, esto lo fuerza a cerrar también.
                 setTimeout(() => {
-                    apagarInstanciaMuMu(index);
-                }, 15000);
-            }, 20000);
-            if (mumuOk || ahkOk) {
-                return await interaction.deleteReply().catch(() => {});
+                    lanzarInstanciaMuMu(index);
+                    setTimeout(() => {
+                        apagarInstanciaMuMu(index);
+                    }, 15000);
+                }, 20000);
+                if (mumuOk || ahkOk) {
+                    return await interaction.deleteReply();
+                }
+                const embedOriginal = interaction.message?.embeds?.[0];
+                const embedActualizado = embedOriginal ? EmbedBuilder.from(embedOriginal) : new EmbedBuilder();
+                embedActualizado.setColor(0xE74C3C);
+                embedActualizado.setDescription(
+                    `❌ Could not close **Instance ${index}** — MuMuManager.exe not found and its AHK window wasn't found either.\n\n${embedOriginal?.description || ''}`
+                );
+                return await interaction.editReply({ embeds: [embedActualizado] });
+            } catch (e) {
+                console.error(`DEBUG: error en heartbeat_cerrar::${index}:`, e?.message || e);
+                try {
+                    return await interaction.followUp({ content: `❌ Something went wrong closing **Instance ${index}** (${e?.message || 'unknown error'}). Try again.`, ephemeral: true });
+                } catch (e2) { /* interaccion ya expirada, nada mas que hacer */ }
             }
-            const embedOriginal = interaction.message?.embeds?.[0];
-            const embedActualizado = embedOriginal ? EmbedBuilder.from(embedOriginal) : new EmbedBuilder();
-            embedActualizado.setColor(0xE74C3C);
-            embedActualizado.setDescription(
-                `❌ Could not close **Instance ${index}** — MuMuManager.exe not found and its AHK window wasn't found either.\n\n${embedOriginal?.description || ''}`
-            );
-            return await interaction.editReply({ embeds: [embedActualizado] });
+            return;
         }
 
         if (interaction.customId === 'mumu_ver_instancias') {
@@ -9510,9 +9658,45 @@ client.once('ready', async () => {
     // comandos. Ahora se refresca solo, cada 10 minutos (mismo TTL que el cache en
     // memoria de guild-emojis.js), asi se autocorrige sin depender de que alguien use el
     // bot manualmente.
+    // Bug real reportado 2026-08-15 (najanaja_44 y OMO, mismos ~11 emojis del lote de
+    // inventario agregado 2026-08-08 NUNCA se crearon en sus servidores -- se sospecha falta
+    // de permiso "Administrator"/"Manage Expressions" del rol del bot): si un emoji no se
+    // puede crear, antes solo quedaba un console.error() -- inutil para un usuario final que
+    // corre el .exe empaquetado y nunca ve esa consola. Ahora, si despues de refrescar quedan
+    // claves de FUENTES_EMOJIS sin crear, se le manda un DM directo al DUEÑO del servidor
+    // explicando cuales faltan. Deduplicado por guild+firma-de-claves-faltantes (no por
+    // separado cada 10 min) para no mandar el mismo aviso en loop mientras el problema siga sin
+    // resolverse -- solo vuelve a avisar si la lista de faltantes cambia o pasaron 24h.
+    const avisoEmojisFaltantesPorGuild = new Map(); // guildId -> { firma, ts }
+    async function avisarEmojisFaltantesSiHaceFalta(guild, mapa) {
+        const faltantes = Object.keys(FUENTES_EMOJIS).filter((nombre) => !mapa[nombre]);
+        if (!faltantes.length) return;
+        const firma = faltantes.join(',');
+        const previo = avisoEmojisFaltantesPorGuild.get(guild.id);
+        if (previo && previo.firma === firma && Date.now() - previo.ts < 24 * 60 * 60 * 1000) return;
+        avisoEmojisFaltantesPorGuild.set(guild.id, { firma, ts: Date.now() });
+        try {
+            const owner = await guild.fetchOwner();
+            const errores = obtenerErroresEmojisGuild(guild.id);
+            // Motivo real de Discord, no solo la lista de nombres (2026-08-15, bug real:
+            // dos usuarios con Administrador confirmado igual no podian crear el lote --
+            // sin el error real no hay forma de seguir diagnosticando a ciegas).
+            const primerMotivo = errores[faltantes[0]];
+            const lineaMotivo = primerMotivo ? `\nReal error from Discord: \`${primerMotivo}\`` : '';
+            await owner.send(
+                `⚠️ **${faltantes.length} icon(s) couldn't be created in "${guild.name}"**: \`${faltantes.slice(0, 15).join('`, `')}\`${faltantes.length > 15 ? '...' : ''}\n` +
+                `This usually means the bot's role is missing permission to create emojis in this server. Check **Server Settings → Roles → (your bot's role)** and make sure **Administrator** is enabled, then it'll fix itself automatically within a few minutes.${lineaMotivo}`
+            );
+        } catch (e) {
+            console.error(`❌ No se pudo avisar por DM sobre emojis faltantes en ${guild.name}:`, e?.message || e);
+        }
+    }
+
     const refrescarEmojisTodosLosGuilds = () => {
         for (const guild of client.guilds.cache.values()) {
-            obtenerMapaEmojisGuild(guild).catch((e) => console.error(`❌ Error refrescando emojis de ${guild.name}:`, e?.message || e));
+            obtenerMapaEmojisGuild(guild)
+                .then((mapa) => avisarEmojisFaltantesSiHaceFalta(guild, mapa))
+                .catch((e) => console.error(`❌ Error refrescando emojis de ${guild.name}:`, e?.message || e));
         }
     };
     refrescarEmojisTodosLosGuilds();

@@ -6,7 +6,7 @@
 # corriendo, ahorra recursos).
 param(
     [Parameter(Mandatory=$true)][string]$InstanceId,
-    [Parameter(Mandatory=$true)][ValidateSet("reload","close")][string]$Action
+    [Parameter(Mandatory=$true)][ValidateSet("reload","close","check")][string]$Action
 )
 
 Add-Type @"
@@ -64,6 +64,23 @@ public class AhkWin {
     }
 }
 "@
+
+if ($Action -eq "check") {
+    # Usado por heartbeat.js antes de intentar una recuperacion automatica (2026-08-14, bug
+    # real reportado por el usuario): si el AHK de esta instancia ya no esta corriendo -- por
+    # ejemplo porque el usuario lo detuvo a mano a proposito -- reiniciar MuMu no sirve de
+    # nada (nada va a volver a engancharse) y solo dispara un loop infinito de reinicios cada
+    # vez que se cumple el timer de congelamiento. Se busca la ventana oculta principal (la
+    # misma que usa "close"), no la visible, porque esa es la que de verdad significa "el
+    # script sigue vivo".
+    $hwndPrincipal = [AhkWin]::FindHiddenMain($InstanceId)
+    if ($hwndPrincipal -eq [IntPtr]::Zero) {
+        Write-Output "NOT_FOUND"
+        exit 1
+    }
+    Write-Output "FOUND:$([AhkWin]::Pid($hwndPrincipal))"
+    exit 0
+}
 
 if ($Action -eq "close") {
     $hwndPrincipal = [AhkWin]::FindHiddenMain($InstanceId)
