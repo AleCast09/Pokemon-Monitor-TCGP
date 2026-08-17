@@ -1,7 +1,8 @@
 {
-  "version": "1.5.48",
+  "version": "1.5.49",
   "notesCount": 1,
   "notes": [
+    "Temporary: added a one-time diagnostic message to the Updates channel showing the exact emoji IDs the bot has on record for the inventory icon set, to help track down why they stay broken for some installs even after every other known cause was ruled out. Will be removed once explained.",
     "Fixed: the missing-emoji warning was only sent as a DM, which could get silently blocked by Discord privacy settings with no visible error anywhere - now reuses the same reliable Updates channel notification you already get for new versions.",
     "Fixed a real bug affecting existing installs updating in-app: source icon files with accented characters in their filename (Pokélingote, Cupón, Retronómetro, etc.) could silently fail to extract during an in-app update, leaving those specific icons permanently missing - a fresh full download didn't have this problem. Renamed the affected files to plain ASCII, sidestepping the issue entirely.",
     "Fixed: Shinedust could freeze with no warning if a step ran long - the retry watchdog now waits 200s instead of misfiring at 90s, and always DMs you directly if the normal alert can't get through.",

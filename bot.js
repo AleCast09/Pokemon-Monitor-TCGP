@@ -1522,7 +1522,14 @@ async function generarCollageCartas(items, rutaMasterPath, mapaCopias, esGoldCar
         // el toggle "Normal Cards HD" estuviera prendido (bug real reportado
         // 2026-07-31: HD andaba bien al entrar al detalle de una carta, pero no
         // en la grilla de Wishlist/All Cards/Gold Cards).
-        const rutaImg = (await obtenerImagenHDBot(cardMap, item.id))
+        // Bug real reportado 2026-08-16: en Gold Cards, el collage general (buscar sin elegir
+        // UNA carta puntual) siempre mostraba el arte normal ("plateada") para las cartas que
+        // ya calificaban como Gold -- esta funcion nunca llegaba a consultar el Drive dorado,
+        // a pesar del parametro esGoldCards, a diferencia de la vista de detalle de una sola
+        // carta (que si lo hace). Mismo respaldo de siempre si esa carta puntual todavia no
+        // tiene version dorada subida: cae al arte normal en vez de dejar la celda vacia.
+        const rutaImg = (esGoldCards && (await obtenerImagenGoldBot(cardMap, item.id)))
+            || (await obtenerImagenHDBot(cardMap, item.id))
             || encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID)
             || (await obtenerImagenRepoCartasBot(rutaMasterPath, info?.IllustrationID));
         if (!rutaImg) continue;
@@ -3717,7 +3724,12 @@ dashboardApp.get('/img/:token/:code', async (req, res) => {
         if (!datos) return res.status(404).end();
         const cardMap = cargarCardMap(datos.rutaMasterPath);
         const info = cardMap?.[req.params.code];
-        let ruta = resolverRutaImagenDashboard(cardMap, datos.rutaMasterPath, req.params.code, info?.IllustrationID);
+        // ?gold=1 (2026-08-16, a pedido explicito del usuario, para la seccion Gold Cards del
+        // dashboard): intenta la version dorada real de Drive primero -- si esa carta puntual
+        // todavia no la tiene subida, cae solo al arte normal de mas abajo, mismo respaldo que
+        // ya usa /goldcards en Discord (nunca deja el tile sin imagen).
+        let ruta = req.query.gold === '1' ? await obtenerImagenGoldBot(cardMap, req.params.code) : null;
+        if (!ruta) ruta = resolverRutaImagenDashboard(cardMap, datos.rutaMasterPath, req.params.code, info?.IllustrationID);
         if (!ruta) ruta = await obtenerImagenRepoCartasBot(datos.rutaMasterPath, info?.IllustrationID);
         if (!ruta) return res.status(404).end();
         res.sendFile(ruta);
@@ -3856,6 +3868,16 @@ dashboardApp.get('/account/:token', async (req, res) => {
             tipoRareza: cartaPorCodigo[carta.id]?.tipoRareza || carta.tipoRareza || '',
             cantidad: cartaPorCodigo[carta.id]?.cantidad || 0
         }));
+
+        // Boton "Gold Cards" al lado de Wishlist (2026-08-16, a pedido explicito del usuario):
+        // mismo umbral configurable que ya usa /goldcards en Discord (por defecto 10+ copias,
+        // ver UMBRAL_GOLD_CARD_DEFAULT/obtenerUmbralGold) -- filtra a solo las cartas de ESTA
+        // cuenta que ya califican como Gold. Las imagenes de esta seccion piden la version
+        // dorada real (Drive, ver obtenerImagenGoldBot) via /img/:token/:code?gold=1, cayendo
+        // sola al arte normal si esa carta puntual todavia no tiene version dorada subida --
+        // mismo comportamiento de respaldo que ya usa Gold Cards en Discord.
+        const umbralGold = datos.discordId ? await obtenerUmbralGold(datos.discordId) : UMBRAL_GOLD_CARD_DEFAULT;
+        const cartasGold = Object.values(porExpansion).flat().filter((carta) => carta.cantidad >= umbralGold);
         // Se resuelve la expansion de cada sobre a partir de sus propias cartas (no de
         // pull.pack, que es un codigo corto tipo "B3b" que no siempre matchea 1 a 1 con el
         // nombre de expansion que ya usa el resto de la pagina) -- alcanza con la primera
@@ -4262,6 +4284,7 @@ ${/* Grilla de expansiones (2026-08-10, a pedido explicito del usuario, reemplaz
     <div class="exp-search-row">
         <input type="text" id="expSearchInput" class="exp-search" placeholder="Search expansion...">
         <button type="button" class="wishlist-btn" id="wishlistBtn">💖 Wishlist</button>
+        <button type="button" class="wishlist-btn" id="goldBtn">🏆 Gold Cards (${umbralGold}+)</button>
     </div>
     <div class="exp-grid" id="expGrid"></div>
 </div>
@@ -4339,6 +4362,24 @@ ${/* Grilla de expansiones (2026-08-10, a pedido explicito del usuario, reemplaz
             const faltante = carta.cantidad === 0;
             html += `<div class="card-tile${faltante ? ' faltante' : ''}" data-rareza="${escaparHtml(carta.tipoRareza)}" data-tiene="${faltante ? '0' : '1'}"><div class="img-wrap"><img src="/img/${req.params.token}/${encodeURIComponent(carta.code)}" loading="lazy" alt="${escaparHtml(carta.nombre)}" data-code="${escaparHtml(carta.code)}" data-nombre="${escaparHtml(carta.nombre)}" data-tiene="${faltante ? '0' : '1'}" onerror="this.classList.add('rota')">`;
             if (carta.cantidad > 0) html += `<div class="badge">x${carta.cantidad}</div>`;
+            html += `</div>`;
+            if (iconosCarta) html += `<div class="rareza-tag"><span class="rareza-pill">${iconosCarta}</span></div>`;
+            html += `</div>`;
+        }
+        html += `</div></div>`;
+
+        // Seccion de Gold Cards (2026-08-16, a pedido explicito del usuario): mismo componente
+        // que Wishlist, pero las imagenes piden la version dorada (?gold=1, ver /img/:token/:code
+        // mas abajo) -- si esa carta puntual no tiene version dorada en Drive todavia, el propio
+        // endpoint cae solo al arte normal, mismo respaldo que ya usa /goldcards en Discord.
+        html += `<div class="expansion oculta" data-expansion="__gold__"><div class="expansion-header"><h2>🏆 Gold Cards — ${umbralGold}+ copies (${cartasGold.length} cards)</h2></div><div class="grid">`;
+        if (!cartasGold.length) {
+            html += `<div class="sub" style="margin:0">No cards with ${umbralGold}+ copies yet.</div>`;
+        }
+        for (const carta of cartasGold) {
+            const iconosCarta = iconosRarezaHtml(carta.tipoRareza);
+            html += `<div class="card-tile" data-rareza="${escaparHtml(carta.tipoRareza)}" data-tiene="1"><div class="img-wrap"><img src="/img/${req.params.token}/${encodeURIComponent(carta.code)}?gold=1" loading="lazy" alt="${escaparHtml(carta.nombre)}" data-code="${escaparHtml(carta.code)}" data-nombre="${escaparHtml(carta.nombre)}" data-tiene="1" onerror="this.classList.add('rota')">`;
+            html += `<div class="badge">x${carta.cantidad}</div>`;
             html += `</div>`;
             if (iconosCarta) html += `<div class="rareza-tag"><span class="rareza-pill">${iconosCarta}</span></div>`;
             html += `</div>`;
@@ -4513,6 +4554,9 @@ function filtrarPorExpansion(filtro) {
 }
 document.getElementById('expBackBtn').addEventListener('click', function () {
     filtrarPorExpansion('all');
+});
+document.getElementById('goldBtn').addEventListener('click', function () {
+    filtrarPorExpansion('__gold__');
 });
 document.getElementById('wishlistBtn').addEventListener('click', function () {
     filtrarPorExpansion('__wishlist__');
@@ -9705,10 +9749,46 @@ client.once('ready', async () => {
         }
     }
 
+    // DEBUG TEMPORAL (2026-08-17, ver Task emojis TCGP): dos usuarios reportan estos iconos
+    // rotos hace dias y el aviso de "faltantes" de arriba NUNCA se disparo -- lo que sugiere
+    // que mapa[nombre] SI tiene un valor para estas claves (el codigo cree que estan bien),
+    // pero ese ID igual no renderiza. Vuelca los IDs reales que el bot esta usando para este
+    // lote puntual, una sola vez por guild, para comparar contra lo que Discord realmente
+    // tiene. Quitar junto con el resto del debug una vez explicado el misterio.
+    const LOTE_TCGP_DEBUG = ['Card_Back_TCGP', 'Polvo_iris_TCGP', 'Pokelingote_TCGP', 'Cupon_de_tienda_TCGP', 'Cupon_de_tienda_especial_TCGP', 'Cupon_premium_TCGP', 'Reloj_de_arena_de_sobres_TCGP', 'Reloj_de_arena_magico_TCGP', 'Retronometro_TCGP', 'Reloj_arena_intercambio_TCGP', 'Ficha_de_intercambio_TCGP'];
+    const avisoDebugTcgpPorGuild = new Set();
+    async function avisarDebugTcgpSiHaceFalta(guild, mapa) {
+        if (avisoDebugTcgpPorGuild.has(guild.id)) return;
+        avisoDebugTcgpPorGuild.add(guild.id);
+        try {
+            const existentes = await guild.emojis.fetch();
+            const lineas = LOTE_TCGP_DEBUG.map((nombre) => {
+                const idEnMapa = mapa[nombre] || '(none)';
+                const enGuildDeVerdad = existentes.find((e) => e.name === nombre);
+                const idReal = enGuildDeVerdad ? enGuildDeVerdad.id : '(not found in guild.emojis.fetch)';
+                return `${nombre}: mapa=${idEnMapa} | guild.emojis.fetch()=${idReal}`;
+            });
+            const mensaje = `🔧 **DEBUG emojis TCGP en "${guild.name}"**\n\`\`\`${lineas.join('\n')}\`\`\``;
+            const destino = await obtenerDestinoNotificacion(client);
+            if (!destino) return;
+            if (destino.tipo === 'webhook') {
+                await axios.post(`${destino.webhookUrl}?wait=true`, { content: mensaje }, { timeout: 15000 });
+            } else {
+                const usuario = await client.users.fetch(destino.userId);
+                await usuario.send(mensaje);
+            }
+        } catch (e) {
+            console.error(`❌ Error mandando debug TCGP en ${guild.name}:`, e?.message || e);
+        }
+    }
+
     const refrescarEmojisTodosLosGuilds = () => {
         for (const guild of client.guilds.cache.values()) {
             obtenerMapaEmojisGuild(guild)
-                .then((mapa) => avisarEmojisFaltantesSiHaceFalta(guild, mapa))
+                .then((mapa) => {
+                    avisarEmojisFaltantesSiHaceFalta(guild, mapa);
+                    avisarDebugTcgpSiHaceFalta(guild, mapa);
+                })
                 .catch((e) => console.error(`❌ Error refrescando emojis de ${guild.name}:`, e?.message || e));
         }
     };
