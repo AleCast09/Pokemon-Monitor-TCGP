@@ -1,7 +1,12 @@
 {
-  "version": "1.5.50",
-  "notesCount": 1,
+  "version": "1.5.51",
+  "notesCount": 5,
   "notes": [
+    "Security fix: the localhost-only gate on trade endpoints checked the client-supplied Host header, which can be spoofed - it didn't actually block remote trade requests over the public tunnel or same WiFi like it was supposed to. Now checks the real connection instead.",
+    "Fixed: a stale lock file could permanently block the app from starting if Windows ever reused the same process ID for something else - now verifies it's actually Monitor Pokemon before treating it as already running.",
+    "Removed the temporary emoji debug message added for troubleshooting - no longer needed.",
+    "Cleanup: removed ~9MB of unused leftover images from the install.",
+    "Control Panel: the \"Start\" button no longer stands out in orange - matches Stop/Restart now.",
     "Fixed: on a brand-new server creating many icons for the first time (like right after inviting the bot), a single icon creation could fail transiently and stay missing until the next automatic refresh 10 minutes later - now retries a few times right away with a short pause between attempts.",
     "Temporary: added a one-time diagnostic message to the Updates channel showing the exact emoji IDs the bot has on record for the inventory icon set, to help track down why they stay broken for some installs even after every other known cause was ruled out. Will be removed once explained.",
     "Fixed: the missing-emoji warning was only sent as a DM, which could get silently blocked by Discord privacy settings with no visible error anywhere - now reuses the same reliable Updates channel notification you already get for new versions.",

@@ -42,10 +42,17 @@ const PENDING_UPDATE_PATH = path.join(__dirname, '.pending_update.json');
 const PENDING_RESTART_PATH = path.join(__dirname, '.pending_restart.json');
 const LOCK_PATH = path.join(__dirname, '.monitor.lock');
 
+// Bug real reportado 2026-08-17: process.kill(pid, 0) solo confirma que EXISTE un proceso con
+// ese numero de PID -- no que sea Monitor Pokemon. Windows reutiliza numeros de PID con el
+// tiempo (normal en cualquier PC con uso real), asi que despues de suficientes reinicios el
+// PID guardado en el lock puede terminar perteneciendo a un proceso completamente distinto
+// (Explorer, un servicio, lo que sea) -- yaHayUnaCopiaAbierta() lo tomaba como "sigue abierto"
+// y bloqueaba el arranque para siempre, sin que el usuario supiera por que ni como arreglarlo.
+// Ahora ademas confirma que ESE PID puntual sea realmente MonitorPokemon.exe.
 function procesoExiste(pid) {
     try {
-        process.kill(pid, 0);
-        return true;
+        const salida = execSync(`tasklist /FI "PID eq ${pid}" /FI "IMAGENAME eq MonitorPokemon.exe" /NH`, { windowsHide: true }).toString();
+        return salida.toLowerCase().includes('monitorpokemon.exe');
     } catch (e) {
         return false;
     }

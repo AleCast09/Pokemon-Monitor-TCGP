@@ -486,7 +486,6 @@ public class ControlPanelForm : Form {
         Controls.Add(labelEstado);
 
         botonIniciar = NuevoBoton("Start", 30, 79, 225);
-        AplicarEstiloPrimario(botonIniciar);
         botonIniciar.Click += (s, e) => { IniciarBot(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
         botonApagar = NuevoBoton("Stop", 30, 121, 225);
         botonApagar.Click += (s, e) => { ApagarBot(); startHabilitado = false; System.Threading.Thread.Sleep(500); RefrescarEstado(); };

@@ -3684,14 +3684,28 @@ function generarTokenDashboard(rutaMasterPath, archivoJson, datosInventario = nu
 // seguridad encontrado por el usuario): el boton "Transfer this card" ejecutaba un trade
 // REAL desde una pagina sin login -- cualquiera con el link publico podia iniciar una
 // transferencia de una carta ajena. Regla explicita del usuario: "los tradeos funcionan
-// UNICAMENTE mediante localhost desde tu PC" -- no alcanza con distinguir solo el tunel
-// publico, un celular en la MISMA WiFi (accediendo por la IP local, ej. 192.168.x.x) tiene
-// que bloquearse igual, porque un telefono nunca puede llegar a mostrar "localhost" de la
-// PC (localhost en un celular es el celular mismo) -- por eso alcanza con chequear el Host
-// header del request: solo pasa si es literalmente localhost/127.0.0.1.
+// UNICAMENTE mediante localhost desde tu PC".
+//
+// Bug real de seguridad encontrado 2026-08-17 (revision de seguridad, este chequeo NO
+// bloqueaba de verdad lo que decia bloquear): la version anterior comparaba req.hostname,
+// que Express arma a partir del header "Host" -- un valor que el propio cliente manda y
+// puede poner en lo que quiera. Cualquiera (por el tunel publico O por la misma WiFi) podia
+// mandar la request con "Host: localhost" a mano (ej. con curl) y pasar el chequeo igual,
+// dejando el bug original sin arreglar de verdad pese al comentario de arriba.
+// Se usa req.socket.remoteAddress en su lugar -- ese es el IP real de la conexion TCP,
+// que el cliente no puede falsificar. Esto solo no alcanza para el caso del tunel de
+// Cloudflare (ver iniciarTunelCloudflared): "cloudflared tunnel --url http://localhost:X"
+// reenvia el trafico externo a localhost tambien, asi que ESE trafico igual llega con
+// remoteAddress en loopback. Por eso se suma un segundo chequeo: cloudflared preserva/agrega
+// headers propios de Cloudflare (cf-ray, cf-connecting-ip, cf-visitor) en todo lo que pasa
+// por el tunel -- una request realmente local (el navegador de la PC pegandole directo a
+// localhost) nunca los trae.
 function esAccesoPublico(req) {
-    const host = (req.hostname || '').toLowerCase();
-    return host !== 'localhost' && host !== '127.0.0.1';
+    const ip = (req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+    const esLoopback = ip === '127.0.0.1' || ip === '::1';
+    if (!esLoopback) return true;
+    const vinoPorCloudflare = !!(req.headers['cf-ray'] || req.headers['cf-connecting-ip'] || req.headers['cf-visitor']);
+    return vinoPorCloudflare;
 }
 
 function obtenerIpLan() {
@@ -9749,46 +9763,10 @@ client.once('ready', async () => {
         }
     }
 
-    // DEBUG TEMPORAL (2026-08-17, ver Task emojis TCGP): dos usuarios reportan estos iconos
-    // rotos hace dias y el aviso de "faltantes" de arriba NUNCA se disparo -- lo que sugiere
-    // que mapa[nombre] SI tiene un valor para estas claves (el codigo cree que estan bien),
-    // pero ese ID igual no renderiza. Vuelca los IDs reales que el bot esta usando para este
-    // lote puntual, una sola vez por guild, para comparar contra lo que Discord realmente
-    // tiene. Quitar junto con el resto del debug una vez explicado el misterio.
-    const LOTE_TCGP_DEBUG = ['Card_Back_TCGP', 'Polvo_iris_TCGP', 'Pokelingote_TCGP', 'Cupon_de_tienda_TCGP', 'Cupon_de_tienda_especial_TCGP', 'Cupon_premium_TCGP', 'Reloj_de_arena_de_sobres_TCGP', 'Reloj_de_arena_magico_TCGP', 'Retronometro_TCGP', 'Reloj_arena_intercambio_TCGP', 'Ficha_de_intercambio_TCGP'];
-    const avisoDebugTcgpPorGuild = new Set();
-    async function avisarDebugTcgpSiHaceFalta(guild, mapa) {
-        if (avisoDebugTcgpPorGuild.has(guild.id)) return;
-        avisoDebugTcgpPorGuild.add(guild.id);
-        try {
-            const existentes = await guild.emojis.fetch();
-            const lineas = LOTE_TCGP_DEBUG.map((nombre) => {
-                const idEnMapa = mapa[nombre] || '(none)';
-                const enGuildDeVerdad = existentes.find((e) => e.name === nombre);
-                const idReal = enGuildDeVerdad ? enGuildDeVerdad.id : '(not found in guild.emojis.fetch)';
-                return `${nombre}: mapa=${idEnMapa} | guild.emojis.fetch()=${idReal}`;
-            });
-            const mensaje = `🔧 **DEBUG emojis TCGP en "${guild.name}"**\n\`\`\`${lineas.join('\n')}\`\`\``;
-            const destino = await obtenerDestinoNotificacion(client);
-            if (!destino) return;
-            if (destino.tipo === 'webhook') {
-                await axios.post(`${destino.webhookUrl}?wait=true`, { content: mensaje }, { timeout: 15000 });
-            } else {
-                const usuario = await client.users.fetch(destino.userId);
-                await usuario.send(mensaje);
-            }
-        } catch (e) {
-            console.error(`❌ Error mandando debug TCGP en ${guild.name}:`, e?.message || e);
-        }
-    }
-
     const refrescarEmojisTodosLosGuilds = () => {
         for (const guild of client.guilds.cache.values()) {
             obtenerMapaEmojisGuild(guild)
-                .then((mapa) => {
-                    avisarEmojisFaltantesSiHaceFalta(guild, mapa);
-                    avisarDebugTcgpSiHaceFalta(guild, mapa);
-                })
+                .then((mapa) => avisarEmojisFaltantesSiHaceFalta(guild, mapa))
                 .catch((e) => console.error(`❌ Error refrescando emojis de ${guild.name}:`, e?.message || e));
         }
     };
