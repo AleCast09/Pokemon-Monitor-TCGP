@@ -109,6 +109,14 @@ function guardarCacheEnDisco(mapa) {
 // redimensiona siempre antes de subir (manteniendo proporcion, sin agrandar los que ya son
 // chicos) para que cualquier asset futuro que tampoco venga pre-recortado a tamaño de emoji
 // no rompa la subida de la misma forma.
+// Reintento con backoff corto (2026-08-17, bug real reportado: dos usuarios con Administrador
+// y dueño real del servidor confirmados igual nunca lograban que se creara un lote grande de
+// emojis de una sola vez en un servidor nuevo -- en pruebas en vivo contra un servidor real, la
+// MISMA llamada a veces fallaba y, reintentada poco despues, funcionaba perfecto (probablemente
+// alguna demora/limite transitorio del lado de Discord al crear muchos emojis seguidos, no
+// reproducible de forma consistente). Antes de esto un solo fallo dejaba esa clave sin crear
+// hasta el proximo refresco automatico (10 min despues) -- ahora se reintenta unas pocas veces
+// enseguida, sin depender de tener que esperar tanto para el caso mas comun (falla transitoria).
 async function subirEmojiFaltante(guild, nombre, rutaRelativa) {
     const rutaAbsoluta = path.join(__dirname, 'assets', rutaRelativa);
     const bufferOriginal = fs.readFileSync(rutaAbsoluta);
@@ -116,8 +124,19 @@ async function subirEmojiFaltante(guild, nombre, rutaRelativa) {
         .resize(128, 128, { fit: 'inside', withoutEnlargement: true })
         .png({ compressionLevel: 9 })
         .toBuffer();
-    const nuevo = await guild.emojis.create({ attachment: buffer, name: nombre });
-    return nuevo.id;
+
+    const INTENTOS = 3;
+    let ultimoError;
+    for (let intento = 1; intento <= INTENTOS; intento++) {
+        try {
+            const nuevo = await guild.emojis.create({ attachment: buffer, name: nombre });
+            return nuevo.id;
+        } catch (e) {
+            ultimoError = e;
+            if (intento < INTENTOS) await new Promise((resolve) => setTimeout(resolve, 2000 * intento));
+        }
+    }
+    throw ultimoError;
 }
 
 // Ultimo motivo de fallo por emoji, por guild (2026-08-15, bug real reportado: dos usuarios

@@ -1,7 +1,8 @@
 {
-  "version": "1.5.49",
+  "version": "1.5.50",
   "notesCount": 1,
   "notes": [
+    "Fixed: on a brand-new server creating many icons for the first time (like right after inviting the bot), a single icon creation could fail transiently and stay missing until the next automatic refresh 10 minutes later - now retries a few times right away with a short pause between attempts.",
     "Temporary: added a one-time diagnostic message to the Updates channel showing the exact emoji IDs the bot has on record for the inventory icon set, to help track down why they stay broken for some installs even after every other known cause was ruled out. Will be removed once explained.",
     "Fixed: the missing-emoji warning was only sent as a DM, which could get silently blocked by Discord privacy settings with no visible error anywhere - now reuses the same reliable Updates channel notification you already get for new versions.",
     "Fixed a real bug affecting existing installs updating in-app: source icon files with accented characters in their filename (Pokélingote, Cupón, Retronómetro, etc.) could silently fail to extract during an in-app update, leaving those specific icons permanently missing - a fresh full download didn't have this problem. Renamed the affected files to plain ASCII, sidestepping the issue entirely.",
