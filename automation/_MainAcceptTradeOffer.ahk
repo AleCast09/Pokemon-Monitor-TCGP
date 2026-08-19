@@ -115,42 +115,16 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
     }
 }
 
-; Chequeo de 2 niveles para el paso 1 (2026-08-05, a pedido explicito del usuario): primero
-; intenta la needle estable "Trade" (sin depender de notificacion) con poco margen -- si
-; matchea de una, ni se molesta en chequear el banner verde. Si NO matchea en ese primer
-; intento corto, recien ahi cae a validar el banner verde "Trade offer received" (con el
-; timeout largo de siempre).
-esperarOfertaYTap(x, y) {
-    global adbPath, puerto, g_winTitle
-    inicio := A_TickCount
-    Loop {
-        tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
-        AdbScreenshot(adbPath, puerto, tempFile)
-        encontrado := false
-        if (FileExist(tempFile)) {
-            pBitmap := Gdip_CreateBitmapFromFile(tempFile)
-            FileDelete, %tempFile%
-            if (pBitmap) {
-                pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_maintrade_offer_badge.png")
-                if (pNeedle) {
-                    vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 30) = 1)
-                }
-                Gdip_DisposeImage(pBitmap)
-            }
-        }
-        if (encontrado) {
-            tap(x, y)
-            return true
-        }
-        if (A_TickCount - inicio > 5000)
-            break
-        Sleep, 500
-    }
-    return esperarNeedleYTap("own_maintrade_offer_banner", 30, x, y)
-}
-
-if (!esperarOfertaYTap(207, 402))
+; Chequeo de 1 sola needle para el paso 1 (2026-08-19, reporte real del usuario en vivo):
+; el "chequeo rapido" de 5s contra own_maintrade_offer_badge se saco -- esa needle resulto
+; ser el icono+texto ESTATICO del tile "Trade" del Social Hub, que esta SIEMPRE visible haya
+; o no oferta real. Como corria primero y matcheaba casi de inmediato, la senal buena (el
+; cartel verde "Trade in progress", que si es especifica de una oferta pendiente real) nunca
+; llegaba a chequearse -- Main entraba a la pestana de Trade a ciegas, sin oferta esperandolo,
+; y de ahi en mas el pipeline fallaba mas adelante (visto en vivo: terminaba en "Select a
+; Friend" en vez de la oferta real). Timeout subido a 40s (antes eran 15s de default) porque
+; ahora es la UNICA needle que gatea este paso.
+if (!esperarNeedleYTap("own_maintrade_offer_banner", 30, 207, 402, 40000))
     ExitConError("no_aparecio_oferta_pendiente_paso1")
 if (!esperarNeedleYTap("own_maintrade_view_button", 30, 143, 424))
     ExitConError("no_aparecio_ver_button_paso2")
