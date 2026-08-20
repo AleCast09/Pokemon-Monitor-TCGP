@@ -355,10 +355,20 @@ public class ControlPanelForm : Form {
     // hacer el reemplazo real, asi que no hay riesgo de que se "dupliquen"
     // ni se corrompa nada por usar los dos (apply-update.js ademas chequea
     // si ya hay una descarga en camino antes de bajar una segunda vez).
+    // Boton "Download Manually" agregado 2026-08-20 (bug real reportado en vivo): un usuario
+    // con problemas de red no podia bajar la actualizacion ni con "Download Now" (la descarga
+    // interna del programa, via axios) ni con "Open Discord Channel Instead" (esa solo abre
+    // Discord, y el boton "Update now" DE ADENTRO de Discord dispara la MISMA descarga interna
+    // que ya le fallaba -- ningun camino existente lo sacaba de esa descarga rota). Este boton
+    // no depende del programa para nada, abre la pagina del release en el navegador de verdad
+    // del usuario -- si su navegador SI puede bajar el zip (como le paso a el), esto lo
+    // desbloquea aunque la descarga interna del programa nunca funcione en su red.
+    const string URL_RELEASES = "https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest";
+
     void MostrarAvisoActualizacion(string versionActual, string versionNueva, string discordChannelUrl) {
         var dialogo = new Form {
             Text = "Update available",
-            ClientSize = new Size(380, 170),
+            ClientSize = new Size(380, 210),
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
             MinimizeBox = false,
@@ -386,10 +396,22 @@ public class ControlPanelForm : Form {
         AplicarEstiloPrimario(btnDescargar);
         dialogo.Controls.Add(btnDescargar);
 
+        var btnManual = new Button {
+            Text = "Download Manually (opens browser)",
+            Size = new Size(340, 34),
+            Location = new Point(20, 122),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = colorSuperficie2,
+            ForeColor = colorTexto,
+            Cursor = Cursors.Hand
+        };
+        btnManual.FlatAppearance.BorderColor = colorBorde;
+        dialogo.Controls.Add(btnManual);
+
         var btnDiscord = new Button {
             Text = "Open Discord Channel Instead",
             Size = new Size(340, 34),
-            Location = new Point(20, 122),
+            Location = new Point(20, 164),
             FlatStyle = FlatStyle.Flat,
             BackColor = colorSuperficie2,
             ForeColor = colorTexto,
@@ -400,6 +422,11 @@ public class ControlPanelForm : Form {
 
         AplicarTemaBarraTitulo(dialogo.Handle);
 
+        btnManual.Click += (s, e) => {
+            try { Process.Start(new ProcessStartInfo { FileName = URL_RELEASES, UseShellExecute = true }); } catch { }
+            dialogo.Close();
+        };
+
         btnDiscord.Click += (s, e) => {
             var destino = !string.IsNullOrEmpty(discordChannelUrl) ? discordChannelUrl : "https://discord.com/app";
             try { Process.Start(new ProcessStartInfo { FileName = destino, UseShellExecute = true }); } catch { }
@@ -408,6 +435,7 @@ public class ControlPanelForm : Form {
 
         btnDescargar.Click += (s, e) => {
             btnDescargar.Enabled = false;
+            btnManual.Enabled = false;
             btnDiscord.Enabled = false;
             btnDescargar.Text = "Downloading...";
             DescargarActualizacionDesdePanel(dialogo);
@@ -449,7 +477,7 @@ public class ControlPanelForm : Form {
                 }
                 MessageBox.Show("Update downloaded. The bot will restart on its own in a few seconds to finish installing it.", "Monitor Pokemon");
             } else {
-                MessageBox.Show("Could not download the update. Try the Discord channel instead.", "Monitor Pokemon");
+                MessageBox.Show("Could not download the update. Close this and use \"Download Manually\" instead, or try the Discord channel.", "Monitor Pokemon");
             }
         } catch (Exception ex) {
             dialogo.Close();

@@ -1,7 +1,8 @@
 {
-  "version": "1.5.55",
+  "version": "1.5.56",
   "notesCount": 1,
   "notes": [
+    "New: the Control Panel's \"Update available\" popup has a \"Download Manually\" button that opens the release page in your real browser - if the in-app download keeps failing on your network (both \"Download Now\" and the Discord \"Update now\" button use the same one), this gives a way out that doesn't depend on the app's own network access at all.",
     "Fixed the same \"thinking\" forever bug across the rest of All Cards/Wishlist/Gold Cards (picking a card, going back, paging, sending to Trading, extracting an account) - a full pass to make sure any unexpected error always shows a message instead of leaving the bot stuck.",
     "Fixed: choosing an expansion in All Cards/Wishlist/Gold Cards could leave the bot \"thinking\" forever with no error if something went wrong loading that expansion's categories - now shows an actual error message instead.",
     "Fixed: the packaged .exe could report card data files as \"not found\" even with a correct path - a bug in the previous version's freeze-fix itself, only happening in the packaged version, now corrected.",
