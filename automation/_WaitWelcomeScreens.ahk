@@ -21,11 +21,14 @@
 ;   folderPath = carpeta base de MuMu (ej. "C:\Program Files\Netease\MuMuPlayer")
 ;   outputFile = ruta donde escribir "OK" o "ERROR: <motivo>"
 ;
-; NO abre el juego (2026-08-05, a pedido explicito del usuario): se saco por completo
-; cualquier "am start" propio (tanto el respaldo inicial como el reintento agregado
-; despues) -- Kevin nunca hace esto en sus propios AHK, y quedo como sospecha real de la
-; causa de varios crashes en vivo esta noche. Este script asume que el juego YA esta
-; abierto (por el inject de Kevin, que lo abre solo) y unicamente busca/toca pantallas.
+; NO abre el juego, salvo un unico respaldo muy acotado (2026-08-05: se saco por completo
+; cualquier "am start" propio -- Kevin nunca hace esto en sus propios AHK, y quedo como
+; sospecha real de la causa de varios crashes en vivo esa noche. 2026-08-19: se repuso UN
+; SOLO intento, condicionado a needle propia del escritorio de Android + margen de 20s, ver
+; esperarPantallasBienvenida mas abajo -- bug real reproducido en vivo: el inject a veces no
+; abre el juego solo, dejando la instancia trabada para siempre sin ningun respaldo). Salvo
+; ese caso puntual, el script asume que el juego YA esta abierto (por el inject de Kevin,
+; que lo abre solo) y unicamente busca/toca pantallas.
 
 #SingleInstance off
 SetBatchLines, -1
@@ -125,6 +128,7 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
     intento := 0
     ultimoReintentoAmStart := 0
     ultimoTapStart := 0
+    yaReabrioJuego := false
     logDebugBienvenida("=== INICIO esperarPantallasBienvenida (needles propios) ===")
     Loop {
         if (A_TickCount - inicio > timeoutMs) {
@@ -216,24 +220,41 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
         } else if (buscarNeedleEnCaptura(pHaystack, "own_ingame_error_popup")) {
             ; Popup generico "Error / Error code: XXX-XXX-XXXXX / An error has occurred" --
             ; reportado en vivo 2026-08-09, aparece cuando el juego tarda en cargar (conexion
-            ; lenta del lado del usuario, no un bug de la automatizacion). Needle recorta SOLO
-            ; el titulo "Error" (el codigo de abajo puede variar entre errores distintos).
+            ; lenta del lado del usuario, no un bug de la automatizacion). Needle recortada de
+            ; nuevo 2026-08-19 (a pedido explicito del usuario, sin ninguna letra -- antes
+            ; recortaba el titulo "Error" en texto, no funcionaba en otros idiomas): ahora es
+            ; solo la esquina redondeada del cartel oscuro (forma+color, no texto).
             ;
-            ; A proposito NO se toca "To Title Screen" para intentar recuperarse solo en el
-            ; mismo intento (a pedido explicito del usuario, 2026-08-09): confiar en que el
-            ; MISMO proceso ya degradado se termine de cargar bien es un 50/50 -- reiniciar
-            ; TODO el flujo de cero (instancias apagadas y prendidas de nuevo, sesion nueva)
-            ; da mucha mas confianza de que la segunda vez cargue bien. Se corta con error
-            ; claro -- el caller ya tiene su propio boton de Retry para esto (mismo mecanismo
-            ; que cualquier otra falla real del pipeline).
-            logDebugBienvenida("intento " . intento . " -- needle 'own_ingame_error_popup' -> corta con error, mejor reiniciar todo el flujo")
-            Gdip_DisposeImage(pHaystack)
-            ExitConError("popup_error_juego")
+            ; CAMBIO DE CRITERIO 2026-08-19 (a pedido explicito del usuario, reemplaza la
+            ; decision de 2026-08-09 de cortar sin tocar nada): ahora SI se toca "Retry" en el
+            ; centro del boton, para intentar recuperarse solo en el mismo intento en vez de
+            ; obligar a reiniciar todo el flujo de cero.
+            logDebugBienvenida("intento " . intento . " -- needle 'own_ingame_error_popup' -> tap Retry (141,380)")
+            tap(141, 380)
         } else if (buscarNeedleEnCaptura(pHaystack, "own_gameclosed")) {
             ; Popup "The game closed, but you successfully obtained the items" -- puede
             ; aparecer despues de un force-stop/inyeccion. Needle mapeada en vivo 2026-08-04.
             logDebugBienvenida("intento " . intento . " -- needle 'own_gameclosed' -> tap OK (150,369)")
             tap(150, 369)  ; boton "OK"
+        } else if (!yaReabrioJuego && (A_TickCount - inicio > 20000) && buscarNeedleEnCaptura(pHaystack, "own_android_home_desktop")) {
+            ; Respaldo MUY acotado (2026-08-19, bug real reproducido en vivo 2 veces seguidas:
+            ; el inject de Kevin a veces no llega a abrir el juego solo, dejando la instancia
+            ; parada en el escritorio de Android para siempre -- sin ningun am start de
+            ; respaldo, el script solo esperaba y tiraba timeout). A diferencia de los
+            ; intentos anteriores (sacados por causar el ciclo de crash+reintento descripto
+            ; arriba), este es deliberadamente MINIMO para no repetir ese bug:
+            ; 1) recien puede activarse despues de 20s (nunca confunde una carga lenta normal
+            ;    con estar trabado en el launcher);
+            ; 2) necesita una needle PROPIA del escritorio de Android (own_android_home_desktop,
+            ;    el fondo de pantalla del launcher, no cualquier pantalla no reconocida) --
+            ;    nunca se activa solo por "no matcheo nada", como hacia la version vieja;
+            ; 3) UNA SOLA VEZ por ejecucion (yaReabrioJuego), nunca en loop -- si vuelve a
+            ;    quedar en el escritorio despues de este intento, se deja que el timeout
+            ;    normal de mas abajo corte con error, en vez de seguir reintentando.
+            logDebugBienvenida("intento " . intento . " -- needle 'own_android_home_desktop' (>20s) -> UNICO am start de respaldo")
+            yaReabrioJuego := true
+            AdbEjecutar(adbPath, puerto, "shell am start -W -n jp.pokemon.pokemontcgp/com.unity3d.player.UnityPlayerActivity -f 0x10018000")
+            Sleep, 3000
         } else {
             ; OJO (2026-08-03): hubo un intento de "reforzar" la apertura con otro am start
             ; cada 5 intentos si no se reconocia nada -- SACADO, era CONTRAPRODUCENTE: si el

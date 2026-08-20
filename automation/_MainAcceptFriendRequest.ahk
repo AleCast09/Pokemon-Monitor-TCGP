@@ -98,6 +98,39 @@ verificarNoCrasheado() {
 }
 verificarNoCrasheado()
 
+; Recuperacion (2026-08-18, bug real reproducido en vivo 2 veces seguidas): Main puede
+; arrancar este script parada en la pantalla de DETALLE de un sobre (ej. "Ruler of the
+; Skies") en vez de Comunidad -- el juego la manda ahi sola, sin que ningun script propio
+; le haya tocado la pantalla entre medio. Esa pantalla tambien tiene la barra de navegacion
+; inferior, asi que el chequeo de mas abajo la reconoce como "pantalla valida" igual, pero
+; el tile de Friends no esta ahi (tiene un layout total distinto), asi que el tap despues
+; cae en cualquier lado. Este chequeo corto (una sola vuelta, sin poll largo) detecta esa
+; pantalla especificamente por su boton "atras" (circular, unico de esa vista) y lo toca
+; para salir -- NUNCA toca "abrir" el sobre, solo el boton de volver. Si no esta esa
+; pantalla, sigue derecho sin tocar nada.
+salirDePantallaSobreSiHaceFalta() {
+    global adbPath, puerto, g_winTitle
+    tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
+    AdbScreenshot(adbPath, puerto, tempFile)
+    if (!FileExist(tempFile))
+        return
+    pBitmap := Gdip_CreateBitmapFromFile(tempFile)
+    FileDelete, %tempFile%
+    if (!pBitmap)
+        return
+    pBack := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_boosterdetail_back_button.png")
+    if (pBack) {
+        vPos := ""
+        if (Gdip_ImageSearch(pBitmap, pBack, vPos, 0, 0, 0, 0, 30) = 1) {
+            Gdip_DisposeImage(pBitmap)
+            tap(142, 465)  ; boton "atras" circular -- NUNCA tocar "abrir" (corregido 2026-08-18, error de calculo: y estaba mal, caia en "Offering Rates")
+            return
+        }
+    }
+    Gdip_DisposeImage(pBitmap)
+}
+salirDePantallaSobreSiHaceFalta()
+
 ; Reconocimiento real antes de tocar (2026-08-05, a pedido explicito del usuario): en vez
 ; de tap ciego con Sleep fijo, espera (poll cada 500ms, hasta timeoutMs) a que la needle de
 ; la pantalla ESPERADA aparezca de verdad antes de tocar -- asi un PC lento no rompe el
@@ -118,6 +151,20 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
                     vPos := ""
                     encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
                 }
+                ; Chequeo de crash EN CADA poll (2026-08-19, bug real reproducido en vivo --
+                ; ver comentario completo en _MainAcceptTradeOffer.ahk, mismo fix aplicado a
+                ; los 4 scripts del pipeline): reusa la captura ya sacada, solo DETECTA y
+                ; corta con error claro -- no reintenta reabrir el juego aca a proposito.
+                if (!encontrado) {
+                    pCrash := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_tapstart_logo.png")
+                    if (pCrash) {
+                        vPosCrash := ""
+                        if (Gdip_ImageSearch(pBitmap, pCrash, vPosCrash, 0, 0, 0, 0, 75) = 1) {
+                            Gdip_DisposeImage(pBitmap)
+                            ExitConError("juego_crasheo_volvio_al_titulo")
+                        }
+                    }
+                }
                 Gdip_DisposeImage(pBitmap)
             }
         }
@@ -131,13 +178,14 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
     }
 }
 
-; Chequeo especial para el paso 4 (2026-08-05, reporte real del usuario): si un Retry
-; anterior ya alcanzo a aceptar la solicitud, al volver a correr todo el pipeline desde
-; cero esta pantalla NO tiene ninguna solicitud pendiente ("No friend requests awaiting
-; approval") -- esperar el check de aceptar ahi se queda colgado para siempre, porque
-; nunca va a aparecer. Se chequean las 2 needles posibles cada vuelta: si aparece el check,
-; toca para aceptar; si aparece "sin solicitudes pendientes", ya estan de amigos, no toca
-; nada y sigue derecho igual.
+; Chequeo especial para el paso 4 (2026-08-05, reporte real del usuario; simplificado
+; 2026-08-18 a pedido explicito del usuario, para sacar el needle de texto en ingles
+; "No friend requests awaiting approval."): si un Retry anterior ya alcanzo a aceptar la
+; solicitud, al volver a correr todo el pipeline desde cero esta pantalla NO tiene ninguna
+; solicitud pendiente -- esperar el check de aceptar ahi se quedaria colgado para siempre,
+; porque nunca va a aparecer. Ahora solo se busca own_mainaccept_check (icono, sin texto);
+; si nunca aparece dentro del timeout, se asume que no hay nada pendiente (ya son amigos)
+; y se sigue igual -- ya no hace falta una segunda needle para ese caso.
 esperarAceptarOYaAmigos(timeoutMs := 15000) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
@@ -155,11 +203,59 @@ esperarAceptarOYaAmigos(timeoutMs := 15000) {
                     tap(242, 202)
                     return true
                 }
-                pNoReq := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_mainaccept_no_requests.png")
+                Gdip_DisposeImage(pBitmap)
+            }
+        }
+        if (A_TickCount - inicio > timeoutMs)
+            return true  ; nunca aparecio el check -- se asume que ya son amigos, no hay nada que aceptar
+        Sleep, 500
+    }
+}
+
+; Paso 1+2 fusionados (2026-08-18, bug real reproducido en vivo, a pedido explicito del
+; usuario): la version anterior tocaba apenas veia el navbar (menu principal) y daba por
+; hecho que eso alcanzaba para llegar a Comunidad -- pero si en ese instante todavia hay
+; algo cargando encima (ej. las imagenes de los sobres), el toque se puede perder sin que
+; el script se entere, porque "el navbar ya esta" no es lo mismo que "ya se puede tocar de
+; verdad". Ahora el chequeo real es distinto: en cada vuelta busca DIRECTAMENTE el tile de
+; Friends (own_mainaccept_friends_icon, el mismo needle que necesita el paso siguiente) --
+; si ya esta visible, listo, lo toca y sigue. Si todavia no esta (ej. Main arranco en la
+; pestaña Home, que no tiene ese tile), busca el navbar (blanco o gris, own_mainmenu_navbar
+; / _activo) y toca el icono de Friends de la barra inferior (141,511) para acercarse, pero
+; NO da el paso por terminado todavia -- vuelve a revisar la vuelta siguiente si el tile ya
+; aparecio de verdad. Solo se marca exito cuando el tile se ve de verdad, nunca antes.
+esperarTileFriendsYTap(timeoutMs := 35000) {
+    global adbPath, puerto, g_winTitle
+    inicio := A_TickCount
+    Loop {
+        tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
+        AdbScreenshot(adbPath, puerto, tempFile)
+        if (FileExist(tempFile)) {
+            pBitmap := Gdip_CreateBitmapFromFile(tempFile)
+            FileDelete, %tempFile%
+            if (pBitmap) {
+                pTile := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_mainaccept_friends_icon.png")
                 vPos := ""
-                if (pNoReq && Gdip_ImageSearch(pBitmap, pNoReq, vPos, 0, 0, 0, 0, 30) = 1) {
+                if (pTile && Gdip_ImageSearch(pBitmap, pTile, vPos, 0, 0, 0, 0, 30) = 1) {
                     Gdip_DisposeImage(pBitmap)
-                    return true  ; ya son amigos (de un Retry anterior) -- no hay nada que aceptar
+                    tap(39, 463)
+                    return true
+                }
+                pNavbarActivo := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_mainmenu_navbar_activo.png")
+                vPos := ""
+                if (pNavbarActivo && Gdip_ImageSearch(pBitmap, pNavbarActivo, vPos, 0, 0, 0, 0, 30) = 1) {
+                    Gdip_DisposeImage(pBitmap)
+                    tap(141, 511)
+                    Sleep, 500
+                    continue
+                }
+                pNavbar := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_mainmenu_navbar.png")
+                vPos := ""
+                if (pNavbar && Gdip_ImageSearch(pBitmap, pNavbar, vPos, 0, 0, 0, 0, 30) = 1) {
+                    Gdip_DisposeImage(pBitmap)
+                    tap(141, 511)
+                    Sleep, 500
+                    continue
                 }
                 Gdip_DisposeImage(pBitmap)
             }
@@ -170,14 +266,7 @@ esperarAceptarOYaAmigos(timeoutMs := 15000) {
     }
 }
 
-; Timeout subido de 15s (default de la funcion) a 35s (2026-08-09, bug real reproducido en
-; vivo): Main SI estaba en el menu principal poco despues de que este paso fallara con
-; timeout -- solo tardo un poco mas en asentarse de lo que 15s le daba de margen. Mismo
-; criterio que el resto de la sesion: mas margen para pantallas que a veces tardan un poco
-; mas en renderizar, sin cambiar nada para quien ya la reconoce rapido (sigue apenas la ve).
-if (!esperarNeedleYTap("own_mainmenu_navbar", 30, 146, 504, 35000))
-    ExitConError("no_aparecio_menu_principal_paso1")
-if (!esperarNeedleYTap("own_mainaccept_friends_icon", 30, 39, 463))
+if (!esperarTileFriendsYTap())
     ExitConError("no_aparecio_pantalla_comunidad_paso2")
 if (!esperarNeedleYTap("own_mainaccept_tabbar_friends", 30, 230, 459))
     ExitConError("no_aparecio_pantalla_amigos_paso3")

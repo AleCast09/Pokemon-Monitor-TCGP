@@ -533,6 +533,32 @@ function leerJsonSeguro(ruta) {
     }
 }
 
+// Variante con limite de tiempo (2026-08-19, reportado en vivo): si el archivo esta en una
+// carpeta de Drive/OneDrive sincronizada en modo "solo en la nube" (sin descargar de verdad),
+// fs.readFileSync se queda esperando a que Windows lo baje de internet -- y como Node es de
+// un solo hilo, TODO el bot se congela mientras tanto, no solo el comando que la disparo. Un
+// amigo del usuario tuvo justo ese sintoma con /card (y el comando siguiente tambien se quedo
+// pensando). Esta version corre la lectura en un proceso aparte con limite de tiempo: si tarda
+// mas de timeoutMs se rinde y devuelve null -- mismo contrato que leerJsonSeguro (nunca tira,
+// los llamadores ya tratan null como "no se pudo cargar"), pero acotado en vez de indefinido.
+// Solo se usa para los archivos de ruta_master (cardmaster.json/en_US.json/cardmap.json), que
+// ademas quedan cacheados en memoria despues del primer exito -- no le agrega este costo extra
+// a rutas calientes como la lectura de JSON de cuentas (esos son locales, no de Drive).
+function leerJsonSeguroConTimeout(ruta, timeoutMs = 8000) {
+    try {
+        const salida = execFileSync(
+            process.execPath,
+            ['-e', 'process.stdout.write(require("fs").readFileSync(process.argv[1]))', ruta],
+            { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+        let contenido = salida.toString('utf8');
+        if (contenido.charCodeAt(0) === 0xFEFF) contenido = contenido.slice(1);
+        return JSON.parse(contenido);
+    } catch (e) {
+        return null;
+    }
+}
+
 function resolverArchivoWishlist(rutaWishlist) {
     if (!rutaWishlist || !fs.existsSync(rutaWishlist)) return null;
     if (fs.lstatSync(rutaWishlist).isDirectory()) {
@@ -574,15 +600,15 @@ function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
         : [];
 
     const rutaMaster = rutaMasterCfg?.webhook_url;
-    const cardmaster = rutaMaster ? leerJsonSeguro(path.join(rutaMaster, 'cardmaster.json')) : null;
-    const en_US = rutaMaster ? leerJsonSeguro(path.join(rutaMaster, 'en_US.json')) : null;
+    const cardmaster = rutaMaster ? leerJsonSeguroConTimeout(path.join(rutaMaster, 'cardmaster.json')) : null;
+    const en_US = rutaMaster ? leerJsonSeguroConTimeout(path.join(rutaMaster, 'en_US.json')) : null;
     const cardMap = rutaMaster ? cargarCardMap(rutaMaster) : null;
     const expansiones = construirMapaExpansiones(en_US);
 
     const cartas = ids.map(id => {
         const nameKey = cardmaster?.[id]?.Name;
         const nombre = normalizarNombreExBot((nameKey && en_US?.[nameKey]) ? en_US[nameKey] : id);
-        const expansionId = cardMap?.[id]?.ExpansionID;
+        const expansionId = expansionIdDeCarta(id, cardMap);
         const expansion = expansionId ? (expansiones[expansionId] || expansionId) : 'No expansion';
         const categoria = categoriaDesdeInfo(cardmaster?.[id]);
         const tipoRareza = tipoRarezaDesdeInfo(cardmaster?.[id]);
@@ -596,17 +622,17 @@ function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
 function obtenerTodasLasCartas(rutaMasterCfg) {
     const rutaMaster = rutaMasterCfg?.webhook_url;
     if (!rutaMaster) return null;
-    const cardmaster = leerJsonSeguro(path.join(rutaMaster, 'cardmaster.json'));
+    const cardmaster = leerJsonSeguroConTimeout(path.join(rutaMaster, 'cardmaster.json'));
     if (!cardmaster) return null;
 
-    const en_US = leerJsonSeguro(path.join(rutaMaster, 'en_US.json'));
+    const en_US = leerJsonSeguroConTimeout(path.join(rutaMaster, 'en_US.json'));
     const cardMap = cargarCardMap(rutaMaster);
     const expansiones = construirMapaExpansiones(en_US);
 
     const cartas = Object.keys(cardmaster).map(id => {
         const info = cardmaster[id];
         const nombre = normalizarNombreExBot((info?.Name && en_US?.[info.Name]) ? en_US[info.Name] : id);
-        const expansionId = cardMap?.[id]?.ExpansionID;
+        const expansionId = expansionIdDeCarta(id, cardMap);
         const expansion = expansionId ? (expansiones[expansionId] || expansionId) : 'No expansion';
         const categoria = categoriaDesdeInfo(info);
         const tipoRareza = tipoRarezaDesdeInfo(info);
@@ -1115,10 +1141,87 @@ function cargarCardMap(rutaMaster) {
         path.join(rutaMaster, 'CardImageCache', 'cardmap.json')
     ];
     for (const candidato of candidatos) {
-        const data = leerJsonSeguro(candidato);
+        const data = leerJsonSeguroConTimeout(candidato);
         if (data) return data;
     }
     return null;
+}
+
+// cardmap.json (dato externo, no lo genera este proyecto -- varia segun la
+// carpeta "ruta_master" de cada usuario, asi que esto NUNCA se corrige
+// editando esos archivos) solo permite UNA expansion por id de carta. Cuando
+// "Deluxe Pack: ex" reimprime una carta que originalmente era de Genetic
+// Apex, le pisa la expansion en vez de sumarla, asi que esa carta deja de
+// aparecer al buscar/filtrar por Genetic Apex (bug reportado 2026-08-17, ej.
+// Bulbasaur y Exeggcute). Confirmado cruzando el checklist oficial de las 226
+// cartas de Genetic Apex contra cardmap.json: estos 51 ids (el print de
+// menor numero de coleccion dentro de Deluxe Pack, por nombre+rareza) son los
+// que quedaron sin ningun registro en A1 para esa rareza especifica -- ojo,
+// algunas especies (Bulbasaur, Charmander, etc.) SI tenian algun otro print
+// en A1 (la version AR especial), pero la version comun seguia robada, por
+// eso hace falta comparar por rareza y no solo "existe algun A1". Solo
+// corrige la expansion mostrada/usada para buscar -- NO se usa para resolver
+// imagenes (esas siguen usando el ExpansionID/CollectionNumber reales, que es
+// donde el arte existe de verdad).
+const OVERRIDES_EXPANSION_A1 = {
+    'PK_10_000010_00': 'A1', // Bulbasaur
+    'PK_10_000020_00': 'A1', // Ivysaur
+    'PK_10_000040_00': 'A1', // Venusaur ex
+    'PK_10_005220_00': 'A1', // Kakuna
+    'PK_10_000210_00': 'A1', // Exeggcute
+    'PK_10_000230_00': 'A1', // Exeggutor ex
+    'PK_10_000330_00': 'A1', // Charmander
+    'PK_10_000340_00': 'A1', // Charmeleon
+    'PK_10_000360_00': 'A1', // Charizard ex
+    'PK_10_000390_00': 'A1', // Growlithe
+    'PK_10_000410_00': 'A1', // Arcanine ex
+    'PK_10_000470_00': 'A1', // Moltres ex
+    'PK_10_000530_00': 'A1', // Squirtle
+    'PK_10_000540_00': 'A1', // Wartortle
+    'PK_10_000560_00': 'A1', // Blastoise ex
+    'PK_10_000740_00': 'A1', // Staryu
+    'PK_10_000760_00': 'A1', // Starmie ex
+    'PK_10_000840_00': 'A1', // Articuno ex
+    'PK_10_000870_00': 'A1', // Froakie
+    'PK_10_000880_00': 'A1', // Frogadier
+    'PK_10_000890_00': 'A1', // Greninja
+    'PK_10_000940_00': 'A1', // Pikachu
+    'PK_10_000960_00': 'A1', // Pikachu ex
+    'PK_10_000970_00': 'A1', // Magnemite
+    'PK_10_000980_00': 'A1', // Magneton
+    'PK_10_001040_00': 'A1', // Zapdos ex
+    'PK_10_001200_00': 'A1', // Gastly
+    'PK_10_001210_00': 'A1', // Haunter
+    'PK_10_001230_00': 'A1', // Gengar ex
+    'PK_10_001270_00': 'A1', // Jynx
+    'PK_10_001290_00': 'A1', // Mewtwo ex
+    'PK_10_003500_00': 'A1', // Kirlia
+    'PK_10_001320_00': 'A1', // Gardevoir
+    'PK_10_001430_00': 'A1', // Machop
+    'PK_10_001440_00': 'A1', // Machoke
+    'PK_10_001460_00': 'A1', // Machamp ex
+    'PK_10_001510_00': 'A1', // Cubone
+    'PK_10_001530_00': 'A1', // Marowak ex
+    'PK_10_004730_00': 'A1', // Golbat
+    'PK_10_008440_00': 'A1', // Dragonair
+    'PK_10_001930_00': 'A1', // Jigglypuff
+    'PK_10_001950_00': 'A1', // Wigglytuff ex
+    'PK_10_001980_00': 'A1', // Farfetch'd
+    'PK_10_004050_00': 'A1', // Lickitung
+    'TR_10_000100_00': 'A1', // Old Amber
+    'TR_10_000110_00': 'A1', // Erika
+    'TR_10_000150_00': 'A1', // Giovanni
+    'TR_10_000170_00': 'A1', // Sabrina
+    'PK_20_000890_01': 'A1', // Greninja (AR)
+    'PK_20_001320_01': 'A1', // Gardevoir (AR)
+    'PK_20_001980_01': 'A1', // Farfetch'd (AR)
+};
+
+// Igual que leer cardMap[cartaId]?.ExpansionID pero aplicando las correcciones
+// de arriba -- usar esta funcion (no el acceso directo) en todo lo que decida
+// bajo que expansion se MUESTRA/BUSCA una carta.
+function expansionIdDeCarta(cartaId, cardMap) {
+    return OVERRIDES_EXPANSION_A1[cartaId] || cardMap?.[cartaId]?.ExpansionID;
 }
 
 function construirMapaExpansiones(en_US) {
@@ -1720,13 +1823,13 @@ function categoriaFormateadaDesdeInfo(info, mapaEmojis) {
 
 function resolverCategoriaCarta(cartaId, rutaMasterPath) {
     if (!rutaMasterPath) return 'Unknown';
-    const cardmaster = leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json'));
+    const cardmaster = leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json'));
     return categoriaDesdeInfo(cardmaster?.[cartaId]);
 }
 
 function resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis) {
     if (!rutaMasterPath) return 'Unknown';
-    const cardmaster = leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json'));
+    const cardmaster = leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json'));
     return categoriaFormateadaDesdeInfo(cardmaster?.[cartaId], mapaEmojis);
 }
 
@@ -1739,17 +1842,18 @@ function resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis) {
 const EMOJI_POR_TRAINER_TYPE = { 1: 'card_supporter', 2: 'card_item', 3: 'card_tool' };
 function trainerTypeDesdeId(cartaId, rutaMasterPath) {
     if (!rutaMasterPath) return undefined;
-    const cardmaster = leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json'));
+    const cardmaster = leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json'));
     return cardmaster?.[cartaId]?.TrainerType;
 }
 
 async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volver = null, guild = null, datosGold = null) {
     const mapaEmojis = await obtenerMapaEmojisGuild(guild);
     const cardMap = cargarCardMap(rutaMasterPath);
-    const en_US = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json')) : null;
+    const en_US = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'en_US.json')) : null;
     const info = cardMap?.[cartaId];
     const expansiones = construirMapaExpansiones(en_US);
-    const expansionNombre = info?.ExpansionID ? (expansiones[info.ExpansionID] || info.ExpansionID) : 'Unknown';
+    const expansionIdCarta = expansionIdDeCarta(cartaId, cardMap);
+    const expansionNombre = expansionIdCarta ? (expansiones[expansionIdCarta] || expansionIdCarta) : 'Unknown';
     const categoria = resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis);
     // datosGold (solo lo pasa /goldcards) -- usa la imagen con borde dorado si
     // existe para esa carta. Si NO existe, se marca sinBordeGold y se cae a la
@@ -1953,6 +2057,39 @@ function lanzarInstanciaMuMu(index) {
     const managerPath = rutaMuMuManager();
     if (!managerPath) return false;
     try {
+        // Asegura "root_permission" ANTES de prender (2026-08-19, bug real reportado en
+        // vivo): este toggle de MuMu a veces se desactiva solo al reiniciar la PC -- sin el,
+        // _InjectAccount.ahk (de Kevin) falla en su primer paso ("am force-stop") porque
+        // adb root no tiene efecto real. Se fuerza a "true" en cada arranque para no
+        // depender de activarlo a mano cada vez. Si el comando falla (version vieja de
+        // MuMuManager sin esta clave, etc.) no corta el arranque -- sigue igual que antes.
+        try {
+            execFileSync(managerPath, ['setting', '-v', String(index), '-k', 'root_permission', '-val', 'true'], { windowsHide: true });
+        } catch (e) {
+            console.error(`DEBUG: no se pudo asegurar root_permission para la instancia ${index}:`, e?.stderr?.toString() || e?.message || e);
+        }
+        // Lanzamiento directo del ejecutable (2026-08-19, a pedido explicito del usuario):
+        // se investigo la herramienta de Kevin (PTCGPB.ahk/Utils.ahk, confirmado corriendo
+        // 11-15 instancias sin colgarse en esta misma PC, contra nuestros timeouts/cuelgues
+        // repetidos hoy con solo 2) -- su launchInstance() NUNCA usa "MuMuManager control
+        // launch" (comando de administracion remota). En cambio corre directo el ejecutable
+        // de la instancia (MuMuNxMain.exe / MuMuPlayer.exe, segun cual exista) con "-v
+        // {numero}" -- el mismo camino que usa un humano al hacer doble click en el icono de
+        // la instancia, mucho mas probado/estable que el RPC de MuMuManager. Se prueba este
+        // camino primero; si el ejecutable no aparece donde se espera, cae al comando de
+        // MuMuManager de siempre (mismo comportamiento que antes) en vez de fallar del todo.
+        try {
+            const folderPath = carpetaBaseMuMu();
+            let exeDirecto = folderPath ? path.join(folderPath, 'shell', 'MuMuPlayer.exe') : null;
+            if (exeDirecto && !fs.existsSync(exeDirecto)) exeDirecto = path.join(folderPath, 'nx_main', 'MuMuNxMain.exe');
+            if (exeDirecto && fs.existsSync(exeDirecto)) {
+                const proc = spawn(exeDirecto, ['-v', String(index)], { detached: true, stdio: 'ignore', windowsHide: false });
+                proc.unref();
+                return true;
+            }
+        } catch (e) {
+            console.error(`DEBUG: lanzamiento directo del ejecutable de MuMu fallo para la instancia ${index}, cae a MuMuManager:`, e?.message || e);
+        }
         // execFileSync con argumentos separados (no un string armado a mano) — un "index" con
         // espacios/&/| no puede inyectar nada porque nunca pasa por un shell (bug real de
         // seguridad encontrado en auditoria 2026-08-13: esto era un execSync con template
@@ -2021,6 +2158,24 @@ function apagarInstanciaMuMu(index) {
     } catch (e) {
         console.error(`DEBUG: MuMuManager rechazó "control shutdown -v ${index}":`, e?.stderr?.toString() || e?.message || e);
         return false;
+    }
+}
+
+// Apagado de fuerza bruta para Retry (2026-08-19, a pedido explicito del usuario: reportó
+// en vivo que una instancia "no abrió nada" tras un Retry normal -- "control shutdown" de
+// MuMuManager no siempre limpia el estado real, la instancia puede quedar en un limbo que
+// ni is_android_started detecta bien). Mata directo los procesos reales de MuMu Player.
+// OJO: MuMuNxMain.exe y MuMuVMMSVC.exe son compartidos por TODA la app (un solo proceso
+// para todas las instancias, no por-instancia) -- no hay forma de matar solo Main y la
+// donante a nivel de proceso, esto apaga TODAS las instancias que estén corriendo.
+const PROCESOS_MUMU = ['MuMuNxMain.exe', 'MuMuNxDevice.exe', 'MuMuVMMHeadless.exe', 'MuMuVMMSVC.exe'];
+function matarTodosLosProcesosMuMu() {
+    for (const proceso of PROCESOS_MUMU) {
+        try {
+            execFileSync('taskkill', ['/IM', proceso, '/F', '/T'], { windowsHide: true });
+        } catch (e) {
+            // Falla si el proceso ya no estaba corriendo -- no es un error real.
+        }
     }
 }
 
@@ -2891,10 +3046,32 @@ const RUTA_DONOR_RESPOND_SCRIPT = path.join(__dirname, 'automation', '_DonorResp
 const RUTA_MAIN_FINALIZE_SCRIPT = path.join(__dirname, 'automation', '_MainFinalizeAndCleanup.ahk');
 // Remapeados 2026-08-03/04 (coordenadas viejas rotas tras el update del juego, mismo
 // motivo por el que Trade estuvo deshabilitado) -- reemplazan a los 4 de arriba.
+// Reemplaza la inyeccion headless de Kevin SOLO para Main Trade (2026-08-19, a pedido
+// explicito del usuario, tras comparar en vivo ambos bots lado a lado -- ver comentario
+// completo en el header de _InjectAccountFast.ahk): usa una sola conexion adb shell
+// persistente en vez de un proceso adb.exe nuevo por cada uno de los ~20 comandos de la
+// inyeccion, igual que hace el propio bot de Kevin (adbWriteRaw) en su motor principal.
+// Probado en vivo contra una instancia real: inyeccion completa en ~2s (antes tardaba
+// decenas de segundos y a veces se colgaba pasando el timeout externo de 90s).
+const RUTA_INJECT_ACCOUNT_FAST_SCRIPT = path.join(__dirname, 'automation', '_InjectAccountFast.ahk');
+// Acomoda las ventanas de Main + donante en pantalla al prenderlas (2026-08-19, a pedido
+// explicito del usuario, mismo criterio que el boton "Arrange" del bot de Kevin).
+const RUTA_ARRANGE_WINDOWS_SCRIPT = path.join(__dirname, 'automation', '_ArrangeWindows.ahk');
+// Detecta si Main ya tiene una oferta real pendiente esperando (2026-08-19, a pedido
+// explicito del usuario: si el juego se crasheo DESPUES de que la donante ya ofrecio su
+// carta, esa oferta sobrevive en el servidor -- no tiene sentido reiniciar TODO el
+// pipeline de cero). Ver header de _CheckPendingOffer.ahk.
+const RUTA_CHECK_PENDING_OFFER_SCRIPT = path.join(__dirname, 'automation', '_CheckPendingOffer.ahk');
 const RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT = path.join(__dirname, 'automation', '_MainAcceptFriendRequest.ahk');
 const RUTA_DONOR_OFFER_CARD_SCRIPT = path.join(__dirname, 'automation', '_DonorOfferCard.ahk');
 const RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT = path.join(__dirname, 'automation', '_MainAcceptTradeOffer.ahk');
 const RUTA_DONOR_RESPOND_FINALIZE_SCRIPT = path.join(__dirname, 'automation', '_DonorRespondAndFinalize.ahk');
+// Paso final de Main (2026-08-19, a pedido explicito del usuario, descubierto en vivo):
+// despues de que la donante finaliza, Main pasa a "Trade agreement reached" (no se queda
+// en "Waiting for a Response" como se penso al principio) -- toca "Trade" y desliza SU
+// PROPIA carta para completar el intercambio de su lado tambien. Sin este paso, la carta
+// de Main nunca se termina de enviar de verdad.
+const RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT = path.join(__dirname, 'automation', '_MainRefreshAfterTrade.ahk');
 
 function ejecutarPasoAhk(ahkExe, rutaScript, args, timeoutMs, outputFile) {
     return new Promise((resolve) => {
@@ -2965,7 +3142,8 @@ const ETIQUETAS_PASOS_MAIN_TRADE = {
     main_accept_friend_request: 'Main accepts friend request',
     donor_offer_card: 'Offer card to Main',
     main_accept_trade_offer: 'Main accepts the trade',
-    donor_respond_finalize: 'Finalize trade'
+    donor_respond_finalize: 'Finalize trade',
+    main_finalize_own_card: 'Main sends own card'
 };
 
 // onProgreso (2026-08-08, a pedido explicito del usuario: log en vivo con check/cruz por
@@ -2987,6 +3165,12 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         return await interaction.followUp({ content: '❌ Could not find an instance named exactly "Main". Main Trade needs your main account\'s MuMu instance to be named "Main".', ephemeral: true });
     }
 
+    // Vuelto a paralelo (2026-08-19, a pedido explicito del usuario): el reordenado
+    // secuencial de mas arriba (donante entera antes de tocar Main) se probo hoy mismo como
+    // workaround a los timeouts/cuelgues, pero se encontro la causa real -- lanzarInstanciaMuMu
+    // ahora arranca el ejecutable de MuMu directo (igual que la herramienta de Kevin) en vez
+    // de "MuMuManager control launch" (RPC menos confiable). Con eso arreglado, se vuelve a
+    // prender ambas instancias a la vez, como estaba antes de todo el debugging de hoy.
     const prendidaMain = await asegurarInstanciaEncendida(infoMain.index);
     const prendidaDonante = await asegurarInstanciaEncendida(index);
     if (!prendidaMain || !prendidaDonante) {
@@ -2995,52 +3179,59 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     }
     onProgreso({ paso: 'Turn on instances', estado: 'ok' });
 
+    // Acomoda las ventanas en pantalla (2026-08-19, a pedido explicito del usuario --
+    // "igual que el bot de Kevin, que acomoda las instancias en orden al prenderlas"):
+    // cosmetico/best-effort, no bloquea el pipeline si falla o si AutoHotkey no esta
+    // configurado -- por eso no se espera su resultado.
+    try {
+        const ahkExeArrange = rutaAutoHotkey();
+        if (ahkExeArrange) {
+            spawn(ahkExeArrange, [RUTA_ARRANGE_WINDOWS_SCRIPT, 'Main', nombre], { windowsHide: false, detached: true, stdio: 'ignore' }).unref();
+        }
+    } catch (e) {
+        console.error('DEBUG: no se pudo acomodar las ventanas de las instancias:', e?.message || e);
+    }
+
     try { await interaction.followUp({ content: `🔄 Running Main Trade (\`${fileName}\` → Main)... this may take several minutes and will close the current sessions on both instances.${avisoRamBajaMainTrade()}`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
     const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
     const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
     const tmp = () => path.join(os.tmpdir(), `mtrade_${index}_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`);
 
-    // Inyeccion de la donante: reemplaza _InjectXml.ahk (propio, ADB directo) por el
-    // MISMO mecanismo que ya usa Shinedust (2026-08-03, a pedido explicito del usuario) --
-    // _InjectAccount.ahk de Kevin via ejecutarInyeccionHeadless, probado extensamente hoy y
-    // mas confiable. sendFriendRequestAfterInject en '0' porque la solicitud de amistad la
-    // manda el paso 'send_friend_request' de mas abajo (script de Kevin aparte), no la
-    // inyeccion misma -- mandarla dos veces seria redundante.
+    // Inyeccion de la donante (2026-08-19, reemplaza el mecanismo anterior via .ini +
+    // _InjectAccount.ahk de Kevin): ahora usa _InjectAccountFast.ahk (propio, ver su
+    // header) -- misma cuenta/instancia pasadas directo por argumentos, sin .ini de por
+    // medio. sendFriendRequestAfterInject ya no aplica: este script nuevo NUNCA manda la
+    // solicitud de amistad el (siempre la manda por separado el paso 'send_friend_request'
+    // de mas abajo), asi que no hay nada que desactivar.
     async function ejecutarInjectDonante() {
-        const { rutaIni, rutaScript: rutaScriptInject } = await obtenerRutasInject(interaction.user.id);
-        try {
-            guardarXmlParaInyeccion(nombre, archivo, rutaIni);
-            actualizarIniInject({ sendFriendRequestAfterInject: '0' }, rutaIni);
-        } catch (e) {
-            return { ok: false, resultado: 'no_se_pudo_guardar_ini' };
-        }
-        return await new Promise((resolve) => {
-            ejecutarInyeccionHeadless((ok, detalle) => resolve({ ok, resultado: detalle }), rutaScriptInject);
-        });
+        const outputFileInject = tmp();
+        return await ejecutarPasoAhk(rutaAutoHotkey(), RUTA_INJECT_ACCOUNT_FAST_SCRIPT, [nombre, folderPath, archivo], 30 * 1000, outputFileInject);
     }
 
-    // Semi-paralelo (2026-08-05, a pedido explicito del usuario): el crash de la vez pasada
-    // resulto ser el "am start" DENTRO del welcome de la donante (interrumpia la carga real
-    // ya iniciada por el inject) -- confirmado en vivo esa noche al sacarlo del todo. Ahora
-    // _WaitWelcomeScreens.ahk (donante/Shinedust) YA NO abre el juego para nada; solo la
-    // copia dedicada _WaitWelcomeScreensMain.ahk lo hace (Main no tiene inject que se lo abra
-    // solo). Con eso resuelto, se corre en paralelo: welcome de Main (con su propio am-start)
-    // a la vez que el inject + welcome de la donante -- recien cuando AMBOS terminan sigue el
-    // resto del pipeline (send_friend_request en adelante).
-    //
-    // Se volvio a probar secuencial 2026-08-09 (bug real reproducido en vivo: las dos
-    // instancias terminaron cerradas en el escritorio de Android al mismo tiempo, con
-    // mecanismos de apertura DISTINTOS -- indicio de contencion de recursos de MuMu corriendo
-    // 2 instancias pesadas a la vez) pero a pedido explicito del usuario se vuelve a paralelo:
-    // en una PC con recursos de sobra (como la de Ale) no hay ningun problema, y hacerlo mas
-    // lento para TODOS penaliza a la mayoria por un problema que solo afecta a quien corre el
-    // bot en hardware limitado (ej. una laptop con poca RAM). OJO: el popup de error in-game
-    // (needle "own_ingame_error_popup", agregado hoy) SI se detecta y cierra solo, pero el
-    // caso mas grave -- el juego cerrandose del todo al escritorio de Android -- sigue sin
-    // deteccion/recuperacion automatica (a proposito: ver el historial de intentos previos
-    // 2026-08-03/2026-08-05 de reabrir con am start cuando no se reconoce nada, sacados las
-    // dos veces por sospecha de que empeoraban los crashes).
+    // Reporte de fallo compartido (2026-08-19): mismo patron usado por el loop de pasos de
+    // mas abajo, extraido a funcion para no repetirlo.
+    async function reportarFalloPaso(nombrePaso, resultado) {
+        onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[nombrePaso] || nombrePaso, estado: 'error', detalle: resultado });
+        const filaStop = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(`main_trade_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+        );
+        const mensaje = `❌ Main Trade failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.`;
+        try {
+            const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            if (canalRunInstance?.webhook_url) {
+                await axios.post(`${canalRunInstance.webhook_url}?wait=true`, { content: mensaje, components: [filaStop.toJSON()] }, { timeout: 10000 });
+                return await interaction.followUp({ content: '⚠️ Error notice sent to your Trading channel.', ephemeral: true });
+            }
+        } catch (e) {
+            console.error('DEBUG: error mandando el resultado de Main Trade al canal de trading:', e?.response?.data || e?.message || e);
+        }
+        return await interaction.followUp({ content: mensaje, components: [filaStop] });
+    }
+
+    // Paralelo (welcome de Main a la vez que inject+welcome de la donante) -- ver comentario
+    // en "Turn on instances" de mas arriba sobre por que se volvio a este esquema.
     const promesaEsperaMain = new Promise((resolve) => ejecutarWaitWelcomeScreens(infoMain.name, (ok, detalle) => resolve({ ok, detalle }), RUTA_WAIT_WELCOME_SCREENS_MAIN_SCRIPT));
     const promesaPrepDonante = (async () => {
         const resInject = await ejecutarInjectDonante();
@@ -3063,7 +3254,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // solicitud, la donante ofrece la carta de la wishlist de Main
     // (_SendTradeCard.ahk, igual que en Friend Trade) ANTES de que Main
     // proponga la suya -- son dos ofertas de trade separadas, no una sola.
-    const pasos = [
+    let pasos = [
         { nombre: 'send_friend_request', script: RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, args: [nombre, folderPath, friendId], timeoutMs: 90 * 1000 },
         // Remapeados 2026-08-03/04 (coordenadas propias, ver header de cada script) --
         // reemplazan Main.ahk + _SendTradeCard.ahk + _MainProposeFavoriteCard.ahk +
@@ -3071,8 +3262,46 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         { nombre: 'main_accept_friend_request', script: RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, args: ['Main', folderPath], timeoutMs: 60 * 1000 },
         { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 },
         { nombre: 'main_accept_trade_offer', script: RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, args: ['Main', folderPath], timeoutMs: 2 * 60 * 1000 },
-        { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 }
+        { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 },
+        // Descubierto en vivo 2026-08-19: sin este paso, la carta de Main nunca se termina
+        // de mandar de verdad (se queda ofrecida pero sin el swipe final de su lado).
+        { nombre: 'main_finalize_own_card', script: RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT, args: ['Main', folderPath], timeoutMs: 60 * 1000 }
     ];
+
+    // REACTIVADO con needle nueva (2026-08-19, a pedido explicito del usuario): el banner
+    // verde matcheaba CUALQUIER oferta pendiente vieja sin relacion (bug real reproducido
+    // en vivo varias veces seguidas). Reemplazado por el badge rojo "sin leer" -- mucho mas
+    // especifico a la oferta de ESTE intento (una oferta vieja ya vista durante el dia ya
+    // no lo muestra). Ver _CheckPendingOffer.ahk para el detalle y la limitacion conocida.
+    const outputFileCheck = tmp();
+    const resultadoCheck = await ejecutarPasoAhk(ahkExe, RUTA_CHECK_PENDING_OFFER_SCRIPT, ['Main', folderPath], 15 * 1000, outputFileCheck);
+    if (resultadoCheck.ok) {
+        onProgreso({ paso: 'Detected pending offer', estado: 'ok', detalle: 'saltando send_friend_request/main_accept_friend_request/donor_offer_card' });
+        pasos = pasos.filter(p => p.nombre === 'main_accept_trade_offer' || p.nombre === 'donor_respond_finalize' || p.nombre === 'main_finalize_own_card');
+    }
+
+    // Mensaje combinado reusable (2026-08-18, a pedido explicito del usuario, ejemplo
+    // mostrado en vivo): mismo embed de datos de carta que ya usa /card
+    // (Expansion/Name/Element/Category/ID + logo PTCGP), pero con una foto REAL del trade
+    // como imagen grande en vez del arte generico de la carta. Se usa en varios pasos del
+    // pipeline (donor_offer_card, donor_respond_finalize x2) con distintas fotos y textos.
+    const mandarFotoTradeAlCanal = async (rutaFoto, mensajeTexto) => {
+        if (!fs.existsSync(rutaFoto)) return;
+        try {
+            const canalTradePhoto = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            if (!canalTradePhoto?.webhook_url) return;
+            const payloadCarta = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild);
+            const embedCarta = payloadCarta.embeds[0].setImage('attachment://trade_photo.png');
+            const formFoto = new FormData();
+            formFoto.append('payload_json', JSON.stringify({ content: mensajeTexto, embeds: [embedCarta.toJSON()] }));
+            formFoto.append('files[0]', fs.readFileSync(rutaFoto), { filename: 'trade_photo.png' });
+            const archivoSymbol = (payloadCarta.files || []).find(f => f.name === 'symbol.png');
+            if (archivoSymbol) formFoto.append('files[1]', archivoSymbol.attachment, { filename: 'symbol.png' });
+            await axios.post(`${canalTradePhoto.webhook_url}?wait=true`, formFoto, { headers: formFoto.getHeaders(), timeout: 15000 });
+        } catch (e) {
+            console.error('DEBUG: error mandando la foto del trade al canal de Trading:', e?.response?.data || e?.message || e);
+        }
+    };
 
     for (const paso of pasos) {
         const outputFilePaso = tmp();
@@ -3080,31 +3309,38 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             ? await paso.promesa()
             : await ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, outputFilePaso);
         if (!ok) {
-            onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'error', detalle: resultado });
-            const filaStop = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger),
-                new ButtonBuilder().setCustomId(`main_trade_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
-            );
-            const mensaje = `❌ Main Trade failed at step **${paso.nombre}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.`;
-            try {
-                const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
-                if (canalRunInstance?.webhook_url) {
-                    await axios.post(`${canalRunInstance.webhook_url}?wait=true`, { content: mensaje, components: [filaStop.toJSON()] }, { timeout: 10000 });
-                    return await interaction.followUp({ content: '✅ Result sent to your Trading channel.', ephemeral: true });
-                }
-            } catch (e) {
-                console.error('DEBUG: error mandando el resultado de Main Trade al canal de trading:', e?.response?.data || e?.message || e);
-            }
-            return await interaction.followUp({ content: mensaje, components: [filaStop] });
+            return await reportarFalloPaso(paso.nombre, resultado);
         }
         onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok' });
-        // Foto real del trade (2026-08-09, a pedido explicito del usuario: "antes de hacer el
-        // swipe" que manda la carta) -- _DonorRespondAndFinalize.ahk guarda una captura al
-        // lado de su propio outputFile (mismo nombre, extension _TradePhoto.png) justo antes
-        // de ese swipe -- si esta ahi, se avisa la ruta para que el panel web la muestre.
+        // Fotos reales del trade en distintos puntos del pipeline (2026-08-09/18, a pedido
+        // explicito del usuario) -- cada script guarda su propia captura al lado de su
+        // outputFile (mismo nombre, extension distinta por foto), justo antes del tap/swipe
+        // que avanza la pantalla, para que quede la evidencia real de que paso en cada paso.
+        if (paso.nombre === 'donor_offer_card') {
+            // _DonorOfferCard.ahk guarda la captura de "You have offered the card..." justo
+            // antes de tocar para cerrar -- momento en que la donante ofrece la carta de verdad.
+            const rutaFotoOferta = outputFilePaso.replace(/\.txt$/, '_OfferPhoto.png');
+            await mandarFotoTradeAlCanal(rutaFotoOferta, `<@${interaction.user.id}> La donante ofreció la carta!\n\nCarta ofrecida: **${nombreCarta}** → Main`);
+        }
         if (paso.nombre === 'donor_respond_finalize') {
+            // _DonorRespondAndFinalize.ahk guarda 2 capturas: una en "Trade for This Card?"
+            // (las 2 cartas juntas) y otra en "Swipe the card..." (la carta sola, justo antes
+            // del swipe que la manda de verdad) -- si esta ahi, se avisa la ruta para que el
+            // panel web la muestre tambien.
             const rutaFotoTrade = outputFilePaso.replace(/\.txt$/, '_TradePhoto.png');
             if (fs.existsSync(rutaFotoTrade)) onProgreso({ paso: 'Trade photo', estado: 'ok', fotoPath: rutaFotoTrade });
+            await mandarFotoTradeAlCanal(rutaFotoTrade, `<@${interaction.user.id}> Tradeo en curso!\n\nCarta enviada: **${nombreCarta}** → Ale Cast`);
+
+            const rutaFotoSwipe = outputFilePaso.replace(/\.txt$/, '_SwipePhoto.png');
+            await mandarFotoTradeAlCanal(rutaFotoSwipe, `Carta enviada exitosamente al usuario <@${interaction.user.id}> (${interaction.user.username})\n\n**${nombreCarta}**`);
+        }
+        if (paso.nombre === 'main_finalize_own_card') {
+            // Foto de la carta de Main justo antes de su propio swipe (2026-08-19, a pedido
+            // explicito del usuario) -- no se conoce el nombre de esta carta (se elige a
+            // ciegas por "mas cantidad primero"), asi que el mensaje no la nombra.
+            const rutaFotoMainSwipe = outputFilePaso.replace(/\.txt$/, '_MainSwipePhoto.png');
+            if (fs.existsSync(rutaFotoMainSwipe)) onProgreso({ paso: 'Main swipe photo', estado: 'ok', fotoPath: rutaFotoMainSwipe });
+            await mandarFotoTradeAlCanal(rutaFotoMainSwipe, `<@${interaction.user.id}> Main mandó su carta — el trade está completo de los dos lados.`);
         }
     }
 
@@ -3414,14 +3650,14 @@ async function generarInfoAccountsPDF(rutaMasterPath, archivoJson, escalaRender 
     }
 
     const cardMap = cargarCardMap(rutaMasterPath);
-    const en_US = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json')) : null;
-    const cardmaster = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json')) : null;
+    const en_US = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'en_US.json')) : null;
+    const cardmaster = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json')) : null;
     const expansiones = construirMapaExpansiones(en_US);
 
     const porExpansion = {};
     for (const [code, cantidad] of Object.entries(conteoPorCodigo)) {
         const infoMapa = cardMap?.[code];
-        const expansionId = infoMapa?.ExpansionID;
+        const expansionId = expansionIdDeCarta(code, cardMap);
         const nombreExpansion = expansionId ? (expansiones[expansionId] || expansionId) : 'Unknown';
         const infoMaster = cardmaster?.[code];
         const nombreCarta = (infoMaster?.Name && en_US?.[infoMaster.Name]) || infoMaster?.Name || code;
@@ -3837,12 +4073,12 @@ dashboardApp.get('/account/:token', async (req, res) => {
             }
         } else {
             const cardMap = cargarCardMap(rutaMasterPath);
-            const en_US = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json')) : null;
-            const cardmaster = rutaMasterPath ? leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json')) : null;
+            const en_US = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'en_US.json')) : null;
+            const cardmaster = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json')) : null;
             const expansiones = construirMapaExpansiones(en_US);
             for (const [code, cantidad] of Object.entries(conteoPorCodigo)) {
                 const infoMapa = cardMap?.[code];
-                const expansionId = infoMapa?.ExpansionID;
+                const expansionId = expansionIdDeCarta(code, cardMap);
                 const nombreExpansion = expansionId ? (expansiones[expansionId] || expansionId) : 'Unknown';
                 const infoMaster = cardmaster?.[code];
                 const nombreCarta = (infoMaster?.Name && en_US?.[infoMaster.Name]) || infoMaster?.Name || code;
@@ -5580,8 +5816,8 @@ function construirSelectXmlPaginado(fileNames, cartaId, pagina, prefix) {
 
 function resolverNombreCarta(cartaId, rutaMasterPath) {
     if (!rutaMasterPath) return cartaId;
-    const cardmaster = leerJsonSeguro(path.join(rutaMasterPath, 'cardmaster.json'));
-    const en_US = leerJsonSeguro(path.join(rutaMasterPath, 'en_US.json'));
+    const cardmaster = leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json'));
+    const en_US = leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'en_US.json'));
     const nameKey = cardmaster?.[cartaId]?.Name;
     return (nameKey && en_US?.[nameKey]) ? en_US[nameKey] : cartaId;
 }
@@ -6303,7 +6539,7 @@ function construirCandidatosPreview(rutaMaster) {
         const rutaImagen = path.join(rutaMaster, 'CardImageCache', `${entry.IllustrationID}.png`);
         if (!fs.existsSync(rutaImagen)) continue;
 
-        const expansionId = cardmap[code]?.ExpansionID;
+        const expansionId = expansionIdDeCarta(code, cardmap);
         const nombreExpansion = expansionId ? nombresExpansion[expansionId] : null;
         if (!nombreExpansion) continue;
         if (!buscarLogoExpansionBot(nombreExpansion)) continue; // sin logo no sirve para la vista previa
@@ -7518,11 +7754,15 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.customId === 'modal_ruta_raiz') {
-            await interaction.deferReply({ ephemeral: true });
             const raiz = interaction.fields.getTextInputValue('input_ruta').trim();
 
+            // Sin deferReply todavia (2026-08-19): si el InjectAccount.ini falta, la
+            // respuesta a ESTA interaccion tiene que ser otro modal pidiendo el Friend ID
+            // -- eso solo se puede hacer como primera respuesta cruda, antes de cualquier
+            // defer/reply. El chequeo de carpeta + guardado en DB no necesitan responder
+            // nada todavia, asi que se hacen primero y se decide recien al final.
             if (!fs.existsSync(raiz)) {
-                return await interaction.editReply({ content: `❌ Folder \`${raiz}\` not found. Check that the path exists.` });
+                return await interaction.reply({ content: `❌ Folder \`${raiz}\` not found. Check that the path exists.`, ephemeral: true });
             }
 
             const derivadas = derivarRutasDesdeRaiz(raiz);
@@ -7547,9 +7787,59 @@ client.on('interactionCreate', async interaction => {
             // archivo real (estructura de carpetas distinta a la de Ale), la
             // unica forma de notarlo era esperar a que "Add Friend" fallara con
             // un error generico, sin ninguna pista de la ruta real usada.
-            const injectIniExiste = fs.existsSync(derivadas.injectIni) ? '' : ' ⚠️ **not found**';
+            // Creado automatico si falta, pidiendo el Friend ID primero (2026-08-19, a
+            // pedido explicito del usuario): antes solo se avisaba "not found" sin ninguna
+            // pista de que hacer al respecto. Ahora, si el archivo no existe en la ruta
+            // derivada, se pide el Friend ID de la cuenta (mismo modal/validacion que ya usa
+            // "Add Friend") ANTES de crearlo -- asi el .ini nuevo no queda vacio, ya viene
+            // con ese ID precargado en favoriteFriendIDs (mismo campo/mecanismo que usa
+            // agregarFriend en el resto del bot). El mensaje final de "Main Path saved" se
+            // manda recien al terminar el modal (ver modal_setup_friendid_for_ini).
+            if (!fs.existsSync(derivadas.injectIni)) {
+                const modalFriendParaIni = new ModalBuilder().setCustomId('modal_setup_friendid_for_ini').setTitle('Add your Friend ID')
+                    .addComponents(
+                        new ActionRowBuilder().addComponents(
+                            new TextInputBuilder().setCustomId('input_friend_nombre').setLabel('Account name (optional)').setStyle(TextInputStyle.Short).setRequired(false)
+                        ),
+                        new ActionRowBuilder().addComponents(
+                            new TextInputBuilder().setCustomId('input_friend_id').setLabel('Friend ID (16 digits)').setStyle(TextInputStyle.Short).setRequired(true).setMinLength(16).setMaxLength(16)
+                        )
+                    );
+                return await interaction.showModal(modalFriendParaIni);
+            }
+
+            await interaction.deferReply({ ephemeral: true });
             return await interaction.editReply({
-                content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\`\n📂 Main.ahk: \`${derivadas.mainAhk}\`\n📂 InjectAccount.ini: \`${derivadas.injectIni}\`${injectIniExiste}`
+                content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\`\n📂 Main.ahk: \`${derivadas.mainAhk}\`\n📂 InjectAccount.ini: \`${derivadas.injectIni}\``
+            });
+        }
+
+        if (interaction.customId === 'modal_setup_friendid_for_ini') {
+            const friendLabel = interaction.fields.getTextInputValue('input_friend_nombre').trim();
+            const friendId = interaction.fields.getTextInputValue('input_friend_id').trim();
+
+            if (!/^\d{16}$/.test(friendId)) {
+                return await interaction.reply({ content: '❌ The Friend ID must be exactly 16 numeric digits.', ephemeral: true });
+            }
+
+            await interaction.deferReply({ ephemeral: true });
+            const filaRaiz = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = 'ruta_raiz'`, [interaction.user.id]);
+            if (!filaRaiz?.webhook_url) {
+                return await interaction.editReply({ content: '❌ Could not find the saved Main Path. Run /setup again from the start.' });
+            }
+            const raiz = filaRaiz.webhook_url;
+            const derivadas = derivarRutasDesdeRaiz(raiz);
+
+            try {
+                crearIniInjectSiNoExiste(derivadas.injectIni);
+                agregarFriend(friendLabel, friendId, derivadas.injectIni);
+            } catch (e) {
+                console.error('DEBUG: no se pudo crear/precargar InjectAccount.ini durante /setup:', e?.message || e);
+                return await interaction.editReply({ content: '❌ Could not create InjectAccount.ini automatically. Check the folder permissions and try /setup again.' });
+            }
+
+            return await interaction.editReply({
+                content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\`\n📂 Main.ahk: \`${derivadas.mainAhk}\`\n📂 InjectAccount.ini: \`${derivadas.injectIni}\` ✨ **created automatically** (Friend ID ${friendId} saved)`
             });
         }
 
@@ -8040,10 +8330,12 @@ client.on('interactionCreate', async interaction => {
         if (!infoMain) {
             return await interaction.followUp({ content: '❌ Could not find an instance named exactly "Main".', ephemeral: true });
         }
-        // Apagado forzado real (no solo "asegurar prendida"): un Retry implica que algo
-        // quedo colgado -- la instancia puede seguir reportando Android como "prendido"
-        // aunque el juego este trabado adentro, asi que hay que reiniciarla de verdad
-        // antes de intentar de nuevo, no solo confiar en que ya esta encendida.
+        // Vuelto al shutdown suave (2026-08-19, a pedido explicito del usuario): el matado
+        // de fuerza bruta de TODOS los procesos de MuMu era un workaround para cuando
+        // "MuMuManager control launch" dejaba instancias en un limbo -- con el lanzamiento
+        // directo del ejecutable (ver lanzarInstanciaMuMu, mismo mecanismo que el bot de
+        // Kevin) ya no hace falta esa brocha gorda, que ademas apaga TODAS las instancias
+        // de la app (no solo Main y la donante).
         await Promise.all([asegurarInstanciaApagada(infoMain.index), asegurarInstanciaApagada(index)]);
         return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre });
     }

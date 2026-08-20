@@ -185,17 +185,16 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
             ; Popup generico "Error / Error code: XXX-XXX-XXXXX / An error has occurred" --
             ; reportado en vivo 2026-08-09 en la instancia Main, aparece cuando el juego tarda
             ; en cargar (conexion lenta del lado del usuario, no un bug de la automatizacion).
-            ; Needle recorta SOLO el titulo "Error" (el codigo de abajo puede variar entre
-            ; errores distintos).
+            ; Needle recortada de nuevo 2026-08-19 (a pedido explicito del usuario, sin
+            ; ninguna letra -- antes recortaba el titulo "Error" en texto, no funcionaba en
+            ; otros idiomas): ahora es solo la esquina redondeada del cartel oscuro
+            ; (forma+color, no texto).
             ;
-            ; A proposito NO se toca "To Title Screen" para intentar recuperarse solo en el
-            ; mismo intento (a pedido explicito del usuario, 2026-08-09): confiar en que el
-            ; MISMO proceso ya degradado se termine de cargar bien es un 50/50 -- reiniciar
-            ; TODO el flujo de cero da mucha mas confianza de que la segunda vez cargue bien.
-            ; Se corta con error claro -- el caller ya tiene su propio boton de Retry.
-            logDebugBienvenida("intento " . intento . " -- needle 'own_ingame_error_popup' -> corta con error, mejor reiniciar todo el flujo")
-            Gdip_DisposeImage(pHaystack)
-            ExitConError("popup_error_juego")
+            ; CAMBIO DE CRITERIO 2026-08-19 (a pedido explicito del usuario, reemplaza la
+            ; decision de 2026-08-09 de cortar sin tocar nada): ahora SI se toca "Retry" en el
+            ; centro del boton, para intentar recuperarse solo en el mismo intento.
+            logDebugBienvenida("intento " . intento . " -- needle 'own_ingame_error_popup' -> tap Retry (141,380)")
+            tap(141, 380)
         } else if (buscarNeedleEnCaptura(pHaystack, "own_gameclosed")) {
             logDebugBienvenida("intento " . intento . " -- needle 'own_gameclosed' -> tap OK (150,369)")
             tap(150, 369)

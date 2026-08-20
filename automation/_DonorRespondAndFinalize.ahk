@@ -101,6 +101,20 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
                     vPos := ""
                     encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
                 }
+                ; Chequeo de crash EN CADA poll (2026-08-19, bug real reproducido en vivo --
+                ; ver comentario completo en _MainAcceptTradeOffer.ahk, mismo fix aplicado a
+                ; los 4 scripts del pipeline): reusa la captura ya sacada, solo DETECTA y
+                ; corta con error claro -- no reintenta reabrir el juego aca a proposito.
+                if (!encontrado) {
+                    pCrash := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_tapstart_logo.png")
+                    if (pCrash) {
+                        vPosCrash := ""
+                        if (Gdip_ImageSearch(pBitmap, pCrash, vPosCrash, 0, 0, 0, 0, 75) = 1) {
+                            Gdip_DisposeImage(pBitmap)
+                            ExitConError("juego_crasheo_volvio_al_titulo")
+                        }
+                    }
+                }
                 Gdip_DisposeImage(pBitmap)
             }
         }
@@ -144,7 +158,22 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000) {
     }
 }
 
-if (!esperarNeedleYTap("own_donorfinalize_waiting_title", 30, 222, 373))
+; Navega a Social Hub -> Trade antes de esperar la pantalla (2026-08-19, bug real
+; reproducido en vivo): este script asumia que la donante YA estaba parada en la pantalla
+; de "esperando respuesta" (como la deja _DonorOfferCard.ahk en el flujo normal) -- pero si
+; el pipeline salto ese paso (oferta pendiente detectada desde antes, ver
+; _CheckPendingOffer.ahk) la donante puede estar en cualquier otra pantalla (ej. sobres).
+; Seguro tambien en el flujo normal: si ya esta en la pantalla de espera, re-entrar a Trade
+; muestra el mismo estado real (servidor, no una pantalla de una sola vez).
+tap(141, 511)
+tap(207, 402)
+
+; Needle y coordenada recalculadas 2026-08-19 (bug real en vivo, cuenta real): la needle
+; vieja (icono "?") ya no matcheaba esta pantalla, y su coordenada de tap tampoco caia
+; sobre el boton "View" real -- needle re-recortada del icono "?" fresco de esta pantalla
+; real, coordenada recalculada al centro real del boton View (140-400,708-772 en pixeles
+; reales de 540x960 -> aprox 141,416 en el sistema logico de este script).
+if (!esperarNeedleYTap("own_donorfinalize_waiting_title", 30, 141, 416))
     ExitConError("no_aparecio_waiting_response_paso1")
 
 ; Foto real del trade (2026-08-09, a pedido explicito del usuario -- corregida: se movio de
@@ -166,6 +195,11 @@ if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 199, 365))
 ; registre como swipe real y no como un tap.
 if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000))
     ExitConError("no_aparecio_instruccion_swipe_paso4")
+; Segunda foto de evidencia (2026-08-18, a pedido explicito del usuario): esta pantalla
+; ("Swipe the card to send it to your trade partner") muestra la carta sola, justo antes
+; de mandarla de verdad -- se guarda ANTES del swipe, mismo criterio que la foto del
+; paso 2 (nombre derivado del outputFile para que bot.js sepa donde buscarla).
+AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_SwipePhoto.png"))
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
 Sleep, 3000
 
