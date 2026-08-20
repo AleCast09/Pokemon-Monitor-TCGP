@@ -1,7 +1,9 @@
 {
-  "version": "1.5.52",
+  "version": "1.5.53",
   "notesCount": 2,
   "notes": [
+    "Fixed: the packaged .exe could report card data files as \"not found\" even with a correct path - a bug in the previous version's freeze-fix itself, only happening in the packaged version, now corrected.",
+    "Fixed: restarting the bot several times in a row while troubleshooting could create duplicate custom emojis and eventually use up the server's emoji slots - now double-checks right before creating each one.",
     "Fixed: if the card data folder was slow to respond (e.g. on a sleeping external/secondary drive), the whole bot could freeze indefinitely - now gives up after 8 seconds instead of hanging forever.",
     "Main Trade: fixed several steps that only worked on English-language accounts, and fixed the final confirmation step not always completing correctly.",
     "Security fix: the localhost-only gate on trade endpoints checked the client-supplied Host header, which can be spoofed - it didn't actually block remote trade requests over the public tunnel or same WiFi like it was supposed to. Now checks the real connection instead.",
