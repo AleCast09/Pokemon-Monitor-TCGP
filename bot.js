@@ -7040,21 +7040,26 @@ client.on('interactionCreate', async interaction => {
             return await interaction.reply({ content: `❌ This command only works in <#${rowCardAll.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply();
-        const expansionElegida = interaction.options.getString('expansion');
-        const rarezaElegida = interaction.options.getString('rarity');
-        const fuente = FUENTES_CARTAS.allcards;
-        const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
-        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-        // c.tipoRareza usa exactamente los mismos valores que las choices de
-        // "rarity" (ya lo confirma el filtro de autocompletado unas lineas
-        // arriba) -- se toma la categoria (etiqueta) de la primera carta que
-        // matchee esa rareza dentro de la expansion, en vez de mantener una
-        // tabla de conversion aparte.
-        const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
-        const payload = cartaConEsaRareza
-            ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
-            : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis });
-        await interaction.editReply(payload);
+        try {
+            const expansionElegida = interaction.options.getString('expansion');
+            const rarezaElegida = interaction.options.getString('rarity');
+            const fuente = FUENTES_CARTAS.allcards;
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            // c.tipoRareza usa exactamente los mismos valores que las choices de
+            // "rarity" (ya lo confirma el filtro de autocompletado unas lineas
+            // arriba) -- se toma la categoria (etiqueta) de la primera carta que
+            // matchee esa rareza dentro de la expansion, en vez de mantener una
+            // tabla de conversion aparte.
+            const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
+            const payload = cartaConEsaRareza
+                ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
+                : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis });
+            await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando cartas por expansion/rareza:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this expansion. Try again.', embeds: [], components: [] });
+        }
         return;
     }
 
@@ -7074,11 +7079,20 @@ client.on('interactionCreate', async interaction => {
         // el historial, así que en otro dispositivo (el celular, por ejemplo)
         // nunca llega a aparecer, ni refrescando.
         await interaction.deferReply();
-        const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
-        const carta = (cartas || []).find(c => c.id === cartaId);
-        if (!carta) return await interaction.editReply({ content: '❌ Card not found.' });
-        const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
-        await interaction.editReply(payload);
+        try {
+            const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
+            const carta = (cartas || []).find(c => c.id === cartaId);
+            if (!carta) return await interaction.editReply({ content: '❌ Card not found.' });
+            const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
+            await interaction.editReply(payload);
+        } catch (error) {
+            // Red de seguridad (2026-08-20, bug real reportado: sin esto la interaccion se
+            // quedaba "pensando" para siempre sin ningun mensaje si algo fallaba al armar el
+            // embed de detalle -- por ejemplo, un error inesperado bajando la imagen de la
+            // carta desde el Drive HD recien configurado).
+            console.error('DEBUG: error mostrando el detalle de la carta:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this card. Try again.' });
+        }
         // El resultado de la búsqueda queda como mensaje público aparte (nunca se
         // toca). A pedido explicito del usuario 2026-07-29: una búsqueda directa
         // (con nombre/atajo) NUNCA debe reubicar el panel del comando, ni siquiera
@@ -7888,13 +7902,22 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_expansion_seleccion' || interaction.customId === 'allcards_expansion_seleccion' || interaction.customId === 'goldcards_expansion_seleccion')) {
         await interaction.deferUpdate();
-        const prefijo = prefijoDeCartas(interaction.customId);
-        const fuente = FUENTES_CARTAS[prefijo];
-        const expansionElegida = interaction.values[0];
-        const { cartas } = await fuente.obtenerCartas(interaction.user.id);
-        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-        const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo, contexto: fuente.contexto, mapaEmojis });
-        return await interaction.editReply(payload);
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const expansionElegida = interaction.values[0];
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo, contexto: fuente.contexto, mapaEmojis });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            // Red de seguridad (2026-08-20, bug real reportado: la interaccion se quedaba
+            // "pensando" para siempre sin ningun mensaje si algo fallaba aca -- este paso no
+            // tenia la misma proteccion que ya tiene el de "elegir categoria" un poco mas
+            // abajo, agregado antes para un bug parecido).
+            console.error('DEBUG: error mostrando categorías de la expansión:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this expansion. Try again.', embeds: [], components: [] });
+        }
     }
 
     if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_categoria_seleccion' || interaction.customId === 'allcards_categoria_seleccion' || interaction.customId === 'goldcards_categoria_seleccion')) {

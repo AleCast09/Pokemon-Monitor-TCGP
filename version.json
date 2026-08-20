@@ -1,7 +1,8 @@
 {
-  "version": "1.5.53",
-  "notesCount": 2,
+  "version": "1.5.54",
+  "notesCount": 1,
   "notes": [
+    "Fixed: choosing an expansion in All Cards/Wishlist/Gold Cards could leave the bot \"thinking\" forever with no error if something went wrong loading that expansion's categories - now shows an actual error message instead.",
     "Fixed: the packaged .exe could report card data files as \"not found\" even with a correct path - a bug in the previous version's freeze-fix itself, only happening in the packaged version, now corrected.",
     "Fixed: restarting the bot several times in a row while troubleshooting could create duplicate custom emojis and eventually use up the server's emoji slots - now double-checks right before creating each one.",
     "Fixed: if the card data folder was slow to respond (e.g. on a sleeping external/secondary drive), the whole bot could freeze indefinitely - now gives up after 8 seconds instead of hanging forever.",
