@@ -538,20 +538,60 @@ function leerJsonSeguro(ruta) {
 // fs.readFileSync se queda esperando a que Windows lo baje de internet -- y como Node es de
 // un solo hilo, TODO el bot se congela mientras tanto, no solo el comando que la disparo. Un
 // amigo del usuario tuvo justo ese sintoma con /card (y el comando siguiente tambien se quedo
-// pensando). Esta version corre la lectura en un proceso aparte con limite de tiempo: si tarda
+// pensando). Esta version corre la lectura en un Worker thread con limite de tiempo: si tarda
 // mas de timeoutMs se rinde y devuelve null -- mismo contrato que leerJsonSeguro (nunca tira,
 // los llamadores ya tratan null como "no se pudo cargar"), pero acotado en vez de indefinido.
 // Solo se usa para los archivos de ruta_master (cardmaster.json/en_US.json/cardmap.json), que
 // ademas quedan cacheados en memoria despues del primer exito -- no le agrega este costo extra
 // a rutas calientes como la lectura de JSON de cuentas (esos son locales, no de Drive).
+//
+// FIX real 2026-08-20 (bug propio encontrado en vivo probando la version empaquetada): la
+// primera version de esto usaba execFileSync(process.execPath, ['-e', ...]) para correr la
+// lectura en un proceso aparte -- funciona perfecto corriendo desde el codigo fuente (node.exe
+// real, PM2), pero en el .exe empaquetado (node:sea) process.execPath es el propio
+// MonitorPokemon.exe, que ignora "-e" y simplemente vuelve a arrancar el bot entero de nuevo
+// dentro del timeout, nunca imprime el archivo, y siempre devuelve null -- exactamente el
+// bug que le paso a un amigo del usuario ("cardmaster.json not found" incluso con la ruta y
+// el archivo bien puestos). worker_threads no tiene ese problema: un Worker corre mas
+// codigo del MISMO bundle en otro hilo, no un proceso ni ejecutable aparte, funciona igual
+// en los dos casos (verificado armando un .exe SEA de prueba). Se usa un SharedArrayBuffer +
+// Atomics.wait (no postMessage/'message' -- esos dependen del event loop, que esta pausado
+// mientras Atomics.wait bloquea este hilo) para que la espera siga siendo acotada y sincrona
+// desde el punto de vista de quien llama, sin tener que volver async toda la cadena de
+// funciones que ya la usan.
+const { Worker: WorkerJsonSeguro } = require('worker_threads');
 function leerJsonSeguroConTimeout(ruta, timeoutMs = 8000) {
     try {
-        const salida = execFileSync(
-            process.execPath,
-            ['-e', 'process.stdout.write(require("fs").readFileSync(process.argv[1]))', ruta],
-            { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }
+        const MAX_BYTES = 32 * 1024 * 1024; // 32MB, generoso para cardmaster.json/en_US.json/cardmap.json
+        const sab = new SharedArrayBuffer(8 + MAX_BYTES);
+        const header = new Int32Array(sab, 0, 2); // [0]=estado (0 pendiente/1 ok/2 no entro/3 error), [1]=largo en bytes
+        Atomics.store(header, 0, 0);
+
+        const worker = new WorkerJsonSeguro(
+            `const { workerData } = require('worker_threads');
+             const fs = require('fs');
+             const header = new Int32Array(workerData.sab, 0, 2);
+             const bytesView = new Uint8Array(workerData.sab, 8);
+             try {
+                 const buf = fs.readFileSync(workerData.ruta);
+                 const len = Math.min(buf.length, bytesView.length);
+                 bytesView.set(buf.subarray(0, len));
+                 Atomics.store(header, 1, len);
+                 Atomics.store(header, 0, buf.length > len ? 2 : 1);
+             } catch (e) {
+                 Atomics.store(header, 0, 3);
+             }
+             Atomics.notify(header, 0);`,
+            { eval: true, workerData: { sab, ruta } }
         );
-        let contenido = salida.toString('utf8');
+
+        Atomics.wait(header, 0, 0, timeoutMs);
+        const estado = Atomics.load(header, 0);
+        try { worker.terminate(); } catch (e) {}
+
+        if (estado !== 1) return null;
+        const len = Atomics.load(header, 1);
+        let contenido = Buffer.from(new Uint8Array(sab, 8, len)).toString('utf8');
         if (contenido.charCodeAt(0) === 0xFEFF) contenido = contenido.slice(1);
         return JSON.parse(contenido);
     } catch (e) {

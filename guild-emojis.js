@@ -150,13 +150,33 @@ function obtenerErroresEmojisGuild(guildId) {
 }
 
 async function construirMapaEmojisGuild(guild) {
-    const existentes = await guild.emojis.fetch();
+    let existentes = await guild.emojis.fetch();
     const mapa = {};
     const errores = {};
     for (const [nombre, rutaRelativa] of Object.entries(FUENTES_EMOJIS)) {
         const existente = existentes.find((e) => e.name === nombre);
         if (existente) {
             mapa[nombre] = existente.id;
+            continue;
+        }
+        // Reconfirmacion justo antes de crear (2026-08-20, bug real reportado: un usuario
+        // terminó con emojis DUPLICADOS, mismo nombre exacto -- Discord no rechaza nombres
+        // repetidos, asi que no hay red de seguridad del lado de ellos). La lista
+        // "existentes" de arriba es una foto de UNA sola vez al principio de esta funcion;
+        // si el usuario reinicio el bot varias veces seguidas mientras probaba (cada
+        // reinicio arranca esta funcion de cero, sin memoria de intentos anteriores) y
+        // Discord tardo un toque en reflejar una creacion muy reciente, dos corridas
+        // pueden creer -A LA VEZ- que a este emoji le falta crearse. Un refetch justo
+        // antes de cada creacion (no solo una vez al principio) angosta muchisimo esa
+        // ventana -- cuesta una llamada extra a la API solo cuando de verdad falta crear
+        // algo, no en el camino feliz donde ya esta todo creado.
+        try {
+            existentes = await guild.emojis.fetch();
+        } catch (e) {
+        }
+        const existenteFresco = existentes.find((e) => e.name === nombre);
+        if (existenteFresco) {
+            mapa[nombre] = existenteFresco.id;
             continue;
         }
         try {
