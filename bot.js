@@ -5747,6 +5747,21 @@ async function asegurarCloudflaredBot() {
     }
 }
 
+// Bug real encontrado en vivo 2026-08-20: entre varios reinicios seguidos del bot en una
+// misma noche, quedaron 2 cloudflared.exe huerfanos vivos -- uno de ellos, apuntando a un
+// puerto que despues paso a usar OTRO proceso (el bot de produccion en esta misma PC),
+// terminaba exponiendo por una URL publica vieja datos de un proceso completamente distinto
+// al que la genero. Se filtra por la ruta EXACTA de bin/cloudflared.exe de ESTA instalacion
+// (nunca toca un cloudflared de otra instalacion/otro programa en la misma PC) -- mismo
+// patron ya usado para AHK en matarInstanciasAhkPrevias.
+function matarCloudflaredPrevios(rutaCloudflared) {
+    try {
+        const rutaEscapada = rutaCloudflared.replace(/'/g, "''");
+        const script = `Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" | Where-Object { $_.ExecutablePath -eq '${rutaEscapada}' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`;
+        execSync(`powershell -NoProfile -Command "${script.replace(/"/g, '\\"')}"`, { windowsHide: true, timeout: 8000 });
+    } catch (e) { /* si no habia ninguno corriendo, o falla el chequeo, se sigue igual */ }
+}
+
 let DASHBOARD_PUBLIC_URL = null;
 async function iniciarTunelDashboard(puerto) {
     const resultado = await asegurarCloudflaredBot();
@@ -5754,6 +5769,7 @@ async function iniciarTunelDashboard(puerto) {
         console.log('DEBUG: cloudflared.exe no disponible -- Info Accounts solo estara disponible en la misma red.');
         return;
     }
+    matarCloudflaredPrevios(resultado.ruta);
     if (resultado.recienDescargado) {
         // Bug real 2026-08-01: ejecutar el .exe apenas se termina de escribir
         // puede fallar con "spawn EBUSY" (Windows/el antivirus lo tiene

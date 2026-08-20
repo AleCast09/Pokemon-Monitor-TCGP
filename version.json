@@ -1,7 +1,9 @@
 {
-  "version": "1.5.56",
-  "notesCount": 1,
+  "version": "1.5.58",
+  "notesCount": 2,
   "notes": [
+    "Fixed a real bug: after several restarts in one session, old cloudflared.exe tunnel processes for Info Accounts could pile up instead of closing - one was found still forwarding a public link to whatever now happens to be running on its old port, potentially a completely different, unrelated process. Now clears out any previous tunnel for this install before starting a new one.",
+    "Fixed: the Control Panel's \"Start\"/\"Restart\" silently refused to start the engine if port 3000 was already in use by anything (even a totally unrelated app, or a second copy on the same PC) - it now only checks whether THIS copy is already running, and lets the engine's existing auto-fallback (tries the next port, shows the real one to paste in P BOT) do its job like it's designed to.",
     "New: the Control Panel's \"Update available\" popup has a \"Download Manually\" button that opens the release page in your real browser - if the in-app download keeps failing on your network (both \"Download Now\" and the Discord \"Update now\" button use the same one), this gives a way out that doesn't depend on the app's own network access at all.",
     "Fixed the same \"thinking\" forever bug across the rest of All Cards/Wishlist/Gold Cards (picking a card, going back, paging, sending to Trading, extracting an account) - a full pass to make sure any unexpected error always shows a message instead of leaving the bot stuck.",
     "Fixed: choosing an expansion in All Cards/Wishlist/Gold Cards could leave the bot \"thinking\" forever with no error if something went wrong loading that expansion's categories - now shows an actual error message instead.",

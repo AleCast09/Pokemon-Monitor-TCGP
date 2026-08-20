@@ -197,8 +197,17 @@ public class ControlPanelForm : Form {
         return ProcesoVivo(pid);
     }
 
+    // Antes tambien miraba PuertoEnUso(3000) como señal de "ya esta corriendo" -- pensado
+    // para no chocar con una instancia de PM2 en una PC de desarrollo, pero el puerto 3000
+    // puede estar ocupado por CUALQUIER cosa (otra copia de Monitor Pokemon con un token
+    // distinto, otra app sin ninguna relacion) -- no hay forma de saber por que esta ocupado
+    // solo mirando el puerto. Bug real 2026-08-20: esto bloqueaba "Start" en silencio, sin
+    // ningun aviso, para cualquiera que tuviera otra cosa usando ese puerto. s4t.js ya sabe
+    // reintentar con el siguiente puerto libre solo (ver iniciarServidorS4T) y avisar cual usó
+    // realmente via "Ports in use.txt" (que este panel ya lee y muestra) -- no hace falta que
+    // el panel adivine de antemano, alcanza con saber si ESTA copia especifica ya esta viva.
     bool EstaCorriendo() {
-        return CorridoPorEstePanel() || PuertoEnUso(3000);
+        return CorridoPorEstePanel();
     }
 
     void IniciarBot() {
