@@ -1,7 +1,8 @@
 {
-  "version": "1.5.54",
+  "version": "1.5.55",
   "notesCount": 1,
   "notes": [
+    "Fixed the same \"thinking\" forever bug across the rest of All Cards/Wishlist/Gold Cards (picking a card, going back, paging, sending to Trading, extracting an account) - a full pass to make sure any unexpected error always shows a message instead of leaving the bot stuck.",
     "Fixed: choosing an expansion in All Cards/Wishlist/Gold Cards could leave the bot \"thinking\" forever with no error if something went wrong loading that expansion's categories - now shows an actual error message instead.",
     "Fixed: the packaged .exe could report card data files as \"not found\" even with a correct path - a bug in the previous version's freeze-fix itself, only happening in the packaged version, now corrected.",
     "Fixed: restarting the bot several times in a row while troubleshooting could create duplicate custom emojis and eventually use up the server's emoji slots - now double-checks right before creating each one.",

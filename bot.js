@@ -2491,10 +2491,16 @@ function parsearListaFriends(rutaIni = RUTA_INJECT_INI_DEFAULT) {
 // primer ack -- por eso el LLAMADOR tiene que hacer interaction.deferReply()
 // ANTES de invocar esta función (acá se usa editReply, nunca reply directo).
 async function reenviarCartaATrading(interaction, cartaId, datosGold, componentes) {
-    const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-    const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
-    const payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
-    payload.components = componentes;
+    let payload;
+    try {
+        const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+        const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+        payload = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
+        payload.components = componentes;
+    } catch (error) {
+        console.error('DEBUG: error armando la carta para trading:', error?.message || error);
+        return await interaction.editReply({ content: '❌ Could not build this card. Try again.' });
+    }
 
     const canalTrading = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
     if (!canalTrading?.webhook_url) {
@@ -7138,16 +7144,21 @@ client.on('interactionCreate', async interaction => {
         if (!GOOGLE_DRIVE_API_KEY_BOT) {
             return await interaction.editReply(advertenciaGoldSinApi());
         }
-        const expansionElegida = interaction.options.getString('expansion');
-        const rarezaElegida = interaction.options.getString('rarity');
-        const fuente = FUENTES_CARTAS.goldcards;
-        const { cartas, rutaMasterPath, mapaCopias } = await obtenerCartasGoldCacheadas(interaction.user.id);
-        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-        const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
-        const payload = cartaConEsaRareza
-            ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
-            : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis });
-        await interaction.editReply(payload);
+        try {
+            const expansionElegida = interaction.options.getString('expansion');
+            const rarezaElegida = interaction.options.getString('rarity');
+            const fuente = FUENTES_CARTAS.goldcards;
+            const { cartas, rutaMasterPath, mapaCopias } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
+            const payload = cartaConEsaRareza
+                ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
+                : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis });
+            await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando gold cards por expansion/rareza:', error?.message || error);
+            await interaction.editReply({ content: '❌ Could not show this expansion. Try again.', embeds: [], components: [] });
+        }
         return;
     }
 
@@ -7166,12 +7177,17 @@ client.on('interactionCreate', async interaction => {
         if (!GOOGLE_DRIVE_API_KEY_BOT) {
             return await interaction.editReply(advertenciaGoldSinApi());
         }
-        const { cartas, rutaMasterPath, mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
-        const carta = (cartas || []).find(c => c.id === cartaId);
-        if (!carta) return await interaction.editReply({ content: `❌ Card not found (or no account has ${umbral}+ copies of it yet).` });
-        const datosGold = { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral };
-        const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild, datosGold);
-        await interaction.editReply(payload);
+        try {
+            const { cartas, rutaMasterPath, mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const carta = (cartas || []).find(c => c.id === cartaId);
+            if (!carta) return await interaction.editReply({ content: `❌ Card not found (or no account has ${umbral}+ copies of it yet).` });
+            const datosGold = { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral };
+            const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild, datosGold);
+            await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando el detalle de la gold card:', error?.message || error);
+            await interaction.editReply({ content: '❌ Could not show this card. Try again.' });
+        }
         // Ver nota en el handler de card_all: una búsqueda directa nunca reubica el panel.
         return;
     }
@@ -7212,16 +7228,21 @@ client.on('interactionCreate', async interaction => {
             return await interaction.reply({ content: `❌ This command only works in <#${rowWishlist.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply();
-        const expansionElegida = interaction.options.getString('expansion');
-        const rarezaElegida = interaction.options.getString('rarity');
-        const fuente = FUENTES_CARTAS.wishlist;
-        const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas();
-        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-        const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
-        const payload = cartaConEsaRareza
-            ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
-            : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis });
-        await interaction.editReply(payload);
+        try {
+            const expansionElegida = interaction.options.getString('expansion');
+            const rarezaElegida = interaction.options.getString('rarity');
+            const fuente = FUENTES_CARTAS.wishlist;
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas();
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
+            const payload = cartaConEsaRareza
+                ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
+                : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis });
+            await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando wishlist por expansion/rareza:', error?.message || error);
+            await interaction.editReply({ content: '❌ Could not show this expansion. Try again.', embeds: [], components: [] });
+        }
         return;
     }
 
@@ -7239,11 +7260,16 @@ client.on('interactionCreate', async interaction => {
         // Pública (no ephemeral) por el mismo motivo que en /card: un ephemeral
         // no queda en el historial y no se ve en otro dispositivo.
         await interaction.deferReply();
-        const { cartas, rutaMasterPath } = await FUENTES_CARTAS.wishlist.obtenerCartas();
-        const carta = (cartas || []).find(c => c.id === cartaId);
-        if (!carta) return await interaction.editReply({ content: '❌ Card not found in your wishlist.' });
-        const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
-        await interaction.editReply(payload);
+        try {
+            const { cartas, rutaMasterPath } = await FUENTES_CARTAS.wishlist.obtenerCartas();
+            const carta = (cartas || []).find(c => c.id === cartaId);
+            if (!carta) return await interaction.editReply({ content: '❌ Card not found in your wishlist.' });
+            const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
+            await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando el detalle de la carta de wishlist:', error?.message || error);
+            await interaction.editReply({ content: '❌ Could not show this card. Try again.' });
+        }
         // Ver nota en el handler de card_all: una búsqueda directa nunca reubica el panel.
         return;
     }
@@ -7943,26 +7969,36 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isStringSelectMenu() && (interaction.customId.startsWith('wishlist_carta_seleccion::') || interaction.customId.startsWith('allcards_carta_seleccion::') || interaction.customId.startsWith('goldcards_carta_seleccion::'))) {
         await interaction.deferUpdate();
-        const prefijo = prefijoDeCartas(interaction.customId);
-        const fuente = FUENTES_CARTAS[prefijo];
-        const [, expansion, categoria, pagina] = interaction.customId.split('::');
-        const cartaId = interaction.values[0];
-        const { cartas, rutaMasterPath, mapaCopias, umbral } = await fuente.obtenerCartas(interaction.user.id);
-        const carta = (cartas || []).find(c => c.id === cartaId);
-        const datosGold = prefijo === 'goldcards' ? { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral } : null;
-        const payload = await construirEmbedDetalleCarta(cartaId, carta?.nombre || cartaId, rutaMasterPath, { prefijo, expansion, categoria, pagina }, interaction.guild, datosGold);
-        return await interaction.editReply(payload);
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const [, expansion, categoria, pagina] = interaction.customId.split('::');
+            const cartaId = interaction.values[0];
+            const { cartas, rutaMasterPath, mapaCopias, umbral } = await fuente.obtenerCartas(interaction.user.id);
+            const carta = (cartas || []).find(c => c.id === cartaId);
+            const datosGold = prefijo === 'goldcards' ? { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral } : null;
+            const payload = await construirEmbedDetalleCarta(cartaId, carta?.nombre || cartaId, rutaMasterPath, { prefijo, expansion, categoria, pagina }, interaction.guild, datosGold);
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando el detalle de la carta:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this card. Try again.', embeds: [], components: [] });
+        }
     }
 
     if (interaction.isButton() && (interaction.customId.startsWith('wishlist_volver_carta_lista::') || interaction.customId.startsWith('allcards_volver_carta_lista::') || interaction.customId.startsWith('goldcards_volver_carta_lista::'))) {
         await interaction.deferUpdate();
-        const prefijo = prefijoDeCartas(interaction.customId);
-        const fuente = FUENTES_CARTAS[prefijo];
-        const [, expansion, categoria, pagina] = interaction.customId.split('::');
-        const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
-        const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-        const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, parseInt(pagina, 10) || 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
-        return await interaction.editReply(payload);
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const [, expansion, categoria, pagina] = interaction.customId.split('::');
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, parseInt(pagina, 10) || 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error volviendo a la lista de cartas:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this list. Try again.', embeds: [], components: [] });
+        }
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'mumu_instancia_seleccion') {
@@ -8060,50 +8096,55 @@ client.on('interactionCreate', async interaction => {
         const fileName = interaction.values[0];
         await interaction.deferUpdate();
 
-        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
-        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
-        if (!archivo) {
-            return await interaction.editReply({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, components: [] });
-        }
-
-        const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-        const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
-        // Mismo criterio que shinedust_result_extract:: -- si esta cuenta ya
-        // califica Gold para esta carta, usar el embed/campo dorado.
-        const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
-        const cuentasGold = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : [];
-        const esCuentaGold = cuentasGold.some(r => r.fileName.replace(/\.xml$/i, '') === fileName);
-        const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
-        const payloadEmbed = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
-        payloadEmbed.components = [];
-
-        const archivos = [new AttachmentBuilder(archivo)];
-        const deviceAccount = extraerDeviceAccount(archivo);
-        if (deviceAccount) {
-            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-            const archivoJson = buscarArchivoJsonPorDeviceAccount(rutaJsonCfg?.webhook_url, deviceAccount);
-            if (archivoJson) archivos.push(new AttachmentBuilder(archivoJson));
-        }
-        const contenidoTexto = `<@${interaction.user.id}> Account \`${fileName}\` (\`${nombreCarta}\`). Database attached.`;
-        // Boton "Info Accounts" (a pedido explicito del usuario 2026-07-31):
-        // reenvia esta MISMA cuenta como un PDF con todas sus cartas agrupadas
-        // por expansion, en vez de solo el XML/JSON crudo.
-        const filaInfoAccounts = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`info_accounts::${fileName}`.slice(0, 100)).setLabel('📋 Info Accounts').setStyle(ButtonStyle.Secondary)
-        );
-
-        const canalExtract = await obtenerCanalComando(interaction.user.id, 'cmd_extract_xlm');
-        if (canalExtract?.webhook_url) {
-            try {
-                const webhookExtract = new WebhookClient({ url: canalExtract.webhook_url });
-                await webhookExtract.send({ content: contenidoTexto, embeds: payloadEmbed.embeds, files: payloadEmbed.files });
-                await webhookExtract.send({ files: archivos, components: [filaInfoAccounts] });
-                return await interaction.editReply({ content: '✅ Sent to your Extract XML channel.', embeds: [], components: [] });
-            } catch (e) {
-                console.error('DEBUG: error mandando extract xml desde card_extract_cuenta:', e?.message || e);
+        try {
+            const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+            const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+            if (!archivo) {
+                return await interaction.editReply({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, components: [] });
             }
+
+            const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+            const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+            // Mismo criterio que shinedust_result_extract:: -- si esta cuenta ya
+            // califica Gold para esta carta, usar el embed/campo dorado.
+            const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const cuentasGold = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : [];
+            const esCuentaGold = cuentasGold.some(r => r.fileName.replace(/\.xml$/i, '') === fileName);
+            const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
+            const payloadEmbed = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
+            payloadEmbed.components = [];
+
+            const archivos = [new AttachmentBuilder(archivo)];
+            const deviceAccount = extraerDeviceAccount(archivo);
+            if (deviceAccount) {
+                const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+                const archivoJson = buscarArchivoJsonPorDeviceAccount(rutaJsonCfg?.webhook_url, deviceAccount);
+                if (archivoJson) archivos.push(new AttachmentBuilder(archivoJson));
+            }
+            const contenidoTexto = `<@${interaction.user.id}> Account \`${fileName}\` (\`${nombreCarta}\`). Database attached.`;
+            // Boton "Info Accounts" (a pedido explicito del usuario 2026-07-31):
+            // reenvia esta MISMA cuenta como un PDF con todas sus cartas agrupadas
+            // por expansion, en vez de solo el XML/JSON crudo.
+            const filaInfoAccounts = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`info_accounts::${fileName}`.slice(0, 100)).setLabel('📋 Info Accounts').setStyle(ButtonStyle.Secondary)
+            );
+
+            const canalExtract = await obtenerCanalComando(interaction.user.id, 'cmd_extract_xlm');
+            if (canalExtract?.webhook_url) {
+                try {
+                    const webhookExtract = new WebhookClient({ url: canalExtract.webhook_url });
+                    await webhookExtract.send({ content: contenidoTexto, embeds: payloadEmbed.embeds, files: payloadEmbed.files });
+                    await webhookExtract.send({ files: archivos, components: [filaInfoAccounts] });
+                    return await interaction.editReply({ content: '✅ Sent to your Extract XML channel.', embeds: [], components: [] });
+                } catch (e) {
+                    console.error('DEBUG: error mandando extract xml desde card_extract_cuenta:', e?.message || e);
+                }
+            }
+            return await interaction.editReply({ ...payloadEmbed, content: contenidoTexto, files: [...(payloadEmbed.files || []), ...archivos], components: [filaInfoAccounts] });
+        } catch (error) {
+            console.error('DEBUG: error en card_extract_cuenta:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Something went wrong extracting this account. Try again.', embeds: [], components: [] });
         }
-        return await interaction.editReply({ ...payloadEmbed, content: contenidoTexto, files: [...(payloadEmbed.files || []), ...archivos], components: [filaInfoAccounts] });
     }
 
     if (interaction.isButton() && interaction.customId.startsWith('info_accounts::')) {
@@ -8762,27 +8803,37 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId.startsWith('wishlist_expansion_pagina_') || interaction.customId.startsWith('allcards_expansion_pagina_') || interaction.customId.startsWith('goldcards_expansion_pagina_')) {
             await interaction.deferUpdate();
-            const prefijo = prefijoDeCartas(interaction.customId);
-            const fuente = FUENTES_CARTAS[prefijo];
-            const resto = interaction.customId.replace(`${prefijo}_expansion_pagina_`, '');
-            const [paginaTexto, expansion, categoria] = resto.split('::');
-            const pagina = parseInt(paginaTexto, 10) || 0;
+            try {
+                const prefijo = prefijoDeCartas(interaction.customId);
+                const fuente = FUENTES_CARTAS[prefijo];
+                const resto = interaction.customId.replace(`${prefijo}_expansion_pagina_`, '');
+                const [paginaTexto, expansion, categoria] = resto.split('::');
+                const pagina = parseInt(paginaTexto, 10) || 0;
 
-            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
-            const mapaEmojisPagina = await obtenerMapaEmojisGuild(interaction.guild);
-            const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, pagina, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisPagina, rutaMasterPath, mapaCopias });
-            return await interaction.editReply(payload);
+                const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
+                const mapaEmojisPagina = await obtenerMapaEmojisGuild(interaction.guild);
+                const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, pagina, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisPagina, rutaMasterPath, mapaCopias });
+                return await interaction.editReply(payload);
+            } catch (error) {
+                console.error('DEBUG: error cambiando de pagina:', error?.message || error);
+                return await interaction.editReply({ content: '❌ Could not change page. Try again.', embeds: [], components: [] });
+            }
         }
 
         if (interaction.customId.startsWith('wishlist_volver_categorias::') || interaction.customId.startsWith('allcards_volver_categorias::') || interaction.customId.startsWith('goldcards_volver_categorias::')) {
             await interaction.deferUpdate();
-            const prefijo = prefijoDeCartas(interaction.customId);
-            const fuente = FUENTES_CARTAS[prefijo];
-            const expansion = interaction.customId.replace(`${prefijo}_volver_categorias::`, '');
-            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
-            const mapaEmojisVolver = await obtenerMapaEmojisGuild(interaction.guild);
-            const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansion, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisVolver });
-            return await interaction.editReply(payload);
+            try {
+                const prefijo = prefijoDeCartas(interaction.customId);
+                const fuente = FUENTES_CARTAS[prefijo];
+                const expansion = interaction.customId.replace(`${prefijo}_volver_categorias::`, '');
+                const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+                const mapaEmojisVolver = await obtenerMapaEmojisGuild(interaction.guild);
+                const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansion, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisVolver });
+                return await interaction.editReply(payload);
+            } catch (error) {
+                console.error('DEBUG: error volviendo a categorías:', error?.message || error);
+                return await interaction.editReply({ content: '❌ Could not show categories. Try again.', embeds: [], components: [] });
+            }
         }
 
         if (interaction.customId === 'wishlist_volver_expansiones' || interaction.customId === 'allcards_volver_expansiones' || interaction.customId === 'goldcards_volver_expansiones') {
@@ -9353,53 +9404,58 @@ client.on('interactionCreate', async interaction => {
             const [, cartaId, fileName, valorShinedust] = interaction.customId.split('::');
             await interaction.deferReply({ ephemeral: true });
 
-            const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
-            const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
-            if (!archivo) {
-                return await interaction.editReply({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.` });
-            }
-
-            const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-            const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
-            // Mismo criterio que en el resultado de Shinedust: si ESTA cuenta ya
-            // califica como Gold para ESTA carta, usar la imagen/campo dorado, sin
-            // importar de que canal vino el click.
-            const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
-            const cuentasGold = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : [];
-            const esCuentaGold = cuentasGold.some(r => r.fileName.replace(/\.xml$/i, '') === fileName);
-            const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
-            const payloadEmbed = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
-            payloadEmbed.components = [];
-            payloadEmbed.embeds[0].addFields({ name: '📄 Account file', value: `\`${fileName}\`` });
-            const mapaEmojisShinedustCard = await obtenerMapaEmojisGuild(interaction.guild);
-            payloadEmbed.embeds[0].addFields({ name: `${emojiTag(mapaEmojisShinedustCard, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: `**${valorShinedust || '?'}**` });
-
-            const archivos = [new AttachmentBuilder(archivo)];
-            const deviceAccount = extraerDeviceAccount(archivo);
-            if (deviceAccount) {
-                const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-                const archivoJson = buscarArchivoJsonPorDeviceAccount(rutaJsonCfg?.webhook_url, deviceAccount);
-                if (archivoJson) archivos.push(new AttachmentBuilder(archivoJson));
-            }
-            const contenidoTexto = `<@${interaction.user.id}> Account \`${fileName}\` has **${valorShinedust || '?'}** Shinedust. Database attached.`;
-
-            // Texto -> Embed -> XML/JSON, en ese orden -- dentro de UN mismo mensaje
-            // Discord ya muestra el texto (content) arriba del embed sin importar el
-            // orden de los campos en el payload, así que combinar content+embed en el
-            // primer mensaje ya da "Texto, Embed"; el XML/JSON va en un segundo mensaje
-            // aparte para que caiga despues.
-            const canalExtract = await obtenerCanalComando(interaction.user.id, 'cmd_extract_xlm');
-            if (canalExtract?.webhook_url) {
-                try {
-                    const webhookExtract = new WebhookClient({ url: canalExtract.webhook_url });
-                    await webhookExtract.send({ content: contenidoTexto, embeds: payloadEmbed.embeds, files: payloadEmbed.files });
-                    await webhookExtract.send({ files: archivos });
-                    return await interaction.editReply({ content: '✅ Sent to your Extract XML channel.' });
-                } catch (e) {
-                    console.error('DEBUG: error mandando extract xml desde shinedust:', e?.message || e);
+            try {
+                const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+                const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+                if (!archivo) {
+                    return await interaction.editReply({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.` });
                 }
+
+                const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+                const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+                // Mismo criterio que en el resultado de Shinedust: si ESTA cuenta ya
+                // califica como Gold para ESTA carta, usar la imagen/campo dorado, sin
+                // importar de que canal vino el click.
+                const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+                const cuentasGold = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : [];
+                const esCuentaGold = cuentasGold.some(r => r.fileName.replace(/\.xml$/i, '') === fileName);
+                const datosGold = esCuentaGold ? { cuentas: cuentasGold, umbral } : null;
+                const payloadEmbed = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild, datosGold);
+                payloadEmbed.components = [];
+                payloadEmbed.embeds[0].addFields({ name: '📄 Account file', value: `\`${fileName}\`` });
+                const mapaEmojisShinedustCard = await obtenerMapaEmojisGuild(interaction.guild);
+                payloadEmbed.embeds[0].addFields({ name: `${emojiTag(mapaEmojisShinedustCard, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: `**${valorShinedust || '?'}**` });
+
+                const archivos = [new AttachmentBuilder(archivo)];
+                const deviceAccount = extraerDeviceAccount(archivo);
+                if (deviceAccount) {
+                    const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+                    const archivoJson = buscarArchivoJsonPorDeviceAccount(rutaJsonCfg?.webhook_url, deviceAccount);
+                    if (archivoJson) archivos.push(new AttachmentBuilder(archivoJson));
+                }
+                const contenidoTexto = `<@${interaction.user.id}> Account \`${fileName}\` has **${valorShinedust || '?'}** Shinedust. Database attached.`;
+
+                // Texto -> Embed -> XML/JSON, en ese orden -- dentro de UN mismo mensaje
+                // Discord ya muestra el texto (content) arriba del embed sin importar el
+                // orden de los campos en el payload, así que combinar content+embed en el
+                // primer mensaje ya da "Texto, Embed"; el XML/JSON va en un segundo mensaje
+                // aparte para que caiga despues.
+                const canalExtract = await obtenerCanalComando(interaction.user.id, 'cmd_extract_xlm');
+                if (canalExtract?.webhook_url) {
+                    try {
+                        const webhookExtract = new WebhookClient({ url: canalExtract.webhook_url });
+                        await webhookExtract.send({ content: contenidoTexto, embeds: payloadEmbed.embeds, files: payloadEmbed.files });
+                        await webhookExtract.send({ files: archivos });
+                        return await interaction.editReply({ content: '✅ Sent to your Extract XML channel.' });
+                    } catch (e) {
+                        console.error('DEBUG: error mandando extract xml desde shinedust:', e?.message || e);
+                    }
+                }
+                return await interaction.editReply({ ...payloadEmbed, content: contenidoTexto, files: [...(payloadEmbed.files || []), ...archivos] });
+            } catch (error) {
+                console.error('DEBUG: error en shinedust_result_extract:', error?.message || error);
+                return await interaction.editReply({ content: '❌ Something went wrong extracting this account. Try again.' });
             }
-            return await interaction.editReply({ ...payloadEmbed, content: contenidoTexto, files: [...(payloadEmbed.files || []), ...archivos] });
         }
 
         if (interaction.customId.startsWith('wishlist_xml::')) {
