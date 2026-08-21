@@ -6,6 +6,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const RUTA_HEARTBEAT_THUMBNAIL = path.join(__dirname, 'assets', 'heartbeat.png');
 
 // Mismo criterio que rutaMuMuManager() de bot.js (duplicado a proposito -- heartbeat.js corre
@@ -166,6 +167,94 @@ function estaInstanciaMuMuCorriendoHb(index) {
     return !!(info.is_process_started && info.pid);
 }
 
+// Opt-in a pedido explicito del usuario 2026-08-21: si esta prendido (ver
+// autoApagadoSinCuentasHabilitado en bot.js, misma tabla estados_modulos), en vez de mandar el
+// aviso con el boton "Close Instance" y esperar un clic manual, heartbeat.js cierra la instancia
+// y su AHK solo, sin mandar ningun aviso. Reusa el mismo mecanismo que el boton "Close Instance"
+// de bot.js (ver heartbeat_cerrar:: y forzarCierreAhkInstancia ahi), duplicado a proposito --
+// heartbeat.js corre como proceso PM2 separado, sin importar nada de bot.js.
+async function autoApagadoSinCuentasHabilitadoHb() {
+    const fila = await db.get(`SELECT status FROM estados_modulos WHERE nombre = 'auto_apagado_sin_cuentas'`);
+    return fila?.status === 'on';
+}
+
+// Mismo script y mismo criterio que ejecutarAccionAhkInstancia() de bot.js (duplicado a
+// proposito, ver nota de rutaMuMuManagerHb arriba) -- manda la señal 0x500 (Kevin ya la
+// escucha en su propio script para "detenerse tras terminar la corrida actual").
+function ejecutarAccionAhkInstanciaHb(index, accion) {
+    const rutaScript = path.join(__dirname, 'scripts', 'ahk-window.ps1');
+    if (!fs.existsSync(rutaScript)) return false;
+    try {
+        const salida = execFileSync(
+            'powershell',
+            ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', rutaScript, '-InstanceId', String(index), '-Action', accion],
+            { windowsHide: true, timeout: 10000 }
+        ).toString().trim();
+        return salida.startsWith('RELOADED:') || salida.startsWith('CLOSED:');
+    } catch (e) {
+        console.error(`[HB] Error ejecutando accion "${accion}" sobre el AHK de la instancia ${index}:`, e?.stderr?.toString() || e?.message || e);
+        return false;
+    }
+}
+
+// Mismo mecanismo (misma Tarea Programada "MonitorPokemon_KillAHK" y mismo archivo compartido en
+// %TEMP%) que forzarCierreAhkInstancia() de bot.js -- ver el comentario largo ahi arriba para el
+// por que (el AHK de Kevin corre elevado, heartbeat.js no, taskkill directo siempre falla con
+// "Acceso denegado"). Duplicado a proposito, mismo criterio que el resto de este archivo.
+const RUTA_KILL_AHK_TARGET_HB = path.join(os.tmpdir(), 'MonitorPokemon_kill_ahk_target.txt');
+function forzarCierreAhkInstanciaHb(index) {
+    try {
+        const rutaScript = path.join(__dirname, 'scripts', 'ahk-window.ps1');
+        if (!fs.existsSync(rutaScript)) return false;
+        const salida = execFileSync(
+            'powershell',
+            ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', rutaScript, '-InstanceId', String(index), '-Action', 'check'],
+            { windowsHide: true, timeout: 10000 }
+        ).toString().trim();
+        const match = salida.match(/^FOUND:(\d+)$/);
+        if (!match) return false;
+        const pidObjetivo = match[1];
+        try {
+            fs.writeFileSync(RUTA_KILL_AHK_TARGET_HB, pidObjetivo);
+            execFileSync('schtasks', ['/run', '/tn', 'MonitorPokemon_KillAHK'], { windowsHide: true, timeout: 8000 });
+        } catch (e) {
+            console.error(`[HB] No se pudo disparar la tarea programada de cierre forzado (¿esta creada?):`, e?.stderr?.toString() || e?.message || e);
+            try { execFileSync('taskkill', ['/PID', pidObjetivo, '/F'], { windowsHide: true, timeout: 8000 }); } catch (e2) { /* ver retorno final abajo */ }
+        }
+        return true;
+    } catch (e) {
+        console.error(`[HB] No se pudo forzar el cierre del AHK de la instancia ${index}:`, e?.stderr?.toString() || e?.message || e);
+        return false;
+    }
+}
+
+// Mismo flujo y mismo orden que el boton "Close Instance" de bot.js (ver heartbeat_cerrar:: ahi
+// -- señal 0x500 primero con MuMu todavia vivo, wait, apagar MuMu, y de respaldo un ciclo
+// prender/apagar + force-kill por si el AHK quedo colgado de verdad por dentro). Se usa cuando
+// autoApagadoSinCuentasHabilitadoHb() esta en ON, en vez de mandar el aviso con boton.
+async function cerrarInstanciaAutoSinCuentasHb(index) {
+    const managerPath = rutaMuMuManagerHb();
+    ejecutarAccionAhkInstanciaHb(index, 'close');
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (managerPath) {
+        try { execFileSync(managerPath, ['control', 'shutdown', '-v', String(index)], { windowsHide: true, timeout: 15000 }); }
+        catch (e) { console.error(`[HB] Auto-close: apagado normal de instancia ${index} fallo/no respondio:`, e?.stderr?.toString() || e?.message || e); }
+    }
+    setTimeout(() => {
+        if (managerPath) {
+            try { execFileSync(managerPath, ['control', 'launch', '-v', String(index)], { windowsHide: true, timeout: 15000 }); }
+            catch (e) { /* si esto falla no hay mucho mas que hacer, se sigue igual con el force-kill de abajo */ }
+        }
+        setTimeout(() => {
+            if (managerPath) {
+                try { execFileSync(managerPath, ['control', 'shutdown', '-v', String(index)], { windowsHide: true, timeout: 15000 }); }
+                catch (e) { /* idem */ }
+            }
+            setTimeout(() => forzarCierreAhkInstanciaHb(index), 3000);
+        }, 15000);
+    }, 20000);
+}
+
 async function recuperarInstanciaCongelada(index) {
     const managerPath = rutaMuMuManagerHb();
     if (!managerPath) return false;
@@ -307,6 +396,13 @@ async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, ti
     // Kevin, ver instanciaSinCuentasElegibles) — con respaldo al pool global
     // de cuentas si por algo no hay ruta_raiz configurada.
     const sinCuentas = instanciaSinCuentasElegibles(rutaLogsInstancias, instId) || cuentasRestantes === 0;
+
+    // Opt-in (2026-08-21, a pedido explicito del usuario): si esta prendido, se salta el aviso
+    // por completo y cierra la instancia/AHK sola -- ver cerrarInstanciaAutoSinCuentasHb arriba.
+    if (sinCuentas && await autoApagadoSinCuentasHabilitadoHb()) {
+        cerrarInstanciaAutoSinCuentasHb(instId).catch((e) => console.error(`[HB] Error en auto-close de instancia ${instId}:`, e?.message || e));
+        return;
+    }
 
     let titulo, cuerpo, boton;
     if (sinCuentas) {

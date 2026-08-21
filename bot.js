@@ -1365,6 +1365,16 @@ async function driveHdRegularHabilitado() {
     return fila?.status === 'on';
 }
 
+// Opt-in (default apagado) a pedido explicito del usuario 2026-08-21: cuando una instancia se
+// queda sin cuentas de 24h elegibles (ver instanciaSinCuentasElegibles en heartbeat.js), en vez
+// de mandar el aviso con el boton "Close Instance" y esperar un clic manual, heartbeat.js cierra
+// la instancia y su AHK solo -- sin mandar ningun aviso. Leido directo por heartbeat.js (proceso
+// separado) desde la misma tabla, igual que 'drive_hd_regular'.
+async function autoApagadoSinCuentasHabilitado() {
+    const fila = await db.get(`SELECT status FROM estados_modulos WHERE nombre = 'auto_apagado_sin_cuentas'`);
+    return fila?.status === 'on';
+}
+
 // Log persistente de fallas del Drive HD (2026-08-06, a pedido explicito del
 // usuario): antes solo quedaba un console.log que se perdia apenas el bot
 // corria oculto/en pm2 -- para usuarios sin acceso comodo a una consola, esto
@@ -2249,10 +2259,30 @@ function ejecutarAccionAhkInstancia(index, accion) {
 }
 
 // Ultimo recurso para un AHK que quedo colgado por dentro y no respondio ni a la señal 0x500
-// ni al ciclo de apagar/prender/apagar MuMu (2026-08-20, bug real en vivo). Busca el PID real
-// via la misma accion "check" que ya usa heartbeat.js, y lo mata directo -- sin esto, la unica
-// forma de cerrarlo era el Administrador de Tareas a mano, algo que no tiene sentido pedirle
-// al usuario para lo que se supone es un boton automatico.
+// ni al ciclo de apagar/prender/apagar MuMu (2026-08-20/21, bug real en vivo). Busca el PID
+// real via la misma accion "check" que ya usa heartbeat.js.
+//
+// FIX real 2026-08-21: la primera version de esto hacia taskkill directo -- funcionaba en
+// teoria, pero en la practica el AHK de Kevin corre elevado (como Administrador) y bot.js NO
+// (a proposito, por seguridad), asi que taskkill siempre fallaba con "Acceso denegado" --
+// confirmado en vivo, incluso ejecutandolo con los mismos permisos exactos que usa PM2 para
+// correr este mismo proceso. Windows no deja que un proceso sin privilegios mate uno elevado,
+// sin importar COMO se invoque el kill (linea de comandos o Administrador de Tareas). La
+// unica forma real de automatizar esto sin correr TODO el bot como administrador (que
+// expondria much0 mas superficie de la necesaria) es una Tarea Programada de Windows
+// configurada de antemano con privilegios altos (creada una sola vez, ver
+// scripts/kill-ahk-target.ps1) -- bot.js deja el PID en un archivo compartido y dispara esa
+// tarea puntual, que SI puede matar el proceso elevado porque el Programador de Tareas la
+// ejecuta con los privilegios que tiene configurados, sin importar quien la disparo.
+//
+// FIX real 2026-08-21 (bug encontrado probando en vivo con una segunda instalacion en la
+// misma PC): la Tarea Programada es UNA sola, compartida por toda la PC, apuntando siempre
+// al mismo script en la carpeta de produccion -- si el archivo con el PID se escribia junto
+// a CADA instalacion (__dirname), una instalacion distinta (ej. el bot de prueba en el
+// Escritorio) dejaba el archivo en un lugar que esa tarea compartida nunca miraba. %TEMP%
+// es fijo por usuario de Windows, no por instalacion, asi que cualquier copia del bot en la
+// misma PC (y misma cuenta de Windows) escribe y lee del mismo lugar.
+const RUTA_KILL_AHK_TARGET = path.join(os.tmpdir(), 'MonitorPokemon_kill_ahk_target.txt');
 function forzarCierreAhkInstancia(index) {
     try {
         const rutaScript = path.join(__dirname, 'scripts', 'ahk-window.ps1');
@@ -2263,7 +2293,21 @@ function forzarCierreAhkInstancia(index) {
         ).toString().trim();
         const match = salida.match(/^FOUND:(\d+)$/);
         if (!match) return false; // ya no esta corriendo -- nada que forzar
-        execSync(`taskkill /PID ${match[1]} /F`, { windowsHide: true, timeout: 8000 });
+        const pidObjetivo = match[1];
+
+        try {
+            fs.writeFileSync(RUTA_KILL_AHK_TARGET, pidObjetivo);
+            execSync(`schtasks /run /tn "MonitorPokemon_KillAHK"`, { windowsHide: true, timeout: 8000 });
+        } catch (e) {
+            // La tarea programada no existe todavia en esta PC (no se hizo el setup de una vez
+            // con permisos de admin) -- se intenta igual el taskkill normal como respaldo, por
+            // si el AHK de este usuario en particular no corre elevado y SI se puede.
+            console.error(`DEBUG: no se pudo disparar la tarea programada de cierre forzado (¿esta creada?):`, e?.stderr?.toString() || e?.message || e);
+            try { execSync(`taskkill /PID ${pidObjetivo} /F`, { windowsHide: true, timeout: 8000 }); } catch (e2) { /* ver retorno final abajo */ }
+        }
+
+        // La tarea se dispara async (schtasks /run no espera a que termine) -- se le da un
+        // respiro y se confirma de verdad en vez de asumir que funciono.
         return true;
     } catch (e) {
         console.error(`DEBUG: no se pudo forzar el cierre del AHK de la instancia ${index}:`, e?.stderr?.toString() || e?.message || e);
@@ -6965,6 +7009,7 @@ async function generarPanelControl(userId) {
     if (estadoS4T === '🟢 ONLINE' && !(await tieneConfiguracion(userId, 's4t'))) estadoS4T = '🔴 OFFLINE (Setup Needed)';
     if (estadoHB === '🟢 ONLINE' && !(await tieneConfiguracion(userId, 'heartbeat'))) estadoHB = '🔴 OFFLINE (Setup Needed)';
     const driveHdRegularOn = await driveHdRegularHabilitado();
+    const autoApagadoSinCuentasOn = await autoApagadoSinCuentasHabilitado();
 
     const embed = new EmbedBuilder()
         .setTitle(' 👑  Pokemon Home PTCGPB!  👑​')
@@ -6976,6 +7021,8 @@ async function generarPanelControl(userId) {
             `• 💓 **Heartbeat Module:** \`${estadoHB}\`\n` +
             `• 🖼️ **Normal Cards in HD:** \`${driveHdRegularOn ? '🟢 ON' : '🔴 OFF'}\`\n` +
             `-# OFF: normal cards stay low quality, Gold cards always HD. ON: normal cards also HD, but uses more disk space over time.\n\n` +
+            `• 🔌 **Auto-Close (out of 24h accounts):** \`${autoApagadoSinCuentasOn ? '🟢 ON' : '🔴 OFF'}\`\n` +
+            `-# OFF: you get an alert with a "Close Instance" button to click. ON: no alert, the instance and its AHK close by themselves.\n\n` +
             `**🎴 Available Features:**\n` +
             `• 💖 **Cards Wishlist** — check and search the cards in your wishlist.\n` +
             `• ⚡ **All Cards** — browse the full catalog of cards in the game.\n` +
@@ -6991,7 +7038,8 @@ async function generarPanelControl(userId) {
         new ButtonBuilder().setCustomId('toggle_trading').setLabel('🚀 S4T On/Off').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('toggle_heartbeat').setLabel('💓 Heartbeat On/Off').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('btn_crear_canales_menu').setLabel('🏗️ Sync Channels').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('toggle_drive_hd_regular').setLabel('🖼️ Normal Cards HD On/Off').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('toggle_drive_hd_regular').setLabel('🖼️ Normal Cards HD On/Off').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('toggle_auto_apagado_sin_cuentas').setLabel('🔌 Auto-Close No-Accounts On/Off').setStyle(ButtonStyle.Secondary)
     );
 
     const botonesGestion = [
@@ -10105,6 +10153,15 @@ client.on('interactionCreate', async interaction => {
                 await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('drive_hd_regular', ?)`, [yaEstaOn ? 'off' : 'on']);
                 const { archivos: archivosPanelDrive, ...panelDrive } = await generarPanelControl(interaction.user.id);
                 await interaction.editReply({ ...panelDrive, files: (archivosPanelDrive || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename })) });
+                break;
+            }
+
+            case 'toggle_auto_apagado_sin_cuentas': {
+                await interaction.deferUpdate();
+                const yaEstaOnAutoApagado = await autoApagadoSinCuentasHabilitado();
+                await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('auto_apagado_sin_cuentas', ?)`, [yaEstaOnAutoApagado ? 'off' : 'on']);
+                const { archivos: archivosPanelAutoApagado, ...panelAutoApagado } = await generarPanelControl(interaction.user.id);
+                await interaction.editReply({ ...panelAutoApagado, files: (archivosPanelAutoApagado || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename })) });
                 break;
             }
 

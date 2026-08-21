@@ -135,6 +135,15 @@ function copiarLanzador() {
         path.join(RAIZ, 'scripts', 'ahk-window.ps1'),
         path.join(DIST, 'scripts', 'ahk-window.ps1')
     );
+    // kill-ahk-target.ps1 (2026-08-21): mismo motivo que ahk-window.ps1 -- nunca se copiaba,
+    // asi que ninguna instalacion empaquetada lo tenia. Solo lo usa la Tarea Programada
+    // "MonitorPokemon_KillAHK" (creada a mano, una vez, con privilegios elevados -- ver
+    // forzarCierreAhkInstancia en bot.js); sin este setup manual el archivo con estar copiado
+    // no alcanza para que la funcion ande sola en la PC de otro usuario todavia.
+    fs.copyFileSync(
+        path.join(RAIZ, 'scripts', 'kill-ahk-target.ps1'),
+        path.join(DIST, 'scripts', 'kill-ahk-target.ps1')
+    );
 
     // Copia suelta en la raiz del paquete (a pedido del usuario) - asi quien
     // recien descarga el .zip lo ve de una, sin tener que abrir el bot y

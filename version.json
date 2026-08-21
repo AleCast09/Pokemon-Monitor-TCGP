@@ -1,7 +1,9 @@
 {
-  "version": "1.5.59",
-  "notesCount": 4,
+  "version": "1.5.60",
+  "notesCount": 2,
   "notes": [
+    "New: an \"Auto-Close (out of 24h accounts)\" toggle in Settings - off by default. When on, an instance that runs out of eligible 24h accounts closes itself (MuMu and its AHK) automatically, with no alert or button click needed.",
+    "Fixed a real bug: the \"Close Instance\" button could turn off MuMu but leave its AHK stuck running forever, since it often runs as Administrator and the bot (deliberately non-admin, for security) couldn't force it closed - now falls back to a narrowly-scoped elevated Scheduled Task as a last resort, confirmed working live.",
     "Fixed: the Control Panel's \"Tutorials\" button could open a dead \"localhost:3005\" page (ERR_CONNECTION_REFUSED) if the Dashboard had fallen back to a different port due to a conflict - the app now tracks its real port the same way S4T/Heartbeat already did, so the button always opens the right one.",
     "Fixed a real bug: a valuable card could be detected and then silently vanish with zero error if its notification channel's webhook was invalid (e.g. the Discord channel got deleted) - now warns you once via the Updates channel instead of losing it in silence, and a failure on one card no longer risks skipping the rest in the same batch.",
     "Fixed: the expansion logo above a card could fail to show for packs whose short in-game name doesn't exactly match the expansion's full folder name (e.g. \"Deluxe\" vs \"Deluxe Pack ex\") - now matches the same partial way card art lookup already did.",
