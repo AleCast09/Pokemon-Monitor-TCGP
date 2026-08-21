@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { exec, execFileSync } = require('child_process');
+const { exec, execFileSync, spawn } = require('child_process');
 const db = require('./database.js');
 const express = require('express');
 const axios = require('axios');
@@ -24,6 +24,37 @@ function rutaMuMuManagerHb() {
         }
     }
     return null;
+}
+
+// Mismo criterio que rutaAutoHotkey() de bot.js (duplicado a proposito, ver nota de
+// rutaMuMuManagerHb arriba). Usado para reacomodar la ventana de una instancia que se
+// acaba de recuperar sola -- sin esto quedaba con tamaño/posicion cualquiera, ver
+// _ArrangeWindows.ahk.
+let _rutaAutoHotkeyCacheadaHb;
+function rutaAutoHotkeyHb() {
+    if (_rutaAutoHotkeyCacheadaHb !== undefined) return _rutaAutoHotkeyCacheadaHb;
+    const candidatosFijos = [
+        'C:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU64.exe',
+        'C:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU32.exe',
+        'C:\\Program Files\\AutoHotkey\\AutoHotkeyU64.exe',
+        'C:\\Program Files\\AutoHotkey\\AutoHotkeyU32.exe',
+        'C:\\Program Files\\AutoHotkey\\AutoHotkey.exe',
+        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU64.exe',
+        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU32.exe',
+        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkey.exe'
+    ];
+    _rutaAutoHotkeyCacheadaHb = candidatosFijos.find(p => fs.existsSync(p)) || null;
+    return _rutaAutoHotkeyCacheadaHb;
+}
+const RUTA_ARRANGE_WINDOWS_SCRIPT_HB = path.join(__dirname, 'automation', '_ArrangeWindows.ahk');
+function reacomodarVentanaInstanciaHb(index) {
+    try {
+        const ahkExe = rutaAutoHotkeyHb();
+        if (!ahkExe || !fs.existsSync(RUTA_ARRANGE_WINDOWS_SCRIPT_HB)) return;
+        spawn(ahkExe, [RUTA_ARRANGE_WINDOWS_SCRIPT_HB, String(index)], { windowsHide: false, detached: true, stdio: 'ignore' }).unref();
+    } catch (e) {
+        console.error(`[HB] No se pudo reacomodar la ventana de la instancia ${index}:`, e?.message || e);
+    }
 }
 
 // Recuperacion automatica de una instancia realmente congelada (2026-08-14, a pedido
@@ -173,6 +204,11 @@ async function recuperarInstanciaCongelada(index) {
         console.error(`[HB] Error prendiendo instancia ${index} para recuperacion:`, e?.stderr?.toString() || e?.message || e);
         return false;
     }
+    // A pedido explicito del usuario 2026-08-21 (bug real en vivo: la ventana quedaba mal
+    // ubicada/con tamaño raro despues de una recuperacion automatica, porque este flujo nunca
+    // llamaba al mismo acomodo de ventanas que ya usa Main Trade). No bloqueante -- cosmetico,
+    // no debe demorar el resto de la recuperacion si la ventana tarda en aparecer.
+    reacomodarVentanaInstanciaHb(index);
 
     // Reabrir la app por ADB directo en vez de confiar en que el AHK la vuelva a abrir solo
     // (2026-08-14, a pedido explicito del usuario, "hazlo para que los usuarios tambien puedan

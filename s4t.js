@@ -294,8 +294,13 @@ function buscarLogoExpansion(sobreTexto) {
     const objetivo = normalizarNombreExpansion(nombreSobre);
     try {
         const carpetas = fs.readdirSync(EXPANSIONS_DIR, { withFileTypes: true }).filter(d => d.isDirectory());
+        // Coincidencia parcial en los dos sentidos (2026-08-21, bug real reportado en vivo: el
+        // logo de "Deluxe Pack ex" nunca aparecia porque el texto que manda el juego para ese
+        // sobre es solo "Deluxe", y esto exigia una igualdad exacta -- mismo criterio que ya usa
+        // resolverExpansionIdPorSobre() mas arriba para el mismo tipo de problema).
         for (const carpeta of carpetas) {
-            if (normalizarNombreExpansion(carpeta.name) === objetivo) {
+            const normalizado = normalizarNombreExpansion(carpeta.name);
+            if (normalizado === objetivo || normalizado.includes(objetivo) || objetivo.includes(normalizado)) {
                 const rutaLogo = path.join(EXPANSIONS_DIR, carpeta.name, `${carpeta.name}.png`);
                 if (fs.existsSync(rutaLogo)) return rutaLogo;
             }
@@ -1125,6 +1130,32 @@ function normalizeMatch(text) {
         .trim();
 }
 
+// Aviso de webhook roto (2026-08-21, a pedido explicito del usuario -- "como el usuario
+// sabra cuando esta roto?"): antes, un canal con webhook invalido/"N/A" (ej. si se borro la
+// categoria o el canal en Discord) hacia que esa carta se perdiera en absoluto silencio, sin
+// que nadie se enterara. Mismo criterio que el aviso de Drive HD roto en bot.js: uno solo por
+// tipo de canal por corrida del proceso (se resetea con cada reinicio), posteado al canal de
+// "actualizaciones" -- ese es el unico que s4t.js ya sabe que deberia estar sano casi siempre,
+// y donde el usuario ya espera ver avisos del sistema.
+const _avisosWebhookRotoEnviados = new Set();
+async function avisarWebhookRotoSiHaceFalta(tipoCanal, configs) {
+    if (_avisosWebhookRotoEnviados.has(tipoCanal)) return;
+    _avisosWebhookRotoEnviados.add(tipoCanal);
+    const canalUpdates = configs['actualizaciones'];
+    if (!canalUpdates?.webhook_url || canalUpdates.webhook_url === 'N/A') return;
+    try {
+        await axios.post(`${canalUpdates.webhook_url}?wait=true`, {
+            embeds: [{
+                title: '⚠️ A card notification channel is broken',
+                description: `The webhook for **${tipoCanal}** is invalid or missing (the channel/category may have been deleted in Discord). Cards for that category are being silently skipped until this is fixed.\n\nRun **Sync Channels** in \`/setup\` to repair it.`,
+                color: 0xE67E22
+            }]
+        }, { timeout: 15000 });
+    } catch (e) {
+        console.error(`DEBUG: no se pudo avisar que el webhook de "${tipoCanal}" esta roto:`, e?.message || e);
+    }
+}
+
 const app = express();
 
 // Parsers BEFORE multer
@@ -1496,6 +1527,14 @@ app.post('/', upload.any(), async (req, res) => {
         const rutaLogoExpansion = buscarLogoExpansion(sobre);
 
         for (const data of envios) {
+          // Try/catch por cada envio individual (2026-08-21, bug real reportado en vivo: una
+          // carta Crown Rare se detecto bien pero nunca llego a Discord, sin ningun log de
+          // error -- el try/catch de mas afuera de este handler nunca se disparo, asi que algo
+          // en el medio (lectura de imagen, composicion de collage/logo, etc.) debe haber
+          // fallado en silencio de una forma que no dejaba rastro. Esto asegura que, pase lo que
+          // pase con UNA carta, quede logueado con su canal y no se pierda sin explicacion, y
+          // que las demas cartas de la misma tanda se sigan mandando igual.
+          try {
             const canalDb = configs[data.tipoCanal];
             if (!canalDb) {
                 console.log(`DEBUG: NO ENCONTRADO canal tipo="${data.tipoCanal}" en configs`);
@@ -1503,6 +1542,7 @@ app.post('/', upload.any(), async (req, res) => {
             }
             if (!canalDb.webhook_url || canalDb.webhook_url === 'N/A' || canalDb.webhook_url === 'local') {
                 console.log(`DEBUG: WEBHOOK INVÁLIDO para canal="${data.tipoCanal}" webhook="${redactarValor(canalDb.webhook_url)}"`);
+                avisarWebhookRotoSiHaceFalta(data.tipoCanal, configs).catch(() => {});
                 continue;
             }
 
@@ -1605,6 +1645,9 @@ app.post('/', upload.any(), async (req, res) => {
                     await axios.post(canalDb.webhook_url, formXml, { headers: formXml.getHeaders() }).catch(() => {});
                 }
             }
+          } catch (errEnvio) {
+            console.error(`DEBUG: fallo procesando el envio para canal="${data.tipoCanal}" (carta perdida sin esto):`, errEnvio?.message || errEnvio);
+          }
         }
     } catch (e) {
         console.error(e);

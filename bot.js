@@ -2248,6 +2248,29 @@ function ejecutarAccionAhkInstancia(index, accion) {
     }
 }
 
+// Ultimo recurso para un AHK que quedo colgado por dentro y no respondio ni a la señal 0x500
+// ni al ciclo de apagar/prender/apagar MuMu (2026-08-20, bug real en vivo). Busca el PID real
+// via la misma accion "check" que ya usa heartbeat.js, y lo mata directo -- sin esto, la unica
+// forma de cerrarlo era el Administrador de Tareas a mano, algo que no tiene sentido pedirle
+// al usuario para lo que se supone es un boton automatico.
+function forzarCierreAhkInstancia(index) {
+    try {
+        const rutaScript = path.join(__dirname, 'scripts', 'ahk-window.ps1');
+        if (!fs.existsSync(rutaScript)) return false;
+        const salida = execSync(
+            `powershell -NoProfile -ExecutionPolicy Bypass -File "${rutaScript}" -InstanceId "${index}" -Action "check"`,
+            { windowsHide: true, timeout: 10000 }
+        ).toString().trim();
+        const match = salida.match(/^FOUND:(\d+)$/);
+        if (!match) return false; // ya no esta corriendo -- nada que forzar
+        execSync(`taskkill /PID ${match[1]} /F`, { windowsHide: true, timeout: 8000 });
+        return true;
+    } catch (e) {
+        console.error(`DEBUG: no se pudo forzar el cierre del AHK de la instancia ${index}:`, e?.stderr?.toString() || e?.message || e);
+        return false;
+    }
+}
+
 function construirEmbedInstanciasMuMu(instancias, seleccion = null) {
     const listaTexto = instancias.length
         ? instancias.map(i => `**${i.index}.** ${i.name} — ${i.is_android_started ? '🟢 On' : '🔴 Off'}`).join('\n')
@@ -5807,10 +5830,47 @@ async function iniciarTunelDashboard(puerto) {
 }
 
 let DASHBOARD_PORT_ACTUAL = null;
+// Mismo mecanismo de "Ports in use.txt" que ya usan s4t.js/heartbeat.js (2026-08-21, bug
+// real reportado en vivo: el boton "Tutorials" del Panel de Control abria
+// "localhost:3005" a ciegas cuando el Dashboard habia caido a otro puerto por conflicto --
+// nadie escuchaba ahi, ERR_CONNECTION_REFUSED. bot.js nunca escribia su propio puerto real
+// a este archivo, asi que panel-info.js no tenia forma de saber que habia cambiado.
+// Duplicado a proposito (bot.js/s4t.js/heartbeat.js son procesos PM2 separados).
+const RUTA_AVISO_PUERTOS_BOT = path.join(__dirname, 'Ports in use.txt');
+const ENCABEZADO_AVISO_PUERTOS_BOT = [
+    'Some default ports were busy, so these services started on different ones.',
+    'Update the Webhook URL in your reroll tool (P BOT) to match:',
+    ''
+];
+function avisarPuertoCambiadoBot(nombreServicio, puertoReal) {
+    try {
+        const prefijo = `${nombreServicio}: `;
+        const lineaNueva = `${prefijo}http://localhost:${puertoReal}`;
+        const lineasDatos = fs.existsSync(RUTA_AVISO_PUERTOS_BOT)
+            ? fs.readFileSync(RUTA_AVISO_PUERTOS_BOT, 'utf8').split(/\r?\n/).filter((l) => l.includes(': http://localhost:') && !l.startsWith(prefijo))
+            : [];
+        fs.writeFileSync(RUTA_AVISO_PUERTOS_BOT, [...ENCABEZADO_AVISO_PUERTOS_BOT, ...lineasDatos, lineaNueva].join('\r\n') + '\r\n', 'utf8');
+    } catch (e) { /* no bloquea el arranque */ }
+}
+function limpiarAvisoPuertoSiVuelveAlDefaultBot(nombreServicio) {
+    try {
+        if (!fs.existsSync(RUTA_AVISO_PUERTOS_BOT)) return;
+        const prefijo = `${nombreServicio}: `;
+        const lineasDatos = fs.readFileSync(RUTA_AVISO_PUERTOS_BOT, 'utf8').split(/\r?\n/).filter((l) => l.includes(': http://localhost:') && !l.startsWith(prefijo));
+        if (lineasDatos.length === 0) {
+            fs.unlinkSync(RUTA_AVISO_PUERTOS_BOT);
+        } else {
+            fs.writeFileSync(RUTA_AVISO_PUERTOS_BOT, [...ENCABEZADO_AVISO_PUERTOS_BOT, ...lineasDatos].join('\r\n') + '\r\n', 'utf8');
+        }
+    } catch (e) { /* no bloquea el arranque */ }
+}
+
 function iniciarServidorDashboard(puerto, intento = 0) {
     const servidor = dashboardApp.listen(puerto, '0.0.0.0', () => {
         DASHBOARD_PORT_ACTUAL = puerto;
         console.log(`🚀 Dashboard Info Accounts online (port ${puerto})`);
+        if (puerto !== DASHBOARD_PORT_BASE) avisarPuertoCambiadoBot('Dashboard', puerto);
+        else limpiarAvisoPuertoSiVuelveAlDefaultBot('Dashboard');
         iniciarTunelDashboard(puerto);
     });
     servidor.on('error', (err) => {
@@ -8953,8 +9013,18 @@ client.on('interactionCreate', async interaction => {
             // Mismo blindaje que heartbeat_reload_ahk:: (ver comentario ahi arriba).
             try {
                 await interaction.deferUpdate();
-                const mumuOk = apagarInstanciaMuMu(index);
+                // Orden invertido (2026-08-20, bug real reportado en vivo: el AHK se quedaba
+                // corriendo aunque MuMu ya se hubiera apagado). Antes se apagaba MuMu PRIMERO y
+                // recien despues se mandaba la señal 0x500 al AHK -- pero el script de Kevin
+                // (ajeno, no editable desde aca) solo revisa esa señal de inmediato mientras
+                // esta tranquilo en su loop de "esperando cuentas"; si MuMu ya esta apagado,
+                // puede quedar ocupado reintentando la conexion en vez de revisar la señal, y
+                // esta se pierde. Mandar la señal primero (con MuMu todavia vivo, script en su
+                // loop normal) y darle un respiro antes de apagar MuMu le da una chance real de
+                // cerrarse solo y limpio antes de que la conexion se corte de abajo.
                 const ahkOk = ejecutarAccionAhkInstancia(index, 'close');
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+                const mumuOk = apagarInstanciaMuMu(index);
                 // Si el AHK quedó realmente colgado por dentro (no solo esperando
                 // cuentas), la señal 0x500 se queda en cola y el script no la
                 // procesa hasta que "respira" de nuevo — confirmado en vivo que
@@ -8967,6 +9037,15 @@ client.on('interactionCreate', async interaction => {
                     lanzarInstanciaMuMu(index);
                     setTimeout(() => {
                         apagarInstanciaMuMu(index);
+                        // Ultimo recurso (2026-08-20, bug real en vivo: un AHK realmente colgado
+                        // por dentro no respondio ni a la señal 0x500 ni al ciclo completo de
+                        // apagar/prender/apagar de arriba -- antes solo quedaba cerrarlo a mano
+                        // desde el Administrador de Tareas). Si a esta altura el AHK SIGUE vivo,
+                        // se lo mata por la fuerza -- ya se le dieron dos chances reales de
+                        // cerrarse limpio antes de llegar aca, y a esta altura ya no le queda
+                        // ninguna cuenta de 24h elegible de todas formas (por eso se disparo este
+                        // boton), asi que no hay nada util que se pierda al forzarlo.
+                        setTimeout(() => forzarCierreAhkInstancia(index), 3000);
                     }, 15000);
                 }, 20000);
                 if (mumuOk || ahkOk) {

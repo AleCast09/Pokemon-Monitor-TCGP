@@ -102,13 +102,26 @@ function leerUrlsPBot(env) {
     return { s4tUrl: `http://localhost:${base.S4T}`, heartbeatUrl: `http://localhost:${base.Heartbeat}` };
 }
 
-// Puerto del dashboard (2026-08-13, bug real encontrado en auditoria): el boton
-// "Tutorials" del panel tenia el puerto pisado a mano en el .cs (3005), asi que si esta PC
-// tiene DASHBOARD_PORT distinto en el .env, el boton abria una pagina muerta. Mismo criterio
-// que DASHBOARD_PORT_BASE en bot.js -- no cubre el auto-fallback en vivo por puerto ocupado
-// (eso solo lo sabe el proceso del bot ya corriendo), pero si el override manual del .env.
+// Puerto del dashboard (2026-08-13, bug real encontrado en auditoria; completado 2026-08-21
+// tras otro reporte en vivo -- el boton "Tutorials" seguia abriendo "localhost:3005" a
+// ciegas para un usuario cuyo Dashboard habia caido a otro puerto por conflicto,
+// ERR_CONNECTION_REFUSED). Antes esto solo cubria el override manual de DASHBOARD_PORT en
+// el .env, pero no el auto-fallback en vivo (bot.js probando el siguiente puerto libre si el
+// de siempre esta ocupado) -- ahora bot.js escribe el puerto real a "Ports in use.txt"
+// (mismo mecanismo que ya usan S4T/Heartbeat) y esto lo lee igual que leerUrlsPBot() arriba.
 function leerPuertoDashboard(env) {
-    return Number(env.DASHBOARD_PORT) || 3005;
+    let puerto = Number(env.DASHBOARD_PORT) || 3005;
+    const rutaAviso = path.join(RAIZ, 'Ports in use.txt');
+    if (fs.existsSync(rutaAviso)) {
+        try {
+            const contenido = fs.readFileSync(rutaAviso, 'utf8');
+            for (const linea of contenido.split(/\r?\n/)) {
+                const match = linea.match(/^Dashboard: http:\/\/localhost:(\d+)$/);
+                if (match) puerto = Number(match[1]);
+            }
+        } catch (e) { /* se queda con el valor de arriba */ }
+    }
+    return puerto;
 }
 
 async function main() {

@@ -1,8 +1,11 @@
 {
-  "version": "1.5.58",
-  "notesCount": 2,
+  "version": "1.5.59",
+  "notesCount": 4,
   "notes": [
-    "Fixed a real bug: after several restarts in one session, old cloudflared.exe tunnel processes for Info Accounts could pile up instead of closing - one was found still forwarding a public link to whatever now happens to be running on its old port, potentially a completely different, unrelated process. Now clears out any previous tunnel for this install before starting a new one.",
+    "Fixed: the Control Panel's \"Tutorials\" button could open a dead \"localhost:3005\" page (ERR_CONNECTION_REFUSED) if the Dashboard had fallen back to a different port due to a conflict - the app now tracks its real port the same way S4T/Heartbeat already did, so the button always opens the right one.",
+    "Fixed a real bug: a valuable card could be detected and then silently vanish with zero error if its notification channel's webhook was invalid (e.g. the Discord channel got deleted) - now warns you once via the Updates channel instead of losing it in silence, and a failure on one card no longer risks skipping the rest in the same batch.",
+    "Fixed: the expansion logo above a card could fail to show for packs whose short in-game name doesn't exactly match the expansion's full folder name (e.g. \"Deluxe\" vs \"Deluxe Pack ex\") - now matches the same partial way card art lookup already did.",
+    "New: when heartbeat auto-recovers a frozen instance, its window now gets repositioned back to its correct spot in the grid (detecting automatically whether \"Main\" is part of the layout or not) - it used to come back full-size/misplaced.",
     "Fixed: the Control Panel's \"Start\"/\"Restart\" silently refused to start the engine if port 3000 was already in use by anything (even a totally unrelated app, or a second copy on the same PC) - it now only checks whether THIS copy is already running, and lets the engine's existing auto-fallback (tries the next port, shows the real one to paste in P BOT) do its job like it's designed to.",
     "New: the Control Panel's \"Update available\" popup has a \"Download Manually\" button that opens the release page in your real browser - if the in-app download keeps failing on your network (both \"Download Now\" and the Discord \"Update now\" button use the same one), this gives a way out that doesn't depend on the app's own network access at all.",
     "Fixed the same \"thinking\" forever bug across the rest of All Cards/Wishlist/Gold Cards (picking a card, going back, paging, sending to Trading, extracting an account) - a full pass to make sure any unexpected error always shows a message instead of leaving the bot stuck.",
