@@ -315,18 +315,42 @@ async function descargarActualizacionPanel(remota) {
     }
 }
 
+// Progreso emitido a stdout como "PROGRESS:<0-100>\n" (2026-08-21, a pedido explicito del
+// usuario: "Download Now" se quedaba con el texto pelado "Downloading..." sin ningun avance
+// real -- ella misma dijo que hasta a ELLA le daba desconfianza y ganas de cerrarlo, sin
+// hablar de un usuario nuevo que no sabe si esta trabado o no). Solo se trackea la descarga
+// del .exe principal (con much0 el archivo mas pesado de las 3 descargas de esta funcion,
+// ~100MB) -- el panel y los assets son rapidos en comparacion, no vale la pena la
+// complejidad extra de un progreso combinado ponderado por tamaño para esa ganancia chica.
+// ControlPanel.cs (DescargarActualizacionDesdePanel) lee esta salida linea por linea y
+// actualiza una barra de progreso real con esto.
 async function descargarActualizacion(remota) {
     const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
     const respuesta = await axios.get(remota.downloadUrl, { responseType: 'stream', timeout: 120000 });
 
+    const totalBytes = Number(respuesta.headers['content-length']) || 0;
+    let bytesRecibidos = 0;
+    let ultimoPorcentajeEmitido = -1;
+
     await new Promise((resolve, reject) => {
         const archivo = fs.createWriteStream(rutaNueva);
+        if (totalBytes > 0) {
+            respuesta.data.on('data', (chunk) => {
+                bytesRecibidos += chunk.length;
+                const porcentaje = Math.min(99, Math.floor((bytesRecibidos / totalBytes) * 100));
+                if (porcentaje !== ultimoPorcentajeEmitido) {
+                    ultimoPorcentajeEmitido = porcentaje;
+                    process.stdout.write(`PROGRESS:${porcentaje}\n`);
+                }
+            });
+        }
         respuesta.data.pipe(archivo);
         archivo.on('finish', resolve);
         archivo.on('error', reject);
         respuesta.data.on('error', reject);
     });
 
+    process.stdout.write('PROGRESS:99\n');
     await descargarActualizacionPanel(remota);
     await descargarYExtraerAssets(remota);
 

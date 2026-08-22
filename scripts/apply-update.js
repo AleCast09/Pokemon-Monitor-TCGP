@@ -14,20 +14,20 @@ async function main() {
     // falta bajarla de nuevo - evita dos descargas escribiendo el mismo
     // archivo al mismo tiempo si el usuario aprieta los dos botones seguidos.
     if (fs.existsSync(PENDING_UPDATE_PATH)) {
-        process.stdout.write(JSON.stringify({ ok: true, yaEstaba: true }));
+        process.stdout.write(JSON.stringify({ ok: true, yaEstaba: true }) + '\n');
         return;
     }
     try {
         const local = obtenerVersionLocal();
         const remota = await obtenerVersionRemota();
         if (!esVersionMasNueva(remota.version, local.version)) {
-            process.stdout.write(JSON.stringify({ ok: true, yaActualizado: true }));
+            process.stdout.write(JSON.stringify({ ok: true, yaActualizado: true }) + '\n');
             return;
         }
         await descargarActualizacion(remota);
-        process.stdout.write(JSON.stringify({ ok: true, version: remota.version }));
+        process.stdout.write(JSON.stringify({ ok: true, version: remota.version }) + '\n');
     } catch (e) {
-        process.stdout.write(JSON.stringify({ ok: false, error: e?.message || String(e) }));
+        process.stdout.write(JSON.stringify({ ok: false, error: e?.message || String(e) }) + '\n');
     }
 }
 

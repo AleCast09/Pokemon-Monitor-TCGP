@@ -14,6 +14,7 @@ using System.Net.NetworkInformation;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -445,7 +446,7 @@ public class ControlPanelForm : Form {
     void MostrarAvisoActualizacion(string versionActual, string versionNueva, string discordChannelUrl) {
         var dialogo = new Form {
             Text = "Update available",
-            ClientSize = new Size(380, 210),
+            ClientSize = new Size(380, 235),
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
             MinimizeBox = false,
@@ -454,19 +455,43 @@ public class ControlPanelForm : Form {
         };
         if (File.Exists(rutaIcono)) dialogo.Icon = new Icon(rutaIcono);
 
+        // Icono grande del bot + texto "Monitor Pokemon" bien visible (2026-08-21, a pedido
+        // explicito del usuario: dijo que el aviso pelado "Downloading..." le daba
+        // desconfianza incluso A ELLA MISMA, con ganas de cerrarlo -- nada en pantalla
+        // confirmaba de que programa era ni que seguia vivo). Reusa la misma imagen que ya
+        // usa el logo chico de la ventana principal.
+        if (File.Exists(rutaImagenPokemon)) {
+            var iconoGrande = new PictureBox {
+                Size = new Size(36, 36),
+                Location = new Point(20, 16),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                Image = Image.FromFile(rutaImagenPokemon),
+                BackColor = colorFondo
+            };
+            dialogo.Controls.Add(iconoGrande);
+        }
+        var lblMarca = new Label {
+            Text = "Monitor Pokemon",
+            ForeColor = colorAcento,
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            Location = new Point(62, 22),
+            AutoSize = true
+        };
+        dialogo.Controls.Add(lblMarca);
+
         var lbl = new Label {
             Text = "A new version is available: v" + versionNueva + " (you have v" + versionActual + ").",
             ForeColor = colorTexto,
             Font = new Font("Segoe UI", 9),
-            Location = new Point(20, 20),
-            Size = new Size(340, 50)
+            Location = new Point(20, 56),
+            Size = new Size(340, 30)
         };
         dialogo.Controls.Add(lbl);
 
         var btnDescargar = new Button {
             Text = "Download Now",
             Size = new Size(340, 34),
-            Location = new Point(20, 80),
+            Location = new Point(20, 95),
             FlatStyle = FlatStyle.Flat,
             Cursor = Cursors.Hand
         };
@@ -476,7 +501,7 @@ public class ControlPanelForm : Form {
         var btnManual = new Button {
             Text = "Download Manually (opens browser)",
             Size = new Size(340, 34),
-            Location = new Point(20, 122),
+            Location = new Point(20, 137),
             FlatStyle = FlatStyle.Flat,
             BackColor = colorSuperficie2,
             ForeColor = colorTexto,
@@ -488,7 +513,7 @@ public class ControlPanelForm : Form {
         var btnDiscord = new Button {
             Text = "Open Discord Channel Instead",
             Size = new Size(340, 34),
-            Location = new Point(20, 164),
+            Location = new Point(20, 179),
             FlatStyle = FlatStyle.Flat,
             BackColor = colorSuperficie2,
             ForeColor = colorTexto,
@@ -496,6 +521,31 @@ public class ControlPanelForm : Form {
         };
         btnDiscord.FlatAppearance.BorderColor = colorBorde;
         dialogo.Controls.Add(btnDiscord);
+
+        // Barra de progreso real + estado en texto (2026-08-21, a pedido explicito del
+        // usuario) -- ocupa el mismo lugar que btnDescargar, oculta hasta que empieza la
+        // descarga de verdad. Antes esto se quedaba con el texto pelado "Downloading..."
+        // sin ningun avance visible durante el minuto+ que puede tardar el .exe (~100MB).
+        var barraProgreso = new ProgressBar {
+            Location = new Point(20, 95),
+            Size = new Size(340, 22),
+            Minimum = 0,
+            Maximum = 100,
+            Value = 0,
+            Style = ProgressBarStyle.Continuous,
+            Visible = false
+        };
+        dialogo.Controls.Add(barraProgreso);
+        var lblProgreso = new Label {
+            Text = "Downloading Monitor Pokemon update...",
+            ForeColor = colorTexto,
+            Font = new Font("Segoe UI", 8),
+            Location = new Point(20, 120),
+            Size = new Size(340, 18),
+            TextAlign = ContentAlignment.MiddleCenter,
+            Visible = false
+        };
+        dialogo.Controls.Add(lblProgreso);
 
         AplicarTemaBarraTitulo(dialogo.Handle);
 
@@ -511,18 +561,26 @@ public class ControlPanelForm : Form {
         };
 
         btnDescargar.Click += (s, e) => {
-            btnDescargar.Enabled = false;
             btnManual.Enabled = false;
             btnDiscord.Enabled = false;
-            btnDescargar.Text = "Downloading...";
-            DescargarActualizacionDesdePanel(dialogo);
+            btnDescargar.Visible = false;
+            barraProgreso.Visible = true;
+            lblProgreso.Visible = true;
+            DescargarActualizacionDesdePanel(dialogo, barraProgreso, lblProgreso);
         };
 
         dialogo.ShowDialog(this);
     }
 
-    void DescargarActualizacionDesdePanel(Form dialogo) {
-        string salida = null;
+    // Async (2026-08-21, a pedido explicito del usuario -- ver el comentario largo en
+    // MostrarAvisoActualizacion) para poder leer la salida del proceso hijo LINEA POR LINEA a
+    // medida que llega (antes: ReadToEnd() bloqueante, esperaba TODA la salida junta al final,
+    // asi que no habia forma de mostrar progreso en vivo aunque update-checker.js lo mandara).
+    // Las lineas "PROGRESS:<n>" (ver descargarActualizacion en update-checker.js) actualizan
+    // la barra; la ultima linea (JSON real) es el resultado final, igual que antes.
+    async void DescargarActualizacionDesdePanel(Form dialogo, ProgressBar barra, Label lblEstado) {
+        var lineasSalida = new List<string>();
+        string ultimaLineaJson = null;
         try {
             var psi = new ProcessStartInfo {
                 UseShellExecute = false,
@@ -537,11 +595,38 @@ public class ControlPanelForm : Form {
                 psi.FileName = "node.exe";
                 psi.Arguments = "\"scripts\\apply-update.js\"";
             }
-            var proc = Process.Start(psi);
-            salida = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit(120000);
+            var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+            var tcsSalida = new TaskCompletionSource<bool>();
+            proc.OutputDataReceived += (s, e) => {
+                if (e.Data == null) return;
+                lineasSalida.Add(e.Data);
+                if (e.Data.StartsWith("PROGRESS:")) {
+                    int porcentaje;
+                    if (int.TryParse(e.Data.Substring(9), out porcentaje)) {
+                        porcentaje = Math.Max(0, Math.Min(100, porcentaje));
+                        try {
+                            barra.Invoke((Action)(() => {
+                                barra.Value = porcentaje;
+                                lblEstado.Text = "Downloading Monitor Pokemon update... " + porcentaje + "%";
+                            }));
+                        } catch { }
+                    }
+                } else {
+                    ultimaLineaJson = e.Data;
+                }
+            };
+            proc.Exited += (s, e) => tcsSalida.TrySetResult(true);
+            proc.Start();
+            proc.BeginOutputReadLine();
+
+            var completado = await Task.WhenAny(tcsSalida.Task, Task.Delay(120000));
+            if (completado != tcsSalida.Task) {
+                try { proc.Kill(); } catch { }
+                throw new Exception("Timed out waiting for the update process.");
+            }
+
             var serializer = new JavaScriptSerializer();
-            var resultado = serializer.Deserialize<Dictionary<string, object>>(salida);
+            var resultado = serializer.Deserialize<Dictionary<string, object>>(ultimaLineaJson);
             dialogo.Close();
             if (resultado != null && resultado.ContainsKey("ok") && (bool)resultado["ok"]) {
                 if (EjecutarSwapPanelSiExiste(raiz)) {
@@ -563,7 +648,8 @@ public class ControlPanelForm : Form {
             // distancia — se muestra también la salida cruda (recortada) para que,
             // si esto le pasa a otro usuario, la captura que mande tenga la pista
             // real en vez de solo "Invalid JSON primitive".
-            var detalle = !string.IsNullOrEmpty(salida) ? salida.Substring(0, Math.Min(300, salida.Length)) : "(no output)";
+            var salidaCompleta = string.Join("\n", lineasSalida);
+            var detalle = !string.IsNullOrEmpty(salidaCompleta) ? salidaCompleta.Substring(0, Math.Min(300, salidaCompleta.Length)) : "(no output)";
             MessageBox.Show("Could not download the update: " + ex.Message + "\n\nProcess output: " + detalle, "Monitor Pokemon");
         }
     }
