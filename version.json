@@ -1,7 +1,8 @@
 {
-  "version": "1.5.61",
-  "notesCount": 13,
+  "version": "1.5.62",
+  "notesCount": 6,
   "notes": [
+    "Fixed a real bug: saving Main Path in /setup could fail with Discord's generic \"Something went wrong\" error and no real reason shown (found live, a fresh install with an empty folder could trigger this) - now shows the actual error instead of failing silently.",
     "Fixed a real bug affecting every user: the Google Drive HD image fetch could exhaust its request quota when loading a big collage (was making 2 requests per card) - now shares one folder listing per expansion instead of searching per card, cutting requests way down.",
     "Fixed: when Drive HD kept failing, it used to turn off the \"Normal Cards HD\" toggle for good, needing a manual re-enable in Settings - now pauses itself for a few minutes in memory and retries on its own, no action needed.",
     "Fixed: when Drive HD was off or paused, it also stopped showing cards that were already downloaded in HD - now only blocks new downloads, already-saved cards keep showing HD regardless.",
