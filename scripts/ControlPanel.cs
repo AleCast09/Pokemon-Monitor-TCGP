@@ -1123,12 +1123,17 @@ public class ControlPanelForm : Form {
             "del \"%~f0\"\r\n";
         File.WriteAllText(rutaBat, contenido);
 
+        // Bug real reportado en vivo 2026-08-21: a este ProcessStartInfo le faltaba
+        // WindowStyle = Hidden (las otras ventanas ocultas del proyecto, ej. MatarTodo,
+        // siempre lo llevan junto con CreateNoWindow) -- sin el, un usuario vio la consola
+        // de "ping 127.0.0.1 -n 2" real en pantalla cada vez que se reemplazaba el panel.
         Process.Start(new ProcessStartInfo {
             FileName = "cmd.exe",
             Arguments = "/c \"" + rutaBat + "\"",
             WorkingDirectory = raizBase,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
         });
         return true;
     }

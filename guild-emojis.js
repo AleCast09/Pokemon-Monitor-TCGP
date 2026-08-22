@@ -35,8 +35,6 @@ const FUENTES_EMOJIS = {
     card_stadium: 'element/Kit_de_explorador_DBPR.png',
     item_poke_ball: 'element/Poke_Ball_EP.png',
     carta_profesor_oak: 'element/Carta_del_profesor_Oak_DBPR.png',
-    bolsa_monedas: 'element/coin_bag_3.png',
-    tarjeta_puntos: 'element/Tarjeta_de_puntos_grande.png',
     // Iconos de inventario/Shinedust (2026-08-08, bug real reportado por un usuario): antes
     // vivian hardcodeados como <:Nombre:ID> con el ID de la aplicacion de bot de Ale -- para
     // cualquier otro usuario (su propia aplicacion de bot, sin ese emoji) Discord no podia
@@ -186,7 +184,7 @@ async function limpiarEmojisDuplicados(guild, existentes) {
 const NOMBRES_EMOJIS_DADOS_DE_BAJA = [
     'poke_ball', 'item_master_ball', 'item_ultra_ball', 'item_repelente', 'item_tarjeta_roja',
     'item_mochila_escape', 'item_pokemuneco', 'cordon_union', 'diario', 'leyenda', 'paquete',
-    'estrella_tienda', 'item_polvo_estelar'
+    'estrella_tienda', 'item_polvo_estelar', 'bolsa_monedas', 'tarjeta_puntos'
 ];
 async function limpiarEmojisDadosDeBaja(guild, existentes) {
     let borrados = 0;
