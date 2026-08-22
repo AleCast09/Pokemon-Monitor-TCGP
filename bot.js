@@ -652,7 +652,8 @@ function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
         const expansion = expansionId ? (expansiones[expansionId] || expansionId) : 'No expansion';
         const categoria = categoriaDesdeInfo(cardmaster?.[id]);
         const tipoRareza = tipoRarezaDesdeInfo(cardmaster?.[id]);
-        return { id, nombre, expansion, categoria, tipoRareza };
+        const elemento = elementoDesdeInfo(cardmaster?.[id], nombre);
+        return { id, nombre, expansion, categoria, tipoRareza, elemento };
     });
 
     cartas.sort((a, b) => a.expansion.localeCompare(b.expansion) || a.nombre.localeCompare(b.nombre));
@@ -676,7 +677,8 @@ function obtenerTodasLasCartas(rutaMasterCfg) {
         const expansion = expansionId ? (expansiones[expansionId] || expansionId) : 'No expansion';
         const categoria = categoriaDesdeInfo(info);
         const tipoRareza = tipoRarezaDesdeInfo(info);
-        return { id, nombre, expansion, categoria, tipoRareza };
+        const elemento = elementoDesdeInfo(info, nombre);
+        return { id, nombre, expansion, categoria, tipoRareza, elemento };
     });
 
     cartas.sort((a, b) => a.expansion.localeCompare(b.expansion) || a.nombre.localeCompare(b.nombre));
@@ -1064,12 +1066,89 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
     return payload;
 }
 
-async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pagina = 0, opciones = {}) {
+// Paso intermedio nuevo entre "elegir categoría" y "elegir carta" (2026-08-21, a
+// pedido explícito del usuario): dentro de una categoría de rareza (que agrupa
+// Pokémon Y cartas de Entrenador por igual, ej. "2 Diamonds") deja elegir por
+// elemento/tipo (Fire, Water, Supporter, Item, etc.) antes de ver la lista de
+// cartas — solo muestra las opciones que realmente existen en esa expansión+
+// categoría puntual, nunca la lista completa de 19 elementos/tipos. Se salta
+// (ver el handler de categoria_seleccion) cuando la categoría tiene 0 o 1
+// elemento distinto, para no sumar un clic de más cuando no hay nada que elegir.
+const ELEMENTO_SIN_FILTRO = '_';
+// Sentinel para "sin categoria puntual elegida" (2026-08-21, bug real reportado: /card
+// expansion:X element:Y SIN rarity ignoraba el elemento por completo y mostraba la lista
+// de categorias comun, sin ningun aviso) -- usado cuando se filtra por expansion+elemento
+// a lo largo de TODAS las categorias de esa expansion, no una sola.
+const CATEGORIA_SIN_FILTRO = '_';
+function construirEmbedElementosPorCategoria(cartas, expansion, categoria, opciones = {}) {
+    const prefijo = opciones.prefijo || 'wishlist';
+    const contexto = opciones.contexto || 'your wishlist';
+    const mapaEmojis = opciones.mapaEmojis || {};
+    const filtradas = cartas.filter(c => c.expansion === expansion && c.categoria === categoria);
+
+    const conteo = {};
+    for (const c of filtradas) {
+        const clave = c.elemento || 'Other';
+        conteo[clave] = (conteo[clave] || 0) + 1;
+    }
+    const elementos = Object.keys(conteo).sort((a, b) => a.localeCompare(b));
+    const categoriaConEmoji = (filtradas[0] && formatearCategoriaConIcono(filtradas[0].tipoRareza, mapaEmojis)) || textoSinEmoji(categoria);
+    const lineas = elementos.map(el => `${el} — ${conteo[el]} cards`);
+
+    const embed = new EmbedBuilder()
+        .setTitle(`🔎 ${expansion}`)
+        .setDescription(`${categoriaConEmoji}\n\n${(lineas.join('\n') || 'No cards found.')}\n\n🔎 **Select an element/type** \n(${filtradas.length} cards in ${contexto}):`)
+        .setColor(0xE91E63)
+        .setFooter({ text: `${elementos.length} option(s)` });
+
+    const componentes = [];
+    if (elementos.length) {
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`${prefijo}_elemento_seleccion`)
+            .setPlaceholder('Select an element/type')
+            .addOptions(elementos.slice(0, 25).map(el => {
+                const opcion = {
+                    label: `${el} (${conteo[el]})`.slice(0, 100),
+                    value: `${expansion}::${categoria}::${el}`.slice(0, 100)
+                };
+                const emoji = emojiOpcionPorElemento(el, mapaEmojis);
+                if (emoji) opcion.emoji = emoji;
+                return opcion;
+            }));
+        componentes.push(new ActionRowBuilder().addComponents(menu));
+    }
+    componentes.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${prefijo}_volver_categorias::${expansion}`).setLabel('🔙 Back').setStyle(ButtonStyle.Secondary),
+        // A pedido explicito del usuario 2026-08-21: elegir elemento por elemento puede
+        // ser tedioso si solo quiere ver TODAS las cartas de la categoria de una -- este
+        // boton salta directo a la lista completa sin filtrar, mismo camino que cuando
+        // la categoria tiene 0/1 elemento y el paso se salta solo.
+        new ButtonBuilder().setCustomId(`${prefijo}_elemento_ver_todas::${expansion}::${categoria}`).setLabel('👁️ View All').setStyle(ButtonStyle.Primary)
+    ));
+
+    const payload = { embeds: [embed], components: componentes };
+    const rutaLogo = buscarLogoExpansionBot(expansion);
+    if (rutaLogo) {
+        const extension = path.extname(rutaLogo) || '.png';
+        embed.setThumbnail(`attachment://logo${extension}`);
+        payload.files = [new AttachmentBuilder(rutaLogo, { name: `logo${extension}` })];
+    } else {
+        payload.attachments = [];
+    }
+    return payload;
+}
+
+async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, elemento = ELEMENTO_SIN_FILTRO, pagina = 0, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
     const contexto = opciones.contexto || 'your wishlist';
     const mapaEmojisCartas = opciones.mapaEmojis || {};
+    const filtroElemento = elemento && elemento !== ELEMENTO_SIN_FILTRO ? elemento : null;
+    // Sin categoria puntual (2026-08-21, bug real: /card expansion:X element:Y sin
+    // rarity ignoraba el elemento) -- se filtra por expansion+elemento a lo largo de
+    // TODAS las categorias en vez de una sola.
+    const filtroCategoria = categoria && categoria !== CATEGORIA_SIN_FILTRO ? categoria : null;
 
-    const filtradas = cartas.filter(c => c.expansion === expansion && c.categoria === categoria);
+    const filtradas = cartas.filter(c => c.expansion === expansion && (!filtroCategoria || c.categoria === filtroCategoria) && (!filtroElemento || c.elemento === filtroElemento));
 
     // Bug real: en categorías como "4 Diamonds", cada carta repite el tag de
     // emoji custom 4 veces (uno por diamante) — con 25 cartas por página como
@@ -1078,8 +1157,11 @@ async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pa
     // la interacción colgada para siempre ("no carga"). El tamaño de página
     // ahora se ajusta según cuántas veces se repite el emoji en esta categoría
     // específica, para que nunca se pase del límite sin importar cuántos
-    // diamantes/estrellas tenga.
-    const cantidadEmoji = RAREZA_ICONOS_CARTAS[filtradas[0]?.tipoRareza]?.cantidad || 1;
+    // diamantes/estrellas tenga. Sin categoria puntual (varias mezcladas), se toma el
+    // PEOR caso de todas las cartas filtradas, no solo la primera.
+    const cantidadEmoji = filtroCategoria
+        ? (RAREZA_ICONOS_CARTAS[filtradas[0]?.tipoRareza]?.cantidad || 1)
+        : Math.max(1, ...filtradas.map(c => RAREZA_ICONOS_CARTAS[c.tipoRareza]?.cantidad || 1));
     // ~40 caracteres por cada tag de emoji personalizado repetido, +55 de
     // margen por nombre/numeración/separadores de cada línea — con 3600
     // caracteres de presupuesto (dejando ~500 de margen para el encabezado y
@@ -1100,36 +1182,60 @@ async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, pa
     // El título del embed no puede renderizar emojis custom de Discord (es texto
     // plano) — por eso la categoría con su emoji real va como primera línea de
     // la descripción en vez de en el título.
-    const categoriaConEmoji = (filtradas[0] && formatearCategoriaConIcono(filtradas[0].tipoRareza, mapaEmojisCartas)) || textoSinEmoji(categoria);
+    const categoriaConEmoji = filtroCategoria
+        ? ((filtradas[0] && formatearCategoriaConIcono(filtradas[0].tipoRareza, mapaEmojisCartas)) || textoSinEmoji(categoria))
+        : 'All categories';
+    const lineaCategoria = filtroElemento ? `${categoriaConEmoji} · ${filtroElemento}` : categoriaConEmoji;
+    const descripcionLista = items.length > 0
+        ? `${listaTexto}\n\n🔎 **Select the card you're looking for** \n(${filtradas.length} cards in ${contexto}):`
+        : `No cards match this filter combination.`;
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${expansion}`)
-        .setDescription(`${categoriaConEmoji}\n\n${listaTexto}\n\n🔎 **Select the card you're looking for** \n(${filtradas.length} cards in ${contexto}):`)
+        .setDescription(`${lineaCategoria}\n\n${descripcionLista}`)
         .setColor(0xE91E63)
         .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas}` });
 
-    const menu = new StringSelectMenuBuilder()
-        .setCustomId(`${prefijo}_carta_seleccion::${expansion}::${categoria}::${paginaSegura}`)
-        .setPlaceholder('Select a card')
-        .addOptions(items.map((c, i) => {
-            const opcion = {
-                label: `${inicio + i + 1}. ${c.nombre}`.slice(0, 100),
-                description: textoSinEmoji(c.categoria).slice(0, 100),
-                value: c.id
-            };
-            const emoji = emojiOpcionPorTipoRareza(c.tipoRareza, mapaEmojisCartas);
-            if (emoji) opcion.emoji = emoji;
-            return opcion;
-        }));
+    // Bug real reportado en vivo 2026-08-21 (Invalid Form Body / BASE_TYPE_BAD_LENGTH): un
+    // StringSelectMenu con 0 opciones es invalido para Discord -- pasaba cuando una
+    // combinacion de filtros (ej. expansion+elemento sin ninguna carta real de ese tipo,
+    // caso raro pero posible) dejaba "items" vacio. Ahora solo se arma el menu si hay algo
+    // que elegir; si no, se muestra el aviso en el texto y solo queda el boton de volver.
+    const componentes = [];
+    if (items.length > 0) {
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`${prefijo}_carta_seleccion::${expansion}::${categoria}::${elemento}::${paginaSegura}`)
+            .setPlaceholder('Select a card')
+            .addOptions(items.map((c, i) => {
+                const opcion = {
+                    label: `${inicio + i + 1}. ${c.nombre}`.slice(0, 100),
+                    description: textoSinEmoji(c.categoria).slice(0, 100),
+                    value: c.id
+                };
+                const emoji = emojiOpcionPorTipoRareza(c.tipoRareza, mapaEmojisCartas);
+                if (emoji) opcion.emoji = emoji;
+                return opcion;
+            }));
+        componentes.push(new ActionRowBuilder().addComponents(menu));
+    }
 
-    const componentes = [new ActionRowBuilder().addComponents(menu)];
-
+    // El botón "Back" vuelve al paso de elementos solo si de verdad hubo uno que
+    // elegir (2+ opciones distintas) DENTRO de una categoria puntual, O si se llegó
+    // acá con "👁️ View All" desde ese mismo paso (opciones.origenElementos) -- si en
+    // cambio se saltó por completo (categoría con 0/1 elemento, se llegó acá directo
+    // desde /card con el filtro de rareza sin pasar por el dropdown, o es el atajo
+    // nuevo de expansion+elemento SIN categoria puntual), volver ahí sería un paso
+    // vacío/confuso o directamente roto (sin categoria no hay elementos que mostrar),
+    // así que va directo a categorías.
+    const botonVolverId = (filtroCategoria && (filtroElemento || opciones.origenElementos))
+        ? `${prefijo}_volver_elementos::${expansion}::${categoria}`
+        : `${prefijo}_volver_categorias::${expansion}`;
     const filaNavegacion = [
-        new ButtonBuilder().setCustomId(`${prefijo}_volver_categorias::${expansion}`).setLabel('🔙 Back').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(botonVolverId).setLabel('🔙 Back').setStyle(ButtonStyle.Secondary)
     ];
     if (totalPaginas > 1) {
         filaNavegacion.push(
-            new ButtonBuilder().setCustomId(`${prefijo}_expansion_pagina_${paginaSegura - 1}::${expansion}::${categoria}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
-            new ButtonBuilder().setCustomId(`${prefijo}_expansion_pagina_${paginaSegura + 1}::${expansion}::${categoria}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
+            new ButtonBuilder().setCustomId(`${prefijo}_expansion_pagina_${paginaSegura - 1}::${expansion}::${categoria}::${elemento}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
+            new ButtonBuilder().setCustomId(`${prefijo}_expansion_pagina_${paginaSegura + 1}::${expansion}::${categoria}::${elemento}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
         );
     }
     componentes.push(new ActionRowBuilder().addComponents(...filaNavegacion));
@@ -1382,32 +1488,39 @@ async function autoApagadoSinCuentasHabilitado() {
 // diagnosticar sin pedirles que abran CMD/PowerShell.
 const RUTA_LOG_DRIVE_HD = path.join(__dirname, 'drive_hd_errores.txt');
 
-// Auto-apagado + aviso (2026-08-11, bug real reportado por el usuario: tenia Drive HD
+// Pausa temporal + aviso (2026-08-11, bug real reportado por el usuario: tenia Drive HD
 // prendido con una API key configurada pero SIN acceso concedido a la carpeta compartida
 // -- cada busqueda de carta pagaba un 403 o un timeout de 8s por CADA carta antes de caer
-// a la imagen local, volviendo lentisimo cualquier listado. Antes esto solo quedaba en un
-// .txt que nadie miraba -- ahora, despues de varios fallos seguidos, se apaga Drive HD
-// solo (mismo interruptor que /setup) y se avisa por Discord, en vez de seguir pagando el
-// costo de 8s por carta para siempre sin que el usuario se entere de que esta roto.
-const UMBRAL_FALLOS_DRIVE_HD_AUTO_APAGAR = 5;
+// a la imagen local, volviendo lentisimo cualquier listado).
+// CAMBIADO 2026-08-21 (a pedido explicito del usuario, tras un caso real en vivo): la
+// primera version APAGABA el toggle real de /setup (escribia 'off' en la DB) -- pero la
+// causa mas comun de 5 fallos seguidos no es una key rota/sin acceso (permanente), es la
+// cuota de la API de Google Drive agotada por una rafaga de pedidos (temporal, se
+// resetea sola en minutos). Apagar el toggle de verdad obligaba a ir a /setup a mano
+// para reactivarlo incluso despues de que la cuota ya se habia recuperado sola. Ahora es
+// una PAUSA en memoria (nunca toca el toggle real ni la DB) -- durante la pausa ni
+// siquiera se intenta la red (evita seguir pagando 403/timeout mientras la cuota sigue
+// agotada), y pasado el tiempo se reintenta solo, sin que el usuario tenga que hacer nada.
+const UMBRAL_FALLOS_DRIVE_HD_PAUSA = 5;
+const DURACION_PAUSA_DRIVE_HD_MS = 5 * 60 * 1000;
 let _fallosDriveHdSeguidos = 0;
+let _driveHdPausadoHastaBot = 0;
 let _avisoDriveHdRotoEnviado = false;
-async function apagarDriveHdYAvisar(motivoResumen) {
-    try {
-        await db.run(`INSERT INTO estados_modulos (nombre, status) VALUES ('drive_hd_regular', 'off') ON CONFLICT(nombre) DO UPDATE SET status = excluded.status`);
-    } catch (e) {
-        console.error('❌ No se pudo apagar Drive HD automaticamente:', e?.message || e);
-        return;
-    }
+function driveHdEnPausaBot() {
+    return Date.now() < _driveHdPausadoHastaBot;
+}
+async function pausarDriveHdYAvisar(motivoResumen) {
+    _driveHdPausadoHastaBot = Date.now() + DURACION_PAUSA_DRIVE_HD_MS;
     if (_avisoDriveHdRotoEnviado) return; // uno solo por corrida, no floodear
     _avisoDriveHdRotoEnviado = true;
     try {
         const destino = await obtenerDestinoNotificacion(client);
         if (!destino) return;
+        const minutos = Math.round(DURACION_PAUSA_DRIVE_HD_MS / 60000);
         const embed = {
-            title: '⚠️ Drive HD turned off automatically',
+            title: '⚠️ Drive HD paused temporarily',
             color: 0xE67E22,
-            description: `Drive HD kept failing (${motivoResumen}) — normally that means the API key doesn't have access to the shared Drive folder yet (ask whoever manages it to share it with you), or the key itself is wrong.\n\nTurned it off for now so card lookups stay fast (falls back to the normal local images). Re-enable it in \`/setup\` once the access is sorted out.`
+            description: `Drive HD kept failing (${motivoResumen}) — usually means the API's request quota got used up (resets on its own), or occasionally that the API key doesn't have access to the shared Drive folder yet.\n\nPaused it for ${minutos} minutes so card lookups stay fast in the meantime (falls back to the normal local images) — it'll try Drive again automatically after that, no action needed. If this keeps happening repeatedly, check that the API key has access to the shared folder.`
         };
         if (destino.tipo === 'webhook') {
             const contenido = destino.ownerId ? `<@${destino.ownerId}>` : undefined;
@@ -1417,7 +1530,7 @@ async function apagarDriveHdYAvisar(motivoResumen) {
             await usuario.send({ embeds: [embed] });
         }
     } catch (e) {
-        console.error('❌ No se pudo avisar que Drive HD se apago solo:', e?.message || e);
+        console.error('❌ No se pudo avisar que Drive HD se pauso solo:', e?.message || e);
     }
 }
 function registrarErrorDriveHd(origen, cartaId, motivo, detalle = '') {
@@ -1429,21 +1542,52 @@ function registrarErrorDriveHd(origen, cartaId, motivo, detalle = '') {
     console.log(`DEBUG: Drive HD (${origen}) carta=${cartaId} motivo=${motivo}`, detalle);
 
     _fallosDriveHdSeguidos++;
-    if (_fallosDriveHdSeguidos >= UMBRAL_FALLOS_DRIVE_HD_AUTO_APAGAR) {
+    if (_fallosDriveHdSeguidos >= UMBRAL_FALLOS_DRIVE_HD_PAUSA) {
         _fallosDriveHdSeguidos = 0;
-        apagarDriveHdYAvisar(`${UMBRAL_FALLOS_DRIVE_HD_AUTO_APAGAR} fallos seguidos, ultimo: ${motivo}`);
+        pausarDriveHdYAvisar(`${UMBRAL_FALLOS_DRIVE_HD_PAUSA} fallos seguidos, ultimo: ${motivo}`);
     }
+}
+
+// Cache en memoria del listado de archivos por subcarpeta de expansion (2026-08-21, bug
+// real encontrado en vivo: drive_hd_errores.txt mostraba una racha de HTTP 403/timeouts
+// justo al cargar un collage de varias cartas de golpe). Antes CADA carta hacia su PROPIA
+// busqueda "q=...name contains..." contra la API -- un collage de 20 cartas nuevas
+// disparaba hasta 40 pedidos seguidos (busqueda + descarga por carta), suficiente para
+// chocar contra la cuota de la API y devolver 403 en cascada. Ahora se trae el listado
+// COMPLETO de la subcarpeta UNA sola vez (1 pedido) y se cachea en memoria -- cartas de
+// la MISMA expansion (muy comun dentro de un mismo collage) comparten ese listado, bajando
+// de ~2 pedidos por carta a ~1 por expansion + 1 por carta (solo la descarga, que sigue
+// siendo individual). Compartido entre la carpeta normal y la de Gold -- los IDs de
+// carpeta de Drive son unicos globalmente, no hay riesgo de que se pisen entre si.
+const _driveListadoArchivosCacheBot = new Map(); // subfolderId -> files[]
+async function obtenerListadoArchivosDriveBot(subfolderId, apiKey) {
+    if (_driveListadoArchivosCacheBot.has(subfolderId)) return _driveListadoArchivosCacheBot.get(subfolderId);
+    const resp = await axios.get('https://www.googleapis.com/drive/v3/files', {
+        params: { q: `'${subfolderId}' in parents`, key: apiKey, fields: 'files(id,name)', pageSize: 400 },
+        timeout: 8000
+    });
+    const archivos = resp.data.files || [];
+    _driveListadoArchivosCacheBot.set(subfolderId, archivos);
+    return archivos;
 }
 
 async function obtenerImagenHDBot(cardMap, cartaId, forzar = false) {
     const info = cardMap?.[cartaId];
     if (!info?.ExpansionID || !info?.CollectionNumber || !GOOGLE_DRIVE_API_KEY_BOT || !GOOGLE_DRIVE_HD_ENABLED_BOT) return null;
-    if (!forzar && !(await driveHdRegularHabilitado())) return null;
 
     const localId = String(info.CollectionNumber).padStart(3, '0');
     const dirCache = path.join(DRIVE_CACHE_DIR_BOT, info.ExpansionID);
     const rutaCache = path.join(dirCache, `${localId}.png`);
+    // El chequeo del toggle "Normal Cards HD" (y el apagado automatico por fallos
+    // seguidos) va DESPUES de mirar la cache en disco (2026-08-21, bug real
+    // encontrado en vivo: apagar el toggle -- a mano o automatico por cuota agotada
+    // -- hacia que TAMBIEN dejaran de servirse las cartas que ya estaban descargadas
+    // de antes, sin ningun motivo real -- servir un archivo que ya esta en disco no
+    // gasta cuota de la API para nada). Ahora el toggle solo bloquea DESCARGAS
+    // nuevas, nunca las que ya se tienen guardadas.
     if (fs.existsSync(rutaCache)) return rutaCache;
+    if (!forzar && !(await driveHdRegularHabilitado())) return null;
+    if (driveHdEnPausaBot()) return null;
 
     try {
         let mapaCarpetas = await obtenerMapaCarpetasDriveBot();
@@ -1457,11 +1601,8 @@ async function obtenerImagenHDBot(cardMap, cartaId, forzar = false) {
             return null;
         }
 
-        const busqueda = await axios.get('https://www.googleapis.com/drive/v3/files', {
-            params: { q: `'${subfolderId}' in parents and name contains '${info.ExpansionID}-${localId}'`, key: GOOGLE_DRIVE_API_KEY_BOT, fields: 'files(id,name)', pageSize: 5 },
-            timeout: 5000
-        });
-        const archivo = (busqueda.data.files || [])[0];
+        const listado = await obtenerListadoArchivosDriveBot(subfolderId, GOOGLE_DRIVE_API_KEY_BOT);
+        const archivo = listado.find(f => f.name.includes(`${info.ExpansionID}-${localId}`));
         if (!archivo) {
             registrarErrorDriveHd('normal', cartaId, 'archivo_no_encontrado_en_carpeta', `${info.ExpansionID}-${localId}`);
             return null;
@@ -1534,6 +1675,7 @@ async function obtenerImagenGoldBot(cardMap, cartaId) {
     const dirCache = path.join(DRIVE_CACHE_DIR_GOLD_BOT, info.ExpansionID);
     const rutaCache = path.join(dirCache, `${localId}.png`);
     if (fs.existsSync(rutaCache)) return rutaCache;
+    if (driveHdEnPausaBot()) return null;
 
     try {
         let mapaCarpetas = await obtenerMapaCarpetasDriveGoldBot();
@@ -1547,11 +1689,8 @@ async function obtenerImagenGoldBot(cardMap, cartaId) {
             return null;
         }
 
-        const busqueda = await axios.get('https://www.googleapis.com/drive/v3/files', {
-            params: { q: `'${subfolderId}' in parents and name contains '${info.ExpansionID}-${localId}'`, key: GOOGLE_DRIVE_API_KEY_BOT, fields: 'files(id,name)', pageSize: 5 },
-            timeout: 5000
-        });
-        const archivo = (busqueda.data.files || [])[0];
+        const listado = await obtenerListadoArchivosDriveBot(subfolderId, GOOGLE_DRIVE_API_KEY_BOT);
+        const archivo = listado.find(f => f.name.includes(`${info.ExpansionID}-${localId}`));
         if (!archivo) {
             registrarErrorDriveHd('gold', cartaId, 'archivo_no_encontrado_en_carpeta', `${info.ExpansionID}-${localId}`);
             return null;
@@ -1662,7 +1801,7 @@ function maxCopiasCarta(mapaCopias, cartaId) {
 async function generarCollageCartas(items, rutaMasterPath, mapaCopias, esGoldCards = false) {
     if (!items?.length || !rutaMasterPath) return null;
     const cardMap = cargarCardMap(rutaMasterPath);
-    const CELL_W = 150, CELL_H = 210, GAP = 8, PADDING = 12;
+    const CELL_W = 300, CELL_H = 420, GAP = 8, PADDING = 12;
     const COLS = Math.min(5, items.length);
 
     const celdas = [];
@@ -1886,14 +2025,47 @@ function resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis) {
 // Las cartas de Entrenador (Partidario/Objeto/Herramienta/Fósil/Estadio) no
 // tienen elemento (Fuego, Agua, etc.) — cardmaster.json las distingue con el
 // campo TrainerType (1=Partidario, 2=Objeto, 3=Herramienta, 4=Fósil,
-// 5=Estadio), presente sin importar la rareza de la carta. Fósil y Estadio
-// todavía no tienen ícono propio en assets/element, por eso caen al genérico
-// de Trainer (bolsa_monedas) hasta que se agregue uno.
-const EMOJI_POR_TRAINER_TYPE = { 1: 'card_supporter', 2: 'card_item', 3: 'card_tool' };
+// 5=Estadio), presente sin importar la rareza de la carta.
+// Mapeo confirmado 2026-08-21 contra 5 cartas reales del juego (capturas del usuario):
+// Koga(Partidario)=1, Caramelo Raro(Objeto)=2, Heavy Helmet(Pokémon Tool)=3, Ámbar
+// Viejo/fósil(Objeto)=4, Área de Entrenamiento(Estadio)=5. El 4 (fósiles) se muestra
+// como "Objeto" igual que el 2 en el juego real, así que comparte ícono/texto con Item.
+// El 5 (Estadio) todavía no tiene ícono propio en assets/ -- sin entrada, tagTipoBot()
+// devuelve '' y queda solo el texto, sin ícono roto.
+const EMOJI_POR_TRAINER_TYPE = { 1: 'card_supporter', 2: 'card_item', 3: 'card_tool', 4: 'card_item' };
+const TEXTO_POR_TRAINER_TYPE = { 1: 'Supporter', 2: 'Item', 3: 'Pokémon Tool', 4: 'Item', 5: 'Stadium' };
 function trainerTypeDesdeId(cartaId, rutaMasterPath) {
     if (!rutaMasterPath) return undefined;
     const cardmaster = leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json'));
     return cardmaster?.[cartaId]?.TrainerType;
+}
+
+// Campo "elemento" para el filtro de Element/Type en All Cards/Wishlist/Gold Cards
+// (2026-08-21, a pedido explicito del usuario): mismo criterio que ya usa "Element:"
+// en el detalle de una carta puntual (tipoIngles para Pokémon, TrainerType para
+// Entrenador) — reusado acá para poder agrupar/filtrar la LISTA de cartas, no solo
+// mostrarlo en el detalle de una ya elegida.
+function elementoDesdeInfo(info, nombreCarta) {
+    if (!info) return null;
+    const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombreCarta)];
+    if (tipoIngles) return tipoIngles;
+    if (info.TrainerType !== undefined) return TEXTO_POR_TRAINER_TYPE[info.TrainerType] || 'Trainer';
+    return null;
+}
+
+const ELEMENTOS_TIPO_POKEMON = ['Water', 'Fire', 'Psychic', 'Grass', 'Lightning', 'Fighting', 'Darkness', 'Metal', 'Dragon', 'Colorless'];
+function emojiKeyDesdeElemento(elemento) {
+    if (!elemento) return null;
+    if (ELEMENTOS_TIPO_POKEMON.includes(elemento)) return `type_${elemento.toLowerCase()}`;
+    if (elemento === 'Supporter') return 'card_supporter';
+    if (elemento === 'Item') return 'card_item';
+    if (elemento === 'Pokémon Tool') return 'card_tool';
+    return null; // Stadium -- sin icono propio en assets/ todavia
+}
+function emojiOpcionPorElemento(elemento, mapaEmojis) {
+    const clave = emojiKeyDesdeElemento(elemento);
+    const emojiId = clave ? mapaEmojis?.[clave] : null;
+    return emojiId ? { id: emojiId, name: clave } : null;
 }
 
 async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volver = null, guild = null, datosGold = null) {
@@ -1930,9 +2102,10 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         const tagElemento = tagTipoBot(`type_${tipoIngles.toLowerCase()}`, mapaEmojis);
         elemento = tagElemento ? `${tagElemento} ${tipoIngles}` : tipoIngles;
     } else if (trainerType !== undefined) {
-        const nombreEmoji = EMOJI_POR_TRAINER_TYPE[trainerType] || 'bolsa_monedas';
+        const textoTrainer = TEXTO_POR_TRAINER_TYPE[trainerType] || 'Trainer';
+        const nombreEmoji = EMOJI_POR_TRAINER_TYPE[trainerType];
         const tagTrainer = tagTipoBot(nombreEmoji, mapaEmojis);
-        elemento = tagTrainer ? `${tagTrainer} Trainer` : 'Trainer';
+        elemento = tagTrainer ? `${tagTrainer} ${textoTrainer}` : textoTrainer;
     } else {
         elemento = 'Unknown';
     }
@@ -1978,7 +2151,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     if (volver) {
         botones.push(
             new ButtonBuilder()
-                .setCustomId(`${volver.prefijo}_volver_carta_lista::${volver.expansion}::${volver.categoria}::${volver.pagina}`)
+                .setCustomId(`${volver.prefijo}_volver_carta_lista::${volver.expansion}::${volver.categoria}::${volver.elemento || ELEMENTO_SIN_FILTRO}::${volver.pagina}`)
                 .setLabel('🔙 Back')
                 .setStyle(ButtonStyle.Secondary)
         );
@@ -6061,6 +6234,14 @@ function construirEmbedXml(resultados, nombreCarta, cartaId, pagina = 0, prefijo
     return { embeds: [embed], files: archivosPayload };
 }
 
+// Mismos valores que devuelve elementoDesdeInfo() (arriba) -- 10 tipos de Pokémon +
+// 4 subtipos de Entrenador (Estadio no aplica acá porque no tiene un valor "limpio"
+// para elegir sin más contexto, pero sigue filtrable desde el paso de botones).
+const OPCIONES_ELEMENTO = [
+    'Water', 'Fire', 'Psychic', 'Grass', 'Lightning', 'Fighting', 'Darkness', 'Metal', 'Dragon', 'Colorless',
+    'Supporter', 'Item', 'Pokémon Tool'
+].map(el => ({ name: el, value: el }));
+
 function construirSlashCommands() {
     return [
         new SlashCommandBuilder().setName('setup').setDescription('Opens the bot control panel'),
@@ -6085,6 +6266,7 @@ function construirSlashCommands() {
                     { name: '2 Star Shiny', value: '2-star-shiny' },
                     { name: 'Crown Rare', value: 'crown-rare' }
                 ))
+            .addStringOption(opt => opt.setName('element').setDescription('Filter by element/type, only shows what exists for the expansion/rarity chosen (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('name').setDescription('Search for a card directly by name (optional)').setAutocomplete(true).setRequired(false)),
         new SlashCommandBuilder().setName('wishlist').setDescription('Runs the Cards Wishlist flow')
             .addStringOption(opt => opt.setName('expansion').setDescription('Filter by expansion before picking the name (optional)').setAutocomplete(true).setRequired(false))
@@ -6103,6 +6285,7 @@ function construirSlashCommands() {
                     { name: '2 Star Shiny', value: '2-star-shiny' },
                     { name: 'Crown Rare', value: 'crown-rare' }
                 ))
+            .addStringOption(opt => opt.setName('element').setDescription('Filter by element/type, only shows what exists for the expansion/rarity chosen (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('name').setDescription('Search for a card in your wishlist directly by name (optional)').setAutocomplete(true).setRequired(false)),
         new SlashCommandBuilder().setName('goldcards').setDescription('Runs the Gold Cards flow')
             .addStringOption(opt => opt.setName('expansion').setDescription('Filter by expansion before picking the name (optional)').setAutocomplete(true).setRequired(false))
@@ -6121,6 +6304,7 @@ function construirSlashCommands() {
                     { name: '2 Star Shiny', value: '2-star-shiny' },
                     { name: 'Crown Rare', value: 'crown-rare' }
                 ))
+            .addStringOption(opt => opt.setName('element').setDescription('Filter by element/type, only shows what exists for the expansion/rarity chosen (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('name').setDescription('Search a Gold-eligible card directly by name (optional)').setAutocomplete(true).setRequired(false)),
         new SlashCommandBuilder()
             .setName('extract')
@@ -6221,8 +6405,8 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
                 const botonVolver = componentesActuales.find(c => typeof c.custom_id === 'string' && c.custom_id.includes('_volver_carta_lista::'));
                 let volver = null;
                 if (botonVolver) {
-                    const [, expansion, categoria, pagina] = botonVolver.custom_id.split('::');
-                    volver = { prefijo, expansion, categoria, pagina };
+                    const [, expansion, categoria, elemento, pagina] = botonVolver.custom_id.split('::');
+                    volver = { prefijo, expansion, categoria, elemento, pagina };
                 }
                 const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
                 const rutaMasterPath = rutaMasterCfg?.webhook_url;
@@ -7148,10 +7332,40 @@ client.on('interactionCreate', async interaction => {
         const rarezaElegida = interaction.options.getString('rarity');
         let porExpansion = expansionElegida ? base.filter(c => c.expansion === expansionElegida) : base;
         if (rarezaElegida) porExpansion = porExpansion.filter(c => c.tipoRareza === rarezaElegida);
-        const coincidencias = (focused ? porExpansion.filter(c => c.nombre.toLowerCase().includes(focused)) : porExpansion)
+
+        // Campo "element" (2026-08-21, bug real reportado: antes usaba una lista fija de
+        // opciones sin importar expansion/rarity ya elegidos -- ej. "Crown Rare" solo tiene
+        // un elemento posible pero mostraba todas igual, dejando elegir uno que no existe
+        // ahi y sin resultados despues). Ahora es autocompletado real, filtrado por
+        // expansion+rarity si ya estan puestos, mostrando solo lo que existe de verdad.
+        if (campoFocus.name === 'element') {
+            const elementos = [...new Set(porExpansion.map(c => c.elemento).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+            const coincidenciasElemento = (focused ? elementos.filter(e => e.toLowerCase().includes(focused)) : elementos)
+                .slice(0, 25)
+                .map(e => ({ name: e, value: e }));
+            return interaction.respond(coincidenciasElemento).catch(() => {});
+        }
+
+        // Campo "name" tambien filtra por "element" si ya esta puesto (2026-08-21, bug real
+        // reportado: mostraba nombres de OTROS elementos, ej. eligiendo element:Item igual
+        // sugeria nombres de Pokemon comunes que no son Item para nada).
+        const elementoElegido = interaction.options.getString('element');
+        const porElemento = elementoElegido ? porExpansion.filter(c => c.elemento === elementoElegido) : porExpansion;
+        const coincidencias = (focused ? porElemento.filter(c => c.nombre.toLowerCase().includes(focused)) : porElemento)
             .slice(0, 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
         return interaction.respond(coincidencias).catch(() => {});
+    }
+
+    // Bug real reportado 2026-08-21: si se usa "rarity" o "element" SIN "expansion"
+    // (ej. /card rarity:2-diamond solo), ninguno de los atajos de abajo matcheaba
+    // (todos requieren "expansion" primero) -- caia al panel generico de siempre sin
+    // ninguna explicacion, dando la impresion de que el filtro "no hacia nada". Ahora
+    // avisa explicito que "expansion" es obligatorio junto con esos dos filtros.
+    if (interaction.isChatInputCommand() && ['card', 'wishlist', 'goldcards'].includes(interaction.commandName)
+        && !interaction.options.getString('name') && !interaction.options.getString('expansion')
+        && (interaction.options.getString('rarity') || interaction.options.getString('element'))) {
+        return await interaction.reply({ content: '❌ "rarity" and "element" need "expansion" set too — pick an expansion first.', ephemeral: true });
     }
 
     // Atajo /card expansion:X (y opcionalmente rarity:Y) SIN elegir un nombre
@@ -7173,6 +7387,7 @@ client.on('interactionCreate', async interaction => {
         try {
             const expansionElegida = interaction.options.getString('expansion');
             const rarezaElegida = interaction.options.getString('rarity');
+            const elementoElegido = interaction.options.getString('element');
             const fuente = FUENTES_CARTAS.allcards;
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
@@ -7181,10 +7396,20 @@ client.on('interactionCreate', async interaction => {
             // arriba) -- se toma la categoria (etiqueta) de la primera carta que
             // matchee esa rareza dentro de la expansion, en vez de mantener una
             // tabla de conversion aparte.
+            // FIX real 2026-08-21 (bug reportado en vivo: /card expansion:X element:Y
+            // SIN rarity ignoraba el elemento por completo y mostraba la lista de
+            // categorias comun, sin ningun aviso): si hay "element" pero no "rarity",
+            // se filtra por expansion+elemento a lo largo de TODAS las categorias
+            // (CATEGORIA_SIN_FILTRO), en vez de requerir "rarity" primero.
             const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
-            const payload = cartaConEsaRareza
-                ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
-                : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis });
+            let payload;
+            if (cartaConEsaRareza) {
+                payload = await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, elementoElegido || ELEMENTO_SIN_FILTRO, 0, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            } else if (elementoElegido) {
+                payload = await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, CATEGORIA_SIN_FILTRO, elementoElegido, 0, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            } else {
+                payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis });
+            }
             await interaction.editReply(payload);
         } catch (error) {
             console.error('DEBUG: error mostrando cartas por expansion/rareza:', error?.message || error);
@@ -7249,7 +7474,26 @@ client.on('interactionCreate', async interaction => {
         const rarezaElegida = interaction.options.getString('rarity');
         let porExpansion = expansionElegida ? base.filter(c => c.expansion === expansionElegida) : base;
         if (rarezaElegida) porExpansion = porExpansion.filter(c => c.tipoRareza === rarezaElegida);
-        const coincidencias = (focused ? porExpansion.filter(c => c.nombre.toLowerCase().includes(focused)) : porExpansion)
+
+        // Campo "element" (2026-08-21, bug real reportado: antes usaba una lista fija de
+        // opciones sin importar expansion/rarity ya elegidos -- ej. "Crown Rare" solo tiene
+        // un elemento posible pero mostraba todas igual, dejando elegir uno que no existe
+        // ahi y sin resultados despues). Ahora es autocompletado real, filtrado por
+        // expansion+rarity si ya estan puestos, mostrando solo lo que existe de verdad.
+        if (campoFocus.name === 'element') {
+            const elementos = [...new Set(porExpansion.map(c => c.elemento).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+            const coincidenciasElemento = (focused ? elementos.filter(e => e.toLowerCase().includes(focused)) : elementos)
+                .slice(0, 25)
+                .map(e => ({ name: e, value: e }));
+            return interaction.respond(coincidenciasElemento).catch(() => {});
+        }
+
+        // Campo "name" tambien filtra por "element" si ya esta puesto (2026-08-21, bug real
+        // reportado: mostraba nombres de OTROS elementos, ej. eligiendo element:Item igual
+        // sugeria nombres de Pokemon comunes que no son Item para nada).
+        const elementoElegido = interaction.options.getString('element');
+        const porElemento = elementoElegido ? porExpansion.filter(c => c.elemento === elementoElegido) : porExpansion;
+        const coincidencias = (focused ? porElemento.filter(c => c.nombre.toLowerCase().includes(focused)) : porElemento)
             .slice(0, 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
         return interaction.respond(coincidencias).catch(() => {});
@@ -7271,13 +7515,19 @@ client.on('interactionCreate', async interaction => {
         try {
             const expansionElegida = interaction.options.getString('expansion');
             const rarezaElegida = interaction.options.getString('rarity');
+            const elementoElegido = interaction.options.getString('element');
             const fuente = FUENTES_CARTAS.goldcards;
             const { cartas, rutaMasterPath, mapaCopias } = await obtenerCartasGoldCacheadas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
             const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
-            const payload = cartaConEsaRareza
-                ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
-                : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis });
+            let payload;
+            if (cartaConEsaRareza) {
+                payload = await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, elementoElegido || ELEMENTO_SIN_FILTRO, 0, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            } else if (elementoElegido) {
+                payload = await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, CATEGORIA_SIN_FILTRO, elementoElegido, 0, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            } else {
+                payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis });
+            }
             await interaction.editReply(payload);
         } catch (error) {
             console.error('DEBUG: error mostrando gold cards por expansion/rareza:', error?.message || error);
@@ -7336,7 +7586,26 @@ client.on('interactionCreate', async interaction => {
         const rarezaElegida = interaction.options.getString('rarity');
         let porExpansion = expansionElegida ? base.filter(c => c.expansion === expansionElegida) : base;
         if (rarezaElegida) porExpansion = porExpansion.filter(c => c.tipoRareza === rarezaElegida);
-        const coincidencias = (focused ? porExpansion.filter(c => c.nombre.toLowerCase().includes(focused)) : porExpansion)
+
+        // Campo "element" (2026-08-21, bug real reportado: antes usaba una lista fija de
+        // opciones sin importar expansion/rarity ya elegidos -- ej. "Crown Rare" solo tiene
+        // un elemento posible pero mostraba todas igual, dejando elegir uno que no existe
+        // ahi y sin resultados despues). Ahora es autocompletado real, filtrado por
+        // expansion+rarity si ya estan puestos, mostrando solo lo que existe de verdad.
+        if (campoFocus.name === 'element') {
+            const elementos = [...new Set(porExpansion.map(c => c.elemento).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+            const coincidenciasElemento = (focused ? elementos.filter(e => e.toLowerCase().includes(focused)) : elementos)
+                .slice(0, 25)
+                .map(e => ({ name: e, value: e }));
+            return interaction.respond(coincidenciasElemento).catch(() => {});
+        }
+
+        // Campo "name" tambien filtra por "element" si ya esta puesto (2026-08-21, bug real
+        // reportado: mostraba nombres de OTROS elementos, ej. eligiendo element:Item igual
+        // sugeria nombres de Pokemon comunes que no son Item para nada).
+        const elementoElegido = interaction.options.getString('element');
+        const porElemento = elementoElegido ? porExpansion.filter(c => c.elemento === elementoElegido) : porExpansion;
+        const coincidencias = (focused ? porElemento.filter(c => c.nombre.toLowerCase().includes(focused)) : porElemento)
             .slice(0, 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
         return interaction.respond(coincidencias).catch(() => {});
@@ -7355,13 +7624,19 @@ client.on('interactionCreate', async interaction => {
         try {
             const expansionElegida = interaction.options.getString('expansion');
             const rarezaElegida = interaction.options.getString('rarity');
+            const elementoElegido = interaction.options.getString('element');
             const fuente = FUENTES_CARTAS.wishlist;
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas();
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
             const cartaConEsaRareza = rarezaElegida ? (cartas || []).find(c => c.expansion === expansionElegida && c.tipoRareza === rarezaElegida) : null;
-            const payload = cartaConEsaRareza
-                ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, 0, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
-                : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis });
+            let payload;
+            if (cartaConEsaRareza) {
+                payload = await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, cartaConEsaRareza.categoria, elementoElegido || ELEMENTO_SIN_FILTRO, 0, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            } else if (elementoElegido) {
+                payload = await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, CATEGORIA_SIN_FILTRO, elementoElegido, 0, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            } else {
+                payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis });
+            }
             await interaction.editReply(payload);
         } catch (error) {
             console.error('DEBUG: error mostrando wishlist por expansion/rareza:', error?.message || error);
@@ -8080,7 +8355,13 @@ client.on('interactionCreate', async interaction => {
             const categoria = interaction.values[0].slice(separador + 2);
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-            const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            // Paso de elemento/tipo (2026-08-21) solo si hay 2+ opciones distintas dentro de
+            // esta categoría -- si hay 0 o 1, no hay nada real que elegir, se salta directo
+            // a la lista de cartas (evita un clic de más cuando no aporta nada).
+            const elementosDistintos = new Set((cartas || []).filter(c => c.expansion === expansion && c.categoria === categoria).map(c => c.elemento || 'Other'));
+            const payload = elementosDistintos.size > 1
+                ? construirEmbedElementosPorCategoria(cartas || [], expansion, categoria, { prefijo, contexto: fuente.contexto, mapaEmojis })
+                : await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, ELEMENTO_SIN_FILTRO, 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
             return await interaction.editReply(payload);
         } catch (error) {
             // Red de seguridad: si algo similar al bug de "4 Diamonds" (texto
@@ -8091,17 +8372,65 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
+    if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_elemento_seleccion' || interaction.customId === 'allcards_elemento_seleccion' || interaction.customId === 'goldcards_elemento_seleccion')) {
+        await interaction.deferUpdate();
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const [expansion, categoria, elemento] = interaction.values[0].split('::');
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, elemento, 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando cartas del elemento:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this element/type. Try again.', embeds: [], components: [] });
+        }
+    }
+
+    if (interaction.isButton() && (interaction.customId.startsWith('wishlist_volver_elementos::') || interaction.customId.startsWith('allcards_volver_elementos::') || interaction.customId.startsWith('goldcards_volver_elementos::'))) {
+        await interaction.deferUpdate();
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const [expansion, categoria] = interaction.customId.replace(`${prefijo}_volver_elementos::`, '').split('::');
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = construirEmbedElementosPorCategoria(cartas || [], expansion, categoria, { prefijo, contexto: fuente.contexto, mapaEmojis });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error volviendo a elementos:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show elements/types. Try again.', embeds: [], components: [] });
+        }
+    }
+
+    if (interaction.isButton() && (interaction.customId.startsWith('wishlist_elemento_ver_todas::') || interaction.customId.startsWith('allcards_elemento_ver_todas::') || interaction.customId.startsWith('goldcards_elemento_ver_todas::'))) {
+        await interaction.deferUpdate();
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const [expansion, categoria] = interaction.customId.replace(`${prefijo}_elemento_ver_todas::`, '').split('::');
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, ELEMENTO_SIN_FILTRO, 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias, origenElementos: true });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando todas las cartas de la categoría:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this category. Try again.', embeds: [], components: [] });
+        }
+    }
+
     if (interaction.isStringSelectMenu() && (interaction.customId.startsWith('wishlist_carta_seleccion::') || interaction.customId.startsWith('allcards_carta_seleccion::') || interaction.customId.startsWith('goldcards_carta_seleccion::'))) {
         await interaction.deferUpdate();
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
-            const [, expansion, categoria, pagina] = interaction.customId.split('::');
+            const [, expansion, categoria, elemento, pagina] = interaction.customId.split('::');
             const cartaId = interaction.values[0];
             const { cartas, rutaMasterPath, mapaCopias, umbral } = await fuente.obtenerCartas(interaction.user.id);
             const carta = (cartas || []).find(c => c.id === cartaId);
             const datosGold = prefijo === 'goldcards' ? { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral } : null;
-            const payload = await construirEmbedDetalleCarta(cartaId, carta?.nombre || cartaId, rutaMasterPath, { prefijo, expansion, categoria, pagina }, interaction.guild, datosGold);
+            const payload = await construirEmbedDetalleCarta(cartaId, carta?.nombre || cartaId, rutaMasterPath, { prefijo, expansion, categoria, elemento, pagina }, interaction.guild, datosGold);
             return await interaction.editReply(payload);
         } catch (error) {
             console.error('DEBUG: error mostrando el detalle de la carta:', error?.message || error);
@@ -8114,10 +8443,10 @@ client.on('interactionCreate', async interaction => {
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
-            const [, expansion, categoria, pagina] = interaction.customId.split('::');
+            const [, expansion, categoria, elemento, pagina] = interaction.customId.split('::');
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-            const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, parseInt(pagina, 10) || 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, elemento, parseInt(pagina, 10) || 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
             return await interaction.editReply(payload);
         } catch (error) {
             console.error('DEBUG: error volviendo a la lista de cartas:', error?.message || error);
@@ -8931,12 +9260,12 @@ client.on('interactionCreate', async interaction => {
                 const prefijo = prefijoDeCartas(interaction.customId);
                 const fuente = FUENTES_CARTAS[prefijo];
                 const resto = interaction.customId.replace(`${prefijo}_expansion_pagina_`, '');
-                const [paginaTexto, expansion, categoria] = resto.split('::');
+                const [paginaTexto, expansion, categoria, elemento] = resto.split('::');
                 const pagina = parseInt(paginaTexto, 10) || 0;
 
                 const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
                 const mapaEmojisPagina = await obtenerMapaEmojisGuild(interaction.guild);
-                const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, pagina, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisPagina, rutaMasterPath, mapaCopias });
+                const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, elemento, pagina, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisPagina, rutaMasterPath, mapaCopias });
                 return await interaction.editReply(payload);
             } catch (error) {
                 console.error('DEBUG: error cambiando de pagina:', error?.message || error);

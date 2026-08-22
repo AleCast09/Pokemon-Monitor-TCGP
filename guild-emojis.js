@@ -30,9 +30,8 @@ const FUENTES_EMOJIS = {
     card_tool: 'element/card_tool.png',
     poke_ball: 'element/Poke_Ball.png',
     item_poke_ball: 'element/Poke_Ball_EP.png',
-    item_master_ball: 'element/64px-Master_Ball_EP.png',
+    item_master_ball: 'element/Master_Ball_EP.png',
     item_ultra_ball: 'element/64px-Ultra_Ball_EP.png',
-    item_polvo_estelar: 'element/64px-Polvo_estelar_EP.png',
     item_repelente: 'element/64px-Repelente_EP.png',
     item_tarjeta_roja: 'element/64px-Tarjeta_roja_EP.png',
     item_mochila_escape: 'element/Mochila_escape_EP.png',
@@ -149,8 +148,46 @@ function obtenerErroresEmojisGuild(guildId) {
     return erroresPorGuild.get(guildId) || {};
 }
 
+// Limpieza de duplicados (2026-08-21, bug real reportado por el usuario -- confirmado con
+// una captura real del servidor de un tercero: dos emojis con el mismo nombre exacto, uno al
+// lado del otro). Discord permite nombres repetidos sin quejarse (no hay ninguna proteccion de
+// su lado), asi que si el proceso reinicia justo en medio de crear un emoji (algo que paso
+// seguido probando en vivo esta sesion), una corrida nueva puede no ver todavia el que se
+// acaba de crear y termina subiendo OTRO con el mismo nombre. Cada duplicado ocupa un espacio
+// de los 50 que da Discord sin usuario -- con varios duplicados, emojis genuinamente nuevos
+// (los ultimos del lote, por orden) se quedan sin espacio y fallan con "Maximum number of
+// emojis reached", exactamente el sintoma reportado. Se queda con el MAS VIEJO de cada nombre
+// (createdTimestamp mas chico) y borra el resto -- conserva el que mas tiempo lleva en uso
+// (mas chance de estar ya referenciado en algun cache/mensaje viejo).
+async function limpiarEmojisDuplicados(guild, existentes) {
+    const porNombre = new Map();
+    for (const emoji of existentes.values()) {
+        if (!porNombre.has(emoji.name)) porNombre.set(emoji.name, []);
+        porNombre.get(emoji.name).push(emoji);
+    }
+    let borrados = 0;
+    for (const [nombre, lista] of porNombre) {
+        if (lista.length < 2) continue;
+        lista.sort((a, b) => (a.createdTimestamp || 0) - (b.createdTimestamp || 0));
+        for (const duplicado of lista.slice(1)) {
+            try {
+                await duplicado.delete('Duplicado — mismo nombre que otro emoji ya existente');
+                borrados++;
+            } catch (e) {
+                console.error(`❌ No se pudo borrar el emoji duplicado "${nombre}" (${duplicado.id}) en ${guild.name}:`, e?.message || e);
+            }
+        }
+    }
+    return borrados;
+}
+
 async function construirMapaEmojisGuild(guild) {
     let existentes = await guild.emojis.fetch();
+    const borrados = await limpiarEmojisDuplicados(guild, existentes);
+    if (borrados > 0) {
+        console.log(`DEBUG: se borraron ${borrados} emoji(s) duplicado(s) en ${guild.name}`);
+        existentes = await guild.emojis.fetch();
+    }
     const mapa = {};
     const errores = {};
     for (const [nombre, rutaRelativa] of Object.entries(FUENTES_EMOJIS)) {

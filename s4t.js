@@ -12,7 +12,6 @@ iniciarAutoSyncCardTypes();
 
 const INGEST_AUTH_TOKEN = process.env.INGEST_AUTH_TOKEN || '';
 const REQUIRE_INGEST_AUTH = /^true$/i.test(process.env.REQUIRE_INGEST_AUTH || (process.env.NODE_ENV === 'production' ? 'true' : 'false'));
-const S4T_FORWARD_XML = /^true$/i.test(process.env.S4T_FORWARD_XML || 'false');
 const CAMPO_INVISIBLE = '​';
 
 function validarIngestToken(req) {
@@ -217,7 +216,7 @@ async function cargarConfigEmbed() {
 // Sin esto, las cartas de Entrenador salían sin ningún ícono en los canales
 // de S4T (bug real 2026-07-23), a diferencia de los Pokémon que sí tenían
 // su emoji de tipo.
-const EMOJI_POR_TRAINER_TYPE = { 1: 'card_supporter', 2: 'card_item', 3: 'card_tool' };
+const EMOJI_POR_TRAINER_TYPE = { 1: 'card_supporter', 2: 'card_item', 3: 'card_tool', 4: 'card_item' };
 
 function obtenerTagTipoPorNombre(nombreIngles, code, cardmaster) {
     if (!nombreIngles) return null;
@@ -888,16 +887,36 @@ async function driveHdRegularHabilitado() {
     return fila?.status === 'on';
 }
 
+// Ver la nota igual en bot.js (obtenerListadoArchivosDriveBot) -- mismo motivo: antes
+// cada carta hacia su PROPIA busqueda contra la API, y un pack/collage de varias cartas
+// nuevas de golpe podia chocar contra la cuota (403 en cascada, confirmado en vivo
+// 2026-08-21). Comparte cuota con bot.js pero corre en su propio proceso PM2, asi que
+// necesita su PROPIA caché en memoria (no se puede compartir entre procesos).
+const _driveListadoArchivosCache = new Map(); // subfolderId -> files[]
+async function obtenerListadoArchivosDrive(subfolderId) {
+    if (_driveListadoArchivosCache.has(subfolderId)) return _driveListadoArchivosCache.get(subfolderId);
+    const resp = await axios.get('https://www.googleapis.com/drive/v3/files', {
+        params: { q: `'${subfolderId}' in parents`, key: GOOGLE_DRIVE_API_KEY, fields: 'files(id,name)', pageSize: 400 },
+        timeout: 8000
+    });
+    const archivos = resp.data.files || [];
+    _driveListadoArchivosCache.set(subfolderId, archivos);
+    return archivos;
+}
+
 async function obtenerImagenHD(cardMap, code) {
     if (!code || !cardMap || !cardMap[code] || !GOOGLE_DRIVE_API_KEY || !GOOGLE_DRIVE_HD_ENABLED) return null;
-    if (!(await driveHdRegularHabilitado())) return null;
     const { ExpansionID, CollectionNumber } = cardMap[code];
     if (!ExpansionID || !CollectionNumber) return null;
 
     const localId = String(CollectionNumber).padStart(3, '0');
     const dirCache = path.join(DRIVE_CACHE_DIR, ExpansionID);
     const rutaCache = path.join(dirCache, `${localId}.png`);
+    // Ver la nota igual en bot.js (obtenerImagenHDBot) -- el toggle va DESPUES de mirar
+    // la cache en disco, para no dejar de servir cartas ya descargadas cuando se apaga
+    // (a mano o automatico por cuota agotada).
     if (fs.existsSync(rutaCache)) return rutaCache;
+    if (!(await driveHdRegularHabilitado())) return null;
 
     try {
         let mapaCarpetas = await obtenerMapaCarpetasDrive();
@@ -909,11 +928,8 @@ async function obtenerImagenHD(cardMap, code) {
         }
         if (!subfolderId) return null;
 
-        const busqueda = await axios.get('https://www.googleapis.com/drive/v3/files', {
-            params: { q: `'${subfolderId}' in parents and name contains '${ExpansionID}-${localId}'`, key: GOOGLE_DRIVE_API_KEY, fields: 'files(id,name)', pageSize: 5 },
-            timeout: 5000
-        });
-        const archivo = (busqueda.data.files || [])[0];
+        const listado = await obtenerListadoArchivosDrive(subfolderId);
+        const archivo = listado.find(f => f.name.includes(`${ExpansionID}-${localId}`));
         if (!archivo) return null;
 
         const descarga = await axios.get(`https://www.googleapis.com/drive/v3/files/${archivo.id}`, {
@@ -1622,28 +1638,37 @@ app.post('/', upload.any(), async (req, res) => {
                 console.error(`DEBUG: error enviando canal=${data.tipoCanal}`, e?.response?.status || '', e?.message || e);
             });
 
-            if (S4T_FORWARD_XML) {
-                // Solo reenvía el XML si llegó adjunto de verdad en esta petición
-                // (multipart) — eso es lo que refleja si el checkbox "Send Account
-                // XML" de la herramienta que lee el emulador estaba tildado o no.
-                // El fallback a disco (xmlInput con source='disk') es solo para el
-                // matching de cuenta/pull más arriba, no debe disparar un reenvío
-                // a Discord que el usuario no pidió con ese checkbox.
-                let xmlBuffer = null;
-                let xmlName = null;
-                if (req.files) {
-                    const xmlFile = req.files.find(f => f.originalname.toLowerCase().endsWith('.xml'));
-                    if (xmlFile) { xmlBuffer = xmlFile.buffer; xmlName = xmlFile.originalname; }
-                }
-                if (!xmlBuffer && xmlInput && xmlInput.source === 'multipart') {
-                    xmlBuffer = Buffer.from(xmlInput.xmlContent, 'utf8');
-                    xmlName = xmlInput.xmlName;
-                }
-                if (xmlBuffer && xmlName) {
-                    const formXml = new FormData();
-                    formXml.append('files[0]', xmlBuffer, { filename: xmlName });
-                    await axios.post(canalDb.webhook_url, formXml, { headers: formXml.getHeaders() }).catch(() => {});
-                }
+            // Solo reenvía el XML si llegó adjunto de verdad en esta petición
+            // (multipart) — eso es lo que refleja si el checkbox "Send Account XML"
+            // de la herramienta que lee el emulador estaba tildado o no (s4tSendAccountXml/
+            // sendAccountXml en su settings.ini). El fallback a disco (xmlInput con
+            // source='disk') es solo para el matching de cuenta/pull más arriba, no debe
+            // disparar un reenvío a Discord que el usuario no pidió con ese checkbox.
+            //
+            // FIX real 2026-08-21 (bug reportado en vivo por el usuario: tenia
+            // s4tSendAccountXml=1 tildado y el XML igual nunca llegaba al canal): esto
+            // antes tambien dependia de una variable de entorno interna S4T_FORWARD_XML,
+            // que por default es 'false' y no la escribe ningun asistente de setup ni
+            // .env.example -- solo funcionaba en la instalacion de produccion del usuario
+            // porque la habia agregado a mano tiempo atras. Cualquier instalacion nueva
+            // (de cualquier usuario, no solo este caso) tenia el reenvio de XML apagado
+            // para siempre sin ninguna forma de activarlo desde la app. La señal real ya
+            // esta mas abajo (si el XML llego adjunto de verdad) -- no hace falta ningun
+            // flag extra.
+            let xmlBuffer = null;
+            let xmlName = null;
+            if (req.files) {
+                const xmlFile = req.files.find(f => f.originalname.toLowerCase().endsWith('.xml'));
+                if (xmlFile) { xmlBuffer = xmlFile.buffer; xmlName = xmlFile.originalname; }
+            }
+            if (!xmlBuffer && xmlInput && xmlInput.source === 'multipart') {
+                xmlBuffer = Buffer.from(xmlInput.xmlContent, 'utf8');
+                xmlName = xmlInput.xmlName;
+            }
+            if (xmlBuffer && xmlName) {
+                const formXml = new FormData();
+                formXml.append('files[0]', xmlBuffer, { filename: xmlName });
+                await axios.post(canalDb.webhook_url, formXml, { headers: formXml.getHeaders() }).catch(() => {});
             }
           } catch (errEnvio) {
             console.error(`DEBUG: fallo procesando el envio para canal="${data.tipoCanal}" (carta perdida sin esto):`, errEnvio?.message || errEnvio);
