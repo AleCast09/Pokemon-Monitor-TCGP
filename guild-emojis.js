@@ -26,24 +26,17 @@ const FUENTES_EMOJIS = {
     type_dragon: 'element/type_dragon.avif',
     type_colorless: 'element/type_colorless.avif',
     card_supporter: 'element/card_supporter.png',
-    card_item: 'element/card_item.png',
+    card_item: 'element/Casco_Dentado_EP.png',
     card_tool: 'element/card_tool.png',
-    poke_ball: 'element/Poke_Ball.png',
+    // Agregados 2026-08-22, a pedido explicito del usuario: antes fosil compartia el
+    // mismo icono que Objeto (misma categoria mostrada en el juego real, ver comentario en
+    // TEXTO_POR_TRAINER_TYPE en bot.js), y Estadio no tenia icono propio en absoluto.
+    card_fossil: 'element/Fósil_aleta_LPZA.png',
+    card_stadium: 'element/Kit_de_explorador_DBPR.png',
     item_poke_ball: 'element/Poke_Ball_EP.png',
-    item_master_ball: 'element/Master_Ball_EP.png',
-    item_ultra_ball: 'element/64px-Ultra_Ball_EP.png',
-    item_repelente: 'element/64px-Repelente_EP.png',
-    item_tarjeta_roja: 'element/64px-Tarjeta_roja_EP.png',
-    item_mochila_escape: 'element/Mochila_escape_EP.png',
-    item_pokemuneco: 'element/Pokemuneco_EP.png',
     carta_profesor_oak: 'element/Carta_del_profesor_Oak_DBPR.png',
     bolsa_monedas: 'element/coin_bag_3.png',
-    cordon_union: 'element/Cordon_union_LPA.png',
-    diario: 'element/Diario_DBPR.png',
-    leyenda: 'element/Leyenda.png',
-    paquete: 'element/Paquete_DBPR.png',
     tarjeta_puntos: 'element/Tarjeta_de_puntos_grande.png',
-    estrella_tienda: 'element/fFIdmpWM6662789b86b3d_1717729435_420x420.png',
     // Iconos de inventario/Shinedust (2026-08-08, bug real reportado por un usuario): antes
     // vivian hardcodeados como <:Nombre:ID> con el ID de la aplicacion de bot de Ale -- para
     // cualquier otro usuario (su propia aplicacion de bot, sin ese emoji) Discord no podia
@@ -181,11 +174,40 @@ async function limpiarEmojisDuplicados(guild, existentes) {
     return borrados;
 }
 
+// Nombres que en algun momento estuvieron en FUENTES_EMOJIS y ya no (2026-08-22, a pedido
+// explicito del usuario): sacar una clave de FUENTES_EMOJIS solo hace que el bot deje de
+// CREARLA -- no borra la que ya existe en un servidor real, asi que se queda ocupando uno de
+// los 50 espacios para siempre. Eso es justo lo que paso probando en vivo: 12 emojis
+// confirmados sin uso (ver el chequeo real contra el codigo) se sacaron del mapa, pero
+// seguian sentados en el servidor, y por eso los nuevos (card_fossil/card_stadium) no
+// entraban. Esta lista es explicita a proposito -- nunca se borra un emoji solo por "no estar
+// en FUENTES_EMOJIS", eso arriesgaria borrar un emoji propio del usuario que nada tiene que
+// ver con el bot y que por casualidad no matchea ningun nombre nuestro actual.
+const NOMBRES_EMOJIS_DADOS_DE_BAJA = [
+    'poke_ball', 'item_master_ball', 'item_ultra_ball', 'item_repelente', 'item_tarjeta_roja',
+    'item_mochila_escape', 'item_pokemuneco', 'cordon_union', 'diario', 'leyenda', 'paquete',
+    'estrella_tienda', 'item_polvo_estelar'
+];
+async function limpiarEmojisDadosDeBaja(guild, existentes) {
+    let borrados = 0;
+    for (const emoji of existentes.values()) {
+        if (!NOMBRES_EMOJIS_DADOS_DE_BAJA.includes(emoji.name)) continue;
+        try {
+            await emoji.delete('Dado de baja -- ya no esta en FUENTES_EMOJIS, ocupaba espacio sin uso');
+            borrados++;
+        } catch (e) {
+            console.error(`❌ No se pudo borrar el emoji dado de baja "${emoji.name}" (${emoji.id}) en ${guild.name}:`, e?.message || e);
+        }
+    }
+    return borrados;
+}
+
 async function construirMapaEmojisGuild(guild) {
     let existentes = await guild.emojis.fetch();
-    const borrados = await limpiarEmojisDuplicados(guild, existentes);
-    if (borrados > 0) {
-        console.log(`DEBUG: se borraron ${borrados} emoji(s) duplicado(s) en ${guild.name}`);
+    const borradosDuplicados = await limpiarEmojisDuplicados(guild, existentes);
+    const borradosDeBaja = await limpiarEmojisDadosDeBaja(guild, existentes);
+    if (borradosDuplicados > 0 || borradosDeBaja > 0) {
+        console.log(`DEBUG: se borraron ${borradosDuplicados} duplicado(s) y ${borradosDeBaja} emoji(s) dado(s) de baja en ${guild.name}`);
         existentes = await guild.emojis.fetch();
     }
     const mapa = {};

@@ -2032,7 +2032,7 @@ function resolverCategoriaFormateadaCarta(cartaId, rutaMasterPath, mapaEmojis) {
 // como "Objeto" igual que el 2 en el juego real, así que comparte ícono/texto con Item.
 // El 5 (Estadio) todavía no tiene ícono propio en assets/ -- sin entrada, tagTipoBot()
 // devuelve '' y queda solo el texto, sin ícono roto.
-const EMOJI_POR_TRAINER_TYPE = { 1: 'card_supporter', 2: 'card_item', 3: 'card_tool', 4: 'card_item' };
+const EMOJI_POR_TRAINER_TYPE = { 1: 'card_supporter', 2: 'card_item', 3: 'card_tool', 4: 'card_fossil', 5: 'card_stadium' };
 const TEXTO_POR_TRAINER_TYPE = { 1: 'Supporter', 2: 'Item', 3: 'Pokémon Tool', 4: 'Item', 5: 'Stadium' };
 function trainerTypeDesdeId(cartaId, rutaMasterPath) {
     if (!rutaMasterPath) return undefined;
@@ -2060,7 +2060,8 @@ function emojiKeyDesdeElemento(elemento) {
     if (elemento === 'Supporter') return 'card_supporter';
     if (elemento === 'Item') return 'card_item';
     if (elemento === 'Pokémon Tool') return 'card_tool';
-    return null; // Stadium -- sin icono propio en assets/ todavia
+    if (elemento === 'Stadium') return 'card_stadium';
+    return null;
 }
 function emojiOpcionPorElemento(elemento, mapaEmojis) {
     const clave = emojiKeyDesdeElemento(elemento);
@@ -6551,7 +6552,13 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
             new ButtonBuilder().setCustomId('goldcards_umbral').setLabel('⚙️ Threshold').setStyle(ButtonStyle.Secondary)
         );
 
-        const bannerPath = path.join(__dirname, 'assets', 'embeds', 'card_banner.png');
+        // Bug real reportado 2026-08-22 (a pedido explicito del usuario): a diferencia de
+        // All Cards/Wishlist (que ya eligen un wallpaper al azar del repositorio compartido,
+        // ver elegirBannerAllCardsAleatorio), Gold Cards se habia quedado con una imagen
+        // FIJA de siempre. Reusa el mismo repositorio/carpeta que All Cards (misma carpeta
+        // "Pokemon Fundas" -- Gold Cards es una vista especial del mismo catalogo, no hace
+        // falta una carpeta separada solo para esto).
+        const bannerPath = await elegirBannerAllCardsAleatorio();
         const symbolPath = path.join(__dirname, 'assets', 'embeds', 'symbol.png');
         const archivos = [];
         if (fs.existsSync(bannerPath)) {
