@@ -267,9 +267,17 @@ public class ControlPanelForm : Form {
         if (confirmacion != DialogResult.Yes) return;
 
         try {
+            // Excluir el propio PID (2026-08-22, mismo bug real que en Repair Broken Files):
+            // este Panel matchea su propio nombre en la lista de procesos a matar, asi que sin
+            // este filtro se mataba a si mismo antes de llegar a borrar los archivos pendientes
+            // o mostrar el mensaje de "Done" de mas abajo -- el cierre del panel ahora es
+            // explicito (Environment.Exit) al final, despues de terminar todo lo demas, en vez
+            // de un efecto secundario a mitad de camino del propio Stop-Process.
+            int miPid = Process.GetCurrentProcess().Id;
             var raizEscapada = raiz.Replace("'", "''");
             var script =
-                "Get-Process MonitorPokemon,MonitorPokemonPanel -ErrorAction SilentlyContinue | Stop-Process -Force; " +
+                "Get-Process MonitorPokemon,MonitorPokemonPanel -ErrorAction SilentlyContinue | " +
+                "Where-Object { $_.Id -ne " + miPid + " } | Stop-Process -Force; " +
                 "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe'\" | " +
                 "Where-Object { $_.CommandLine -and $_.CommandLine.Contains('" + raizEscapada + "') } | " +
                 "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
@@ -286,7 +294,8 @@ public class ControlPanelForm : Form {
         try { File.Delete(rutaPendienteRestart); } catch { }
         try { File.Delete(Path.Combine(raiz, ".pending_update.json")); } catch { }
 
-        MessageBox.Show("Done. Everything was force-stopped.\n\nIf a MonitorPokemon.new.exe file exists in this folder, an update was mid-way through - delete MonitorPokemon.exe and rename MonitorPokemon.new.exe to MonitorPokemon.exe before pressing Start again.", "Monitor Pokemon");
+        MessageBox.Show("Done. Everything was force-stopped, including this panel - reopen it from \"Open Control Panel.bat\" whenever you need it again.\n\nIf a MonitorPokemon.new.exe file exists in this folder, an update was mid-way through - delete MonitorPokemon.exe and rename MonitorPokemon.new.exe to MonitorPokemon.exe before pressing Start again.", "Monitor Pokemon");
+        Environment.Exit(0);
     }
 
     // "Repair Broken Files" (2026-08-21, a pedido explicito del usuario -- caso real en vivo:
@@ -299,7 +308,7 @@ public class ControlPanelForm : Form {
     // version mas nueva de GitHub Releases (mismas URLs "latest/download" ya usadas por
     // "Download Manually"), y prende todo de nuevo -- sin depender de que el chequeo normal de
     // actualizacion detecte que hace falta, ni de que el usuario sepa cual carpeta es la real.
-    void RepararArchivosRotos() {
+    async void RepararArchivosRotos() {
         var confirmacion = MessageBox.Show(
             "This force-stops everything, then re-downloads the app and its assets fresh from the latest release, overwriting anything in this folder (your saved token/settings are kept).\n\nUse this if something stays broken after a normal update (wrong icons, stale files) or you're not sure this is the right/only copy running.\n\nContinue?",
             "Repair Broken Files",
@@ -308,10 +317,57 @@ public class ControlPanelForm : Form {
         );
         if (confirmacion != DialogResult.Yes) return;
 
+        // Barra de progreso real (2026-08-22, a pedido explicito del usuario, mismo motivo que
+        // la de "Download Now": WebClient.DownloadFile antes bloqueaba en silencio sin ningun
+        // avance visible durante los ~100MB del .exe). Assets primero (chico, ~10% del total
+        // estimado) y despues el .exe (grande, resto) -- pesos aproximados, no hace falta un
+        // HEAD previo para saber el tamaño exacto de antemano.
+        var formProgreso = new Form {
+            Text = "Repairing...",
+            Size = new Size(380, 130),
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            StartPosition = FormStartPosition.CenterScreen,
+            BackColor = colorFondo
+        };
+        var barraReparar = new ProgressBar {
+            Location = new Point(20, 40),
+            Size = new Size(324, 22),
+            Minimum = 0,
+            Maximum = 100,
+            Value = 0,
+            Style = ProgressBarStyle.Continuous
+        };
+        var lblReparar = new Label {
+            Text = "Stopping everything...",
+            ForeColor = colorTexto,
+            Font = new Font("Segoe UI", 8),
+            Location = new Point(20, 15),
+            Size = new Size(324, 18)
+        };
+        formProgreso.Controls.Add(lblReparar);
+        formProgreso.Controls.Add(barraReparar);
+        formProgreso.Show(this);
+        Action<int, string> actualizarProgreso = (pct, texto) => {
+            try {
+                barraReparar.Value = Math.Max(0, Math.Min(100, pct));
+                if (texto != null) lblReparar.Text = texto;
+            } catch { }
+        };
+
         var raizEscapada = raiz.Replace("'", "''");
         try {
+            // Excluir el propio PID (2026-08-22, bug real reportado en vivo: el boton se
+            // quedaba "muerto" a mitad de camino, sin descargar ni prender nada) -- este
+            // mismo Panel (MonitorPokemonPanel.exe) matchea su propio nombre en la lista de
+            // arriba, asi que sin este filtro se mataba A SI MISMO como efecto secundario
+            // del primer paso, y todo el codigo de despues (descarga, copia, IniciarBot)
+            // nunca llegaba a correr -- el proceso que lo estaba ejecutando ya no existia.
+            int miPid = Process.GetCurrentProcess().Id;
             var scriptMatar =
-                "Get-Process MonitorPokemon,MonitorPokemonPanel -ErrorAction SilentlyContinue | Stop-Process -Force; " +
+                "Get-Process MonitorPokemon,MonitorPokemonPanel -ErrorAction SilentlyContinue | " +
+                "Where-Object { $_.Id -ne " + miPid + " } | Stop-Process -Force; " +
                 "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe'\" | " +
                 "Where-Object { $_.CommandLine -and $_.CommandLine.Contains('" + raizEscapada + "') } | " +
                 "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
@@ -320,7 +376,10 @@ public class ControlPanelForm : Form {
             };
             Process.Start(psiMatar).WaitForExit();
         } catch (Exception ex) {
+            formProgreso.Close();
             MessageBox.Show("Could not stop the running processes: " + ex.Message, "Monitor Pokemon");
+            startHabilitado = true;
+            RefrescarEstado();
             return;
         }
 
@@ -330,12 +389,30 @@ public class ControlPanelForm : Form {
         try { File.Delete(Path.Combine(raiz, ".pending_update.json")); } catch { }
 
         try {
+            // Forzar TLS 1.2 (2026-08-22, bug real reportado en vivo: "No se puede crear un
+            // canal seguro SSL/TLS" al descargar de GitHub) -- WebClient/.NET usa el protocolo
+            // "SystemDefault" del SO si no se le dice otra cosa, y en varios Windows eso no
+            // incluye TLS 1.2 habilitado por default (GitHub ya no acepta nada mas viejo). El
+            // resto del programa nunca lo necesito porque las descargas normales (Download Now,
+            // Check for Updates) corren por Node/axios, no por WebClient de .NET -- este es el
+            // unico lugar que usa WebClient directamente.
+            System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12;
             string tempAssets = Path.Combine(Path.GetTempPath(), "MonitorPokemon-assets-repair.zip");
             string tempExe = Path.Combine(Path.GetTempPath(), "MonitorPokemon-repair.exe");
             using (var client = new System.Net.WebClient()) {
-                client.DownloadFile("https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip", tempAssets);
-                client.DownloadFile("https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe", tempExe);
+                // Assets (0-10%) y .exe (10-100%) -- pesos aproximados por tamaño tipico, no
+                // hace falta un HEAD previo para saber el real de antemano.
+                client.DownloadProgressChanged += (s, e) => actualizarProgreso(
+                    (int)(e.ProgressPercentage * 0.10), "Downloading assets... " + e.ProgressPercentage + "%");
+                actualizarProgreso(1, "Downloading assets...");
+                await client.DownloadFileTaskAsync("https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip", tempAssets);
             }
+            using (var client = new System.Net.WebClient()) {
+                client.DownloadProgressChanged += (s, e) => actualizarProgreso(
+                    10 + (int)(e.ProgressPercentage * 0.90), "Downloading Monitor Pokemon... " + e.ProgressPercentage + "%");
+                await client.DownloadFileTaskAsync("https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe", tempExe);
+            }
+            actualizarProgreso(100, "Installing...");
 
             var scriptExtraer = "Expand-Archive -Path '" + tempAssets.Replace("'", "''") + "' -DestinationPath '" + raizEscapada + "' -Force";
             var psiExtraer = new ProcessStartInfo("powershell", "-NoProfile -WindowStyle Hidden -Command \"" + scriptExtraer + "\"") {
@@ -344,7 +421,36 @@ public class ControlPanelForm : Form {
             Process.Start(psiExtraer).WaitForExit();
 
             string exeDestino = Path.Combine(raiz, "MonitorPokemon.exe");
-            File.Copy(tempExe, exeDestino, true);
+            // Delete + Move en vez de Copy (2026-08-22, bug real confirmado en vivo: "Acceso
+            // denegado" seguia fallando incluso con 25 reintentos de File.Copy a lo largo de
+            // ~50s -- probando a mano en ese momento exacto, un simple Rename-Item SI funcionaba
+            // sin problema, lo que apunta a Windows Defender re-escaneando el archivo cada vez
+            // que File.Copy vuelve a ESCRIBIR contenido sobre el destino, autoboicoteando cada
+            // intento siguiente. launcher.js ya evita exactamente este problema en su propio
+            // camino de actualizacion (iniciarActualizacion) borrando primero y despues
+            // MOVIENDO el archivo nuevo -- un rename es una operacion de metadata, no una
+            // escritura de contenido, así que no dispara el mismo re-escaneo.
+            Exception ultimoErrorCopia = null;
+            bool copiado = false;
+            for (int intento = 1; intento <= 25 && !copiado; intento++) {
+                bool reintentar = false;
+                try {
+                    try { File.Delete(exeDestino); } catch { }
+                    File.Move(tempExe, exeDestino);
+                    copiado = true;
+                } catch (Exception exCopia) {
+                    ultimoErrorCopia = exCopia;
+                    reintentar = intento < 25;
+                }
+                // await no puede ir dentro de un catch con el compilador viejo (csc.exe de
+                // .NET Framework, no soporta C# 6+) -- por eso el delay queda afuera, gatillado
+                // por esta bandera en vez de estar directamente en el catch.
+                if (reintentar) {
+                    actualizarProgreso(100, "Installing... (file locked, retrying " + intento + "/25)");
+                    await Task.Delay(2000);
+                }
+            }
+            if (!copiado) throw ultimoErrorCopia;
 
             try { File.Delete(tempAssets); } catch { }
             try { File.Delete(tempExe); } catch { }
@@ -360,9 +466,14 @@ public class ControlPanelForm : Form {
                 File.WriteAllText(Path.Combine(raiz, "version.json"), jsonRemoto);
             }
         } catch (Exception ex) {
+            formProgreso.Close();
             MessageBox.Show("Everything was stopped, but the fresh download/repair failed: " + ex.Message + "\n\nCheck your internet connection and try again, or use \"Download Manually\" instead.", "Monitor Pokemon");
+            startHabilitado = true;
+            RefrescarEstado();
             return;
         }
+
+        formProgreso.Close();
 
         // Mismo aviso de "Sync Channels + re-guardar Main Path" que ya manda una actualizacion
         // normal (ver avisarPasosManualesTrasDescarga en update-checker.js) -- Repair hace su
@@ -383,6 +494,8 @@ public class ControlPanelForm : Form {
 
         MessageBox.Show("Repair complete. Starting Monitor Pokemon...", "Monitor Pokemon");
         IniciarBot();
+        startHabilitado = true;
+        RefrescarEstado();
     }
 
     // "Quit" (2026-08-06, a pedido explicito del usuario): mismo comportamiento
@@ -719,7 +832,7 @@ public class ControlPanelForm : Form {
 
         var botonReparar = NuevoBoton("🔧 Repair Broken Files", 30, 247, 225);
         AplicarEstiloPeligro(botonReparar);
-        botonReparar.Click += (s, e) => { RepararArchivosRotos(); startHabilitado = true; System.Threading.Thread.Sleep(500); RefrescarEstado(); };
+        botonReparar.Click += (s, e) => RepararArchivosRotos();
 
         NuevoTitulo("S4T (paste in P BOT)", 30, 348);
         txtS4t = NuevoCampo(30, 368, 225);

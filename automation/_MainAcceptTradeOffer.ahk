@@ -136,6 +136,36 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
     }
 }
 
+; Igual que esperarNeedleYTap pero sin ninguna accion al encontrarla (2026-08-22, mismo
+; patron ya usado en _DonorOfferCard.ahk/_DonorRespondAndFinalize.ahk): deja la pantalla
+; intacta para poder sacar una foto real ANTES de tocar.
+esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000) {
+    global adbPath, puerto, g_winTitle
+    inicio := A_TickCount
+    Loop {
+        tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
+        AdbScreenshot(adbPath, puerto, tempFile)
+        encontrado := false
+        if (FileExist(tempFile)) {
+            pBitmap := Gdip_CreateBitmapFromFile(tempFile)
+            FileDelete, %tempFile%
+            if (pBitmap) {
+                pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
+                if (pNeedle) {
+                    vPos := ""
+                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                }
+                Gdip_DisposeImage(pBitmap)
+            }
+        }
+        if (encontrado)
+            return true
+        if (A_TickCount - inicio > timeoutMs)
+            return false
+        Sleep, 500
+    }
+}
+
 ; Paso 1+2 fusionados, v2 (2026-08-18, bug real reproducido en vivo: confirmado que la
 ; donante SI tenia una oferta real y pendiente -- "Waiting for a Response" de su lado --
 ; pero Main nunca la detectaba). La v1 de este fix (mas arriba en el historial) todavia
@@ -258,8 +288,13 @@ if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 198, 367))
 ; esta pantalla de Main, dejando el boton "OK" sin tocar aunque el paso se reportara ok).
 ; own_maintrade_offered_confirm es la curva redondeada del boton OK, recortada fresca de
 ; esta pantalla real (forma, no el color plano que puede tener shimmer).
-if (!esperarNeedleYTap("own_maintrade_offered_confirm", 30, 143, 431))
+; Foto de evidencia (2026-08-22, a pedido explicito del usuario): "Main ofrece la carta",
+; misma logica que _OfferPhoto.png del lado de la donante -- se espera la pantalla SIN
+; tocarla todavia para sacar la foto limpia antes de confirmar con OK.
+if (!esperarNeedleSinAccion("own_maintrade_offered_confirm", 30, 15000))
     ExitConError("no_aparecio_confirmacion_final_paso10")
+AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainOfferPhoto.png"))
+tap(143, 431)
 
 WriteResult("OK")
 Gdip_Shutdown(pToken)

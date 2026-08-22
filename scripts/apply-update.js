@@ -14,6 +14,11 @@ async function main() {
     // falta bajarla de nuevo - evita dos descargas escribiendo el mismo
     // archivo al mismo tiempo si el usuario aprieta los dos botones seguidos.
     if (fs.existsSync(PENDING_UPDATE_PATH)) {
+        // Sin esto la barra de progreso del panel se queda clavada en 0% (bug real
+        // reportado en vivo): esta rama vuelve casi instantaneo, sin pasar por
+        // descargarActualizacion() -- que es la unica que emite "PROGRESS:" -- asi que
+        // del lado de ControlPanel.cs nunca llega ninguna linea de progreso.
+        process.stdout.write('PROGRESS:100\n');
         process.stdout.write(JSON.stringify({ ok: true, yaEstaba: true }) + '\n');
         return;
     }

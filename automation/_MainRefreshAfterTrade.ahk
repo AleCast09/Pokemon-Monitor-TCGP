@@ -196,6 +196,16 @@ AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainSwipePhoto
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
 Sleep, 3000
 
+; Segunda foto de evidencia (2026-08-22, a pedido explicito del usuario, mostrando una
+; captura real de referencia: la pantalla final "Got it!" que confirma que la carta
+; realmente se mando -- mismo motivo y mismo needle que en _DonorRespondAndFinalize.ahk (es
+; la misma pantalla generica del juego, sin importar de que lado se mando la carta). Se
+; espera la pantalla de verdad en vez de un Sleep fijo, para no sacar la foto de un cuadro
+; intermedio todavia en transicion. No hace falta tocar "Tap to Proceed" aca -- Main se
+; apaga solo enseguida (ver apagarInstanciaMuMu en bot.js), no necesita seguir navegando.
+if (esperarNeedleSinAccion("own_donorfinalize_tap_to_proceed", 30, 15000))
+    AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainSentPhoto.png"))
+
 WriteResult("OK")
 Gdip_Shutdown(pToken)
 ExitApp, 0

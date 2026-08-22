@@ -203,8 +203,16 @@ AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_SwipePhoto.png
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
 Sleep, 3000
 
-if (!esperarNeedleYTap("own_donorfinalize_tap_to_proceed", 30, 152, 486))
+; Tercera foto de evidencia (2026-08-22, a pedido explicito del usuario, mostrando una
+; captura real de referencia: la pantalla final "Got it!" que confirma que la carta
+; realmente se mando -- las 2 fotos anteriores son ambas de ANTES del swipe, esta es la
+; UNICA prueba real de que se registro. Se espera la pantalla SIN tocarla todavia (mismo
+; patron que esperarNeedleSinAccion ya usa mas arriba) para sacar la foto limpia antes de
+; tocar "Tap to Proceed" y avanzar.
+if (!esperarNeedleSinAccion("own_donorfinalize_tap_to_proceed", 30, 15000))
     ExitConError("no_aparecio_tap_to_proceed_paso5")
+AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_SentPhoto.png"))
+tap(152, 486)
 
 WriteResult("OK")
 Gdip_Shutdown(pToken)

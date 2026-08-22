@@ -1,7 +1,11 @@
 {
-  "version": "1.5.68",
-  "notesCount": 3,
+  "version": "1.5.70",
+  "notesCount": 7,
   "notes": [
+    "New: Main Trade now sends a final summary collage with all 3 phases of the trade (Offer/Send/Receive, both sides) plus a thank-you message, in addition to the live step-by-step photos.",
+    "Fixed a real bug: the message showing Main sending its own card displayed the wrong card's info (copied from the donor's card instead of showing no misleading data), since Main's actual card is chosen blindly and was never known.",
+    "New: added confirmation photos right after each swipe (donor and Main), not just before - proof the card was actually sent, not just attempted.",
+    "Fixed a real bug: \"Repair Broken Files\" (and \"Kill Everything\") killed the Control Panel itself as a side effect of its own first step (it matches any process named MonitorPokemonPanel.exe - including the one running the button you just clicked), so it silently died right there and never actually got to re-download anything or turn the app back on. Now excludes itself from that step, so the repair genuinely runs to completion.",
     "Fixed a real bug: the new Item icon (Casco Dentado) never actually showed up on any server that already had the old \"card_item\" icon created (a generic backpack) - changing the source image alone doesn't replace an icon Discord already has under that name. Now force-refreshes it once so everyone gets the real one.",
     "Fixed a real bug: the \"Sync Channels + re-save Main Path\" reminder after an update only showed up if you used Discord's \"Update now\" button - the Control Panel's \"Download Now\" and \"Repair Broken Files\" never showed it. Centralized so it now shows no matter which one you use.",
     "Fixed: \"Repair Broken Files\" never updated the local version number after replacing everything, so the app could keep thinking it was still on the old version - now refreshes it too.",

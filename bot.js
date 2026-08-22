@@ -1878,6 +1878,65 @@ async function generarCollageCartas(items, rutaMasterPath, mapaCopias, esGoldCar
     }
 }
 
+// Collage de las 3 fases de Main Trade (2026-08-22, a pedido explicito del usuario, mostrado
+// con un ejemplo real de captura: "primera fase donante ofrece/main ofrece, segunda fase
+// donante envía/main envía, tercera fase donante recibe/main recibe... adjuntamos un mensaje
+// que diga al final: intercambio exitosamente confirmado, muchas gracias por el intercambio")
+// -- 2 columnas (Donor/Main) x hasta 3 filas (Offer/Send/Receive), con el nombre de la fase
+// superpuesto arriba de cada celda. A diferencia de generarCollageCartas (trabaja con IDs de
+// carta y busca el arte), esto arma el grid directo desde archivos de captura de pantalla ya
+// en disco -- si a alguna fase le falta la foto (fallo puntual de un paso, o el trade
+// terminó antes de llegar ahí), esa celda queda con un placeholder gris en vez de romper
+// todo el collage.
+async function componerCollageFasesMainTrade(fases) {
+    const disponibles = fases.filter(f => f.ruta);
+    if (!disponibles.length) return null;
+    const CELL_W = 320, CELL_H = 450, GAP = 10, PADDING = 14, COLS = 2, ALTO_ETIQUETA = 32;
+
+    const celdas = [];
+    let indice = 0;
+    for (const fase of disponibles) {
+        let imgBuffer = null;
+        if (fase.ruta && fs.existsSync(fase.ruta)) {
+            try {
+                imgBuffer = await sharp(fase.ruta).resize(CELL_W, CELL_H, { fit: 'cover' }).png().toBuffer();
+            } catch (e) { imgBuffer = null; }
+        }
+        if (!imgBuffer) {
+            imgBuffer = await sharp({ create: { width: CELL_W, height: CELL_H, channels: 4, background: { r: 40, g: 36, b: 44, alpha: 1 } } }).png().toBuffer();
+        }
+        const svgEtiqueta = Buffer.from(
+            `<svg width="${CELL_W}" height="${ALTO_ETIQUETA}">` +
+            `<rect x="0" y="0" width="${CELL_W}" height="${ALTO_ETIQUETA}" fill="black" fill-opacity="0.68"/>` +
+            `<text x="${CELL_W / 2}" y="22" font-size="17" font-family="Arial, sans-serif" font-weight="bold" fill="white" text-anchor="middle">${fase.etiqueta}</text>` +
+            `</svg>`
+        );
+        try {
+            imgBuffer = await sharp(imgBuffer).composite([{ input: svgEtiqueta, top: 0, left: 0 }]).png().toBuffer();
+        } catch (e) { /* si falla la etiqueta, se muestra la foto sin nombre */ }
+
+        const col = indice % COLS;
+        const row = Math.floor(indice / COLS);
+        celdas.push({ input: imgBuffer, top: PADDING + row * (CELL_H + GAP), left: PADDING + col * (CELL_W + GAP) });
+        indice++;
+    }
+    if (!celdas.length) return null;
+
+    const filas = Math.ceil(indice / COLS);
+    const anchoTotal = PADDING * 2 + COLS * CELL_W + (COLS - 1) * GAP;
+    const altoTotal = PADDING * 2 + filas * CELL_H + (filas - 1) * GAP;
+
+    try {
+        return await sharp({ create: { width: anchoTotal, height: altoTotal, channels: 4, background: { r: 24, g: 20, b: 28, alpha: 1 } } })
+            .composite(celdas)
+            .png()
+            .toBuffer();
+    } catch (e) {
+        console.error('DEBUG: error armando el collage de fases de Main Trade:', e?.message || e);
+        return null;
+    }
+}
+
 // Mismo criterio que componerLogoSobreImagen de s4t.js -- agranda el canvas
 // hacia arriba y pone el logo de la expansion centrado en esa franja nueva,
 // en vez de dejarlo como un thumbnail chico aparte (a pedido explicito del
@@ -3572,23 +3631,43 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // (Expansion/Name/Element/Category/ID + logo PTCGP), pero con una foto REAL del trade
     // como imagen grande en vez del arte generico de la carta. Se usa en varios pasos del
     // pipeline (donor_offer_card, donor_respond_finalize x2) con distintas fotos y textos.
-    const mandarFotoTradeAlCanal = async (rutaFoto, mensajeTexto) => {
+    // sinDatosCarta (2026-08-22, bug real reportado en vivo con captura): la foto de
+    // main_finalize_own_card es de la carta REAL que Main manda, pero esa carta se elige a
+    // ciegas ("mas cantidad primero", ver comentario en el call-site) -- nunca se sabe su
+    // Name/Expansion/Element/Category/ID real. Sin este flag, el embed reusaba `cartaId`/
+    // `nombreCarta` (los de la carta de la DONANTE, ej. "Wynaut") para las 3 fotos por igual,
+    // asi que en el paso de Main el texto del embed quedaba mostrando los datos de la carta
+    // de la donante encima de la foto real de la carta de Main (ej. "Crawdaunt") -- informacion
+    // cruzada y erronea. Con el flag, ese paso manda solo la foto, sin datos de carta inventados.
+    const mandarFotoTradeAlCanal = async (rutaFoto, mensajeTexto, sinDatosCarta = false) => {
         if (!fs.existsSync(rutaFoto)) return;
         try {
             const canalTradePhoto = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
             if (!canalTradePhoto?.webhook_url) return;
-            const payloadCarta = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild);
-            const embedCarta = payloadCarta.embeds[0].setImage('attachment://trade_photo.png');
             const formFoto = new FormData();
-            formFoto.append('payload_json', JSON.stringify({ content: mensajeTexto, embeds: [embedCarta.toJSON()] }));
+            if (sinDatosCarta) {
+                const embedFoto = new EmbedBuilder().setColor(0xE91E63).setImage('attachment://trade_photo.png');
+                formFoto.append('payload_json', JSON.stringify({ content: mensajeTexto, embeds: [embedFoto.toJSON()] }));
+            } else {
+                const payloadCarta = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild);
+                const embedCarta = payloadCarta.embeds[0].setImage('attachment://trade_photo.png');
+                formFoto.append('payload_json', JSON.stringify({ content: mensajeTexto, embeds: [embedCarta.toJSON()] }));
+                const archivoSymbol = (payloadCarta.files || []).find(f => f.name === 'symbol.png');
+                if (archivoSymbol) formFoto.append('files[1]', archivoSymbol.attachment, { filename: 'symbol.png' });
+            }
             formFoto.append('files[0]', fs.readFileSync(rutaFoto), { filename: 'trade_photo.png' });
-            const archivoSymbol = (payloadCarta.files || []).find(f => f.name === 'symbol.png');
-            if (archivoSymbol) formFoto.append('files[1]', archivoSymbol.attachment, { filename: 'symbol.png' });
             await axios.post(`${canalTradePhoto.webhook_url}?wait=true`, formFoto, { headers: formFoto.getHeaders(), timeout: 15000 });
         } catch (e) {
             console.error('DEBUG: error mandando la foto del trade al canal de Trading:', e?.response?.data || e?.message || e);
         }
     };
+
+    // Rutas de las 6 fotos de las 3 fases (Ofrece/Envía/Recibe x donante/Main), guardadas a
+    // medida que el pipeline avanza (2026-08-22, a pedido explicito del usuario) -- se usan
+    // despues del loop para armar el collage resumen final.
+    let rutaFaseOfertaDonante = null, rutaFaseOfertaMain = null;
+    let rutaFaseEnviaDonante = null, rutaFaseEnviaMain = null;
+    let rutaFaseRecibeDonante = null, rutaFaseRecibeMain = null;
 
     for (const paso of pasos) {
         const outputFilePaso = tmp();
@@ -3607,7 +3686,16 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             // _DonorOfferCard.ahk guarda la captura de "You have offered the card..." justo
             // antes de tocar para cerrar -- momento en que la donante ofrece la carta de verdad.
             const rutaFotoOferta = outputFilePaso.replace(/\.txt$/, '_OfferPhoto.png');
+            rutaFaseOfertaDonante = rutaFotoOferta;
             await mandarFotoTradeAlCanal(rutaFotoOferta, `<@${interaction.user.id}> La donante ofreció la carta!\n\nCarta ofrecida: **${nombreCarta}** → Main`);
+        }
+        if (paso.nombre === 'main_accept_trade_offer') {
+            // _MainAcceptTradeOffer.ahk guarda la captura de "You have offered the card..."
+            // del lado de Main (2026-08-22, a pedido explicito del usuario) -- misma logica
+            // que la foto de oferta de la donante, pero del lado de Main.
+            const rutaFotoMainOferta = outputFilePaso.replace(/\.txt$/, '_MainOfferPhoto.png');
+            rutaFaseOfertaMain = rutaFotoMainOferta;
+            await mandarFotoTradeAlCanal(rutaFotoMainOferta, `<@${interaction.user.id}> Main ofreció su carta!`, true);
         }
         if (paso.nombre === 'donor_respond_finalize') {
             // _DonorRespondAndFinalize.ahk guarda 2 capturas: una en "Trade for This Card?"
@@ -3619,16 +3707,61 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             await mandarFotoTradeAlCanal(rutaFotoTrade, `<@${interaction.user.id}> Tradeo en curso!\n\nCarta enviada: **${nombreCarta}** → Ale Cast`);
 
             const rutaFotoSwipe = outputFilePaso.replace(/\.txt$/, '_SwipePhoto.png');
+            rutaFaseEnviaDonante = rutaFotoSwipe;
             await mandarFotoTradeAlCanal(rutaFotoSwipe, `Carta enviada exitosamente al usuario <@${interaction.user.id}> (${interaction.user.username})\n\n**${nombreCarta}**`);
+
+            // Foto DESPUES del swipe (2026-08-22, a pedido explicito del usuario: las 2 fotos
+            // de arriba son ambas de ANTES de mandar la carta -- faltaba una prueba real de
+            // que el swipe se registro de verdad, no solo que se intento.
+            const rutaFotoEnviada = outputFilePaso.replace(/\.txt$/, '_SentPhoto.png');
+            rutaFaseRecibeDonante = rutaFotoEnviada;
+            await mandarFotoTradeAlCanal(rutaFotoEnviada, `Swipe registrado — carta enviada de verdad.\n\n**${nombreCarta}**`);
         }
         if (paso.nombre === 'main_finalize_own_card') {
             // Foto de la carta de Main justo antes de su propio swipe (2026-08-19, a pedido
             // explicito del usuario) -- no se conoce el nombre de esta carta (se elige a
             // ciegas por "mas cantidad primero"), asi que el mensaje no la nombra.
             const rutaFotoMainSwipe = outputFilePaso.replace(/\.txt$/, '_MainSwipePhoto.png');
+            rutaFaseEnviaMain = rutaFotoMainSwipe;
             if (fs.existsSync(rutaFotoMainSwipe)) onProgreso({ paso: 'Main swipe photo', estado: 'ok', fotoPath: rutaFotoMainSwipe });
-            await mandarFotoTradeAlCanal(rutaFotoMainSwipe, `<@${interaction.user.id}> Main mandó su carta — el trade está completo de los dos lados.`);
+            await mandarFotoTradeAlCanal(rutaFotoMainSwipe, `<@${interaction.user.id}> Main mandó su carta — el trade está completo de los dos lados.`, true);
+
+            // Foto DESPUES del swipe de Main (2026-08-22, mismo motivo que la de la donante).
+            const rutaFotoMainEnviada = outputFilePaso.replace(/\.txt$/, '_MainSentPhoto.png');
+            rutaFaseRecibeMain = rutaFotoMainEnviada;
+            await mandarFotoTradeAlCanal(rutaFotoMainEnviada, `Swipe de Main registrado — carta enviada de verdad.`, true);
         }
+    }
+
+    // Collage resumen final de las 3 fases (2026-08-22, a pedido explicito del usuario, ADEMAS
+    // de las fotos en vivo de arriba, no en su lugar): un solo mensaje al cierre con las 6
+    // fotos juntas (Ofrece/Envía/Recibe x donante/Main) + agradecimiento, para tener de un
+    // vistazo la prueba completa del intercambio de los dos lados.
+    try {
+        const collageFases = await componerCollageFasesMainTrade([
+            { etiqueta: 'Donor — Offers', ruta: rutaFaseOfertaDonante },
+            { etiqueta: 'Main — Offers', ruta: rutaFaseOfertaMain },
+            { etiqueta: 'Donor — Sends', ruta: rutaFaseEnviaDonante },
+            { etiqueta: 'Main — Sends', ruta: rutaFaseEnviaMain },
+            { etiqueta: 'Donor — Received', ruta: rutaFaseRecibeDonante },
+            { etiqueta: 'Main — Received', ruta: rutaFaseRecibeMain }
+        ]);
+        if (collageFases) {
+            const canalCollage = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            if (canalCollage?.webhook_url) {
+                const embedCollage = new EmbedBuilder()
+                    .setColor(0xE91E63)
+                    .setTitle('✅ Main Trade completado')
+                    .setDescription(`Intercambio confirmado. ¡Muchas gracias por el intercambio!\n\n**${nombreCarta}**`)
+                    .setImage('attachment://main_trade_resumen.png');
+                const formCollage = new FormData();
+                formCollage.append('payload_json', JSON.stringify({ embeds: [embedCollage.toJSON()] }));
+                formCollage.append('files[0]', collageFases, { filename: 'main_trade_resumen.png' });
+                await axios.post(`${canalCollage.webhook_url}?wait=true`, formCollage, { headers: formCollage.getHeaders(), timeout: 20000 });
+            }
+        }
+    } catch (e) {
+        console.error('DEBUG: error mandando el collage resumen de Main Trade:', e?.response?.data || e?.message || e);
     }
 
     // A pedido explicito del usuario 2026-07-29: al terminar todo el pipeline
@@ -3666,6 +3799,16 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
 // a mano (la aceptacion de la solicitud la hace la otra persona, el bot no tiene forma de
 // detectarla solo) -- por eso el ultimo paso reportado es "Waiting for you to continue" en vez
 // de inventar un "friend accepted" que el codigo no verifica de verdad.
+// Reescrito 2026-08-22 a pedido explicito del usuario: "que lo abra como la abre Kevin y
+// todo lo demas, igualito que Main Trade" -- antes esta funcion usaba el mecanismo VIEJO
+// (InjectAccount.ini + _InjectAccount.ahk de Kevin via ejecutarInyeccionHeadless), separado
+// del mas nuevo/rapido _InjectAccountFast.ahk que Main Trade ya usa desde el 2026-08-19. Se
+// alinea Friend Trade al mismo camino: inyeccion rapida propia + _WaitWelcomeScreens.ahk +
+// _SendFriendRequest.ahk (los 3 mismos pasos iniciales de Main Trade, mismos scripts, solo
+// que ahora en una sola instancia en vez de dos). El resto del flujo (esperar confirmacion
+// manual con "Next Trade") queda IGUAL por ahora -- el auto-poll queda pendiente hasta poder
+// construir needles reales contra una prueba en vivo (_SendTradeCard.ahk/_FinalizeTradeCard.ahk
+// son scripts "a ciegas", sin verificacion de pantalla, no son seguros para reintentar solos).
 async function ejecutarFreeTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre }, onProgreso = () => {}) {
     const prendida = await asegurarInstanciaEncendida(index);
     if (!prendida) {
@@ -3676,44 +3819,54 @@ async function ejecutarFreeTradeDesdeDiscord(interaction, { cartaId, friendId, f
 
     try { await interaction.followUp({ content: `🔄 Running injection on instance **${nombre}**... this WILL CLOSE the current session and may take several minutes.`, ephemeral: true }); } catch (e) { /* interaccion puede haber expirado */ }
 
-    const { rutaIni: rutaIniTrade, rutaScript: rutaScriptTrade } = await obtenerRutasInject(interaction.user.id);
-    try {
-        guardarXmlParaInyeccion(nombre, archivo, rutaIniTrade);
-        actualizarIniInject({ sendFriendRequestAfterInject: '1', injectSelectedFriendIDs: friendId }, rutaIniTrade);
-    } catch (e) {
-        onProgreso({ paso: 'Inject account & send friend request', estado: 'error', detalle: 'could not save InjectAccount.ini' });
-        return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', ephemeral: true });
+    const ahkExe = rutaAutoHotkey();
+    const folderPath = carpetaBaseMuMu();
+    if (!ahkExe || !folderPath || !fs.existsSync(RUTA_INJECT_ACCOUNT_FAST_SCRIPT) || !fs.existsSync(RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT)) {
+        onProgreso({ paso: 'Check scripts', estado: 'error', detalle: 'scripts not found' });
+        return await interaction.followUp({ content: '❌ Friend Trade scripts not found.', ephemeral: true });
     }
+    const tmp = () => path.join(os.tmpdir(), `ftrade_${index}_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`);
 
-    ejecutarInyeccionHeadless(async (ok, detalle) => {
-        try {
-            if (!ok) {
-                onProgreso({ paso: 'Inject account & send friend request', estado: 'error', detalle });
-                return await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, ephemeral: true });
-            }
-            onProgreso({ paso: 'Inject account & send friend request', estado: 'ok' });
-            onProgreso({ paso: 'Waiting for you to press Next Trade once your friend accepts', estado: 'ok', terminado: true });
-            const filaNext = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`mumu_nexttrade_${index}::${nombre}`).setLabel('▶️ Next Trade').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger)
-            );
-            const mensaje = `✅ Injection completed on instance **${nombre}** (\`${fileName}\`), friend request sent to \`${friendId}\`.\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist. If something went wrong, press **🛑 Stop**.`;
+    const resInject = await ejecutarPasoAhk(ahkExe, RUTA_INJECT_ACCOUNT_FAST_SCRIPT, [nombre, folderPath, archivo], 30 * 1000, tmp());
+    if (!resInject.ok) {
+        onProgreso({ paso: 'Inject account', estado: 'error', detalle: resInject.resultado });
+        return await interaction.followUp({ content: `❌ Could not inject the account (${resInject.resultado}).`, ephemeral: true });
+    }
+    onProgreso({ paso: 'Inject account', estado: 'ok' });
 
-            const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
-            if (canalRunInstance?.webhook_url) {
-                try {
-                    await axios.post(`${canalRunInstance.webhook_url}?wait=true`, {
-                        content: mensaje,
-                        components: [filaNext.toJSON()]
-                    }, { timeout: 10000 });
-                    return await interaction.followUp({ content: '✅ Sent to your Trading channel.', ephemeral: true });
-                } catch (e) {
-                    console.error('DEBUG: error mandando el resultado de Trade al canal de trading:', e?.response?.data || e?.message || e);
-                }
-            }
-            await interaction.followUp({ content: mensaje, components: [filaNext], ephemeral: true });
-        } catch (e) { /* interaccion puede haber expirado */ }
-    }, rutaScriptTrade);
+    const espera = await new Promise((resolve) => ejecutarWaitWelcomeScreens(nombre, (ok, detalle) => resolve({ ok, detalle })));
+    if (!espera.ok) {
+        onProgreso({ paso: 'Reach main menu', estado: 'error', detalle: espera.detalle });
+        return await interaction.followUp({ content: `❌ Could not reach the main menu on instance **${nombre}** (${espera.detalle}).`, ephemeral: true });
+    }
+    onProgreso({ paso: 'Reach main menu', estado: 'ok' });
+
+    const resSolicitud = await ejecutarPasoAhk(ahkExe, RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, [nombre, folderPath, friendId], 90 * 1000, tmp());
+    if (!resSolicitud.ok) {
+        onProgreso({ paso: 'Send friend request', estado: 'error', detalle: resSolicitud.resultado });
+        return await interaction.followUp({ content: `❌ Could not send the friend request (${resSolicitud.resultado}).`, ephemeral: true });
+    }
+    onProgreso({ paso: 'Send friend request', estado: 'ok', terminado: true });
+
+    const filaNext = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`mumu_nexttrade_${index}::${nombre}`).setLabel('▶️ Next Trade').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger)
+    );
+    const mensaje = `✅ Injection completed on instance **${nombre}** (\`${fileName}\`), friend request sent to \`${friendId}\`.\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist. If something went wrong, press **🛑 Stop**.`;
+
+    try {
+        const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+        if (canalRunInstance?.webhook_url) {
+            await axios.post(`${canalRunInstance.webhook_url}?wait=true`, {
+                content: mensaje,
+                components: [filaNext.toJSON()]
+            }, { timeout: 10000 });
+            return await interaction.followUp({ content: '✅ Sent to your Trading channel.', ephemeral: true });
+        }
+    } catch (e) {
+        console.error('DEBUG: error mandando el resultado de Trade al canal de trading:', e?.response?.data || e?.message || e);
+    }
+    return await interaction.followUp({ content: mensaje, components: [filaNext], ephemeral: true });
 }
 
 const RUTA_SEND_TRADE_CARD_SCRIPT = path.join(__dirname, 'automation', '_SendTradeCard.ahk');
@@ -9614,7 +9767,11 @@ client.on('interactionCreate', async interaction => {
             const cartaId = interaction.customId.replace('card_trade::', '');
             await interaction.deferReply({ ephemeral: true }); // armar la carta puede tardar más de 3s
             const fila = new ActionRowBuilder().addComponents(
-                // Deshabilitado a pedido explicito del usuario 2026-08-06.
+                // Reactivado 2026-08-22 a pedido explicito del usuario (estaba deshabilitado
+                // desde el 2026-08-06 por bugs conocidos, ya resueltos).
+                // Deshabilitado (2026-08-22): todavia se esta construyendo el auto-poll, no
+                // listo para usuarios todavia (activo sin comitear en la sesion de desarrollo
+                // en vivo mientras se prueba).
                 new ButtonBuilder().setCustomId(`card_trade_friend::${cartaId}`).setLabel('🤝 Friend Trade').setStyle(ButtonStyle.Secondary).setDisabled(true),
                 new ButtonBuilder().setCustomId(`card_trade_main::${cartaId}`).setLabel('🏠 Main Trade').setStyle(ButtonStyle.Primary),
                 // Deshabilitado a pedido explicito del usuario 2026-07-29: todavia no
