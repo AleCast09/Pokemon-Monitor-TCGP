@@ -1,7 +1,8 @@
 {
-  "version": "1.5.62",
-  "notesCount": 6,
+  "version": "1.5.63",
+  "notesCount": 1,
   "notes": [
+    "Fixed a real bug: saving Main Path with a brand-new folder (no InjectAccount.ini yet) always failed with Discord's generic \"Something went wrong\" error, no matter how many times you retried - it was chaining a second modal as the response, which Discord doesn't reliably support. Now saves normally and creates the empty file directly, no chained modal involved.",
     "Fixed a real bug: saving Main Path in /setup could fail with Discord's generic \"Something went wrong\" error and no real reason shown (found live, a fresh install with an empty folder could trigger this) - now shows the actual error instead of failing silently.",
     "Fixed a real bug affecting every user: the Google Drive HD image fetch could exhaust its request quota when loading a big collage (was making 2 requests per card) - now shares one folder listing per expansion instead of searching per card, cutting requests way down.",
     "Fixed: when Drive HD kept failing, it used to turn off the \"Normal Cards HD\" toggle for good, needing a manual re-enable in Settings - now pauses itself for a few minutes in memory and retries on its own, no action needed.",

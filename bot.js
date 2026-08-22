@@ -8235,19 +8235,19 @@ client.on('interactionCreate', async interaction => {
         if (interaction.customId === 'modal_ruta_raiz') {
             const raiz = interaction.fields.getTextInputValue('input_ruta').trim();
 
-            // Bug real reportado en vivo 2026-08-21 (un usuario con carpeta recien creada,
-            // sin InjectAccount.ini todavia): este bloque no tenia NINGUN try/catch -- si
-            // algo fallaba en el camino (ej. interaction.showModal() encadenado desde un
-            // modal submit, o cualquier otra excepcion), la interaccion quedaba sin ninguna
-            // respuesta y Discord mostraba su propio error generico "Algo ha fallado.
-            // Intentalo de nuevo", sin ninguna pista real de que paso ni forma de
-            // diagnosticarlo del lado del usuario ni de este lado (nada quedaba en logs).
+            // Bug real reportado en vivo 2026-08-21 (un usuario con carpeta recien creada, sin
+            // InjectAccount.ini todavia): esto SOLIA responder a este modal abriendo un
+            // SEGUNDO modal encadenado (pidiendo el Friend ID) -- Discord no soporta bien
+            // encadenar un modal como respuesta a otro modal (rechazado del lado de la API/
+            // cliente antes de que nuestro codigo pueda hacer nada, asi que ni el try/catch de
+            // aca alcanzaba a mostrar un error real), dejando SIEMPRE "Algo ha fallado.
+            // Intentalo de nuevo" sin ninguna pista, sin importar cuantas veces se reintentara.
+            // Arreglado de raiz: ya no encadena ningun modal -- si falta el .ini, simplemente
+            // se crea VACIO en el momento (crearIniInjectSiNoExiste ya soporta esto sin
+            // necesitar un Friend ID de entrada) y se le indica al usuario que use el boton
+            // "🆔 Add Friend" (ya existe aparte en /setup) para cargar su primera cuenta --
+            // un paso mas, pero sin ningun modal-en-cadena de por medio.
             try {
-                // Sin deferReply todavia (2026-08-19): si el InjectAccount.ini falta, la
-                // respuesta a ESTA interaccion tiene que ser otro modal pidiendo el Friend ID
-                // -- eso solo se puede hacer como primera respuesta cruda, antes de cualquier
-                // defer/reply. El chequeo de carpeta + guardado en DB no necesitan responder
-                // nada todavia, asi que se hacen primero y se decide recien al final.
                 if (!fs.existsSync(raiz)) {
                     return await interaction.reply({ content: `❌ Folder \`${raiz}\` not found. Check that the path exists.`, ephemeral: true });
                 }
@@ -8264,40 +8264,19 @@ client.on('interactionCreate', async interaction => {
                     ['ruta_inject_script', derivadas.injectScript],
                     ['ruta_main_ahk', derivadas.mainAhk]
                 ];
+                await interaction.deferReply({ ephemeral: true });
                 for (const [tipo, valor] of filas) {
                     await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, 'local', ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET webhook_url = ?`, [interaction.user.id, tipo, valor, valor]);
                 }
 
-                // InjectAccount.ini/script agregados al aviso (2026-08-06, bug real
-                // reportado por un usuario): antes se calculaban y guardaban igual,
-                // pero no se mostraban -- si esta ruta derivada no correspondia a un
-                // archivo real (estructura de carpetas distinta a la de Ale), la
-                // unica forma de notarlo era esperar a que "Add Friend" fallara con
-                // un error generico, sin ninguna pista de la ruta real usada.
-                // Creado automatico si falta, pidiendo el Friend ID primero (2026-08-19, a
-                // pedido explicito del usuario): antes solo se avisaba "not found" sin ninguna
-                // pista de que hacer al respecto. Ahora, si el archivo no existe en la ruta
-                // derivada, se pide el Friend ID de la cuenta (mismo modal/validacion que ya usa
-                // "Add Friend") ANTES de crearlo -- asi el .ini nuevo no queda vacio, ya viene
-                // con ese ID precargado en favoriteFriendIDs (mismo campo/mecanismo que usa
-                // agregarFriend en el resto del bot). El mensaje final de "Main Path saved" se
-                // manda recien al terminar el modal (ver modal_setup_friendid_for_ini).
+                let notaIni = '';
                 if (!fs.existsSync(derivadas.injectIni)) {
-                    const modalFriendParaIni = new ModalBuilder().setCustomId('modal_setup_friendid_for_ini').setTitle('Add your Friend ID')
-                        .addComponents(
-                            new ActionRowBuilder().addComponents(
-                                new TextInputBuilder().setCustomId('input_friend_nombre').setLabel('Account name (optional)').setStyle(TextInputStyle.Short).setRequired(false)
-                            ),
-                            new ActionRowBuilder().addComponents(
-                                new TextInputBuilder().setCustomId('input_friend_id').setLabel('Friend ID (16 digits)').setStyle(TextInputStyle.Short).setRequired(true).setMinLength(16).setMaxLength(16)
-                            )
-                        );
-                    return await interaction.showModal(modalFriendParaIni);
+                    crearIniInjectSiNoExiste(derivadas.injectIni);
+                    notaIni = ` ✨ **created automatically** (empty — use **🆔 Add Friend** below to add your first account)`;
                 }
 
-                await interaction.deferReply({ ephemeral: true });
                 return await interaction.editReply({
-                    content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\`\n📂 Main.ahk: \`${derivadas.mainAhk}\`\n📂 InjectAccount.ini: \`${derivadas.injectIni}\``
+                    content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\`\n📂 Main.ahk: \`${derivadas.mainAhk}\`\n📂 InjectAccount.ini: \`${derivadas.injectIni}\`${notaIni}`
                 });
             } catch (e) {
                 console.error('DEBUG: error guardando Main Path:', e?.message || e);
@@ -8310,35 +8289,6 @@ client.on('interactionCreate', async interaction => {
                     console.error('DEBUG: tampoco se pudo avisar del error de Main Path:', e2?.message || e2);
                 }
             }
-        }
-
-        if (interaction.customId === 'modal_setup_friendid_for_ini') {
-            const friendLabel = interaction.fields.getTextInputValue('input_friend_nombre').trim();
-            const friendId = interaction.fields.getTextInputValue('input_friend_id').trim();
-
-            if (!/^\d{16}$/.test(friendId)) {
-                return await interaction.reply({ content: '❌ The Friend ID must be exactly 16 numeric digits.', ephemeral: true });
-            }
-
-            await interaction.deferReply({ ephemeral: true });
-            const filaRaiz = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = 'ruta_raiz'`, [interaction.user.id]);
-            if (!filaRaiz?.webhook_url) {
-                return await interaction.editReply({ content: '❌ Could not find the saved Main Path. Run /setup again from the start.' });
-            }
-            const raiz = filaRaiz.webhook_url;
-            const derivadas = derivarRutasDesdeRaiz(raiz);
-
-            try {
-                crearIniInjectSiNoExiste(derivadas.injectIni);
-                agregarFriend(friendLabel, friendId, derivadas.injectIni);
-            } catch (e) {
-                console.error('DEBUG: no se pudo crear/precargar InjectAccount.ini durante /setup:', e?.message || e);
-                return await interaction.editReply({ content: '❌ Could not create InjectAccount.ini automatically. Check the folder permissions and try /setup again.' });
-            }
-
-            return await interaction.editReply({
-                content: `✅ Main Path saved: \`${raiz}\`\n\nAutomatically detected:\n📂 Local: \`${derivadas.local}\`\n📂 Data Master: \`${derivadas.master}\`\n📂 XML Accounts: \`${derivadas.xml}\`\n📂 JSON Accounts: \`${derivadas.json}\`\n📂 Wishlist: \`${derivadas.wishlist}\`\n📂 Main.ahk: \`${derivadas.mainAhk}\`\n📂 InjectAccount.ini: \`${derivadas.injectIni}\` ✨ **created automatically** (Friend ID ${friendId} saved)`
-            });
         }
 
         return await configScript.manejarModal(interaction);
