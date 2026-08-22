@@ -200,12 +200,36 @@ async function limpiarEmojisDadosDeBaja(guild, existentes) {
     return borrados;
 }
 
+// Nombres que SIGUEN en FUENTES_EMOJIS pero cuya imagen de origen cambio (2026-08-22, bug
+// real reportado en vivo: "card_item" mostraba una mochila generica vieja en vez del Casco
+// Dentado nuevo). limpiarEmojisDadosDeBaja de arriba no lo cubre -- esa lista es para claves
+// que YA NO EXISTEN en FUENTES_EMOJIS; esta es para claves que siguen existiendo pero cuyo
+// archivo cambio, asi que el emoji ya creado en cada servidor (con la imagen VIEJA) nunca se
+// vuelve a subir por el chequeo de "ya existe por nombre". Se borra una sola vez para forzar
+// el re-upload con la imagen actual -- una vez liberada esta lista de nuevo (proximo release
+// tras confirmar que ya circulo), no hace falta dejarla creciendo para siempre.
+const NOMBRES_EMOJIS_A_REFRESCAR = ['card_item'];
+async function limpiarEmojisARefrescar(guild, existentes) {
+    let borrados = 0;
+    for (const emoji of existentes.values()) {
+        if (!NOMBRES_EMOJIS_A_REFRESCAR.includes(emoji.name)) continue;
+        try {
+            await emoji.delete('Imagen de origen actualizada -- se recrea con el archivo nuevo');
+            borrados++;
+        } catch (e) {
+            console.error(`❌ No se pudo borrar el emoji a refrescar "${emoji.name}" (${emoji.id}) en ${guild.name}:`, e?.message || e);
+        }
+    }
+    return borrados;
+}
+
 async function construirMapaEmojisGuild(guild) {
     let existentes = await guild.emojis.fetch();
     const borradosDuplicados = await limpiarEmojisDuplicados(guild, existentes);
     const borradosDeBaja = await limpiarEmojisDadosDeBaja(guild, existentes);
-    if (borradosDuplicados > 0 || borradosDeBaja > 0) {
-        console.log(`DEBUG: se borraron ${borradosDuplicados} duplicado(s) y ${borradosDeBaja} emoji(s) dado(s) de baja en ${guild.name}`);
+    const borradosARefrescar = await limpiarEmojisARefrescar(guild, existentes);
+    if (borradosDuplicados > 0 || borradosDeBaja > 0 || borradosARefrescar > 0) {
+        console.log(`DEBUG: se borraron ${borradosDuplicados} duplicado(s), ${borradosDeBaja} emoji(s) dado(s) de baja y ${borradosARefrescar} a refrescar en ${guild.name}`);
         existentes = await guild.emojis.fetch();
     }
     const mapa = {};

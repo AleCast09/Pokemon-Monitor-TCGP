@@ -1,7 +1,8 @@
 {
-  "version": "1.5.67",
-  "notesCount": 2,
+  "version": "1.5.68",
+  "notesCount": 3,
   "notes": [
+    "Fixed a real bug: the new Item icon (Casco Dentado) never actually showed up on any server that already had the old \"card_item\" icon created (a generic backpack) - changing the source image alone doesn't replace an icon Discord already has under that name. Now force-refreshes it once so everyone gets the real one.",
     "Fixed a real bug: the \"Sync Channels + re-save Main Path\" reminder after an update only showed up if you used Discord's \"Update now\" button - the Control Panel's \"Download Now\" and \"Repair Broken Files\" never showed it. Centralized so it now shows no matter which one you use.",
     "Fixed: \"Repair Broken Files\" never updated the local version number after replacing everything, so the app could keep thinking it was still on the old version - now refreshes it too.",
     "Fixed a real bug: removing an unused icon from the internal list only stopped creating NEW copies of it - the old one stayed sitting on the server forever, taking up one of the 50 emoji slots and blocking genuinely new icons from being created. Now actively removes a specific list of known-retired icons the next time it builds the icon map.",
