@@ -288,6 +288,74 @@ public class ControlPanelForm : Form {
         MessageBox.Show("Done. Everything was force-stopped.\n\nIf a MonitorPokemon.new.exe file exists in this folder, an update was mid-way through - delete MonitorPokemon.exe and rename MonitorPokemon.new.exe to MonitorPokemon.exe before pressing Start again.", "Monitor Pokemon");
     }
 
+    // "Repair Broken Files" (2026-08-21, a pedido explicito del usuario -- caso real en vivo:
+    // un usuario tenia el .exe viejo corriendo desde una instalacion en OneDrive mientras las
+    // imagenes de assets/ ya se habian actualizado solas, dejando un mix roto donde el codigo
+    // empaquetado (viejo) buscaba archivos que ya no existian con ese nombre. Diagnosticar eso
+    // a mano -- cerrar todo, bajar el .exe de nuevo, pisarlo -- le tomo un buen rato yendo y
+    // viniendo por Discord. Este boton hace exactamente esos 3 pasos de una: mata todo lo que
+    // este corriendo (mismo mecanismo que Kill Everything), pisa el .exe Y los assets con la
+    // version mas nueva de GitHub Releases (mismas URLs "latest/download" ya usadas por
+    // "Download Manually"), y prende todo de nuevo -- sin depender de que el chequeo normal de
+    // actualizacion detecte que hace falta, ni de que el usuario sepa cual carpeta es la real.
+    void RepararArchivosRotos() {
+        var confirmacion = MessageBox.Show(
+            "This force-stops everything, then re-downloads the app and its assets fresh from the latest release, overwriting anything in this folder (your saved token/settings are kept).\n\nUse this if something stays broken after a normal update (wrong icons, stale files) or you're not sure this is the right/only copy running.\n\nContinue?",
+            "Repair Broken Files",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning
+        );
+        if (confirmacion != DialogResult.Yes) return;
+
+        var raizEscapada = raiz.Replace("'", "''");
+        try {
+            var scriptMatar =
+                "Get-Process MonitorPokemon,MonitorPokemonPanel -ErrorAction SilentlyContinue | Stop-Process -Force; " +
+                "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe'\" | " +
+                "Where-Object { $_.CommandLine -and $_.CommandLine.Contains('" + raizEscapada + "') } | " +
+                "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+            var psiMatar = new ProcessStartInfo("powershell", "-NoProfile -WindowStyle Hidden -Command \"" + scriptMatar + "\"") {
+                WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false, CreateNoWindow = true
+            };
+            Process.Start(psiMatar).WaitForExit();
+        } catch (Exception ex) {
+            MessageBox.Show("Could not stop the running processes: " + ex.Message, "Monitor Pokemon");
+            return;
+        }
+
+        try { File.Delete(rutaLock); } catch { }
+        try { File.Delete(Path.Combine(raiz, "_update.bat")); } catch { }
+        try { File.Delete(rutaPendienteRestart); } catch { }
+        try { File.Delete(Path.Combine(raiz, ".pending_update.json")); } catch { }
+
+        try {
+            string tempAssets = Path.Combine(Path.GetTempPath(), "MonitorPokemon-assets-repair.zip");
+            string tempExe = Path.Combine(Path.GetTempPath(), "MonitorPokemon-repair.exe");
+            using (var client = new System.Net.WebClient()) {
+                client.DownloadFile("https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon-assets.zip", tempAssets);
+                client.DownloadFile("https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest/download/MonitorPokemon.exe", tempExe);
+            }
+
+            var scriptExtraer = "Expand-Archive -Path '" + tempAssets.Replace("'", "''") + "' -DestinationPath '" + raizEscapada + "' -Force";
+            var psiExtraer = new ProcessStartInfo("powershell", "-NoProfile -WindowStyle Hidden -Command \"" + scriptExtraer + "\"") {
+                WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false, CreateNoWindow = true
+            };
+            Process.Start(psiExtraer).WaitForExit();
+
+            string exeDestino = Path.Combine(raiz, "MonitorPokemon.exe");
+            File.Copy(tempExe, exeDestino, true);
+
+            try { File.Delete(tempAssets); } catch { }
+            try { File.Delete(tempExe); } catch { }
+        } catch (Exception ex) {
+            MessageBox.Show("Everything was stopped, but the fresh download/repair failed: " + ex.Message + "\n\nCheck your internet connection and try again, or use \"Download Manually\" instead.", "Monitor Pokemon");
+            return;
+        }
+
+        MessageBox.Show("Repair complete. Starting Monitor Pokemon...", "Monitor Pokemon");
+        IniciarBot();
+    }
+
     // "Quit" (2026-08-06, a pedido explicito del usuario): mismo comportamiento
     // que Advanced\Quit Monitor Pokemon.bat, ahora tambien como boton -- para
     // cuando el usuario ya termino de usarlo y no quiere que se abra solo la
@@ -504,7 +572,7 @@ public class ControlPanelForm : Form {
 
     void ConstruirUI() {
         Text = "Monitor Pokemon";
-        ClientSize = new Size(650, 505);
+        ClientSize = new Size(650, 546);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -515,8 +583,8 @@ public class ControlPanelForm : Form {
         // redondeadas ajustadas al contenido; el logo+version va suelto abajo, sin borde.
         // El titulo de cada tarjeta ahora va ADENTRO (arriba a la izquierda), no encima
         // del borde -- por eso el contenido de cada una arranca 40px mas abajo que antes.
-        var seccionControl = NuevaSeccion("CONTROL", 15, 15, 260, 242, colorSeccionControl);
-        var seccionPuertos = NuevaSeccion("S4T / HEARTBEAT", 15, 267, 260, 157, colorSeccionDiscord);
+        var seccionControl = NuevaSeccion("CONTROL", 15, 15, 260, 283, colorSeccionControl);
+        var seccionPuertos = NuevaSeccion("S4T / HEARTBEAT", 15, 308, 260, 157, colorSeccionDiscord);
         var seccionDiscord = NuevaSeccion("DISCORD", 290, 15, 345, 332, colorSeccionDiscord);
 
         labelEstado = new Label { Font = new Font("Segoe UI", 10), AutoSize = true, Location = new Point(30, 55), ForeColor = colorTexto };
@@ -535,19 +603,23 @@ public class ControlPanelForm : Form {
         var botonSalir = NuevoBoton("Quit", 170, 205, 85);
         botonSalir.Click += (s, e) => { SalirDeMonitorPokemon(); System.Threading.Thread.Sleep(500); RefrescarEstado(); };
 
-        NuevoTitulo("S4T (paste in P BOT)", 30, 307);
-        txtS4t = NuevoCampo(30, 327, 225);
+        var botonReparar = NuevoBoton("🔧 Repair Broken Files", 30, 247, 225);
+        AplicarEstiloPeligro(botonReparar);
+        botonReparar.Click += (s, e) => { RepararArchivosRotos(); startHabilitado = true; System.Threading.Thread.Sleep(500); RefrescarEstado(); };
+
+        NuevoTitulo("S4T (paste in P BOT)", 30, 348);
+        txtS4t = NuevoCampo(30, 368, 225);
         HacerCopiableAlClick(txtS4t);
-        NuevoTitulo("Heartbeat (paste in P BOT)", 30, 364);
-        txtHeartbeat = NuevoCampo(30, 384, 225);
+        NuevoTitulo("Heartbeat (paste in P BOT)", 30, 405);
+        txtHeartbeat = NuevoCampo(30, 425, 225);
         HacerCopiableAlClick(txtHeartbeat);
 
-        var pictureBox = new PictureBox { Size = new Size(46, 46), Location = new Point(30, 439), SizeMode = PictureBoxSizeMode.Zoom, BackColor = colorFondo };
+        var pictureBox = new PictureBox { Size = new Size(46, 46), Location = new Point(30, 480), SizeMode = PictureBoxSizeMode.Zoom, BackColor = colorFondo };
         if (File.Exists(rutaImagenPokemon)) pictureBox.Image = Image.FromFile(rutaImagenPokemon);
         Controls.Add(pictureBox);
         pictureBox.BringToFront();
 
-        labelVersion = new Label { Text = "Monitor Pokemon", Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = colorAcento, AutoSize = true, MaximumSize = new Size(180, 0), Location = new Point(85, 455) };
+        labelVersion = new Label { Text = "Monitor Pokemon", Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = colorAcento, AutoSize = true, MaximumSize = new Size(180, 0), Location = new Point(85, 496) };
         Controls.Add(labelVersion);
         labelVersion.BringToFront();
 
