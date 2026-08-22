@@ -27,6 +27,8 @@ if (rol === 'bot') {
     require('./scripts/panel-info.js');
 } else if (rol === 'apply_update') {
     require('./scripts/apply-update.js');
+} else if (rol === 'notify_repair_done') {
+    require('./scripts/notify-repair-done.js');
 } else {
     require('./launcher.js');
 }

@@ -9964,22 +9964,12 @@ client.on('interactionCreate', async interaction => {
                 await descargarActualizacion(remota);
                 await interaction.editReply({ content: `✅ Update ready. Restarting with version **${remota.version}**...` });
 
-                // A pedido explicito del usuario 2026-07-30: avisar en el canal de
-                // Updates cuando la descarga termina, recordando los pasos manuales
-                // que siguen (Sync Channels + volver a guardar Main Path) -- se
-                // manda ANTES de programar el process.exit para asegurarse de que
-                // el mensaje realmente sale antes de que el proceso muera.
-                try {
-                    const canalUpdates = await obtenerCanalComando(interaction.user.id, 'actualizaciones');
-                    if (canalUpdates?.webhook_url) {
-                        await axios.post(`${canalUpdates.webhook_url}?wait=true`, {
-                            content: `<@${interaction.user.id}> ✅ The download for **${remota.version}** finished 100%. Please press **Sync Channels** and re-save your **Main Path** in \`/setup\` once it restarts, so nothing breaks.`
-                        }, { timeout: 15000 });
-                    }
-                } catch (e) {
-                    console.error('DEBUG: no se pudo avisar en el canal de Updates que la descarga termino:', e?.response?.data || e?.message || e);
-                }
-
+                // El aviso de "Sync Channels + re-guardar Main Path" ahora se manda desde
+                // DENTRO de descargarActualizacion() (ver avisarPasosManualesTrasDescarga en
+                // update-checker.js) -- centralizado 2026-08-22 para que salga sin importar
+                // si la descarga se disparo desde este boton de Discord o desde "Download
+                // Now"/"Repair Broken Files" del Panel, en vez de tener que repetir esta
+                // misma logica en cada lugar nuevo que dispare una descarga.
                 setTimeout(() => process.exit(0), 1500);
             } catch (e) {
                 console.error('DEBUG: error descargando actualización:', e?.message || e);

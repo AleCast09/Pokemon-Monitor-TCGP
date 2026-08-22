@@ -324,6 +324,28 @@ async function descargarActualizacionPanel(remota) {
 // complejidad extra de un progreso combinado ponderado por tamaño para esa ganancia chica.
 // ControlPanel.cs (DescargarActualizacionDesdePanel) lee esta salida linea por linea y
 // actualiza una barra de progreso real con esto.
+// Aviso centralizado de "pasos manuales tras actualizar" (2026-08-22, a pedido explicito del
+// usuario: el aviso de Sync Channels + re-guardar Main Path solo salia si se actualizaba con
+// el boton "Update now" DE DISCORD -- descargarActualizacion() tambien la usan "Download Now"
+// del Panel (via apply-update.js) y, antes de esto, NINGUNA de las dos avisaba nada). Vive
+// aca (no en bot.js) porque descargarActualizacion() ya es el punto en comun real de los dos
+// caminos -- asi no hay que acordarse de repetir el aviso en cada lugar nuevo que dispare una
+// descarga. Consulta la DB directo (sin discord.js completo) para no depender de un cliente
+// de Discord ya conectado -- funciona igual desde bot.js (con cliente vivo) que desde
+// apply-update.js (proceso hijo sin cliente, corriendo por su cuenta).
+async function avisarPasosManualesTrasDescarga(remota) {
+    try {
+        const fila = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'actualizaciones' AND webhook_url NOT IN ('N/A', 'local') ORDER BY rowid DESC LIMIT 1`);
+        if (!fila?.webhook_url) return;
+        const mencion = process.env.DISCORD_USER_ID ? `<@${process.env.DISCORD_USER_ID}> ` : '';
+        await axios.post(`${fila.webhook_url}?wait=true`, {
+            content: `${mencion}✅ The download for **${remota.version}** finished 100%. Please press **Sync Channels** and re-save your **Main Path** in \`/setup\` once it restarts, so nothing breaks.`
+        }, { timeout: 15000 });
+    } catch (e) {
+        console.error('DEBUG: no se pudo avisar en el canal de Updates que la descarga termino:', e?.response?.data || e?.message || e);
+    }
+}
+
 async function descargarActualizacion(remota) {
     const rutaNueva = path.join(__dirname, 'MonitorPokemon.new.exe');
     const respuesta = await axios.get(remota.downloadUrl, { responseType: 'stream', timeout: 120000 });
@@ -353,6 +375,7 @@ async function descargarActualizacion(remota) {
     process.stdout.write('PROGRESS:99\n');
     await descargarActualizacionPanel(remota);
     await descargarYExtraerAssets(remota);
+    await avisarPasosManualesTrasDescarga(remota);
 
     // Sin esto, version.json local nunca cambia y el bot cree para siempre que
     // sigue en la versión vieja, avisando de la "misma" actualización sin parar
@@ -367,6 +390,7 @@ module.exports = {
     avisarActualizacionAplicadaSiHaceFalta,
     avisarActualizacionFallidaSiHaceFalta,
     descargarActualizacion,
+    avisarPasosManualesTrasDescarga,
     obtenerVersionLocal,
     obtenerVersionRemota,
     esVersionMasNueva,

@@ -348,10 +348,38 @@ public class ControlPanelForm : Form {
 
             try { File.Delete(tempAssets); } catch { }
             try { File.Delete(tempExe); } catch { }
+
+            // Bug real encontrado 2026-08-22: MonitorPokemon-assets.zip solo trae assets/ y
+            // automation/ (ver generarAssetsZip en build-exe.js) -- version.json NUNCA viene
+            // ahi, asi que sin esto el archivo local se quedaba con el numero de version
+            // VIEJO despues de reparar, aunque el .exe y los assets ya fueran los nuevos de
+            // verdad (el propio chequeo de "hay actualizacion" del bot se hubiera confundido
+            // creyendo que seguia desactualizado).
+            using (var client = new System.Net.WebClient()) {
+                var jsonRemoto = client.DownloadString("https://raw.githubusercontent.com/AleCast09/Pokemon-Monitor-TCGP/main/version.json");
+                File.WriteAllText(Path.Combine(raiz, "version.json"), jsonRemoto);
+            }
         } catch (Exception ex) {
             MessageBox.Show("Everything was stopped, but the fresh download/repair failed: " + ex.Message + "\n\nCheck your internet connection and try again, or use \"Download Manually\" instead.", "Monitor Pokemon");
             return;
         }
+
+        // Mismo aviso de "Sync Channels + re-guardar Main Path" que ya manda una actualizacion
+        // normal (ver avisarPasosManualesTrasDescarga en update-checker.js) -- Repair hace su
+        // PROPIA descarga en C#, sin pasar por esa funcion, asi que se dispara aparte con este
+        // rol chico (scripts/notify-repair-done.js). No bloqueante (no importa si tarda o
+        // falla en la red -- Start no debe esperar por esto).
+        try {
+            var psiAviso = new ProcessStartInfo {
+                FileName = rutaExe,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+                WorkingDirectory = raiz
+            };
+            psiAviso.EnvironmentVariables["MONITOR_ROLE"] = "notify_repair_done";
+            Process.Start(psiAviso);
+        } catch { }
 
         MessageBox.Show("Repair complete. Starting Monitor Pokemon...", "Monitor Pokemon");
         IniciarBot();
