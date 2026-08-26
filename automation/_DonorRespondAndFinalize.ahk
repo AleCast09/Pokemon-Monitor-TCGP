@@ -107,6 +107,26 @@ chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
     return encontrado
 }
 
+; Bug real confirmado en vivo 2026-08-26: el swipe que manda la carta (ver call site mas
+; abajo) NO registra si el Speed Mod de la instancia esta activo a 3x -- probado 2 veces en
+; la misma pantalla real, el MISMO swipe funciono al toque apenas se bajo el multiplicador a
+; 1x a mano. Este helper reproduce ese mismo arreglo, pero solo si el icono flotante de Speed
+; Mod esta realmente presente (needle own_speedmod_icon, ya validada en _SpeedMod.ahk) -- si
+; la cuenta no tiene el mod activo, no toca nada (evita tocar a ciegas de mas en cuentas sin
+; el mod). A pedido explicito del usuario: NO se vuelve a subir a 3x despues -- a esta altura
+; el trade esta practicamente terminado (solo queda cerrar el "Got it!" final).
+bajarSpeedModA1xSiEstaActivo() {
+    global adbPath, puerto
+    if (!chequeoRapidoNeedle("own_speedmod_icon", 80))
+        return false
+    tap(18, 109, 800)                    ; icono flotante de Speed Mod (persistente en cualquier pantalla)
+    Sleep, 800
+    RunWait, %ComSpec% /c ""%adbPath%" -s 127.0.0.1:%puerto% shell input swipe 363 248 33 248 600", , Hide
+    Sleep, 1000
+    tap(171, 285, 500)                   ; minimizar el panel
+    return true
+}
+
 ; Reconocimiento real antes de tocar (2026-08-05, a pedido explicito del usuario): espera
 ; (poll cada 500ms, hasta timeoutMs) a que la needle de la pantalla ESPERADA aparezca antes
 ; de tocar -- asi un PC lento no rompe el timing.
@@ -251,6 +271,14 @@ if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000, "o
 ; de mandarla de verdad -- se guarda ANTES del swipe, mismo criterio que la foto del
 ; paso 2 (nombre derivado del outputFile para que bot.js sepa donde buscarla).
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_SwipePhoto.png"))
+
+; Bajar Speed Mod a 1x si esta activo (2026-08-26, bug real confirmado en vivo -- ver
+; comentario largo mas abajo en bajarSpeedModA1xSiEstaActivo): con el juego a 3x el swipe de
+; abajo NO registra. No hace falta volver a subirlo despues -- a esta altura el trade ya esta
+; practicamente terminado, solo queda la pantalla de "Got it!" para cerrar (a pedido explicito
+; del usuario, no restaurar).
+bajarSpeedModA1xSiEstaActivo()
+
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
 Sleep, 3000
 

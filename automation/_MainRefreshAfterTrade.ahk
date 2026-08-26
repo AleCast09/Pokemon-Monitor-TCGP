@@ -84,6 +84,21 @@ chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
     return encontrado
 }
 
+; Bug real confirmado en vivo 2026-08-26 (ver comentario completo en
+; _DonorRespondAndFinalize.ahk): el swipe que manda la carta de Main tambien puede fallar con
+; Speed Mod en 3x -- mismo arreglo, sin restaurar despues (a pedido explicito del usuario).
+bajarSpeedModA1xSiEstaActivo() {
+    global adbPath, puerto
+    if (!chequeoRapidoNeedle("own_speedmod_icon", 80))
+        return false
+    tap(18, 109, 800)
+    Sleep, 800
+    RunWait, %ComSpec% /c ""%adbPath%" -s 127.0.0.1:%puerto% shell input swipe 363 248 33 248 600", , Hide
+    Sleep, 1000
+    tap(171, 285, 500)
+    return true
+}
+
 esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
@@ -246,6 +261,7 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
 if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000, "own_donorfinalize_swipe_instruction_native", 30))
     ExitConError("no_aparecio_instruccion_swipe_main")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainSwipePhoto.png"))
+bajarSpeedModA1xSiEstaActivo()
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
 Sleep, 3000
 

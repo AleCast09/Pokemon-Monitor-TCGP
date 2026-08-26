@@ -109,6 +109,21 @@ chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
     return encontrado
 }
 
+; Bug real confirmado en vivo 2026-08-26 (ver comentario completo en
+; _DonorRespondAndFinalize.ahk): el swipe que manda la carta no registra con Speed Mod en 3x.
+; No se restaura a 3x despues, a pedido explicito del usuario -- el trade ya esta terminado.
+bajarSpeedModA1xSiEstaActivo() {
+    global adbPath, puerto
+    if (!chequeoRapidoNeedle("own_speedmod_icon", 80))
+        return false
+    tap(18, 109, 800)
+    Sleep, 800
+    RunWait, %ComSpec% /c ""%adbPath%" -s 127.0.0.1:%puerto% shell input swipe 363 248 33 248 600", , Hide
+    Sleep, 1000
+    tap(171, 285, 500)
+    return true
+}
+
 ; Reconocimiento real antes de tocar (2026-08-05, a pedido explicito del usuario): espera
 ; (poll cada 500ms, hasta timeoutMs) a que la needle de la pantalla ESPERADA aparezca antes
 ; de tocar -- asi un PC lento no rompe el timing.
@@ -244,6 +259,7 @@ if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000, "o
 ; de mandarla de verdad -- se guarda ANTES del swipe, mismo criterio que la foto del
 ; paso 2 (nombre derivado del outputFile para que bot.js sepa donde buscarla).
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_SwipePhoto.png"))
+bajarSpeedModA1xSiEstaActivo()
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
 Sleep, 3000
 
