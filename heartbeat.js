@@ -418,7 +418,22 @@ async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, ti
         // cualquier popup ajeno de paso, y el AHK (que sigue corriendo, nunca se toca) se
         // reengancha solo apenas la instancia vuelve a estar disponible, sin importar la causa
         // original del freeze.
-        const recuperado = await recuperarInstanciaCongelada(instId);
+        //
+        // try/catch agregado (2026-08-26, bug real reportado en vivo): "avisado" ya queda en
+        // true ANTES de este punto (linea de arriba), a proposito, para no spammear el mismo
+        // aviso en cada ciclo -- pero eso significa que si recuperarInstanciaCongelada tira una
+        // excepcion sin capturar (ej. MuMuManager.exe fallo de una forma que no se esperaba),
+        // la funcion entera se cortaba ACA, nunca llegaba a mandar ningun aviso a Discord, y la
+        // instancia quedaba silenciada para siempre (avisado nunca se resetea solo si los packs
+        // nunca vuelven a avanzar, que es justo el caso de un freeze real). Ahora una excepcion
+        // se trata igual que "recuperado = false" -- se sigue de largo y se manda el aviso de
+        // "auto-recovery failed" con el boton manual, en vez de morir en silencio.
+        let recuperado = false;
+        try {
+            recuperado = await recuperarInstanciaCongelada(instId);
+        } catch (e) {
+            console.error(`[HB] Excepcion sin capturar en recuperarInstanciaCongelada(${instId}), tratada como fallo de recuperacion:`, e?.message || e);
+        }
         if (recuperado) {
             titulo = '🔄 Frozen instance auto-recovered';
             cuerpo = `**Instance ${instId}** hadn't opened any new packs in the last ${minutos} minute(s) (stuck at **${packs}** packs) — restarted MuMu automatically to clear it (this also dismisses any stray popup, like MuMu asking for a camera to scan a friend's QR code). The AHK should reattach on its own once it's back up.`;
