@@ -827,7 +827,22 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                         // propio bot de Kevin); "zzz"/Pause ahora es SOLO la
                         // lectura en vivo del log local (instancia sin cuentas
                         // elegibles), no el mismo temporizador de congelamiento.
-                        if (sinCuentasInstancia) {
+                        //
+                        // Bug real reportado en vivo 2026-08-26: "Pause" se seguia mostrando
+                        // aunque la instancia ya estuviera completamente cerrada (ej. despues
+                        // de cerrarInstanciaAutoSinCuentasHb) -- instanciaSinCuentasElegibles
+                        // solo lee la ULTIMA LINEA del log local, que se queda congelada
+                        // diciendo "no eligible accounts" para siempre una vez que nada mas le
+                        // escribe encima (el proceso ya no existe). "Pause" implica que sigue
+                        // viva pero esperando cuentas -- "Stop" es el estado real cuando ya no
+                        // hay ni AHK ni MuMu corriendo. Se agrega el mismo chequeo que ya usa
+                        // el aviso de congelamiento (estaAhkCorriendoHb/estaInstanciaMuMuCorriendoHb)
+                        // para decidir entre los dos, en vez de confiar ciegamente en el log.
+                        if (sinCuentasInstancia && !(estaAhkCorriendoHb(instId) && estaInstanciaMuMuCorriendoHb(instId))) {
+                            offlineInstancesList.push(counter);
+                            let stopTexto = " Stop".padStart(5, ' ');
+                            tabla += `> 🖥️ \`${idStr}\` | ⏹️ \`${stopTexto}\` | 📦 \`${packsVal}\` | 🔓 \`${cuentasVal}\`\n`;
+                        } else if (sinCuentasInstancia) {
                             onlineInstancesList.push(counter);
                             let pausaTexto = "Pause".padStart(5, ' ');
                             tabla += `> 🖥️ \`${idStr}\` | 💤 \`${pausaTexto}\` | 📦 \`${packsVal}\` | 🔓 \`${cuentasVal}\`\n`;
