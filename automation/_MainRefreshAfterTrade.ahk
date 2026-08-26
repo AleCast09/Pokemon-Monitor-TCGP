@@ -136,6 +136,30 @@ esperarAgreementConRefresh(timeoutMs := 45000) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        ; Chequeo rapido cableado (2026-08-26): needle propia own_maintrade_agreement_reached_native
+        ; (badge rojo "!" del boton Trade), validada en vivo -- coincide con el mismo badge que
+        ; usa _DonorRespondAndFinalize.ahk para otro paso, pero corren en instancias distintas
+        ; (nunca compiten contra la misma captura), asi que es seguro con variation 30 estandar.
+        if (chequeoRapidoNeedle("own_maintrade_agreement_reached_native", 30)) {
+            tap(141, 416)
+            return true
+        }
+        ; Chequeo rapido cableado (2026-08-26): needle propia own_maintrade_already_agreed_ok_native
+        ; (icono "?" de ayuda, atenuado detras del popup -- el boton OK es color solido y ya se
+        ; comprobo que falsea contra otros botones celestes del juego). Validada en vivo --
+        ; limpio hasta variation 20 contra 36 capturas de otras pantallas.
+        if (chequeoRapidoNeedle("own_maintrade_already_agreed_ok_native", 20)) {
+            tap(113, 364, 1500)
+            if (A_TickCount - inicio > timeoutMs)
+                return false
+            continue
+        }
+        if (chequeoRapidoNeedle("own_maintrade_refresh_button_native", 30)) {
+            tap(227, 373, 2000)
+            if (A_TickCount - inicio > timeoutMs)
+                return false
+            continue
+        }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontradoAgreement := false
@@ -216,7 +240,10 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
         Sleep, 500
     }
 }
-if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donorfinalize_swipe_instruction_native,
+; ya validada en _DonorRespondAndFinalize.ahk (misma pantalla real, confirmado en el codigo
+; que Main comparte este mismo needle con la donante para este paso).
+if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000, "own_donorfinalize_swipe_instruction_native", 30))
     ExitConError("no_aparecio_instruccion_swipe_main")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainSwipePhoto.png"))
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
@@ -229,7 +256,7 @@ Sleep, 3000
 ; espera la pantalla de verdad en vez de un Sleep fijo, para no sacar la foto de un cuadro
 ; intermedio todavia en transicion. No hace falta tocar "Tap to Proceed" aca -- Main se
 ; apaga solo enseguida (ver apagarInstanciaMuMu en bot.js), no necesita seguir navegando.
-if (esperarNeedleSinAccion("own_donorfinalize_tap_to_proceed", 30, 15000))
+if (esperarNeedleSinAccion("own_donorfinalize_tap_to_proceed", 30, 15000, "own_donorfinalize_tap_to_proceed_native", 30))
     AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainSentPhoto.png"))
 
 WriteResult("OK")

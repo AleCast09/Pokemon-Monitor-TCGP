@@ -199,15 +199,19 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
 ; _CheckPendingOffer.ahk) la donante puede estar en cualquier otra pantalla (ej. sobres).
 ; Seguro tambien en el flujo normal: si ya esta en la pantalla de espera, re-entrar a Trade
 ; muestra el mismo estado real (servidor, no una pantalla de una sola vez).
+; tap(207,402) SACADO (2026-08-26, a pedido explicito del usuario, confirmado en vivo): a esta
+; altura del pipeline la donante ya esta DENTRO de Trade (no en Social Hub), asi que ese
+; segundo toque caia en una zona vacia sin hacer nada -- solo sumaba 4s de espera al pedo.
 tap(141, 511)
-tap(207, 402)
 
 ; Needle y coordenada recalculadas 2026-08-19 (bug real en vivo, cuenta real): la needle
 ; vieja (icono "?") ya no matcheaba esta pantalla, y su coordenada de tap tampoco caia
 ; sobre el boton "View" real -- needle re-recortada del icono "?" fresco de esta pantalla
 ; real, coordenada recalculada al centro real del boton View (140-400,708-772 en pixeles
 ; reales de 540x960 -> aprox 141,416 en el sistema logico de este script).
-if (!esperarNeedleYTap("own_donorfinalize_waiting_title", 30, 141, 416))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donorfinalize_waiting_title_native
+; (el badge rojo "!" del boton View), ya validada en _DonorRespondAndFinalize.ahk.
+if (!esperarNeedleYTap("own_donorfinalize_waiting_title", 30, 141, 416, 15000, "own_donorfinalize_waiting_title_native", 30))
     ExitConError("no_aparecio_waiting_response_paso1")
 
 ; Foto real del trade (2026-08-09, a pedido explicito del usuario -- corregida: se movio de
@@ -216,18 +220,24 @@ if (!esperarNeedleYTap("own_donorfinalize_waiting_title", 30, 141, 416))
 ; ANTES de tocar para seguir, mientras la pantalla todavia esta completa. Nombre derivado del
 ; outputFile (mismo que ya recibe este script como 3er argumento) para que bot.js sepa
 ; exactamente donde buscarla sin necesitar coordinarse por otro lado.
-if (!esperarNeedleSinAccion("own_donorfinalize_tradeforcard_title", 30, 15000))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donorfinalize_tradeforcard_title_native,
+; ya validada en _DonorRespondAndFinalize.ahk (variation 20, con margen).
+if (!esperarNeedleSinAccion("own_donorfinalize_tradeforcard_title", 30, 15000, "own_donorfinalize_tradeforcard_title_native", 20))
     ExitConError("no_aparecio_tradeforcard_paso2")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_TradePhoto.png"))
 tap(206, 459)
 
-if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 199, 365))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donorfinalize_confirm_native, ya
+; validada en _DonorRespondAndFinalize.ahk.
+if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 199, 365, 15000, "own_donorfinalize_confirm_native", 30))
     ExitConError("no_aparecio_confirmar_finalizar_paso3")
 
 ; Swipe rapido para enviar la carta (142,397)->(145,157) en logico, convertido a
 ; dispositivo -- a pedido explicito del usuario, duracion corta (150ms) para que
 ; registre como swipe real y no como un tap.
-if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donorfinalize_swipe_instruction_native,
+; ya validada en _DonorRespondAndFinalize.ahk.
+if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000, "own_donorfinalize_swipe_instruction_native", 30))
     ExitConError("no_aparecio_instruccion_swipe_paso4")
 ; Segunda foto de evidencia (2026-08-18, a pedido explicito del usuario): esta pantalla
 ; ("Swipe the card to send it to your trade partner") muestra la carta sola, justo antes
@@ -243,7 +253,7 @@ Sleep, 3000
 ; UNICA prueba real de que se registro. Se espera la pantalla SIN tocarla todavia (mismo
 ; patron que esperarNeedleSinAccion ya usa mas arriba) para sacar la foto limpia antes de
 ; tocar "Tap to Proceed" y avanzar.
-if (!esperarNeedleSinAccion("own_donorfinalize_tap_to_proceed", 30, 15000))
+if (!esperarNeedleSinAccion("own_donorfinalize_tap_to_proceed", 30, 15000, "own_donorfinalize_tap_to_proceed_native", 30))
     ExitConError("no_aparecio_tap_to_proceed_paso5")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_SentPhoto.png"))
 tap(152, 486)
