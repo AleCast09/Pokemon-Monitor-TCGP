@@ -54,6 +54,11 @@ if (puerto = "")
     ExitConError("puerto_no_encontrado")
 AdbConectar(adbPath, puerto)
 
+; Handle de la ventana real, para el chequeo rapido por captura directa (2026-08-26, mismo
+; mecanismo que _DonorOfferCard.ahk / _FriendTradeOfferCard.ahk / _SpeedMod.ahk /
+; _WaitWelcomeScreens*.ahk). No fatal si no se encuentra.
+global g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
+
 tap(x, y, esperaMs := 4000) {
     static convX := 540/283, convY := 960/488, offset := 40
     global adbPath, puerto
@@ -61,8 +66,12 @@ tap(x, y, esperaMs := 4000) {
     Sleep, %esperaMs%
 }
 
-tapSiApareceNeedle(nombreNeedle, x, y, variation := 30) {
+tapSiApareceNeedle(nombreNeedle, x, y, variation := 30, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto
+    if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+        tap(x, y)
+        return true
+    }
     Sleep, 1200
     tempFile := A_ScriptDir . "\Logs\_friendrespond_check.png"
     AdbScreenshot(adbPath, puerto, tempFile)
@@ -116,10 +125,34 @@ tapSiApareceNeedlePolling(nombreNeedle, x, y, timeoutMs := 10000) {
     }
 }
 
-esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
+; Chequeo rapido por captura directa de ventana (2026-08-26, ver comentario completo en
+; _DonorOfferCard.ahk). Sin riesgo de regresion.
+chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
+    global g_hwndFast
+    if (nombreNeedleNativo = "" || !g_hwndFast)
+        return false
+    pBitmap := capturarVentana(g_hwndFast)
+    if (!pBitmap)
+        return false
+    encontrado := false
+    pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
+    if (pNeedle) {
+        vPos := ""
+        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        Gdip_DisposeImage(pNeedle)
+    }
+    Gdip_DisposeImage(pBitmap)
+    return encontrado
+}
+
+esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            tap(x, y)
+            return true
+        }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false
@@ -145,10 +178,12 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
     }
 }
 
-esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000) {
+esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo))
+            return true
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false
@@ -190,21 +225,23 @@ tap(209, 457)
 ; _FriendTradeOfferCard.ahk -- mismas needles de la donante, copiadas tal cual.
 tapSiApareceNeedlePolling("own_donoroffer_willsend_popup", 141, 436)
 
-if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357)) {
+; Chequeos rapidos cableados (2026-08-26): needles nativas ya validadas en vivo en
+; _DonorOfferCard.ahk / _FriendTradeOfferCard.ahk -- misma pantalla real, mismo needle.
+if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357, 15000, "own_donoroffer_choosecard_title_native", 30)) {
     tapSiApareceNeedlePolling("own_donoroffer_willsend_popup", 141, 436, 3000)
-    if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357))
+    if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357, 15000, "own_donoroffer_choosecard_title_native", 30))
         ExitConError("no_aparecio_choosecard_paso9")
 }
-if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 145, 458))
+if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 145, 458, 15000, "own_donoroffer_choosecard_title_native", 30))
     ExitConError("no_aparecio_ok_habilitado_paso10")
-if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 30, 197, 461))
+if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 30, 197, 461, 15000, "own_donoroffer_tradepartner_header_native", 30))
     ExitConError("no_aparecio_preview_envio_paso11")
-if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365))
+if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 30))
     ExitConError("no_aparecio_confirmar_set_card_paso12")
 
-tapSiApareceNeedle("own_donoroffer_remainingcopy_popup", 204, 383)
+tapSiApareceNeedle("own_donoroffer_remainingcopy_popup", 204, 383, 30, "own_donoroffer_remainingcopy_popup_native", 30)
 
-if (!esperarNeedleSinAccion("own_donoroffer_offered_text", 30, 15000))
+if (!esperarNeedleSinAccion("own_donoroffer_offered_text", 30, 15000, "own_donoroffer_offered_text_native", 30))
     ExitConError("no_aparecio_confirmacion_final_paso14")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainOfferPhoto.png"))
 tap(136, 438)

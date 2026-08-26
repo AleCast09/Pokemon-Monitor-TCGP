@@ -52,6 +52,8 @@ if (puerto = "")
     ExitConError("puerto_no_encontrado")
 AdbConectar(adbPath, puerto)
 
+global g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
+
 tap(x, y, esperaMs := 4000) {
     static convX := 540/283, convY := 960/488, offset := 40
     global adbPath, puerto
@@ -64,10 +66,32 @@ tap(x, y, esperaMs := 4000) {
 tap(141, 511)
 tap(207, 402)
 
-esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
+chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
+    global g_hwndFast
+    if (nombreNeedleNativo = "" || !g_hwndFast)
+        return false
+    pBitmap := capturarVentana(g_hwndFast)
+    if (!pBitmap)
+        return false
+    encontrado := false
+    pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
+    if (pNeedle) {
+        vPos := ""
+        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        Gdip_DisposeImage(pNeedle)
+    }
+    Gdip_DisposeImage(pBitmap)
+    return encontrado
+}
+
+esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            tap(x, y)
+            return true
+        }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false
@@ -164,10 +188,12 @@ if (!esperarAgreementConRefresh(45000))
 ; Main TAMBIEN tiene que deslizar su propia carta para mandarla -- mismo needle y mismo
 ; swipe que ya usa la donante en _DonorRespondAndFinalize.ahk (own_donorfinalize_swipe_instruction,
 ; icono generico sin texto, verificado que matchea esta pantalla tambien).
-esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000) {
+esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo))
+            return true
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false

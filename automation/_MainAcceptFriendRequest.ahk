@@ -58,6 +58,8 @@ if (puerto = "")
 
 AdbConectar(adbPath, puerto)
 
+global g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
+
 ; Logico->dispositivo (mismo criterio que _CountShinedust.ahk/_WaitWelcomeScreens.ahk):
 ; coordenadas mapeadas en vivo 2026-08-03/04 con la herramienta de overlay del usuario,
 ; en escala logica 283x532 -- se convierten antes de tocar.
@@ -135,10 +137,32 @@ salirDePantallaSobreSiHaceFalta()
 ; de tap ciego con Sleep fijo, espera (poll cada 500ms, hasta timeoutMs) a que la needle de
 ; la pantalla ESPERADA aparezca de verdad antes de tocar -- asi un PC lento no rompe el
 ; timing (el script simplemente espera mas si hace falta, en vez de tocar antes de tiempo).
-esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
+chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
+    global g_hwndFast
+    if (nombreNeedleNativo = "" || !g_hwndFast)
+        return false
+    pBitmap := capturarVentana(g_hwndFast)
+    if (!pBitmap)
+        return false
+    encontrado := false
+    pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
+    if (pNeedle) {
+        vPos := ""
+        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        Gdip_DisposeImage(pNeedle)
+    }
+    Gdip_DisposeImage(pBitmap)
+    return encontrado
+}
+
+esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            tap(x, y)
+            return true
+        }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false

@@ -115,11 +115,37 @@ logDebugBienvenida(msg) {
     }
 }
 
+; Chequeo rapido (2026-08-25, a pedido explicito del usuario -- "los usuarios me dijeron que
+; demora mucho, hagamos que haga match mas rapido"): usa capturarVentana (PrintWindow directo,
+; ~0ms) en vez de AdbScreenshot (~150-400ms) para las 2 condiciones MAS frecuentes del loop --
+; "ya llego al menu principal" y "esta en la pantalla de titulo, tocar Start". Needles propios
+; a esta resolucion (_native, ver _AdbUtils.ahk), verificados en vivo contra capturas reales
+; (variation 10 y 20 respectivamente, sin falsos positivos cruzados). Si esto no encuentra
+; nada, NO se toca nada a ciegas -- se sigue de largo al chequeo lento de siempre (mas abajo),
+; que cubre todos los demas popups sin ningun cambio. Cero riesgo de regresion: en el peor
+; caso (el rapido nunca matchea), el loop se comporta exactamente igual que antes.
+chequeoRapido(hwnd) {
+    if (!hwnd)
+        return ""
+    pBitmap := capturarVentana(hwnd)
+    if (!pBitmap)
+        return ""
+    esMenu := buscarNeedleEnCaptura(pBitmap, "own_mainmenu_navbar_native", 10)
+    esTitulo := !esMenu && buscarNeedleEnCaptura(pBitmap, "own_tapstart_logo_native", 20)
+    Gdip_DisposeImage(pBitmap)
+    if (esMenu)
+        return "menu"
+    if (esTitulo)
+        return "titulo"
+    return ""
+}
+
 esperarPantallasBienvenida(timeoutMs := 70000) {
-    global adbPath, puerto, LogsDir
+    global adbPath, puerto, LogsDir, g_winTitle
     inicio := A_TickCount
     intento := 0
     ultimoTapStart := 0
+    hwndRapido := obtenerHwndMuMu(g_winTitle)
     logDebugBienvenida("=== INICIO esperarPantallasBienvenida (needles propios, script Main) ===")
     Loop {
         if (A_TickCount - inicio > timeoutMs) {
@@ -127,6 +153,23 @@ esperarPantallasBienvenida(timeoutMs := 70000) {
             return false
         }
         intento++
+
+        resultadoRapido := chequeoRapido(hwndRapido)
+        if (resultadoRapido = "menu") {
+            logDebugBienvenida("intento " . intento . " -- [RAPIDO] YA LLEGO al menu principal, esperando 5s a que termine de cargar")
+            Sleep, 5000
+            return true
+        }
+        if (resultadoRapido = "titulo") {
+            if (A_TickCount - ultimoTapStart > 8000) {
+                logDebugBienvenida("intento " . intento . " -- [RAPIDO] needle 'tapstart' -> tap Start (141,452)")
+                ultimoTapStart := A_TickCount
+                tap(141, 452)
+            } else {
+                Sleep, 300
+            }
+            continue
+        }
 
         tempFile := LogsDir . "\_welcomeback_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)

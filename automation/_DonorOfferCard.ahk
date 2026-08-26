@@ -51,6 +51,12 @@ if (puerto = "")
     ExitConError("puerto_no_encontrado")
 AdbConectar(adbPath, puerto)
 
+; Handle de la ventana real, para el chequeo rapido por captura directa (2026-08-26, mismo
+; mecanismo que _SpeedMod.ahk / _WaitWelcomeScreens*.ahk -- ver comentario completo en
+; esperarNeedleYTap mas abajo). No fatal si no se encuentra -- este script sigue funcionando
+; 100% por ADB como siempre, el chequeo rapido simplemente no se usa en ese caso.
+global g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
+
 tap(x, y, esperaMs := 4000) {
     static convX := 540/283, convY := 960/488, offset := 40
     global adbPath, puerto
@@ -122,8 +128,15 @@ verificarEsperandoRespuestaUnaVez(nombreNeedle) {
 ; Chequeo condicional por NEEDLE (2026-08-05, a pedido explicito del usuario -- mas solido
 ; que el OCR para este popup en particular, el texto no varia). Igual que
 ; tapSiApareceTexto: si la needle no matchea, no tapea nada y sigue derecho.
-tapSiApareceNeedle(nombreNeedle, x, y, variation := 30) {
+; Parametros nombreNeedleNativo/variationNativo (2026-08-26): si matchea el chequeo rapido
+; (ver chequeoRapidoNeedle, definida mas abajo -- AHK resuelve funciones globales sin
+; importar el orden), toca altiro sin esperar el Sleep+screenshot ADB de siempre.
+tapSiApareceNeedle(nombreNeedle, x, y, variation := 30, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto
+    if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+        tap(x, y)
+        return true
+    }
     Sleep, 1200
     tempFile := A_ScriptDir . "\Logs\_donoroffer_check.png"
     AdbScreenshot(adbPath, puerto, tempFile)
@@ -219,13 +232,47 @@ verificarNoCrasheado() {
 }
 verificarNoCrasheado()
 
+; Chequeo rapido por captura directa de ventana (2026-08-26, a pedido explicito del usuario
+; -- "hagamoslo ahora como matar el tiempo mejor", mismo mecanismo ya probado en vivo en
+; _SpeedMod.ahk y _WaitWelcomeScreens*.ahk: PrintWindow contra la ventana real, ~0ms, contra
+; ~150-400ms de pedirle un screenshot al emulador por ADB). Usa needles PROPIOS a la
+; resolucion NATIVA de la ventana (sufijo _native, NO son intercambiables con las needles
+; ADB de 540x960 que usa el resto de este script). Sin riesgo de regresion: si no hay needle
+; nativa para este paso (nombreNeedleNativo = ""), o la ventana no se pudo resolver, o el
+; chequeo rapido no matchea, cae sin ningun cambio al chequeo lento de siempre.
+chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
+    global g_hwndFast
+    if (nombreNeedleNativo = "" || !g_hwndFast)
+        return false
+    pBitmap := capturarVentana(g_hwndFast)
+    if (!pBitmap)
+        return false
+    encontrado := false
+    pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
+    if (pNeedle) {
+        vPos := ""
+        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        Gdip_DisposeImage(pNeedle)
+    }
+    Gdip_DisposeImage(pBitmap)
+    return encontrado
+}
+
 ; Reconocimiento real antes de tocar (2026-08-05, a pedido explicito del usuario): espera
 ; (poll cada 500ms, hasta timeoutMs) a que la needle de la pantalla ESPERADA aparezca antes
 ; de tocar -- asi un PC lento no rompe el timing.
-esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
+; Parametros nombreNeedleNativo/variationNativo (2026-08-26, opcionales): si se pasan, cada
+; iteracion prueba PRIMERO el chequeo rapido (ver chequeoRapidoNeedle) antes del chequeo
+; lento de siempre -- si matchea, toca y devuelve altiro, sin esperar el screenshot ADB de
+; esa vuelta. Si no se pasan (default ""), el comportamiento es IDENTICO al de siempre.
+esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            tap(x, y)
+            return true
+        }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false
@@ -268,10 +315,14 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
 ; Igual que esperarNeedleYTap pero sin ninguna accion al encontrarla (2026-08-18, a pedido
 ; explicito del usuario -- mismo patron ya usado en _DonorRespondAndFinalize.ahk): deja la
 ; pantalla intacta para poder sacar una foto real ANTES de tocar.
-esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000) {
+; Parametros nombreNeedleNativo/variationNativo (2026-08-26): mismo chequeo rapido opcional
+; que esperarNeedleYTap (ver comentario completo ahi) -- sin accion, solo devuelve true/false.
+esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo))
+            return true
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false
@@ -306,7 +357,10 @@ if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 146, 504))
     ExitConError("no_aparecio_x_extra_paso3")
 if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 146, 504))
     ExitConError("no_aparecio_comunidad_paso4")
-if (!esperarNeedleYTap("own_donoroffer_trade_icon", 30, 207, 402))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_trade_icon_native (el
+; tile "Trade" de Social Hub), validada en vivo en _FriendTradeCheckPendingOffer.ahk (misma
+; pantalla real, sin falsos positivos cruzados).
+if (!esperarNeedleYTap("own_donoroffer_trade_icon", 30, 207, 402, 15000, "own_donoroffer_trade_icon_native", 30))
     ExitConError("no_aparecio_socialhub_paso5")
 
 ; Chequeo condicional (2026-08-05, a pedido explicito del usuario): si Main YA ofrecio
@@ -337,7 +391,12 @@ if (verificarEsperandoRespuesta("own_donoroffer_waitingresponse_pill", 147, 423)
     ExitApp, 0
 }
 
-if (!esperarNeedleYTap("own_donoroffer_trade_button", 30, 139, 427))
+; Chequeo rapido cableado (2026-08-26): needle propia own_maintrade_trade_button_native ya
+; validada en vivo hoy mismo contra una captura real de esta pantalla (match perfecto, avg
+; 0.00/255, variation 0 alcanza) y cruzada contra 7 capturas de otras pantallas (titulo x2,
+; social hub x2, friends x2, menu principal) sin ningun falso positivo -- variation 30 usado
+; igual, con margen.
+if (!esperarNeedleYTap("own_donoroffer_trade_button", 30, 139, 427, 15000, "own_maintrade_trade_button_native", 30))
     ExitConError("no_aparecio_trade_landing_paso6")
 ; Causa real encontrada (2026-08-19, bug reproducido en vivo varias veces): el recorte
 ; original tenia contaminacion en la esquina superior-izquierda (unos 8x6 pixeles de otro
@@ -345,7 +404,12 @@ if (!esperarNeedleYTap("own_donoroffer_trade_button", 30, 139, 427))
 ; tolerancia a 50 tampoco alcanzaba. Recorte reemplazado por uno mas ajustado que deja solo
 ; el icono de la lupa, sin esa esquina -- verificado con diferencia 0.00 (pixel por pixel)
 ; contra 2 capturas reales tomadas en momentos distintos. Tolerancia devuelta a 30.
-if (!esperarNeedleYTap("own_donoroffer_selectfriend_trade", 30, 213, 179))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_selectfriend_trade_native
+; (el pill "Trade" al lado del amigo en "Select a Friend"), validada en vivo -- match exacto
+; (variation 0) contra una captura real de esta pantalla, sin ningun falso positivo hasta
+; variation 60 contra 10 capturas de otras pantallas (titulo, social hub, friends, home, trade
+; landing). Se usa 30 con margen, igual que el resto de needles de este script.
+if (!esperarNeedleYTap("own_donoroffer_selectfriend_trade", 30, 213, 179, 15000, "own_donoroffer_selectfriend_trade_native", 30))
     ExitConError("no_aparecio_selectfriend_paso7")
 
 ; Popup explicativo "Choose a Card to Trade" -- puede no aparecer siempre. Reintenta unos
@@ -353,16 +417,49 @@ if (!esperarNeedleYTap("own_donoroffer_selectfriend_trade", 30, 213, 179))
 ; que a veces tarda en renderizar y un chequeo de una sola vez se lo perdia.
 tapSiApareceNeedlePolling("own_donoroffer_willsend_popup", 141, 436)
 
-if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357)) {
+; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_choosecard_title_native
+; (el titulo "Choose a Card to Trade", estable -- no depende de la carta), validada en vivo --
+; match exacto (variation 0) contra una captura real y sin ningun falso positivo hasta
+; variation 80 contra 11 capturas de otras pantallas.
+if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357, 15000, "own_donoroffer_choosecard_title_native", 30)) {
     ; Red de seguridad (2026-08-19, bug real reproducido en vivo): si el popup "Choose a
     ; Card to Trade" seguia tapando la pantalla (mas lento en renderizar de lo esperado),
     ; este paso nunca iba a encontrar el titulo por mas que espere, sin importar el
     ; timeout. En vez de solo agrandar el numero a ciegas, antes de rendirse de verdad
     ; intenta cerrar el popup una vez mas (por si seguia ahi) y reintenta el chequeo.
     tapSiApareceNeedlePolling("own_donoroffer_willsend_popup", 141, 436, 3000)
-    if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357))
+    if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357, 15000, "own_donoroffer_choosecard_title_native", 30))
         ExitConError("no_aparecio_choosecard_paso9")
 }
+; Recuperacion "vista ampliada" (2026-08-25, bug real reproducido en vivo -- el toque de
+; seleccion de arriba a veces deja la carta en vista ampliada/zoom en vez de solo
+; seleccionarla con el check -- sospecha del usuario, a confirmar: el Speed Mod a 3x puede
+; estar alterando el timing real del toque). Needle own_donoroffer_cardinfo_zoomed (el icono
+; "Card Info", SOLO visible en esa vista ampliada -- confirmado en vivo contra 2 capturas
+; reales del bug + 1 captura normal sin match). Si aparece: foto de evidencia (mismo criterio
+; que _OfferPhoto.png, bot.js la manda a Discord si existe) + UN SOLO toque en la coordenada
+; de OK (en la vista ampliada cae en zona vacia debajo de la carta, cierra el zoom) -- SIN
+; retocar la carta de nuevo (a pedido explicito del usuario: el toque de mas volvia a caer
+; en la carta, no en OK). El flujo normal de mas abajo sigue solo desde aca.
+tempFileZoom := A_ScriptDir . "\Logs\_donoroffer_zoomcheck.png"
+AdbScreenshot(adbPath, puerto, tempFileZoom)
+if (FileExist(tempFileZoom)) {
+    pBitmapZoom := Gdip_CreateBitmapFromFile(tempFileZoom)
+    if (pBitmapZoom) {
+        pNeedleZoom := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_donoroffer_cardinfo_zoomed.png")
+        vPosZoom := ""
+        estaAmpliada := (pNeedleZoom && Gdip_ImageSearch(pBitmapZoom, pNeedleZoom, vPosZoom, 0, 0, 0, 0, 30) = 1)
+        if (pNeedleZoom)
+            Gdip_DisposeImage(pNeedleZoom)
+        if (estaAmpliada) {
+            FileCopy, %tempFileZoom%, % StrReplace(g_outputFile, ".txt", "_ZoomRecoveryPhoto.png"), 1
+            tap(145, 458)  ; coordenada de OK -- zona vacia en la vista ampliada, cierra el zoom
+        }
+        Gdip_DisposeImage(pBitmapZoom)
+    }
+    FileDelete, %tempFileZoom%
+}
+
 ; Paso 10 (2026-08-05, a pedido explicito del usuario): NO se puede needlear "OK ya
 ; habilitado" -- el boton tiene un shimmer de color que cambia de tono en cada captura
 ; (confirmado en vivo, ni variation 70 lo agarra), y el checkmark de la carta seleccionada
@@ -370,22 +467,45 @@ if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357)) {
 ; distinta cada vez). Se reutiliza la misma needle del titulo (estable, no depende de la
 ; carta) solo para confirmar que seguimos en esta pantalla, y se toca OK a ciegas -- mismo
 ; criterio que la seleccion de la carta en el paso 9.
-if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 145, 458))
+; Sleep antes del toque ciego (2026-08-25, bug real reproducido en vivo: el toque a veces
+; caia sobre la carta en vez del boton OK -- abria "Card Info" en vez de confirmar --
+; porque el boton todavia estaba terminando de habilitarse/renderizar en el instante exacto
+; en que la needle del titulo (estable) ya daba OK. Mismo patron ya usado en otros lados de
+; este pipeline para esta misma clase de bug: needle SIN tocar + Sleep + tap manual, en vez
+; de esperarNeedleYTap (que toca apenas encuentra, sin margen).
+if (!esperarNeedleSinAccion("own_donoroffer_choosecard_title", 30, 15000, "own_donoroffer_choosecard_title_native", 30))
     ExitConError("no_aparecio_ok_habilitado_paso10")
-if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 30, 197, 461))
+Sleep, 1500
+tap(145, 458)
+; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_tradepartner_header_native
+; ("Trade Partner"), validada en vivo -- match exacto contra una captura real y sin ningun
+; falso positivo hasta variation 80 contra 12 capturas de otras pantallas.
+if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 30, 197, 461, 15000, "own_donoroffer_tradepartner_header_native", 30))
     ExitConError("no_aparecio_preview_envio_paso11")
-if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_setcard_confirm_native
+; (el texto especifico de este popup, "Do you want to set this as your card to be traded?" --
+; NO el boton OK generico, que es solo un color solido y dio falsos positivos en vivo contra
+; otras pantallas con botones celestes). Validada en vivo: match exacto, sin ningun falso
+; positivo hasta variation 80 contra 13 capturas de otras pantallas.
+if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 30))
     ExitConError("no_aparecio_confirmar_set_card_paso12")
 
 ; Aviso "solo te queda 1 copia" -- puede no aparecer siempre. Pasado a needle real
 ; (2026-08-05, a pedido del usuario) -- ya no queda ningun chequeo por OCR en este script.
-tapSiApareceNeedle("own_donoroffer_remainingcopy_popup", 204, 383)
+; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_remainingcopy_popup_native
+; (el texto de advertencia "This will trade a card that you only have one remaining copy of"),
+; validada en vivo -- match exacto, sin ningun falso positivo hasta variation 80 contra 14
+; capturas de otras pantallas.
+tapSiApareceNeedle("own_donoroffer_remainingcopy_popup", 204, 383, 30, "own_donoroffer_remainingcopy_popup_native", 30)
 
 ; Foto real de cuando la donante ofrece la carta (2026-08-18, a pedido explicito del
 ; usuario -- mismo criterio que la foto que ya saca _DonorRespondAndFinalize.ahk): se saca
 ; ANTES de tocar, mientras la pantalla de confirmacion todavia esta completa. Nombre
 ; derivado del outputFile para que bot.js sepa donde buscarla.
-if (!esperarNeedleSinAccion("own_donoroffer_offered_text", 30, 15000))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_offered_text_native
+; ("You have offered the card to your trade partner."), validada en vivo -- match exacto,
+; sin ningun falso positivo hasta variation 80 contra 15 capturas de otras pantallas.
+if (!esperarNeedleSinAccion("own_donoroffer_offered_text", 30, 15000, "own_donoroffer_offered_text_native", 30))
     ExitConError("no_aparecio_confirmacion_final_paso14")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_OfferPhoto.png"))
 tap(136, 438)

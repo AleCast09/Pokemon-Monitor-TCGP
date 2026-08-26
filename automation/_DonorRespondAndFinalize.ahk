@@ -49,6 +49,11 @@ if (puerto = "")
     ExitConError("puerto_no_encontrado")
 AdbConectar(adbPath, puerto)
 
+; Handle de la ventana real, para el chequeo rapido por captura directa (2026-08-26, mismo
+; mecanismo que _DonorOfferCard.ahk / _SpeedMod.ahk / _WaitWelcomeScreens*.ahk). No fatal si
+; no se encuentra.
+global g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
+
 tap(x, y, esperaMs := 4000) {
     static convX := 540/283, convY := 960/488, offset := 40
     global adbPath, puerto
@@ -82,13 +87,38 @@ verificarNoCrasheado() {
 }
 verificarNoCrasheado()
 
+; Chequeo rapido por captura directa de ventana (2026-08-26, ver comentario completo en
+; _DonorOfferCard.ahk). Sin riesgo de regresion.
+chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
+    global g_hwndFast
+    if (nombreNeedleNativo = "" || !g_hwndFast)
+        return false
+    pBitmap := capturarVentana(g_hwndFast)
+    if (!pBitmap)
+        return false
+    encontrado := false
+    pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
+    if (pNeedle) {
+        vPos := ""
+        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        Gdip_DisposeImage(pNeedle)
+    }
+    Gdip_DisposeImage(pBitmap)
+    return encontrado
+}
+
 ; Reconocimiento real antes de tocar (2026-08-05, a pedido explicito del usuario): espera
 ; (poll cada 500ms, hasta timeoutMs) a que la needle de la pantalla ESPERADA aparezca antes
 ; de tocar -- asi un PC lento no rompe el timing.
-esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
+; Parametros nombreNeedleNativo/variationNativo (2026-08-26, opcionales): ver chequeoRapidoNeedle.
+esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            tap(x, y)
+            return true
+        }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false
@@ -131,10 +161,12 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
 ; Igual que esperarNeedleYTap pero sin ninguna accion al encontrarla (2026-08-09, a pedido
 ; explicito del usuario: sacar la foto real de la carta justo antes del swipe que la manda --
 ; deja la pantalla intacta para que el caller saque su propia captura antes de actuar).
-esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000) {
+esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo))
+            return true
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false

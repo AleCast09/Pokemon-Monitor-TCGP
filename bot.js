@@ -3418,6 +3418,11 @@ const RUTA_DONOR_RESPOND_FINALIZE_SCRIPT = path.join(__dirname, 'automation', '_
 // PROPIA carta para completar el intercambio de su lado tambien. Sin este paso, la carta
 // de Main nunca se termina de enviar de verdad.
 const RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT = path.join(__dirname, 'automation', '_MainRefreshAfterTrade.ahk');
+// Speed Mod (2026-08-24, a pedido explicito del usuario): activa 2x/3x en las cuentas
+// donantes que corren el cliente parchado (Main NO -- corre sin parchar) -- ver header de
+// _SpeedMod.ahk para el detalle completo, portado del "Common_SpeedModMenuButton" del bot de
+// Kevin. No critico -- si falla, el llamador sigue el trade igual, solo mas lento.
+const RUTA_SPEED_MOD_SCRIPT = path.join(__dirname, 'automation', '_SpeedMod.ahk');
 
 function ejecutarPasoAhk(ahkExe, rutaScript, args, timeoutMs, outputFile) {
     return new Promise((resolve) => {
@@ -3578,11 +3583,28 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
 
     // Paralelo (welcome de Main a la vez que inject+welcome de la donante) -- ver comentario
     // en "Turn on instances" de mas arriba sobre por que se volvio a este esquema.
-    const promesaEsperaMain = new Promise((resolve) => ejecutarWaitWelcomeScreens(infoMain.name, (ok, detalle) => resolve({ ok, detalle }), RUTA_WAIT_WELCOME_SCREENS_MAIN_SCRIPT));
+    // Speed Mod (2026-08-25, a pedido explicito del usuario: "para todos, main trade, friend
+    // trade" -- mismo mecanismo ya probado en vivo en Aggressive Trade, ver header de
+    // _SpeedMod.ahk) -- corre en paralelo con cada welcome screens, no bloqueante.
+    const promesaEsperaMain = (async () => {
+        const promesaSpeedModMain = fs.existsSync(RUTA_SPEED_MOD_SCRIPT)
+            ? ejecutarPasoAhk(ahkExe, RUTA_SPEED_MOD_SCRIPT, [infoMain.name, folderPath], 35 * 1000, tmp())
+            : Promise.resolve({ ok: true });
+        const promesaEspera = new Promise((resolve) => ejecutarWaitWelcomeScreens(infoMain.name, (ok, detalle) => resolve({ ok, detalle }), RUTA_WAIT_WELCOME_SCREENS_MAIN_SCRIPT));
+        const [resSpeedModMain, espera] = await Promise.all([promesaSpeedModMain, promesaEspera]);
+        if (!resSpeedModMain.ok) onProgreso({ paso: 'Speed Mod (Main)', estado: 'warning', detalle: resSpeedModMain.resultado });
+        return espera;
+    })();
     const promesaPrepDonante = (async () => {
         const resInject = await ejecutarInjectDonante();
         if (!resInject.ok) return resInject;
-        return await new Promise((resolve) => ejecutarWaitWelcomeScreens(nombre, (ok, detalle) => resolve({ ok, resultado: detalle })));
+        const promesaSpeedMod = fs.existsSync(RUTA_SPEED_MOD_SCRIPT)
+            ? ejecutarPasoAhk(ahkExe, RUTA_SPEED_MOD_SCRIPT, [nombre, folderPath], 35 * 1000, tmp())
+            : Promise.resolve({ ok: true });
+        const promesaEspera = new Promise((resolve) => ejecutarWaitWelcomeScreens(nombre, (ok, detalle) => resolve({ ok, resultado: detalle })));
+        const [resSpeedMod, espera] = await Promise.all([promesaSpeedMod, promesaEspera]);
+        if (!resSpeedMod.ok) onProgreso({ paso: 'Speed Mod (donor)', estado: 'warning', detalle: resSpeedMod.resultado });
+        return espera;
     })();
     const [esperaMain, prepDonante] = await Promise.all([promesaEsperaMain, promesaPrepDonante]);
     if (!esperaMain.ok) {
@@ -3683,6 +3705,15 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         // outputFile (mismo nombre, extension distinta por foto), justo antes del tap/swipe
         // que avanza la pantalla, para que quede la evidencia real de que paso en cada paso.
         if (paso.nombre === 'donor_offer_card') {
+            // Foto de recuperacion (2026-08-25, a pedido explicito del usuario, bug real
+            // reproducido en vivo): _DonorOfferCard.ahk guarda esta SOLO si el toque de
+            // seleccion dejo la carta en vista ampliada en vez de seleccionarla -- se manda
+            // nada mas si el archivo existe de verdad (la mayoria de las corridas no lo
+            // generan). Sirve para confirmar a distancia si el bug pasa sin mirar la pantalla.
+            const rutaFotoZoom = outputFilePaso.replace(/\.txt$/, '_ZoomRecoveryPhoto.png');
+            if (fs.existsSync(rutaFotoZoom)) {
+                await mandarFotoTradeAlCanal(rutaFotoZoom, `⚠️ <@${interaction.user.id}> La donante quedó en vista ampliada al elegir la carta -- se recuperó sola y siguió.`, true);
+            }
             // _DonorOfferCard.ahk guarda la captura de "You have offered the card..." justo
             // antes de tocar para cerrar -- momento en que la donante ofrece la carta de verdad.
             const rutaFotoOferta = outputFilePaso.replace(/\.txt$/, '_OfferPhoto.png');
@@ -3786,6 +3817,301 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     return await interaction.followUp({ content: mensaje, ephemeral: true });
 }
 
+// ================== AGGRESSIVE TRADE (2026-08-24, a pedido explicito del usuario) ==================
+// Idea: mandar VARIAS copias de la misma carta a Main de una sola vez, cada una desde una
+// cuenta/instancia donante distinta, en paralelo -- para cuando el usuario necesita varias
+// copias juntas en vez de repetir Main Trade una por una (~5 min cada corrida).
+//
+// NO hace falta ningun script AHK nuevo ni duplicado por instancia: _InjectAccountFast.ahk,
+// _SendFriendRequest.ahk y el resto ya reciben la instancia (winTitle) y la cuenta como
+// ARGUMENTOS (ver su propio header "Uso: ..."), no hardcodeados -- y ya tienen
+// "#SingleInstance off", asi que Windows deja correr el mismo .ahk varias veces a la vez sin
+// pisarse, mientras cada corrida apunte a una ventana distinta. Kevin en cambio necesita
+// duplicar su script por numero de instancia (1.ahk, 2.ahk...) porque el suyo usa
+// "#SingleInstance, Force" -- eso SI le prohibe correr el mismo archivo dos veces.
+//
+// Separado en 2 fases por donante:
+//   1) Fase paralela (TODAS las donantes a la vez, nada toca la ventana de Main todavia):
+//      inyectar cuenta -> esperar welcome screens -> mandar solicitud de amistad a Main.
+//   2) Fase en cola (una donante a la vez, protegida por conTurnoMainAggressive): todo lo que
+//      SI necesita la pantalla de Main -- aceptar amistad, ofrecer/aceptar carta, finalizar.
+//      Mismos scripts/orden que ya prueba ejecutarMainTradeDesdeDiscord de arriba (nombre de
+//      paso y RUTA_* identicos), solo que reordenados para que "mandar solicitud" quede en la
+//      fase paralela en vez de la fase en cola.
+//
+// Flujo de Discord (2026-08-24, descrito en vivo por el usuario, paso a paso):
+//   1. Boton "Aggressive Trade" -> elegir cual amigo guardado es Main (igual que Main Trade).
+//   2. "Cuantas cartas necesitas?" (1-10, 1 carta = 1 instancia).
+//   3. Por cada instancia, UNA POR UNA: "que cuenta deseas inyectar en la instancia N?" --
+//      dropdown de cuentas elegibles, sacando las que ya se usaron en una instancia anterior
+//      (no se puede repetir cuenta). Se repite hasta cubrir la cantidad pedida.
+//   4. Resumen final con botones "Start" y "Restart" (Restart en vez de "atras" a proposito --
+//      a pedido explicito del usuario: volver atras un paso puede generar cruces raros entre
+//      instancias ya elegidas, mas simple reiniciar la seleccion entera si algo salio mal).
+//   5. Start -> ejecutarAggressiveTradeDesdeDiscord con las asignaciones ya armadas.
+// El boton "Aggressive Trade" sigue deshabilitado ("Coming Soon") hasta probar el flujo
+// completo en vivo con instancias reales -- el codigo ya esta armado, falta habilitarlo.
+
+const AGGRESSIVE_TRADE_MAX_INSTANCIAS = 10;
+
+// Mutex de un solo cupo (2026-08-24): cada donante que llega a la parte que toca la pantalla
+// de Main encadena su turno acá -- el siguiente en la fila no arranca hasta que el anterior
+// termine (exito o error, .catch(()=>{}) evita que un fallo trabe la cola entera).
+let _colaTurnoMainAggressive = Promise.resolve();
+function conTurnoMainAggressive(tarea) {
+    const miTurno = _colaTurnoMainAggressive.then(tarea, tarea);
+    _colaTurnoMainAggressive = miTurno.catch(() => {});
+    return miTurno;
+}
+
+// Sesiones de seleccion en memoria (mismo patron que _tradeSesiones de mas abajo -- se pierde
+// en un reinicio, no importa, es solo estado de un flujo de botones en curso). El customId de
+// cada boton/select solo necesita cargar el sesionId (corto), no la lista completa de
+// asignaciones ya elegidas -- esa lista puede pasarse de largo el limite de 100 caracteres de
+// un customId apenas con 3-4 instancias.
+const _aggressiveTradeSesiones = new Map();
+const TTL_SESION_AGGRESSIVE_MS = 30 * 60 * 1000;
+
+function crearSesionAggressiveTrade({ userId, cartaId, friendId, cuentasElegibles, instanciasDonantes }) {
+    const sesionId = crypto.randomUUID().slice(0, 12);
+    _aggressiveTradeSesiones.set(sesionId, {
+        userId, cartaId, friendId, cuentasElegibles, instanciasDonantes,
+        cantidadTotal: 0, asignaciones: [], ts: Date.now()
+    });
+    setTimeout(() => _aggressiveTradeSesiones.delete(sesionId), TTL_SESION_AGGRESSIVE_MS);
+    return sesionId;
+}
+
+// Arma el siguiente paso segun cuanto se lleva asignado: o pide la cuenta de la proxima
+// instancia, o -- si ya se cubrio la cantidad pedida -- muestra el resumen final con Start/
+// Restart. Se llama despues de CADA eleccion (cantidad, cuenta, restart), asi que el flujo
+// entero avanza solo desde un unico lugar.
+async function mostrarPasoAsignacionAggressive(interaction, sesionId) {
+    const sesion = _aggressiveTradeSesiones.get(sesionId);
+    if (!sesion) {
+        return await interaction.update({ content: '❌ This Aggressive Trade session expired. Start again from the card.', components: [] });
+    }
+
+    if (sesion.asignaciones.length < sesion.cantidadTotal) {
+        const siguienteInstancia = sesion.instanciasDonantes[sesion.asignaciones.length];
+        const fileNamesUsados = new Set(sesion.asignaciones.map(a => a.fileName));
+        const cuentasRestantes = sesion.cuentasElegibles.filter(c => !fileNamesUsados.has(c.fileName));
+        if (!cuentasRestantes.length) {
+            return await interaction.update({ content: `❌ Ran out of eligible accounts (needed ${sesion.cantidadTotal}, only ${fileNamesUsados.size} distinct accounts available). Start again with a lower quantity.`, components: [] });
+        }
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`aggr_cuenta::${sesionId}`)
+            .setPlaceholder(`Account for instance ${sesion.asignaciones.length + 1}`)
+            .addOptions(cuentasRestantes.slice(0, 25).map(c => ({
+                label: `${c.fileName} (x${c.cantidad})`.slice(0, 100),
+                value: c.fileName.slice(0, 100)
+            })));
+        const filaCancelar = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`aggr_cancelar::${sesionId}`).setLabel('⬅️ Cancel').setStyle(ButtonStyle.Secondary)
+        );
+        return await interaction.update({
+            content: `Which account do you want to inject into **instance ${sesion.asignaciones.length + 1}** (${siguienteInstancia.name})? (${sesion.asignaciones.length}/${sesion.cantidadTotal} assigned so far)`,
+            components: [new ActionRowBuilder().addComponents(menu), filaCancelar]
+        });
+    }
+
+    const resumen = sesion.asignaciones.map((a, i) => `**${i + 1}.** \`${a.fileName}\` → instance **${a.instanciaNombre}**`).join('\n');
+    const filaAcciones = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`aggr_start::${sesionId}`).setLabel('▶️ Start').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`aggr_restart::${sesionId}`).setLabel('🔄 Restart').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`aggr_cancelar::${sesionId}`).setLabel('⬅️ Cancel').setStyle(ButtonStyle.Danger)
+    );
+    return await interaction.update({
+        content: `**Aggressive Trade — ${sesion.asignaciones.length} card(s) ready:**\n${resumen}\n\nPress **Start** to run all of them, **Restart** to pick accounts again, or **Cancel** to back out.`,
+        components: [filaAcciones]
+    });
+}
+
+// asignacionesElegidas (2026-08-24, a pedido explicito del usuario -- flujo de Discord
+// descrito en vivo): NO se auto-elige la cuenta de cada instancia -- el usuario la elige a
+// mano, una por una, instancia por instancia (ver construirPasoAsignacionAggressive mas abajo),
+// sin repetir una cuenta ya usada en una instancia anterior. Esta funcion recibe esa lista YA
+// armada: [{ instanciaIndex, instanciaNombre, fileName }, ...], una entrada por donante.
+async function ejecutarAggressiveTradeDesdeDiscord(interaction, { cartaId, friendId, asignacionesElegidas }, onProgreso = () => {}) {
+    const ahkExe = rutaAutoHotkey();
+    const folderPath = carpetaBaseMuMu();
+    const scripts = [RUTA_INJECT_ACCOUNT_FAST_SCRIPT, RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, RUTA_DONOR_OFFER_CARD_SCRIPT, RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT];
+    if (!ahkExe || !folderPath || scripts.some(s => !fs.existsSync(s))) {
+        onProgreso({ paso: 'Check scripts', estado: 'error', detalle: 'scripts not found' });
+        return { ok: false, motivo: 'scripts_not_found' };
+    }
+
+    const instancias = obtenerInstanciasMuMu();
+    const infoMain = (instancias || []).find(i => i.name === 'Main');
+    if (!infoMain) {
+        onProgreso({ paso: 'Find Main instance', estado: 'error', detalle: 'no instance named "Main"' });
+        return { ok: false, motivo: 'no_main_instance' };
+    }
+    if (!Array.isArray(asignacionesElegidas) || !asignacionesElegidas.length) {
+        onProgreso({ paso: 'Assign accounts to instances', estado: 'error', detalle: 'no assignments provided' });
+        return { ok: false, motivo: 'sin_asignaciones' };
+    }
+
+    const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+    const asignaciones = [];
+    for (const elegida of asignacionesElegidas.slice(0, AGGRESSIVE_TRADE_MAX_INSTANCIAS)) {
+        const instancia = (instancias || []).find(i => String(i.index) === String(elegida.instanciaIndex));
+        if (!instancia || instancia.name === 'Main') continue;
+        const rutaXml = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, elegida.fileName);
+        if (!rutaXml) continue;
+        asignaciones.push({ cuenta: { fileName: elegida.fileName }, rutaXml, instancia });
+    }
+    if (!asignaciones.length) {
+        onProgreso({ paso: 'Assign accounts to instances', estado: 'error', detalle: 'could not resolve any account file' });
+        return { ok: false, motivo: 'sin_archivos_resueltos' };
+    }
+    onProgreso({ paso: 'Assign accounts to instances', estado: 'ok', detalle: `${asignaciones.length} donor(s) matched` });
+
+    const prendidaMain = await asegurarInstanciaEncendida(infoMain.index);
+    if (!prendidaMain) {
+        onProgreso({ paso: 'Turn on Main', estado: 'error', detalle: 'could not turn on Main' });
+        return { ok: false, motivo: 'main_no_prendio' };
+    }
+    await Promise.all(asignaciones.map(a => asegurarInstanciaEncendida(a.instancia.index)));
+    onProgreso({ paso: 'Turn on instances', estado: 'ok' });
+
+    const tmp = (etiqueta) => path.join(os.tmpdir(), `aggr_${etiqueta}_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`);
+
+    // Main solo necesita llegar UNA vez a su propio menu principal -- corre en paralelo con
+    // la fase de preparacion de TODAS las donantes (mismo patron que ejecutarMainTradeDesdeDiscord).
+    // Speed Mod (2026-08-24, a pedido explicito del usuario -- "no se sabe si hay gente que
+    // usa ese APK tambien para su Main"): se intenta UNA vez aca tambien, mismo criterio no
+    // bloqueante que en cada donante -- si hace match, activa la velocidad; si no, Main sigue
+    // el mismo camino de siempre (aceptar solicitud, etc.) sin ninguna diferencia.
+    // Speed Mod EN PARALELO con Welcome Screens (2026-08-25, a pedido explicito del usuario
+    // tras probarlo en vivo: "que haga match desde que se abre el pokemon" -- el icono del
+    // mod ya esta visible desde que el juego recien abre, no hace falta esperar a que termine
+    // de navegar las pantallas de bienvenida). No bloqueante: si falla, no corta nada.
+    const promesaEsperaMain = (async () => {
+        const promesaSpeedModMain = fs.existsSync(RUTA_SPEED_MOD_SCRIPT)
+            ? ejecutarPasoAhk(ahkExe, RUTA_SPEED_MOD_SCRIPT, [infoMain.name, folderPath], 35 * 1000, tmp('speedmod_main'))
+            : Promise.resolve({ ok: true });
+        const promesaEspera = new Promise((resolve) => ejecutarWaitWelcomeScreens(infoMain.name, (ok, detalle) => resolve({ ok, detalle }), RUTA_WAIT_WELCOME_SCREENS_MAIN_SCRIPT));
+        const [resSpeedModMain, espera] = await Promise.all([promesaSpeedModMain, promesaEspera]);
+        if (!resSpeedModMain.ok) onProgreso({ donante: 'Main', paso: 'speed_mod', estado: 'warning', detalle: resSpeedModMain.resultado });
+        return espera;
+    })();
+
+    // Fase 1 por donante (paralela entre si -- nada de esto toca la ventana de Main).
+    async function prepararDonante(asignacion) {
+        const { cuenta, rutaXml, instancia } = asignacion;
+        const nombre = instancia.name;
+
+        const outInject = tmp(`inject_${instancia.index}`);
+        const resInject = await ejecutarPasoAhk(ahkExe, RUTA_INJECT_ACCOUNT_FAST_SCRIPT, [nombre, folderPath, rutaXml], 30 * 1000, outInject);
+        if (!resInject.ok) return { ok: false, paso: 'inject_donor_account', detalle: resInject.resultado };
+
+        const promesaSpeedMod = fs.existsSync(RUTA_SPEED_MOD_SCRIPT)
+            ? ejecutarPasoAhk(ahkExe, RUTA_SPEED_MOD_SCRIPT, [nombre, folderPath], 35 * 1000, tmp(`speedmod_${instancia.index}`))
+            : Promise.resolve({ ok: true });
+        const promesaEspera = new Promise((resolve) => ejecutarWaitWelcomeScreens(nombre, (ok, detalle) => resolve({ ok, detalle })));
+        const [resSpeedMod, espera] = await Promise.all([promesaSpeedMod, promesaEspera]);
+        if (!resSpeedMod.ok) onProgreso({ donante: nombre, paso: 'speed_mod', estado: 'warning', detalle: resSpeedMod.resultado });
+        if (!espera.ok) return { ok: false, paso: 'reach_donor_menu', detalle: espera.detalle };
+
+        const outSolicitud = tmp(`friendreq_${instancia.index}`);
+        const resSolicitud = await ejecutarPasoAhk(ahkExe, RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, [nombre, folderPath, friendId], 90 * 1000, outSolicitud);
+        if (!resSolicitud.ok) return { ok: false, paso: 'send_friend_request', detalle: resSolicitud.resultado };
+
+        return { ok: true };
+    }
+
+    // Fase 2 por donante (en cola, una a la vez, via conTurnoMainAggressive) -- mismos 5 pasos
+    // que ejecutarMainTradeDesdeDiscord (sin send_friend_request, que ya paso en la fase 1).
+    async function procesarConMain(asignacion) {
+        const nombre = asignacion.instancia.name;
+        const pasos = [
+            { nombre: 'main_accept_friend_request', script: RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, args: ['Main', folderPath], timeoutMs: 60 * 1000 },
+            { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 },
+            { nombre: 'main_accept_trade_offer', script: RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, args: ['Main', folderPath], timeoutMs: 2 * 60 * 1000 },
+            { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 },
+            { nombre: 'main_finalize_own_card', script: RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT, args: ['Main', folderPath], timeoutMs: 60 * 1000 }
+        ];
+        let rutaFotoEnvio = null;
+        for (const paso of pasos) {
+            const outPaso = tmp(`${paso.nombre}_${asignacion.instancia.index}`);
+            const { ok, resultado } = await ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, outPaso);
+            if (!ok) return { ok: false, paso: paso.nombre, detalle: resultado };
+            // _DonorRespondAndFinalize.ahk guarda esta captura justo despues del swipe que manda
+            // la carta de verdad (mismo archivo que ya usa Main Trade, ver _SentPhoto.png arriba).
+            if (paso.nombre === 'donor_respond_finalize') rutaFotoEnvio = outPaso.replace(/\.txt$/, '_SentPhoto.png');
+        }
+        return { ok: true, rutaFotoEnvio };
+    }
+
+    // Mensaje simple al canal de Trading (2026-08-24, a pedido explicito del usuario: "cuando
+    // un instancia termina su ciclo, va a mandar un mensaje... primera carta transferida
+    // exitosamente, junto a foto") -- sin el embed de datos de carta (no siempre se conoce el
+    // nombre exacto de la carta enviada por esta cuenta puntual), foto simple como Friend Trade.
+    async function mandarMensajeAggressiveAlCanal(texto, rutaFoto) {
+        try {
+            const canal = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            if (!canal?.webhook_url) return;
+            if (rutaFoto && fs.existsSync(rutaFoto)) {
+                const form = new FormData();
+                form.append('payload_json', JSON.stringify({ content: texto }));
+                form.append('files[0]', fs.readFileSync(rutaFoto), { filename: 'trade_photo.png' });
+                await axios.post(`${canal.webhook_url}?wait=true`, form, { headers: form.getHeaders(), timeout: 15000 });
+            } else {
+                await axios.post(`${canal.webhook_url}?wait=true`, { content: texto }, { timeout: 10000 });
+            }
+        } catch (e) {
+            console.error('DEBUG: error mandando el resultado de Aggressive Trade al canal de trading:', e?.response?.data || e?.message || e);
+        }
+    }
+
+    // Contador de cuantos donantes ya terminaron con exito -- se incrementa en el orden real
+    // en que van completando (no el orden del array), asi el mensaje dice "Carta 1", "Carta 2"
+    // segun van saliendo de a una de la cola de Main, tal cual lo describio el usuario.
+    let completados = 0;
+
+    // Pipeline completo por donante: prepara en paralelo con el resto, despues encadena su
+    // turno con Main, y al final apaga su propia instancia (exito o error).
+    async function pipelineDonante(asignacion) {
+        const nombre = asignacion.instancia.name;
+        onProgreso({ donante: nombre, paso: 'inject_donor_account', estado: 'running' });
+        const prep = await prepararDonante(asignacion);
+        if (!prep.ok) {
+            onProgreso({ donante: nombre, paso: prep.paso, estado: 'error', detalle: prep.detalle });
+            apagarInstanciaMuMu(asignacion.instancia.index);
+            return { ok: false, donante: nombre, cuenta: asignacion.cuenta.fileName, ...prep };
+        }
+        onProgreso({ donante: nombre, paso: 'send_friend_request', estado: 'ok' });
+
+        const esperaMain = await promesaEsperaMain;
+        if (!esperaMain.ok) {
+            onProgreso({ donante: nombre, paso: 'reach_main_menu', estado: 'error', detalle: esperaMain.detalle });
+            apagarInstanciaMuMu(asignacion.instancia.index);
+            return { ok: false, donante: nombre, cuenta: asignacion.cuenta.fileName, paso: 'reach_main_menu', detalle: esperaMain.detalle };
+        }
+
+        const resultadoMain = await conTurnoMainAggressive(() => procesarConMain(asignacion));
+        apagarInstanciaMuMu(asignacion.instancia.index);
+        if (!resultadoMain.ok) {
+            onProgreso({ donante: nombre, paso: resultadoMain.paso, estado: 'error', detalle: resultadoMain.detalle });
+            await mandarMensajeAggressiveAlCanal(`❌ <@${interaction.user.id}> Aggressive Trade: la cuenta \`${asignacion.cuenta.fileName}\` (instancia **${nombre}**) falló en el paso **${resultadoMain.paso}**.`);
+            return { ok: false, donante: nombre, cuenta: asignacion.cuenta.fileName, ...resultadoMain };
+        }
+        completados++;
+        onProgreso({ donante: nombre, paso: 'trade_completed', estado: 'ok' });
+        await mandarMensajeAggressiveAlCanal(`✅ <@${interaction.user.id}> Carta ${completados} transferida exitosamente — cuenta \`${asignacion.cuenta.fileName}\` (instancia **${nombre}**).`, resultadoMain.rutaFotoEnvio);
+        return { ok: true, donante: nombre, cuenta: asignacion.cuenta.fileName };
+    }
+
+    const resultados = await Promise.all(asignaciones.map(pipelineDonante));
+    apagarInstanciaMuMu(infoMain.index);
+
+    const exitosos = resultados.filter(r => r.ok);
+    const fallidos = resultados.filter(r => !r.ok);
+    onProgreso({ paso: 'Aggressive Trade completed', estado: 'ok', terminado: true, exitosos: exitosos.length, fallidos: fallidos.length });
+    return { ok: true, exitosos, fallidos, total: resultados.length };
+}
+
 // Extraida del handler de card_trade_instancia:: (2026-08-08, a pedido explicito del
 // usuario: reusar el MISMO flujo de "Free Trade" desde la pagina web de cartas, no solo
 // desde Discord) -- mismo comportamiento de siempre (inyecta + manda solicitud de amistad,
@@ -3834,7 +4160,15 @@ async function ejecutarFreeTradeDesdeDiscord(interaction, { cartaId, friendId, f
     }
     onProgreso({ paso: 'Inject account', estado: 'ok' });
 
-    const espera = await new Promise((resolve) => ejecutarWaitWelcomeScreens(nombre, (ok, detalle) => resolve({ ok, detalle })));
+    // Speed Mod (2026-08-25, a pedido explicito del usuario: "para todos, main trade, friend
+    // trade" -- mismo mecanismo probado en vivo en Aggressive Trade, ver header de
+    // _SpeedMod.ahk) -- en paralelo con el welcome screens, no bloqueante.
+    const promesaSpeedMod = fs.existsSync(RUTA_SPEED_MOD_SCRIPT)
+        ? ejecutarPasoAhk(ahkExe, RUTA_SPEED_MOD_SCRIPT, [nombre, folderPath], 35 * 1000, tmp())
+        : Promise.resolve({ ok: true });
+    const promesaEspera = new Promise((resolve) => ejecutarWaitWelcomeScreens(nombre, (ok, detalle) => resolve({ ok, detalle })));
+    const [resSpeedMod, espera] = await Promise.all([promesaSpeedMod, promesaEspera]);
+    if (!resSpeedMod.ok) onProgreso({ paso: 'Speed Mod', estado: 'warning', detalle: resSpeedMod.resultado });
     if (!espera.ok) {
         onProgreso({ paso: 'Reach main menu', estado: 'error', detalle: espera.detalle });
         return await interaction.followUp({ content: `❌ Could not reach the main menu on instance **${nombre}** (${espera.detalle}).`, ephemeral: true });
@@ -3975,11 +4309,17 @@ function ejecutarSendTradeCard(winTitle, callback) {
     // del viejo _SendTradeCard.ahk) -- mismo criterio que ejecutarFriendTradeAcceptOffer.
     const outputFile = path.join(os.tmpdir(), `ftrade_offer_${winTitle}_${Date.now()}.txt`);
     spawnAhkConProteccion(ahkExe, [RUTA_SEND_TRADE_CARD_SCRIPT, winTitle, folderPath, outputFile], { windowsHide: false }, 3 * 60 * 1000, (ok, detalle) => {
+        // Bug real reportado en vivo 2026-08-25: este callback borraba outputFile SIN leerlo
+        // primero, asi que el motivo real que el script SI escribe (ExitConError, "ERROR:
+        // <motivo>") se perdia siempre -- el usuario solo veia "codigo_3" (el exit code
+        // generico de spawnAhkConProteccion), sin ninguna pista de que paso realmente fallo.
+        let resultado = '';
+        try { resultado = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8').trim() : ''; } catch (e) { /* nada que leer */ }
         try { if (fs.existsSync(outputFile)) fs.unlinkSync(outputFile); } catch (e) {}
         // outputFile devuelto (2026-08-23, a pedido explicito del usuario -- "igualito que
         // Main Trade"): de ahi sale el nombre real de la foto que este script guarda
         // (_OfferPhoto.png), para poder mandarla al canal de Trading despues.
-        callback(ok, detalle, outputFile);
+        callback(ok && resultado && !resultado.startsWith('ERROR'), resultado || detalle, outputFile);
     });
 }
 
@@ -3997,9 +4337,14 @@ function ejecutarFinalizeTradeCard(winTitle, instanceIndex, callback) {
     }
     const outputFile = path.join(os.tmpdir(), `ftrade_finalize_${winTitle}_${Date.now()}.txt`);
     spawnAhkConProteccion(ahkExe, [RUTA_FINALIZE_TRADE_CARD_SCRIPT, winTitle, folderPath, outputFile], { windowsHide: false }, 3 * 60 * 1000, (ok, detalle) => {
+        // Mismo bug que ejecutarSendTradeCard (2026-08-25): leer el motivo real ANTES de
+        // borrar el archivo, en vez de perderlo y mostrar solo el "codigo_N" generico.
+        let resultado = '';
+        try { resultado = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8').trim() : ''; } catch (e) { /* nada que leer */ }
         try { if (fs.existsSync(outputFile)) fs.unlinkSync(outputFile); } catch (e) {}
-        if (ok) apagarInstanciaMuMu(instanceIndex);
-        callback(ok, detalle, outputFile);
+        const okReal = ok && resultado && !resultado.startsWith('ERROR');
+        if (okReal) apagarInstanciaMuMu(instanceIndex);
+        callback(okReal, resultado || detalle, outputFile);
     });
 }
 
@@ -8766,6 +9111,70 @@ client.on('interactionCreate', async interaction => {
         return await interaction.update({ content: '❌ Cancelled -- nothing was injected.', components: [] });
     }
 
+    // Aggressive Trade (2026-08-24) -- selects del flujo de seleccion, ver el comentario
+    // grande arriba de ejecutarAggressiveTradeDesdeDiscord para el flujo completo paso a paso.
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('aggr_friendid::')) {
+        const cartaId = interaction.customId.replace('aggr_friendid::', '');
+        const friendId = interaction.values[0];
+        await interaction.deferUpdate();
+
+        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+        const cuentasElegibles = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId);
+        if (cuentasElegibles === null) {
+            return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.', components: [] });
+        }
+        if (!cuentasElegibles.length) {
+            return await interaction.editReply({ content: '❌ No account has this card.', components: [] });
+        }
+        const instancias = obtenerInstanciasMuMu();
+        if (instancias === null) {
+            return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+        }
+        const instanciasDonantes = instancias.filter(i => i.name !== 'Main');
+        if (!instanciasDonantes.length) {
+            return await interaction.editReply({ content: '❌ No donor instances found (every instance is named "Main"?).', components: [] });
+        }
+        // Limite duro (2026-08-24, a pedido explicito del usuario): las instancias donantes
+        // van numeradas 1-10 nomas -- Main aparte, 11 en total. Si hay mas de 10 instancias que
+        // no sean Main, es un setup invalido para Aggressive Trade -- error claro en vez de
+        // truncar en silencio a las primeras 10.
+        if (instanciasDonantes.length > AGGRESSIVE_TRADE_MAX_INSTANCIAS) {
+            return await interaction.editReply({ content: `❌ Found ${instanciasDonantes.length} instances besides Main -- Aggressive Trade only supports up to ${AGGRESSIVE_TRADE_MAX_INSTANCIAS} donor instances (11 total including Main). Close/remove the extra ones first.`, components: [] });
+        }
+
+        const tope = Math.min(AGGRESSIVE_TRADE_MAX_INSTANCIAS, cuentasElegibles.length, instanciasDonantes.length);
+        const sesionId = crearSesionAggressiveTrade({ userId: interaction.user.id, cartaId, friendId, cuentasElegibles, instanciasDonantes });
+
+        const menuCantidad = new StringSelectMenuBuilder()
+            .setCustomId(`aggr_cantidad::${sesionId}`)
+            .setPlaceholder('How many cards do you need?')
+            .addOptions(Array.from({ length: tope }, (_, i) => ({ label: `${i + 1} card${i + 1 > 1 ? 's' : ''} (${i + 1} instance${i + 1 > 1 ? 's' : ''})`, value: String(i + 1) })));
+        return await interaction.editReply({ content: `How many copies of this card do you need? (up to ${tope}, limited by eligible accounts/free instances)`, components: [new ActionRowBuilder().addComponents(menuCantidad)] });
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('aggr_cantidad::')) {
+        const sesionId = interaction.customId.replace('aggr_cantidad::', '');
+        const sesion = _aggressiveTradeSesiones.get(sesionId);
+        if (!sesion) {
+            return await interaction.update({ content: '❌ This Aggressive Trade session expired. Start again from the card.', components: [] });
+        }
+        sesion.cantidadTotal = parseInt(interaction.values[0], 10) || 0;
+        sesion.asignaciones = [];
+        return await mostrarPasoAsignacionAggressive(interaction, sesionId);
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('aggr_cuenta::')) {
+        const sesionId = interaction.customId.replace('aggr_cuenta::', '');
+        const sesion = _aggressiveTradeSesiones.get(sesionId);
+        if (!sesion) {
+            return await interaction.update({ content: '❌ This Aggressive Trade session expired. Start again from the card.', components: [] });
+        }
+        const fileName = interaction.values[0];
+        const siguienteInstancia = sesion.instanciasDonantes[sesion.asignaciones.length];
+        sesion.asignaciones.push({ instanciaIndex: siguienteInstancia.index, instanciaNombre: siguienteInstancia.name, fileName });
+        return await mostrarPasoAsignacionAggressive(interaction, sesionId);
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_shinedust_cuenta::')) {
         const [, cartaId] = interaction.customId.split('::');
         const fileName = interaction.values[0];
@@ -9940,7 +10349,11 @@ client.on('interactionCreate', async interaction => {
                 new ButtonBuilder().setCustomId(`card_trade_main::${cartaId}`).setLabel('🏠 Main Trade').setStyle(ButtonStyle.Primary),
                 // Deshabilitado a pedido explicito del usuario 2026-07-29: todavia no
                 // esta implementado, se libera en un release futuro.
-                new ButtonBuilder().setCustomId(`card_trade_agresivo::${cartaId}`).setLabel('⚡ Aggressive Trade — Coming Soon').setStyle(ButtonStyle.Danger).setDisabled(true)
+                // Habilitado 2026-08-24 a pedido explicito del usuario para probarlo en vivo
+                // por primera vez -- flujo completo armado (seleccion de cuentas paso a paso +
+                // fase paralela + cola con Main + Speed Mod), pero nunca corrido de punta a
+                // punta con instancias reales todavia.
+                new ButtonBuilder().setCustomId(`card_trade_agresivo::${cartaId}`).setLabel('⚡ Aggressive Trade').setStyle(ButtonStyle.Primary)
             );
             return await reenviarCartaATrading(interaction, cartaId, null, [fila]);
         }
@@ -9967,7 +10380,59 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId.startsWith('card_trade_agresivo::')) {
             const cartaId = interaction.customId.replace('card_trade_agresivo::', '');
-            return await interaction.update({ content: `🚧 Aggressive Trade for \`${cartaId}\` is still being built -- coming soon.`, components: [] });
+            const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+            const friends = parsearListaFriends(rutaIni);
+            if (!friends.length) {
+                return await interaction.update({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup (add Main\'s own friend ID).', components: [] });
+            }
+            const menu = new StringSelectMenuBuilder()
+                .setCustomId(`aggr_friendid::${cartaId}`.slice(0, 100))
+                .setPlaceholder('Which saved friend is Main?')
+                .addOptions(friends.slice(0, 25).map(f => ({
+                    label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
+                    value: f.id
+                })));
+            return await interaction.update({ content: 'Which saved friend is your **Main** account? (donors will send their friend request to this ID)', components: [new ActionRowBuilder().addComponents(menu)] });
+        }
+
+        if (interaction.isButton() && interaction.customId.startsWith('aggr_restart::')) {
+            const sesionId = interaction.customId.replace('aggr_restart::', '');
+            const sesion = _aggressiveTradeSesiones.get(sesionId);
+            if (!sesion) {
+                return await interaction.update({ content: '❌ This Aggressive Trade session expired. Start again from the card.', components: [] });
+            }
+            sesion.asignaciones = [];
+            return await mostrarPasoAsignacionAggressive(interaction, sesionId);
+        }
+
+        if (interaction.isButton() && interaction.customId.startsWith('aggr_cancelar::')) {
+            const sesionId = interaction.customId.replace('aggr_cancelar::', '');
+            _aggressiveTradeSesiones.delete(sesionId);
+            return await interaction.update({ content: '❌ Aggressive Trade cancelled -- nothing was injected.', components: [] });
+        }
+
+        if (interaction.isButton() && interaction.customId.startsWith('aggr_start::')) {
+            const sesionId = interaction.customId.replace('aggr_start::', '');
+            const sesion = _aggressiveTradeSesiones.get(sesionId);
+            if (!sesion) {
+                return await interaction.update({ content: '❌ This Aggressive Trade session expired. Start again from the card.', components: [] });
+            }
+            _aggressiveTradeSesiones.delete(sesionId);
+            await interaction.update({ content: `🔄 Running Aggressive Trade (${sesion.asignaciones.length} card(s))... this may take a while. Progress will be posted to your Trading channel as each one finishes.`, components: [] });
+            const resultado = await ejecutarAggressiveTradeDesdeDiscord(interaction, { cartaId: sesion.cartaId, friendId: sesion.friendId, asignacionesElegidas: sesion.asignaciones });
+            const mensajeFinal = resultado.ok
+                ? `✅ Aggressive Trade completed: ${resultado.exitosos.length}/${resultado.total} card(s) sent to Main.` + (resultado.fallidos.length ? ` ${resultado.fallidos.length} failed (see errors above in your Trading channel).` : '')
+                : `❌ Aggressive Trade could not start (${resultado.motivo}).`;
+            try {
+                const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+                if (canalRunInstance?.webhook_url) {
+                    await axios.post(`${canalRunInstance.webhook_url}?wait=true`, { content: mensajeFinal }, { timeout: 10000 });
+                    return await interaction.followUp({ content: '✅ Result sent to your Trading channel.', ephemeral: true });
+                }
+            } catch (e) {
+                console.error('DEBUG: error mandando el resultado de Aggressive Trade al canal de trading:', e?.response?.data || e?.message || e);
+            }
+            return await interaction.followUp({ content: mensajeFinal, ephemeral: true });
         }
 
         if (interaction.customId.startsWith('goldcards_trade::')) {
@@ -10547,7 +11012,11 @@ client.on('interactionCreate', async interaction => {
                             categoria: '🎮 RUN MUMU PLAYER 🎮',
                             tipoCategoria: 'run_mumu_categoria',
                             canales: [
-                                { tipo: 'cmd_run_instance', name: '🔄-trading' }
+                                { tipo: 'cmd_run_instance', name: '🔄-trading' },
+                                // Agregados 2026-08-24 a pedido explicito del usuario -- canales
+                                // nuevos, todavia sin comando propio (igual que Donate/Heartbeat).
+                                { tipo: 'share-cards', name: '🃏-share-cards' },
+                                { tipo: 'farm-shop-tickets', name: '🎫-farm-shop-tickets' }
                             ]
                         }
                     ];
@@ -10574,6 +11043,8 @@ client.on('interactionCreate', async interaction => {
                             fields: TUTORIALES_LISTA.map((t, i) => ({ name: `${i + 1}- ${t.label}`, value: '​', inline: false }))
                         },
                         apoyo: { title: '☕ Donate', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
+                        'share-cards': { title: '🃏 Share Cards', description: 'Post cards here that you\'re giving away or open to trading.' },
+                        'farm-shop-tickets': { title: '🎫 Farm Shop Tickets', description: 'Track Shop Tickets farmed across your accounts here.' },
                         cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
                         cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
                         cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot — you can attach a screenshot too.' },

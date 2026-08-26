@@ -126,3 +126,50 @@ AdbConectar(adbPath, puerto) {
     comando := """" . adbPath . """ connect " . device
     RunWait, %ComSpec% /c "%comando%", , Hide
 }
+
+; capturarVentana (2026-08-25, a pedido explicito del usuario -- "los usuarios me dijeron que
+; demora mucho, hagamos que haga match mas rapido"): reemplaza AdbScreenshot para el
+; RECONOCIMIENTO de needles (no para tap/swipe, que siguen siendo ADB) -- captura la ventana
+; de Windows directo via PrintWindow (misma tecnica que from_window() del bot de Kevin,
+; Scripts\Include\Utils.ahk -- la bandera 0x3 = PW_CLIENTONLY|PW_RENDERFULLCONTENT es la que
+; hace que esto funcione contra una ventana con render por GPU como MuMu, sin salir todo
+; negro). Confirmado en vivo: ~0ms por captura contra 150-400ms+ de AdbScreenshot, porque
+; agarra los pixeles que la ventana YA tiene dibujados en pantalla, sin pedirle nada al
+; emulador. Devuelve un puntero de bitmap GDI+ (mismo tipo que Gdip_CreateBitmapFromFile) --
+; el llamador es responsable de Gdip_DisposeImage() cuando termine, igual que siempre.
+;
+; OJO: usa DllCall("gdiplus\...") directo, NO llama ninguna funcion de Gdip_All.ahk -- asi
+; esta funcion puede vivir en este archivo compartido sin romper los scripts que incluyen
+; _AdbUtils.ahk pero NO Gdip_All.ahk (mismo problema ya documentado arriba en el intento
+; descartado 2026-08-05). Igual, GDI+ debe estar inicializado (Gdip_Startup() ya llamado)
+; antes de usar esto -- todo script que necesite needles ya lo hace de entrada.
+;
+; La resolucion de esta captura es la NATIVA de la ventana (chica, ~275x532 en vez de los
+; 540x960 de un screenshot ADB) -- los needles para usar con esto son propios, recortados a
+; esta escala, NO reusan los needles ya existentes (esos estan todos a escala ADB).
+capturarVentana(hwnd) {
+    if DllCall("IsIconic", "ptr", hwnd)
+        DllCall("ShowWindow", "ptr", hwnd, "int", 4)
+    VarSetCapacity(Rect, 16)
+    DllCall("GetClientRect", "ptr", hwnd, "ptr", &Rect)
+    width := NumGet(Rect, 8, "int")
+    height := NumGet(Rect, 12, "int")
+    if (width < 10 || height < 10)
+        return 0
+    hdc := DllCall("CreateCompatibleDC", "ptr", 0, "ptr")
+    VarSetCapacity(bi, 40, 0)
+    NumPut(40, bi, 0, "uint")
+    NumPut(width, bi, 4, "uint")
+    NumPut(-height, bi, 8, "int")
+    NumPut(1, bi, 12, "ushort")
+    NumPut(32, bi, 14, "ushort")
+    NumPut(0, bi, 16, "uint")
+    hbm := DllCall("CreateDIBSection", "ptr", hdc, "ptr", &bi, "uint", 0, "ptr*", pBits:=0, "ptr", 0, "uint", 0, "ptr")
+    obm := DllCall("SelectObject", "ptr", hdc, "ptr", hbm, "ptr")
+    DllCall("PrintWindow", "ptr", hwnd, "ptr", hdc, "uint", 0x3) ; PW_CLIENTONLY | PW_RENDERFULLCONTENT
+    DllCall("gdiplus\GdipCreateBitmapFromHBITMAP", "ptr", hbm, "ptr", 0, "ptr*", pBitmap:=0)
+    DllCall("SelectObject", "ptr", hdc, "ptr", obm)
+    DllCall("DeleteObject", "ptr", hbm)
+    DllCall("DeleteDC", "ptr", hdc)
+    return pBitmap
+}

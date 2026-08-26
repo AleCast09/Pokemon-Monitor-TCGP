@@ -67,6 +67,11 @@ if (puerto = "") {
 }
 AdbConectar(adbPath, puerto)
 
+; Handle de la ventana real, para el chequeo rapido por captura directa (2026-08-26, mismo
+; mecanismo que _DonorOfferCard.ahk / _FriendTradeOfferCard.ahk / _SpeedMod.ahk /
+; _WaitWelcomeScreens*.ahk). No fatal si no se encuentra.
+global g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
+
 tap(x, y, esperaMs := 4000) {
     static convX := 540/283, convY := 960/488, offset := 40
     global adbPath, puerto
@@ -97,11 +102,37 @@ buscarNeedle(nombreNeedle, variation) {
     return encontrado
 }
 
+; Chequeo rapido por captura directa de ventana (2026-08-26, ver comentario completo en
+; _DonorOfferCard.ahk / _FriendTradeOfferCard.ahk). Sin riesgo de regresion: sin needle
+; nativa para el paso, o sin ventana resuelta, o sin match -- cae al chequeo lento de siempre.
+chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
+    global g_hwndFast
+    if (nombreNeedleNativo = "" || !g_hwndFast)
+        return false
+    pBitmap := capturarVentana(g_hwndFast)
+    if (!pBitmap)
+        return false
+    encontrado := false
+    pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
+    if (pNeedle) {
+        vPos := ""
+        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        Gdip_DisposeImage(pNeedle)
+    }
+    Gdip_DisposeImage(pBitmap)
+    return encontrado
+}
+
 ; Reconocimiento real antes de tocar (mismo patron que _DonorOfferCard.ahk).
-esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
+; Parametros nombreNeedleNativo/variationNativo (2026-08-26, opcionales): ver chequeoRapidoNeedle.
+esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            tap(x, y)
+            return true
+        }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false
@@ -134,9 +165,13 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000) {
 ; tapando la needle normal (own_donoroffer_trade_icon, probado hasta variation=130, cero
 ; match -- el banner realmente cubre el icono, no es un problema de tolerancia). Si aparece
 ; este badge propio, se abre Trade a ciegas (ya se sabe que hay algo esperando).
+; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_trade_icon_native (el
+; tile "Trade" de Social Hub), validada en vivo -- match exacto contra la captura real, sin
+; ningun falso positivo cruzado (los 2 "matches" extra fueron la misma pantalla real
+; duplicada por error de nombrado, no una pantalla distinta).
 if (buscarNeedle("own_friendtrade_socialhub_pending_badge", 30)) {
     tap(207, 402)
-} else if (!esperarNeedleYTap("own_donoroffer_trade_icon", 30, 207, 402)) {
+} else if (!esperarNeedleYTap("own_donoroffer_trade_icon", 30, 207, 402, 15000, "own_donoroffer_trade_icon_native", 30)) {
     ExitConError("no_aparecio_socialhub")
 }
 
@@ -178,7 +213,9 @@ if (badgeYaVisible) {
 ; instancia trabada ahi para siempre. Ya no hace falta la coordenada "segura" alternativa:
 ; para cuando se llega aca, YA se confirmo 2 veces (badge de Social Hub arriba + este chequeo
 ; rapido) que no hay oferta pendiente, asi que no hay riesgo real de tocar "View" sin querer.
-if (!esperarNeedleYTap("own_donoroffer_trade_button", 30, 139, 427))
+; Chequeo rapido cableado (2026-08-26): needle propia own_maintrade_trade_button_native, ya
+; validada en vivo en _DonorOfferCard.ahk (misma pantalla real de Trade generica).
+if (!esperarNeedleYTap("own_donoroffer_trade_button", 30, 139, 427, 15000, "own_maintrade_trade_button_native", 30))
     ExitConError("no_aparecio_trade_landing")
 
 ; Tutorial de primera vez (2026-08-22/23, bug real en vivo: una cuenta que entra a Trade por
