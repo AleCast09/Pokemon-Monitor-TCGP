@@ -487,7 +487,7 @@ if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 30, 197, 461, 15000
 ; NO el boton OK generico, que es solo un color solido y dio falsos positivos en vivo contra
 ; otras pantallas con botones celestes). Validada en vivo: match exacto, sin ningun falso
 ; positivo hasta variation 80 contra 13 capturas de otras pantallas.
-if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 30))
+if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 20))
     ExitConError("no_aparecio_confirmar_set_card_paso12")
 
 ; Aviso "solo te queda 1 copia" -- puede no aparecer siempre. Pasado a needle real

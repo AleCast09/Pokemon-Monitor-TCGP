@@ -403,7 +403,7 @@ if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 30, 197, 461, 15000
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_setcard_confirm_native
 ; (el texto especifico de este popup -- NO el boton OK generico, que dio falsos positivos
 ; en vivo contra otras pantallas con botones celestes, ver _DonorOfferCard.ahk).
-if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 30))
+if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 20))
     ExitConError("no_aparecio_confirmar_set_card_paso12")
 
 ; Aviso "solo te queda 1 copia" -- puede no aparecer siempre. Pasado a needle real

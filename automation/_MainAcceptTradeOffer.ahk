@@ -228,17 +228,24 @@ esperarViewButtonYTap(timeoutMs := 35000) {
     inicio := A_TickCount
     matchesSeguidos := 0
     Loop {
-        tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
-        AdbScreenshot(adbPath, puerto, tempFile)
-        encontrado := false
-        if (FileExist(tempFile)) {
-            pBitmap := Gdip_CreateBitmapFromFile(tempFile)
-            FileDelete, %tempFile%
-            if (pBitmap) {
-                pView := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_maintrade_offer_received_banner.png")
-                vPos := ""
-                encontrado := (pView && Gdip_ImageSearch(pBitmap, pView, vPos, 0, 0, 0, 0, 30) = 1)
-                Gdip_DisposeImage(pBitmap)
+        ; Chequeo rapido cableado (2026-08-26): needle propia
+        ; own_maintrade_offer_received_banner_native (texto "Trade offer received"), validada
+        ; en vivo -- limpio contra 20 capturas de otras pantallas. Se mantiene intacta la
+        ; doble confirmacion (matchesSeguidos >= 2) que ya existia por el bug real de 2026-08-19
+        ; -- esto solo cambia DE DONDE sale la captura (rapida en vez de ADB), no la logica.
+        encontrado := chequeoRapidoNeedle("own_maintrade_offer_received_banner_native", 30)
+        if (!encontrado) {
+            tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
+            AdbScreenshot(adbPath, puerto, tempFile)
+            if (FileExist(tempFile)) {
+                pBitmap := Gdip_CreateBitmapFromFile(tempFile)
+                FileDelete, %tempFile%
+                if (pBitmap) {
+                    pView := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_maintrade_offer_received_banner.png")
+                    vPos := ""
+                    encontrado := (pView && Gdip_ImageSearch(pBitmap, pView, vPos, 0, 0, 0, 0, 30) = 1)
+                    Gdip_DisposeImage(pBitmap)
+                }
             }
         }
         if (encontrado) {
@@ -258,9 +265,16 @@ esperarViewButtonYTap(timeoutMs := 35000) {
 
 if (!esperarViewButtonYTap())
     ExitConError("no_aparecio_oferta_pendiente_paso1")
-if (!esperarNeedleYTap("own_maintrade_trade_button", 30, 204, 460))
+; Chequeo rapido cableado (2026-08-26): needle propia own_maintrade_trade_button_confirm_native
+; (titulo "Trade Offer Received"), validada en vivo -- limpio contra 21 capturas de otras
+; pantallas.
+if (!esperarNeedleYTap("own_maintrade_trade_button", 30, 204, 460, 15000, "own_maintrade_trade_button_confirm_native", 30))
     ExitConError("no_aparecio_intercambiar_button_paso3")
-if (!esperarNeedleYTap("own_maintrade_choosecard_title", 30, 251, 496))
+; Chequeo rapido cableado (2026-08-26): needle propia own_maintrade_choosecard_title_native
+; (titulo "Choose a Card to Trade", recorte mas ajustado que el de la donante -- ese incluia
+; unas lineas de mas que si difieren entre las 2 variantes de esta pantalla, este matchea
+; ambas), validada en vivo -- limpio contra 21 capturas de otras pantallas.
+if (!esperarNeedleYTap("own_maintrade_choosecard_title", 30, 251, 496, 15000, "own_maintrade_choosecard_title_native", 30))
     ExitConError("no_aparecio_elige_carta_paso4")
 
 ; Reconocimiento de imagen (2026-08-04, a pedido explicito del usuario): "Por cantidad de
@@ -294,20 +308,31 @@ Loop, 2 {
     tap(233, 348)  ; "Por cantidad de cartas" -- selecciona/alterna hacia flecha arriba
 }
 
-if (!esperarNeedleYTap("own_maintrade_x_sort", 30, 140, 501))
+; Chequeo rapido cableado (2026-08-26): needle propia own_maintrade_x_sort_native (titulo
+; "Sort" del menu de ordenar), validada en vivo -- limpio contra 22 capturas de otras pantallas.
+if (!esperarNeedleYTap("own_maintrade_x_sort", 30, 140, 501, 15000, "own_maintrade_x_sort_native", 30))
     ExitConError("no_aparecio_menu_ordenar_paso5")
 ; Misma pantalla que el paso 4 -- la carta en si varia por cuenta, no se puede needlear,
 ; se toca a ciegas (48,357 en la donante / 52,456 aca) ya confirmado el encabezado.
-if (!esperarNeedleYTap("own_maintrade_choosecard_title", 30, 52, 456))
+; Needle rapida reutilizada (2026-08-26): own_maintrade_choosecard_title_native, ya validada.
+if (!esperarNeedleYTap("own_maintrade_choosecard_title", 30, 52, 456, 15000, "own_maintrade_choosecard_title_native", 30))
     ExitConError("no_aparecio_lista_cartas_paso6")
 ; own_maintrade_ok_selected SACADA de aca (2026-08-05, mismo motivo que la donante): el
 ; boton OK tiene un shimmer de color que cambia de tono en cada captura, no se puede
 ; needlear de forma confiable. Se reutiliza la needle estable del titulo en su lugar.
-if (!esperarNeedleYTap("own_maintrade_choosecard_title", 30, 138, 460))
+if (!esperarNeedleYTap("own_maintrade_choosecard_title", 30, 138, 460, 15000, "own_maintrade_choosecard_title_native", 30))
     ExitConError("no_aparecio_ok_habilitado_paso7")
-if (!esperarNeedleYTap("own_maintrade_tradepartner_header", 30, 197, 464))
+; Chequeo rapido cableado (2026-08-26): needle propia own_maintrade_tradepartner_header_native
+; ("Trade Partner" + la barra de moneda/energia de arriba -- el recorte ajustado solo al
+; texto daba falso positivo contra la pantalla "Trade Offer Received", que tambien muestra
+; "Trade Partner"; ampliado hacia arriba para diferenciarlas). Validada en vivo -- limpio
+; hasta variation 40 contra 24 capturas de otras pantallas.
+if (!esperarNeedleYTap("own_maintrade_tradepartner_header", 30, 197, 464, 15000, "own_maintrade_tradepartner_header_native", 30))
     ExitConError("no_aparecio_preview_envio_paso8")
-if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 198, 367))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_setcard_confirm_native,
+; ya validada en _DonorOfferCard.ahk -- matchea exacto tambien esta pantalla del lado de Main
+; (mismo popup real, confirmado en vivo).
+if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 198, 367, 15000, "own_donoroffer_setcard_confirm_native", 20))
     ExitConError("no_aparecio_confirmar_set_card_paso9")
 ; Needle propia separada de la donante (2026-08-19, bug real en vivo -- own_donoroffer_offered_text
 ; era compartida entre este script y _DonorOfferCard.ahk, y la needle vieja ya no matcheaba
@@ -317,7 +342,10 @@ if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 198, 367))
 ; Foto de evidencia (2026-08-22, a pedido explicito del usuario): "Main ofrece la carta",
 ; misma logica que _OfferPhoto.png del lado de la donante -- se espera la pantalla SIN
 ; tocarla todavia para sacar la foto limpia antes de confirmar con OK.
-if (!esperarNeedleSinAccion("own_maintrade_offered_confirm", 30, 15000))
+; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_offered_text_native, ya
+; validada en _DonorOfferCard.ahk -- matchea exacto tambien esta pantalla del lado de Main
+; (mismo texto real, confirmado en vivo).
+if (!esperarNeedleSinAccion("own_maintrade_offered_confirm", 30, 15000, "own_donoroffer_offered_text_native", 30))
     ExitConError("no_aparecio_confirmacion_final_paso10")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainOfferPhoto.png"))
 tap(143, 431)

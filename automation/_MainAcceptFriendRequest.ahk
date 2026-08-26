@@ -214,6 +214,13 @@ esperarAceptarOYaAmigos(timeoutMs := 15000) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        ; Chequeo rapido cableado (2026-08-26): needle propia own_mainaccept_check_native (el
+        ; check verde de aceptar), validada en vivo -- limpio contra las 18 capturas de otras
+        ; pantallas que tengo hoy.
+        if (chequeoRapidoNeedle("own_mainaccept_check_native", 30)) {
+            tap(242, 202)
+            return true
+        }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         if (FileExist(tempFile)) {
@@ -254,6 +261,13 @@ esperarTileFriendsYTap(timeoutMs := 35000) {
     Loop {
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
+        ; Chequeo rapido cableado (2026-08-26): needle propia own_mainaccept_friends_icon_native
+        ; (el tile "Friends" de Social Hub), validada en vivo -- match exacto, sin ningun falso
+        ; positivo cruzado (los "matches" extra fueron la misma pantalla real duplicada).
+        if (chequeoRapidoNeedle("own_mainaccept_friends_icon_native", 30)) {
+            tap(39, 463)
+            return true
+        }
         if (FileExist(tempFile)) {
             pBitmap := Gdip_CreateBitmapFromFile(tempFile)
             FileDelete, %tempFile%
@@ -292,11 +306,20 @@ esperarTileFriendsYTap(timeoutMs := 35000) {
 
 if (!esperarTileFriendsYTap())
     ExitConError("no_aparecio_pantalla_comunidad_paso2")
-if (!esperarNeedleYTap("own_mainaccept_tabbar_friends", 30, 230, 459))
+; Chequeo rapido cableado (2026-08-26): needle propia own_mainaccept_tabbar_friends_native
+; (texto "Approve" de la tab bar), validada en vivo -- limpio hasta variation 60 contra 17
+; capturas de otras pantallas (el unico otro match real era la misma pantalla real de Friends
+; List, capturada antes con otra cuenta).
+if (!esperarNeedleYTap("own_mainaccept_tabbar_friends", 30, 230, 459, 15000, "own_mainaccept_tabbar_friends_native", 30))
     ExitConError("no_aparecio_pantalla_amigos_paso3")
 if (!esperarAceptarOYaAmigos())
     ExitConError("no_aparecio_solicitud_pendiente_paso4")
-if (!esperarNeedleYTap("own_mainaccept_x_back", 30, 142, 502))
+; Chequeo rapido cableado (2026-08-26): needle propia own_mainaccept_x_back_native. El recorte
+; original (solo el icono X) daba falso positivo contra "Select a Friend" del flujo de Trade
+; (mismo icono generico, misma posicion) -- ampliado para incluir la tab bar "Friends/Sent
+; requests/Approve" de arriba, unica de esta pantalla. Limpio hasta variation 60 contra 19
+; capturas de otras pantallas.
+if (!esperarNeedleYTap("own_mainaccept_x_back", 30, 142, 502, 15000, "own_mainaccept_x_back_native", 30))
     ExitConError("no_aparecio_boton_x_paso5")
 
 WriteResult("OK")
