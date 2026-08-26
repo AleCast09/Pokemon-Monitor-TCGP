@@ -62,8 +62,58 @@ public class AhkWin {
     public static int Pid(IntPtr hWnd) {
         int pid; GetWindowThreadProcessId(hWnd, out pid); return pid;
     }
+
+    [DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string lpszWindow);
+    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    public const uint BM_CLICK = 0x00F5;
+
+    // Dialogo NATIVO de Windows (clase "#32770", NO "AutoHotkey"/"AutoHotkeyGUI") que AHK
+    // muestra solo -- sin que nuestro codigo lo pida -- cuando un script SIN "#SingleInstance
+    // off" (como el de Kevin, que no tocamos) intenta relanzarse mientras la instancia anterior
+    // todavia no termino de cerrar: "Could not close the previous instance of this script. Keep
+    // waiting?" (Si/No). Reportado en vivo 2026-08-26: dejaba una instancia trabada 20+ minutos
+    // sin que heartbeat.js llegara a avisar ni a recuperarla -- el titulo corto es el mismo
+    // "{N}.ahk" que ya usamos para encontrar el panel visible normal, asi que hace falta
+    // distinguirlo por CLASE, no por titulo.
+    public static IntPtr FindStuckInstanceDialog(string exactTitle) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((hWnd, lParam) => {
+            var sbClase = new StringBuilder(256);
+            GetClassName(hWnd, sbClase, 256);
+            if (sbClase.ToString() == "#32770") {
+                var sbTitulo = new StringBuilder(256);
+                GetWindowText(hWnd, sbTitulo, 256);
+                if (sbTitulo.ToString() == exactTitle) { found = hWnd; return false; }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    // Le contesta "No" (no seguir esperando) al dialogo de arriba, vía BM_CLICK directo al
+    // boton -- no simula mouse/teclado (mas confiable si la ventana esta minimizada o tapada).
+    // "No" en vez de "Si" a proposito: "Si" (seguir esperando) es exactamente el estado
+    // trabado en el que ya estaba -- "No" es la unica opcion que puede destrabar algo.
+    public static bool DismissStuckInstanceDialog(IntPtr hDialog) {
+        IntPtr hBtnNo = FindWindowEx(hDialog, IntPtr.Zero, "Button", "&No");
+        if (hBtnNo == IntPtr.Zero) hBtnNo = FindWindowEx(hDialog, IntPtr.Zero, "Button", "No");
+        if (hBtnNo == IntPtr.Zero) return false;
+        SendMessage(hBtnNo, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+        return true;
+    }
 }
 "@
+
+# Primero SIEMPRE, sin importar la accion pedida (2026-08-26, bug real reportado en vivo):
+# si el dialogo nativo "Could not close the previous instance..." esta tapando esta instancia,
+# se lo cierra ANTES de chequear/reintentar nada -- si no, "check" reporta un estado que ya no
+# es real (el script de Kevin puede seguir sin poder arrancar de nuevo detras del dialogo) y
+# "reload"/"close" nunca le llegan a la ventana real porque el dialogo modal se lo impide.
+$hwndDialogoTrabado = [AhkWin]::FindStuckInstanceDialog("$InstanceId.ahk")
+if ($hwndDialogoTrabado -ne [IntPtr]::Zero) {
+    [AhkWin]::DismissStuckInstanceDialog($hwndDialogoTrabado) | Out-Null
+    Start-Sleep -Milliseconds 500
+}
 
 if ($Action -eq "check") {
     # Usado por heartbeat.js antes de intentar una recuperacion automatica (2026-08-14, bug
