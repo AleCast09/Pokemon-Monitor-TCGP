@@ -348,6 +348,12 @@ if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 198, 367, 15000, "own_don
 if (!esperarNeedleSinAccion("own_maintrade_offered_confirm", 30, 15000, "own_donoroffer_offered_text_native", 30))
     ExitConError("no_aparecio_confirmacion_final_paso10")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainOfferPhoto.png"))
+; Sleep antes del toque ciego (2026-08-27, bug real reproducido en vivo): el chequeo rapido
+; nuevo confirma la pantalla casi al instante -- mas rapido que el tiempo que el boton OK
+; puede tardar en terminar de habilitarse/renderizar del todo, y el toque a ciegas se perdia
+; sin registrar nada. Mismo patron ya usado en otros lados de este pipeline para esta misma
+; clase de bug (needle SIN tocar + Sleep + tap manual).
+Sleep, 1200
 tap(143, 431)
 
 WriteResult("OK")

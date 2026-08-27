@@ -291,6 +291,9 @@ Sleep, 3000
 if (!esperarNeedleSinAccion("own_donorfinalize_tap_to_proceed", 30, 15000, "own_donorfinalize_tap_to_proceed_native", 30))
     ExitConError("no_aparecio_tap_to_proceed_paso5")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_SentPhoto.png"))
+; Sleep antes del toque ciego (2026-08-27, bug real reproducido en vivo en
+; _MainAcceptTradeOffer.ahk, mismo patron aca por prevencion).
+Sleep, 1200
 tap(152, 486)
 
 WriteResult("OK")

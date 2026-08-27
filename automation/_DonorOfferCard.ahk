@@ -508,6 +508,10 @@ tapSiApareceNeedle("own_donoroffer_remainingcopy_popup", 204, 383, 30, "own_dono
 if (!esperarNeedleSinAccion("own_donoroffer_offered_text", 30, 15000, "own_donoroffer_offered_text_native", 30))
     ExitConError("no_aparecio_confirmacion_final_paso14")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_OfferPhoto.png"))
+; Sleep antes del toque ciego (2026-08-27, bug real reproducido en vivo en _MainAcceptTradeOffer.ahk,
+; mismo patron aca por prevencion): el chequeo rapido nuevo confirma la pantalla casi al
+; instante -- mas rapido que lo que el boton OK puede tardar en habilitarse del todo.
+Sleep, 1200
 tap(136, 438)
 
 WriteResult("OK")
