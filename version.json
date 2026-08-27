@@ -1,7 +1,15 @@
 {
-  "version": "1.5.75",
-  "notesCount": 1,
+  "version": "1.5.76",
+  "notesCount": 8,
   "notes": [
+    "Disabled: Main Trade and Aggressive Trade, while we finish improving them.",
+    "Fixed: title screen not recognized after the game's new visual update.",
+    "Fixed: card swipe failing when Speed Mod was active at 3x.",
+    "Fixed: heartbeat could go silent forever after one failed recovery attempt.",
+    "Fixed: stuck \"previous instance\" dialogs are now auto-dismissed.",
+    "Improved: Main Trade screen checks run much faster than before.",
+    "Fixed: /allcards now also finds card images from our shared repo.",
+    "Fixed: a real Main Trade bug where the final OK tap didn't register.",
     "Fixed a real bug affecting anyone already stuck from a past failed update (before this fix existed, so nothing was queued to retry): the app now checks on every startup whether it's actually running the version it claims to be, and if a previous update was downloaded but never truly installed, re-queues the swap automatically instead of leaving it broken forever with no visible sign anything was wrong.",
     "Fixed a real bug: if the automatic update's file swap failed (old .exe stayed locked, usually antivirus), the app quietly gave up and stayed on the old version forever, even though it reported \"already up to date\" - no error, no retry, nothing to click. Now retries the swap automatically on the next 2 restarts, and if it still can't finish after 3 tries, shows a real popup telling you to grab the .exe by hand instead of failing silently.",
     "Improved: Friend Trade button is now blue (matching Main Trade) instead of grey, so it's clearly active - it was working in 1.5.72 too, just easy to mistake for disabled since it looked like the greyed-out Aggressive Trade button next to it.",

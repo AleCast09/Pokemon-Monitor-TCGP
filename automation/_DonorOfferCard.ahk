@@ -355,6 +355,44 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
     }
 }
 
+; Version de esperarNeedleYTap para el paso 5, con DOS needles alternativas validas para
+; confirmar la misma pantalla (2026-08-27, a pedido explicito del usuario -- ver comentario
+; completo en el call site mas abajo): el tile "Trade" vacio de siempre, O el mismo tile con
+; el badge rojo "No trade agreement reached" si un trade anterior fue rechazado. Cualquiera
+; de las dos confirma que estamos en Social Hub, listos para tocar la coordenada de siempre.
+esperarTradeIconOBadgeRechazo(timeoutMs := 15000) {
+    global adbPath, puerto, g_winTitle
+    inicio := A_TickCount
+    Loop {
+        if (chequeoRapidoNeedle("own_donoroffer_trade_icon_native", 30) || chequeoRapidoNeedle("own_donoroffer_notradeagreement_badge_native", 30)) {
+            tap(207, 402)
+            return true
+        }
+        tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
+        AdbScreenshot(adbPath, puerto, tempFile)
+        encontrado := false
+        if (FileExist(tempFile)) {
+            pBitmap := Gdip_CreateBitmapFromFile(tempFile)
+            FileDelete, %tempFile%
+            if (pBitmap) {
+                pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_donoroffer_trade_icon.png")
+                if (pNeedle) {
+                    vPos := ""
+                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 30) = 1)
+                }
+                Gdip_DisposeImage(pBitmap)
+            }
+        }
+        if (encontrado) {
+            tap(207, 402)
+            return true
+        }
+        if (A_TickCount - inicio > timeoutMs)
+            return false
+        Sleep, 500
+    }
+}
+
 if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 141, 499))
     ExitConError("no_aparecio_search_results_paso1")
 if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 81, 367))
@@ -369,8 +407,31 @@ if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 146, 504))
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_trade_icon_native (el
 ; tile "Trade" de Social Hub), validada en vivo en _FriendTradeCheckPendingOffer.ahk (misma
 ; pantalla real, sin falsos positivos cruzados).
-if (!esperarNeedleYTap("own_donoroffer_trade_icon", 30, 207, 402, 15000, "own_donoroffer_trade_icon_native", 30))
+; Needle alternativa agregada (2026-08-27, a pedido explicito del usuario, caso real visto en
+; vivo): si un trade anterior fue RECHAZADO, este mismo tile "Trade" no aparece vacio -- tiene
+; un badge rojo "!" superpuesto (icono generico, sin texto) junto con el texto "No trade
+; agreement reached". Mismo tile, misma coordenada de toque de siempre -- solo se agrega el
+; reconocimiento de este segundo estado para no depender solo del tile vacio. Needle propia
+; own_donoroffer_notradeagreement_badge_native, validada en vivo: limpio contra Social Hub
+; normal y contra otra captura de Social Hub, hasta variation 60 (empieza a fallar recien en
+; 80, muy por encima de la tolerancia 30 usada aca).
+if (!esperarTradeIconOBadgeRechazo())
     ExitConError("no_aparecio_socialhub_paso5")
+
+; Popup "The trade has been terminated and no trade agreement was reached" (2026-08-27, a
+; pedido explicito del usuario, caso real visto en vivo -- justo el que dispara el badge de
+; rechazo de arriba): al entrar a Trade despues de un rechazo, este popup tapa la pantalla
+; antes de llegar a la landing normal de Trade. Se cierra tocando OK y de ahi sigue derecho
+; el flujo de siempre (la landing de Trade es identica despues). Opcional -- si no aparece
+; (caso normal, sin rechazo previo), no hace nada y sigue de largo.
+; Needle propia own_donoroffer_tradeterminated_dimmedsprite_native (mascota de fondo
+; atenuada por el popup, sin texto ni datos personales -- la foto/nombre del trade partner en
+; este popup NUNCA se usan como needle, varian por cuenta y son datos personales). Validada en
+; vivo: match exacto contra 2 capturas reales de este popup, 0 contra Social Hub normal (x2),
+; Trade Offer Received y Friends. Coordenada de OK (140,380) tambien confirmada en vivo (cierra
+; el popup de verdad, verificado con captura despues del toque).
+if (chequeoRapidoNeedle("own_donoroffer_tradeterminated_dimmedsprite_native", 30))
+    tap(140, 380)
 
 ; Chequeo condicional (2026-08-05, a pedido explicito del usuario): si Main YA ofrecio
 ; algo antes (de un Retry anterior), esta pantalla no muestra el boton azul normal de

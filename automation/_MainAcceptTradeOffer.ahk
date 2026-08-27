@@ -363,7 +363,52 @@ AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainOfferPhoto
 ; sin registrar nada. Mismo patron ya usado en otros lados de este pipeline para esta misma
 ; clase de bug (needle SIN tocar + Sleep + tap manual).
 Sleep, 1200
-tap(143, 431)
+
+; Toca y VERIFICA que el popup se haya cerrado de verdad, con reintento (2026-08-27, bug real
+; reproducido en vivo, confirmado con foto de diagnostico: el toque a ciegas caia justo en el
+; centro del boton OK -- verificado a mano contra la foto real -- pero el popup seguia
+; intacto despues igual, incluso con los Sleep de arriba ya puestos. No es un problema de
+; coordenada ni de needle: el toque en si no estaba registrando, probablemente porque el juego
+; todavia esta confirmando la oferta con el servidor en ese instante puntual y el boton no es
+; realmente interactivo todavia aunque ya se vea listo). En vez de asumir que un solo toque a
+; ciegas alcanza (que fue lo que dejaba a Main pegada en el popup, reportando "ok" igual, y
+; rompiendo _MainRefreshAfterTrade.ahk mas adelante porque nunca lo encontraba realmente
+; cerrado), ahora se re-verifica el mismo needle despues de cada toque y se reintenta hasta 5
+; veces antes de darlo por fallado de verdad.
+popupOfrecidoSigueAhi() {
+    global adbPath, puerto, g_hwndFast
+    if (g_hwndFast)
+        return chequeoRapidoNeedle("own_donoroffer_offered_text_native", 30)
+    tempFile := A_ScriptDir . "\Logs\_step_check_verify_ok.png"
+    AdbScreenshot(adbPath, puerto, tempFile)
+    encontrado := false
+    if (FileExist(tempFile)) {
+        pBitmap := Gdip_CreateBitmapFromFile(tempFile)
+        FileDelete, %tempFile%
+        if (pBitmap) {
+            pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_maintrade_offered_confirm.png")
+            if (pNeedle) {
+                vPos := ""
+                encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 30) = 1)
+                Gdip_DisposeImage(pNeedle)
+            }
+            Gdip_DisposeImage(pBitmap)
+        }
+    }
+    return encontrado
+}
+
+cerrado := false
+Loop, 5 {
+    tap(143, 431)
+    Sleep, 1000
+    if (!popupOfrecidoSigueAhi()) {
+        cerrado := true
+        break
+    }
+}
+if (!cerrado)
+    ExitConError("ok_no_registro_paso10_tras_reintentos")
 
 WriteResult("OK")
 Gdip_Shutdown(pToken)
