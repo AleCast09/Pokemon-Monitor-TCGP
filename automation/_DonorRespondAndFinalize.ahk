@@ -185,8 +185,17 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
-        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo))
+        ; Margen de asentamiento (2026-08-27, bug real reproducido en vivo): el chequeo
+        ; rapido puede confirmar la pantalla justo en un frame todavia en transicion/fade-in
+        ; (la foto de evidencia que el llamador saca justo despues salia en blanco, y en
+        ; algunos casos el propio match parecia fallar por agarrar un frame a medio
+        ; renderizar). Un Sleep corto ANTES de devolver true le da tiempo a la pantalla real
+        ; a terminar de asentarse -- el camino lento de mas abajo no tenia este problema
+        ; porque el AdbScreenshot en si ya tardaba lo suficiente.
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            Sleep, 600
             return true
+        }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false
@@ -217,10 +226,15 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
 ; _CheckPendingOffer.ahk) la donante puede estar en cualquier otra pantalla (ej. sobres).
 ; Seguro tambien en el flujo normal: si ya esta en la pantalla de espera, re-entrar a Trade
 ; muestra el mismo estado real (servidor, no una pantalla de una sola vez).
-; tap(207,402) SACADO (2026-08-26, a pedido explicito del usuario, confirmado en vivo): a esta
-; altura del pipeline la donante ya esta DENTRO de Trade (no en Social Hub), asi que ese
-; segundo toque caia en una zona vacia sin hacer nada -- solo sumaba 4s de espera al pedo.
+; tap(207,402) repuesto (2026-08-27, bug real reproducido en vivo): se habia sacado un dia
+; antes por pedido explicito del usuario, que en ESE momento puntual del pipeline observo que
+; caia en zona vacia sin hacer nada (la donante ya estaba dentro de Trade). Pero corriendo
+; este script de forma aislada/en otro momento se confirmo que la donante puede estar
+; parada en Social Hub de verdad -- sin este segundo toque nunca entra a Trade y esperarNeedleYTap
+; de mas abajo nunca encuentra nada. Mismo criterio que el comentario de arriba: un toque en
+; una zona vacia es inofensivo, sacarlo no lo es.
 tap(141, 511)
+tap(207, 402)
 
 ; Needle y coordenada recalculadas 2026-08-19 (bug real en vivo, cuenta real): la needle
 ; vieja (icono "?") ya no matcheaba esta pantalla, y su coordenada de tap tampoco caia

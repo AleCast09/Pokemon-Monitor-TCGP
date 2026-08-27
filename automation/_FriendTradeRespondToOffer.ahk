@@ -182,8 +182,17 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
-        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo))
+        ; Margen de asentamiento (2026-08-27, bug real reproducido en vivo): el chequeo
+        ; rapido puede confirmar la pantalla justo en un frame todavia en transicion/fade-in
+        ; (la foto de evidencia que el llamador saca justo despues salia en blanco, y en
+        ; algunos casos el propio match parecia fallar por agarrar un frame a medio
+        ; renderizar). Un Sleep corto ANTES de devolver true le da tiempo a la pantalla real
+        ; a terminar de asentarse -- el camino lento de mas abajo no tenia este problema
+        ; porque el AdbScreenshot en si ya tardaba lo suficiente.
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            Sleep, 600
             return true
+        }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
         AdbScreenshot(adbPath, puerto, tempFile)
         encontrado := false
