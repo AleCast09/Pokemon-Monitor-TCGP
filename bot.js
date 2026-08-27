@@ -7473,7 +7473,7 @@ function buscarLogoExpansionBot(nombreExpansion) {
 // cardmaster.json/en_US.json/cardmap.json tienen miles de entradas, no conviene
 // releerlos ni recorrerlos en cada click de /embed.
 let _candidatosPreviewCache = null;
-function construirCandidatosPreview(rutaMaster) {
+async function construirCandidatosPreview(rutaMaster) {
     const rawMaster = fs.readFileSync(path.join(rutaMaster, 'cardmaster.json'), 'utf8').replace(/^﻿/, '');
     const rawNombres = fs.readFileSync(path.join(rutaMaster, 'en_US.json'), 'utf8').replace(/^﻿/, '');
     const master = JSON.parse(rawMaster);
@@ -7498,8 +7498,14 @@ function construirCandidatosPreview(rutaMaster) {
         if (!entry.IllustrationID) continue;
         const rarezaClave = mapearRarezaNumericaPreview(entry.Rarity, code);
         if (!rarezaClave) continue;
-        const rutaImagen = path.join(rutaMaster, 'CardImageCache', `${entry.IllustrationID}.png`);
-        if (!fs.existsSync(rutaImagen)) continue;
+        // Respaldo del repo propio (2026-08-26, a pedido explicito del usuario -- una
+        // expansion nueva no tiene sus imagenes en CardImageCache todavia): antes esta
+        // funcion solo miraba la carpeta local y saltaba la carta si no estaba, aunque
+        // obtenerImagenRepoCartasBot() ya existe para exactamente este caso (bajarla de
+        // nuestro repo de GitHub y guardarla en CardImageCache, indistinguible de ahi en
+        // mas). Ahora lo intenta antes de descartar la carta.
+        const rutaImagen = await obtenerImagenRepoCartasBot(rutaMaster, entry.IllustrationID);
+        if (!rutaImagen) continue;
 
         const expansionId = expansionIdDeCarta(code, cardmap);
         const nombreExpansion = expansionId ? nombresExpansion[expansionId] : null;
@@ -7532,7 +7538,7 @@ async function elegirExpansionYCartasPreview(cantidad) {
         if (!rutaMaster) return null;
 
         if (!_candidatosPreviewCache || _candidatosPreviewCache.ruta !== rutaMaster) {
-            _candidatosPreviewCache = { ruta: rutaMaster, ...construirCandidatosPreview(rutaMaster) };
+            _candidatosPreviewCache = { ruta: rutaMaster, ...(await construirCandidatosPreview(rutaMaster)) };
         }
 
         const expansiones = Object.keys(_candidatosPreviewCache.porExpansion)
