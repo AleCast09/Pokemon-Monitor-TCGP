@@ -332,6 +332,15 @@ async function iniciarActualizacion() {
         ':fallo',
         `echo Could not replace MonitorPokemon.exe - the old file stayed locked for over a minute (likely antivirus). Attempt ${intentosPrevios + 1}/3. > "${rutaFalloUpdate}"`,
         ...(esUltimoIntento ? [
+            // Bug real reportado en vivo 2026-08-27 (usuario "Naja"): borrar solo
+            // .pending_update.json no alcanzaba -- MonitorPokemon.new.exe seguia existiendo,
+            // y sanarSwapIncompletoSiHaceFalta() (arriba en este mismo archivo) lo detecta como
+            // "actualizacion incompleta" en el proximo arranque y vuelve a armar el intento
+            // desde 0, mostrando el mismo popup para siempre en loop -- exactamente lo que
+            // reporto el usuario ("si le doy OK sigue abriendo terminal y muestra este popup de
+            // nuevo"). Borrando tambien el .new.exe aca, no queda nada que el chequeo de
+            // reparacion pueda encontrar -- el popup se muestra UNA vez de verdad.
+            `del "${rutaNueva}" 2>nul`,
             `del "${rutaPendiente}" 2>nul`,
             `powershell -NoProfile -STA -WindowStyle Hidden -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${mensajePopup.replace(/'/g, "''")}', 'Monitor Pokemon - Update Failed')"`
         ] : []),
