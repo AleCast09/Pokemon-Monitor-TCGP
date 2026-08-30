@@ -54,7 +54,7 @@ AdbConectar(adbPath, puerto)
 
 global g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
 
-tap(x, y, esperaMs := 4000) {
+tap(x, y, esperaMs := 0) {
     static convX := 540/283, convY := 960/488, offset := 40
     global adbPath, puerto
     AdbTap(adbPath, puerto, Round(x * convX), Round((y - offset) * convY))
@@ -103,7 +103,11 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedl
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        ; Sleep de asentamiento antes del toque (2026-08-29, mismo bug real reproducido en vivo
+        ; con Speed Mod en 3x que en _MainAcceptFriendRequest.ahk/_DonorOfferCard.ahk hoy mismo):
+        ; la needle puede confirmar un frame antes de que el boton este de verdad tocable.
         if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            Sleep, 900
             tap(x, y)
             return true
         }

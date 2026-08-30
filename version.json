@@ -1,7 +1,9 @@
 {
-  "version": "1.5.77",
-  "notesCount": 1,
+  "version": "1.5.78",
+  "notesCount": 2,
   "notes": [
+    "New: Wishlist now shows a visual collage with the real artwork and quantities of your cards instead of a plain text list, and lets you pick a card directly from a dropdown instead of navigating through expansions/categories first.",
+    "Disabled: Trade, Friend Trade, Main Trade, Aggressive Trade and Gold Trade buttons while we finish a better version of Main Trade.",
     "Fixed a real bug: after 3 failed auto-update tries, the app kept looping the failure popup forever instead of showing it once.",
     "Disabled: Main Trade and Aggressive Trade, while we finish improving them.",
     "Fixed: title screen not recognized after the game's new visual update.",

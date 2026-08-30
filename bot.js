@@ -502,7 +502,10 @@ function construirEmbedComando(commandKey, user) {
         .setTimestamp();
 }
 
-const WISHLIST_POR_PAGINA = 15;
+// Subido de 15 a 25 (2026-08-30, a pedido explicito del usuario -- "creo que son maximo 25
+// opciones, entonces serian 25 cartas que deberian verse aqui en el embed"): coincide con el
+// limite real de opciones de un StringSelectMenu de Discord.
+const WISHLIST_POR_PAGINA = 25;
 
 function construirEmbedWishlistInicio(user, mapaEmojis = {}) {
     const tagWishlist = tagTipoBot('icono_wishlist', mapaEmojis);
@@ -653,7 +656,7 @@ function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
         const categoria = categoriaDesdeInfo(cardmaster?.[id]);
         const tipoRareza = tipoRarezaDesdeInfo(cardmaster?.[id]);
         const elemento = elementoDesdeInfo(cardmaster?.[id], nombre);
-        return { id, nombre, expansion, categoria, tipoRareza, elemento };
+        return { id, nombre, expansion, expansionId, categoria, tipoRareza, elemento };
     });
 
     cartas.sort((a, b) => a.expansion.localeCompare(b.expansion) || a.nombre.localeCompare(b.nombre));
@@ -678,7 +681,7 @@ function obtenerTodasLasCartas(rutaMasterCfg) {
         const categoria = categoriaDesdeInfo(info);
         const tipoRareza = tipoRarezaDesdeInfo(info);
         const elemento = elementoDesdeInfo(info, nombre);
-        return { id, nombre, expansion, categoria, tipoRareza, elemento };
+        return { id, nombre, expansion, expansionId, categoria, tipoRareza, elemento };
     });
 
     cartas.sort((a, b) => a.expansion.localeCompare(b.expansion) || a.nombre.localeCompare(b.nombre));
@@ -884,19 +887,72 @@ function archivosDesdeAttachmentBuilders(files = []) {
     ));
 }
 
+// Picker de "release" (categoría de expansiones, ej. "B3") -- paso previo al
+// listado plano de expansiones, solo cuando hay 2+ releases distintos entre
+// las cartas (con 0 o 1 no aporta nada elegir).
+function construirEmbedCategoriasDeExpansion(categorias, mapaCategorias, totalCartas, opciones = {}) {
+    const prefijo = opciones.prefijo || 'allcards';
+    const lineas = categorias.map((cat, i) => `${i + 1}. **${cat}** — ${mapaCategorias[cat].size} expansions`);
+
+    const embed = new EmbedBuilder()
+        .setTitle('📦 Which release do you want to browse?')
+        .setDescription(lineas.join('\n') + '\n\n🔎 **Select a release below**, or view every expansion at once with the button.')
+        .setColor(0x3498DB)
+        .setFooter({ text: `${categorias.length} releases • ${totalCartas} total cards` });
+
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId(`${prefijo}_grupo_expansion_seleccion`)
+        .setPlaceholder('Select a release')
+        .addOptions(categorias.slice(0, 25).map(cat => ({ label: cat, description: `${mapaCategorias[cat].size} expansions`, value: cat })));
+
+    const componentes = [
+        new ActionRowBuilder().addComponents(menu),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`${prefijo}_expansion_ver_todas`).setLabel('📜 View all expansions').setStyle(ButtonStyle.Secondary)
+        )
+    ];
+
+    const payload = { embeds: [embed], components: componentes };
+    if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+        embed.setThumbnail('attachment://symbol.png');
+        payload.files = [new AttachmentBuilder(SYMBOL_EMBEDS_PATH, { name: 'symbol.png' })];
+    } else {
+        payload.attachments = [];
+    }
+    return payload;
+}
+
 function construirEmbedResumenExpansiones(cartas, opciones = {}) {
     const prefijo = opciones.prefijo || 'allcards';
+    const categoriaFiltro = opciones.categoriaFiltro || null;
+    const verTodas = !!opciones.verTodas;
+
+    // hayReleases: si hay 2+ releases distintos, siempre hay a donde volver
+    // ("View all expansions" también necesita su botón de vuelta, no solo el
+    // filtro por release puntual -- a pedido explicito del usuario).
+    const hayReleases = Object.keys(categoriasDeExpansiones(cartas)).length > 1;
+
+    if (!categoriaFiltro && !verTodas && hayReleases) {
+        const mapaCategorias = categoriasDeExpansiones(cartas);
+        const categorias = Object.keys(mapaCategorias).sort((a, b) => a.localeCompare(b));
+        return construirEmbedCategoriasDeExpansion(categorias, mapaCategorias, cartas.length, { prefijo });
+    }
+
+    const cartasFiltradas = categoriaFiltro
+        ? cartas.filter(c => categoriaBaseExpansionId(c.expansionId) === categoriaFiltro)
+        : cartas;
+
     const conteo = {};
-    for (const c of cartas) conteo[c.expansion] = (conteo[c.expansion] || 0) + 1;
+    for (const c of cartasFiltradas) conteo[c.expansion] = (conteo[c.expansion] || 0) + 1;
     const expansiones = Object.keys(conteo).sort((a, b) => a.localeCompare(b));
 
     const lineas = expansiones.map((exp, i) => `${i + 1}. **${exp}** — ${conteo[exp]} cards`);
 
     const embed = new EmbedBuilder()
-        .setTitle('📋 All Expansions')
+        .setTitle(categoriaFiltro ? `📋 Expansions — ${categoriaFiltro}` : '📋 All Expansions')
         .setDescription((lineas.join('\n') || 'No expansions found.') + '\n\n🔎 **Select an expansion below:**')
         .setColor(0x3498DB)
-        .setFooter({ text: `${expansiones.length} expansions • ${cartas.length} total cards` });
+        .setFooter({ text: `${expansiones.length} expansions • ${cartasFiltradas.length} total cards` });
 
     const componentes = [];
     if (expansiones.length) {
@@ -905,6 +961,11 @@ function construirEmbedResumenExpansiones(cartas, opciones = {}) {
             .setPlaceholder('Select an expansion')
             .addOptions(expansiones.slice(0, 25).map(exp => ({ label: exp.slice(0, 100), value: exp })));
         componentes.push(new ActionRowBuilder().addComponents(menu));
+    }
+    if (categoriaFiltro || (verTodas && hayReleases)) {
+        componentes.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`${prefijo}_grupo_expansion_volver`).setLabel('🔙 Back to releases').setStyle(ButtonStyle.Secondary)
+        ));
     }
 
     const payload = { embeds: [embed], components: componentes };
@@ -917,11 +978,13 @@ function construirEmbedResumenExpansiones(cartas, opciones = {}) {
     return payload;
 }
 
-function construirEmbedListaCartas(cartas, pagina, opciones = {}) {
+async function construirEmbedListaCartas(cartas, pagina, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
     const titulo = opciones.titulo || '📋 Your Wishlist';
     const vacioTexto = opciones.vacioTexto || 'No cards saved in your wishlist.';
     const mapaEmojis = opciones.mapaEmojis || {};
+    const categoriaFiltro = opciones.categoriaFiltro || null;
+    const verTodas = !!opciones.verTodas;
 
     const totalPaginas = Math.max(1, Math.ceil(cartas.length / WISHLIST_POR_PAGINA));
     const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
@@ -946,11 +1009,45 @@ function construirEmbedListaCartas(cartas, pagina, opciones = {}) {
         listaTexto = bloques.join('\n\n');
     }
 
+    const mapaCategorias = categoriasDeExpansiones(cartas);
+    const categorias = Object.keys(mapaCategorias).sort((a, b) => a.localeCompare(b));
+    const hayReleases = categorias.length > 1;
+    // Wishlist salta directo a expansiones (2026-08-30, a pedido explicito del usuario --
+    // "no me interesa el tema de que grupo de categoria es"): el paso de "Select a release"
+    // (agrupar por A1/A3/B3b/etc.) tiene sentido para allcards/goldcards con decenas de
+    // expansiones, pero en una wishlist personal (pocas cartas) es friccion de mas.
+    const mostrarCategorias = prefijo !== 'wishlist' && !categoriaFiltro && !verTodas && hayReleases;
+
+    const cartasParaExpansiones = categoriaFiltro
+        ? cartas.filter(c => categoriaBaseExpansionId(c.expansionId) === categoriaFiltro)
+        : cartas;
+    const expansiones = [...new Set(cartasParaExpansiones.map(c => c.expansion))].sort((a, b) => a.localeCompare(b));
+
+    const textoBusqueda = !items.length ? '' : (mostrarCategorias
+        ? '\n\n🔎 **Search card:** select a release below.'
+        : '\n\n🔎 **Search card:** select an expansion below.');
+
+    // Un solo collage con TODAS las cartas de la pagina (2026-08-30, a pedido explicito del
+    // usuario, simplificado tras probar el agrupado por expansion con logos -- "mejor
+    // hablemos de que muestre todas las cartas unicamente"): sin logos ni separacion por
+    // expansion, mezcladas en una sola grilla con badge "xN" (suma de copias entre todas las
+    // cuentas) por carta, igual que antes. El embed principal lleva el titulo arriba y esta
+    // imagen abajo -- un solo embed, un solo archivo adjunto.
+    const archivosExtra = [];
+    let collageBufferPagina = null;
+    if (items.length && opciones.rutaMasterPath) {
+        collageBufferPagina = await generarCollageCartas(items, opciones.rutaMasterPath, opciones.mapaCopias, prefijo === 'goldcards', 5);
+    }
+
     const embed = new EmbedBuilder()
         .setTitle(titulo)
-        .setDescription(listaTexto + (items.length ? '\n\n🔎 **Search card:** select an expansion below.' : ''))
+        .setDescription((collageBufferPagina ? '' : listaTexto) + textoBusqueda)
         .setColor(0xE91E63)
         .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas} • ${cartas.length} cards` });
+    if (collageBufferPagina) {
+        embed.setImage('attachment://collage.png');
+        archivosExtra.push(new AttachmentBuilder(collageBufferPagina, { name: 'collage.png' }));
+    }
 
     const fila = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`${prefijo}_pagina_${paginaSegura - 1}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
@@ -958,16 +1055,53 @@ function construirEmbedListaCartas(cartas, pagina, opciones = {}) {
     );
 
     const componentes = [fila];
-    const expansiones = [...new Set(cartas.map(c => c.expansion))].sort((a, b) => a.localeCompare(b));
-    if (expansiones.length) {
+    if (prefijo === 'wishlist') {
+        // Selector de carta DIRECTO (2026-08-30, a pedido explicito del usuario -- "yo no te
+        // he dicho que aparezca la opcion de expansion, sino que aparezca directamente la
+        // carta para seleccionar"): en vez de navegar expansion -> categoria -> carta, esta
+        // pagina ya muestra hasta 25 cartas en el collage de arriba -- el menu lista esas
+        // mismas cartas por nombre, y al elegir una va derecho al detalle (mismo
+        // construirEmbedDetalleCarta que usa el resto del bot).
+        if (items.length) {
+            const menuCartas = new StringSelectMenuBuilder()
+                .setCustomId(`${prefijo}_carta_directa_seleccion::${paginaSegura}`)
+                .setPlaceholder('Select a card')
+                .addOptions(items.slice(0, 25).map((c) => ({
+                    label: c.nombre.slice(0, 100),
+                    description: textoSinEmoji(c.categoria).slice(0, 100),
+                    value: c.id
+                })));
+            componentes.push(new ActionRowBuilder().addComponents(menuCartas));
+        }
+    } else if (mostrarCategorias) {
+        const menuCat = new StringSelectMenuBuilder()
+            .setCustomId(`${prefijo}_grupo_expansion_seleccion`)
+            .setPlaceholder('Select a release')
+            .addOptions(categorias.slice(0, 25).map(cat => ({ label: cat, description: `${mapaCategorias[cat].size} expansions`, value: cat })));
+        componentes.push(new ActionRowBuilder().addComponents(menuCat));
+        componentes.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`${prefijo}_expansion_ver_todas`).setLabel('📜 View all expansions').setStyle(ButtonStyle.Secondary)
+        ));
+    } else if (expansiones.length) {
         const menu = new StringSelectMenuBuilder()
             .setCustomId(`${prefijo}_expansion_seleccion`)
             .setPlaceholder('Select an expansion')
             .addOptions(expansiones.slice(0, 25).map(exp => ({ label: exp.slice(0, 100), value: exp })));
         componentes.push(new ActionRowBuilder().addComponents(menu));
+        if (categoriaFiltro || (verTodas && hayReleases)) {
+            componentes.push(new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`${prefijo}_grupo_expansion_volver`).setLabel('🔙 Back to releases').setStyle(ButtonStyle.Secondary)
+            ));
+        }
     }
 
-    return { embeds: [embed], components: componentes, attachments: [] };
+    const payload = { embeds: [embed], components: componentes };
+    if (archivosExtra.length) {
+        payload.files = archivosExtra;
+    } else {
+        payload.attachments = [];
+    }
+    return payload;
 }
 
 const WISHLIST_EXPANSION_POR_PAGINA = 25;
@@ -1368,6 +1502,64 @@ const OVERRIDES_EXPANSION_A1 = {
 // bajo que expansion se MUESTRA/BUSCA una carta.
 function expansionIdDeCarta(cartaId, cardMap) {
     return OVERRIDES_EXPANSION_A1[cartaId] || cardMap?.[cartaId]?.ExpansionID;
+}
+
+// Código de "release"/categoría a partir de un ExpansionID (ej. "B3b" -> "B3",
+// "A1a" -> "A1", "A1" -> "A1") -- las sub-expansiones dentro de un mismo
+// lanzamiento comparten el código base y solo difieren en la letra final.
+// Usado para agrupar el picker de expansiones por release (2026-08-29, a
+// pedido explicito del usuario: antes se mostraban las +20 expansiones todas
+// juntas en un solo menú, que además recortaba en silencio a 25 por el límite
+// de Discord).
+function categoriaBaseExpansionId(expansionId) {
+    if (!expansionId) return null;
+    const m = expansionId.match(/^([A-Za-z]*\d+)/);
+    return m ? m[1] : expansionId;
+}
+
+// Mapa código de release (ej. "B3") -> Set de nombres de expansión (ej.
+// "Extradimensional Crisis", "Eevee Grove") que caen dentro de ese release.
+function categoriasDeExpansiones(cartas) {
+    const mapa = {};
+    for (const c of cartas) {
+        const cat = categoriaBaseExpansionId(c.expansionId) || c.expansion;
+        if (!mapa[cat]) mapa[cat] = new Set();
+        mapa[cat].add(c.expansion);
+    }
+    return mapa;
+}
+
+// Autocompletado del campo "expansion" en /card, /wishlist, /goldcards -- a
+// pedido explicito del usuario (2026-08-29): con 20+ expansiones el campo de
+// texto libre las mostraba todas de una sola vez sin forma de agrupar. Ahora,
+// además del match normal por nombre, escribir el código de release (ej.
+// "B3") filtra a solo las expansiones de ese release -- mismo agrupado que ya
+// tiene el selector con botones, pero adaptado a autocompletado en vez de un
+// paso de menú aparte (acá no hay "botones", solo texto).
+function coincidenciasExpansionAutocomplete(base, focused, releaseFiltro = null) {
+    const baseFiltrada = releaseFiltro
+        ? base.filter(c => categoriaBaseExpansionId(c.expansionId) === releaseFiltro)
+        : base;
+    const expansiones = [...new Set(baseFiltrada.map(c => c.expansion))].sort((a, b) => a.localeCompare(b));
+    if (!focused) return expansiones.slice(0, 25).map(e => ({ name: e.slice(0, 100), value: e }));
+
+    const mapaExpNombreACategoria = {};
+    for (const c of baseFiltrada) mapaExpNombreACategoria[c.expansion] = (categoriaBaseExpansionId(c.expansionId) || '').toLowerCase();
+
+    return expansiones
+        .filter(e => e.toLowerCase().includes(focused) || mapaExpNombreACategoria[e] === focused)
+        .slice(0, 25)
+        .map(e => ({ name: e.slice(0, 100), value: e }));
+}
+
+// Autocompletado del nuevo campo "release" (2026-08-29, a pedido explicito del
+// usuario -- quiere primero elegir el release de una lista y que RECIÉN ahí
+// se le pregunte qué expansión, en vez de escribir el código a ciegas).
+function coincidenciasReleaseAutocomplete(base, focused) {
+    const mapaCategorias = categoriasDeExpansiones(base);
+    const categorias = Object.keys(mapaCategorias).sort((a, b) => a.localeCompare(b));
+    const filtradas = focused ? categorias.filter(c => c.toLowerCase().includes(focused)) : categorias;
+    return filtradas.slice(0, 25).map(c => ({ name: `${c} (${mapaCategorias[c].size} expansions)`.slice(0, 100), value: c }));
 }
 
 function construirMapaExpansiones(en_US) {
@@ -1798,14 +1990,20 @@ function maxCopiasCarta(mapaCopias, cartaId) {
 // sin red) -- una miniatura chica no necesita HD, y bajar HD de hasta 25
 // cartas por cada pantalla seria lento y gastaria disco de mas sin necesidad.
 // Las cartas sin imagen local encontrada se saltean (no hay nada que dibujar).
-async function generarCollageCartas(items, rutaMasterPath, mapaCopias, esGoldCards = false) {
+async function generarCollageCartas(items, rutaMasterPath, mapaCopias, esGoldCards = false, colsFijo = null) {
     if (!items?.length || !rutaMasterPath) return null;
     const cardMap = cargarCardMap(rutaMasterPath);
-    const CELL_W = 300, CELL_H = 420, GAP = 8, PADDING = 12;
-    const COLS = Math.min(5, items.length);
+    // Celdas agrandadas de nuevo (2026-08-30, a pedido explicito del usuario, repetido):
+    // 300x420 -> 340x476 -> 380x532.
+    const CELL_W = 380, CELL_H = 532, GAP = 8, PADDING = 12;
+    // colsFijo (2026-08-30, a pedido explicito del usuario): numero fijo de columnas para la
+    // grilla, en vez de calcularlo segun items.length -- usado por construirEmbedListaCartas
+    // (wishlist) para que todas las cartas de la pagina queden en una grilla mas ancha y
+    // pareja. Sin colsFijo, se sigue calculando dinamico como siempre (usado por
+    // construirEmbedCartasPorExpansion, una sola expansion por vez).
+    const COLS = colsFijo || Math.min(5, items.length);
 
-    const celdas = [];
-    let indice = 0;
+    const imagenesListas = [];
     for (const item of items) {
         const info = cardMap?.[item.id];
         // Mismo orden que la vista individual de carta (construirEmbedDetalleCarta)
@@ -1856,16 +2054,31 @@ async function generarCollageCartas(items, rutaMasterPath, mapaCopias, esGoldCar
             } catch (e) { /* si falla el badge, se muestra la imagen sin numero */ }
         }
 
-        const col = indice % COLS;
-        const row = Math.floor(indice / COLS);
-        celdas.push({ input: imgBuffer, top: PADDING + row * (CELL_H + GAP), left: PADDING + col * (CELL_W + GAP) });
-        indice++;
+        imagenesListas.push(imgBuffer);
     }
-    if (!celdas.length) return null;
+    if (!imagenesListas.length) return null;
 
-    const filas = Math.ceil(indice / COLS);
+    // Filas centradas (2026-08-30, a pedido explicito del usuario -- "quiero que este
+    // centrado"): con colsFijo, una expansion chica (ej. 2 cartas en una grilla de 6
+    // columnas) quedaba pegada a la izquierda con un hueco enorme a la derecha DENTRO de la
+    // misma imagen -- ahora cada fila (llena o parcial, como la ultima) se centra segun
+    // cuantos items tiene ESA fila puntual, no siempre arrancando en el margen izquierdo.
+    const filas = Math.ceil(imagenesListas.length / COLS);
     const anchoTotal = PADDING * 2 + COLS * CELL_W + (COLS - 1) * GAP;
     const altoTotal = PADDING * 2 + filas * CELL_H + (filas - 1) * GAP;
+    const celdas = imagenesListas.map((imgBuffer, indice) => {
+        const row = Math.floor(indice / COLS);
+        const inicioFila = row * COLS;
+        const itemsEnFila = Math.min(COLS, imagenesListas.length - inicioFila);
+        const colEnFila = indice - inicioFila;
+        const anchoFila = itemsEnFila * CELL_W + (itemsEnFila - 1) * GAP;
+        const offsetCentrado = Math.round((anchoTotal - PADDING * 2 - anchoFila) / 2);
+        return {
+            input: imgBuffer,
+            top: PADDING + row * (CELL_H + GAP),
+            left: PADDING + offsetCentrado + colEnFila * (CELL_W + GAP)
+        };
+    });
 
     try {
         return await sharp({ create: { width: anchoTotal, height: altoTotal, channels: 4, background: { r: 30, g: 30, b: 36, alpha: 1 } } })
@@ -2244,8 +2457,13 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     // Trade reactivado (2026-08-03) para probar si sigue funcionando tras la update --
     // Shinedust ya se reactivo antes (2026-08-01) y se confirmo funcionando.
     const filaAcciones = new ActionRowBuilder().addComponents(
-        // Deshabilitado en Gold Cards a pedido explicito del usuario 2026-08-06.
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold),
+        // Deshabilitado para TODOS los usuarios (2026-08-30, a pedido explicito del usuario --
+        // "necesito que bloquees el acceso a todos los usuarios del boton de trade, porque
+        // estaremos trabajando tu y yo en esto"): el mecanismo de wishlist/Main Trade sigue en
+        // pruebas en vivo (ver project_pending_tasks #61), se bloquea por completo mientras
+        // dure esa sesion de trabajo para que nadie mas lo dispare por accidente. Reemplaza el
+        // deshabilitado anterior (solo en Gold Cards) -- reactivar cuando el usuario lo pida.
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(true),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
         // Marcar como wishlist (2026-08-11, a pedido explicito del usuario): desde un
@@ -3547,6 +3765,10 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
 
     const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
     const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+    // Imagen de referencia para el mecanismo nuevo de wishlist+favorito (2026-08-29, ver
+    // memoria project_pending_tasks #60) -- si no se resuelve, _DonorOfferCard.ahk recibe ""
+    // y sigue con el método viejo a ciegas, sin cortar el trade.
+    const rutaImagenReferencia = (await resolverImagenReferenciaCartaBot(cartaId, rutaMasterCfg?.webhook_url)) || '';
     const tmp = () => path.join(os.tmpdir(), `mtrade_${index}_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`);
 
     // Inyeccion de la donante (2026-08-19, reemplaza el mecanismo anterior via .ini +
@@ -3628,7 +3850,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         // reemplazan Main.ahk + _SendTradeCard.ahk + _MainProposeFavoriteCard.ahk +
         // _DonorRespondTrade.ahk + _MainFinalizeAndCleanup.ahk + _FinalizeTradeCard.ahk.
         { nombre: 'main_accept_friend_request', script: RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, args: ['Main', folderPath], timeoutMs: 60 * 1000 },
-        { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 },
+        { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath, rutaImagenReferencia], timeoutMs: 2 * 60 * 1000 },
         { nombre: 'main_accept_trade_offer', script: RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, args: ['Main', folderPath], timeoutMs: 2 * 60 * 1000 },
         { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 },
         // Descubierto en vivo 2026-08-19: sin este paso, la carta de Main nunca se termina
@@ -3953,6 +4175,10 @@ async function ejecutarAggressiveTradeDesdeDiscord(interaction, { cartaId, frien
     }
 
     const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+    // Imagen de referencia para el mecanismo nuevo de wishlist+favorito (2026-08-29, ver
+    // memoria project_pending_tasks #60) -- mismo criterio que ejecutarMainTradeDesdeDiscord.
+    const rutaMasterCfgAggr = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+    const rutaImagenReferenciaAggr = (await resolverImagenReferenciaCartaBot(cartaId, rutaMasterCfgAggr?.webhook_url)) || '';
     const asignaciones = [];
     for (const elegida of asignacionesElegidas.slice(0, AGGRESSIVE_TRADE_MAX_INSTANCIAS)) {
         const instancia = (instancias || []).find(i => String(i.index) === String(elegida.instanciaIndex));
@@ -4027,7 +4253,7 @@ async function ejecutarAggressiveTradeDesdeDiscord(interaction, { cartaId, frien
         const nombre = asignacion.instancia.name;
         const pasos = [
             { nombre: 'main_accept_friend_request', script: RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, args: ['Main', folderPath], timeoutMs: 60 * 1000 },
-            { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 },
+            { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath, rutaImagenReferenciaAggr], timeoutMs: 2 * 60 * 1000 },
             { nombre: 'main_accept_trade_offer', script: RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, args: ['Main', folderPath], timeoutMs: 2 * 60 * 1000 },
             { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 },
             { nombre: 'main_finalize_own_card', script: RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT, args: ['Main', folderPath], timeoutMs: 60 * 1000 }
@@ -6769,6 +6995,24 @@ function resolverNombreCarta(cartaId, rutaMasterPath) {
     return (nameKey && en_US?.[nameKey]) ? en_US[nameKey] : cartaId;
 }
 
+// Resuelve la imagen de referencia de la carta pedida en Discord, para el mecanismo nuevo
+// de _DonorOfferCard.ahk (2026-08-29, ver memoria project_pending_tasks #60) -- compara el
+// arte de esta imagen contra las cartas del Wishlist de Main para marcarla como favorita en
+// vez de elegir a ciegas por posición. Mismo criterio ya usado en 3 lugares del bot: caché
+// local (CardImageCache, vía IllustrationID) primero, repo propio de GitHub como respaldo si
+// la expansión es nueva y todavía no tiene la imagen local. Devuelve null (no "") si no se
+// pudo resolver -- _DonorOfferCard.ahk trata cualquier valor vacío como "sin referencia" y
+// sigue con el método viejo a ciegas, sin cortar el trade.
+async function resolverImagenReferenciaCartaBot(cartaId, rutaMasterPath) {
+    if (!cartaId || !rutaMasterPath) return null;
+    const cardmaster = leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json'));
+    const illustrationId = cardmaster?.[cartaId]?.IllustrationID;
+    if (!illustrationId) return null;
+    return encontrarImagenPorIllustration(rutaMasterPath, illustrationId)
+        || (await obtenerImagenRepoCartasBot(rutaMasterPath, illustrationId))
+        || null;
+}
+
 function buscarXmlPorCarta(rutaJsonCuentas, cartaId) {
     if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
     const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
@@ -6858,6 +7102,7 @@ function construirSlashCommands() {
             .addStringOption(opt => opt.setName('channel').setDescription('Upload a new avatar directly for this webhook (use together with "image")').setAutocomplete(true).setRequired(false))
             .addAttachmentOption(opt => opt.setName('image').setDescription('Image to use as the new avatar (use together with "type")').setRequired(false)),
         new SlashCommandBuilder().setName('card').setDescription('Runs the All Cards flow')
+            .addStringOption(opt => opt.setName('release').setDescription('Filter by release group (ex. B3) before picking the expansion (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('expansion').setDescription('Filter by expansion before picking the name (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('rarity').setDescription('Filter by rarity before picking the name (optional)').setRequired(false)
                 .addChoices(
@@ -6877,6 +7122,7 @@ function construirSlashCommands() {
             .addStringOption(opt => opt.setName('element').setDescription('Filter by element/type, only shows what exists for the expansion/rarity chosen (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('name').setDescription('Search for a card directly by name (optional)').setAutocomplete(true).setRequired(false)),
         new SlashCommandBuilder().setName('wishlist').setDescription('Runs the Cards Wishlist flow')
+            .addStringOption(opt => opt.setName('release').setDescription('Filter by release group (ex. B3) before picking the expansion (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('expansion').setDescription('Filter by expansion before picking the name (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('rarity').setDescription('Filter by rarity before picking the name (optional)').setRequired(false)
                 .addChoices(
@@ -6896,6 +7142,7 @@ function construirSlashCommands() {
             .addStringOption(opt => opt.setName('element').setDescription('Filter by element/type, only shows what exists for the expansion/rarity chosen (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('name').setDescription('Search for a card in your wishlist directly by name (optional)').setAutocomplete(true).setRequired(false)),
         new SlashCommandBuilder().setName('goldcards').setDescription('Runs the Gold Cards flow')
+            .addStringOption(opt => opt.setName('release').setDescription('Filter by release group (ex. B3) before picking the expansion (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('expansion').setDescription('Filter by expansion before picking the name (optional)').setAutocomplete(true).setRequired(false))
             .addStringOption(opt => opt.setName('rarity').setDescription('Filter by rarity before picking the name (optional)').setRequired(false)
                 .addChoices(
@@ -7937,12 +8184,13 @@ client.on('interactionCreate', async interaction => {
         const { cartas } = await obtenerTodasLasCartasCacheadas();
         const base = cartas || [];
 
+        if (campoFocus.name === 'release') {
+            return interaction.respond(coincidenciasReleaseAutocomplete(base, focused)).catch(() => {});
+        }
+
         if (campoFocus.name === 'expansion') {
-            const expansiones = [...new Set(base.map(c => c.expansion))].sort((a, b) => a.localeCompare(b));
-            const coincidencias = (focused ? expansiones.filter(e => e.toLowerCase().includes(focused)) : expansiones)
-                .slice(0, 25)
-                .map(e => ({ name: e.slice(0, 100), value: e }));
-            return interaction.respond(coincidencias).catch(() => {});
+            const releaseElegido = interaction.options.getString('release');
+            return interaction.respond(coincidenciasExpansionAutocomplete(base, focused, releaseElegido)).catch(() => {});
         }
 
         // Campo "name": si ya se eligió una expansión y/o rareza, filtra solo
@@ -7986,6 +8234,30 @@ client.on('interactionCreate', async interaction => {
         && !interaction.options.getString('name') && !interaction.options.getString('expansion')
         && (interaction.options.getString('rarity') || interaction.options.getString('element'))) {
         return await interaction.reply({ content: '❌ "rarity" and "element" need "expansion" set too — pick an expansion first.', ephemeral: true });
+    }
+
+    // Atajo /card release:X SIN expansion ni name (2026-08-29, a pedido
+    // explicito del usuario): salta directo a la lista de expansiones de ese
+    // release, igual que si lo hubiera elegido en el picker manual con botones.
+    if (interaction.isChatInputCommand() && interaction.commandName === 'card' && !interaction.options.getString('name') && !interaction.options.getString('expansion') && interaction.options.getString('release')) {
+        const rowCardAllRelease = await obtenerCanalComando(interaction.user.id, 'cmd_card_all');
+        if (!rowCardAllRelease) {
+            return await interaction.reply({ content: `❌ No channel synced for **All Cards**. Use **Sync Channels** first.`, ephemeral: true });
+        }
+        if (interaction.channelId !== rowCardAllRelease.canal_id) {
+            return await interaction.reply({ content: `❌ This command only works in <#${rowCardAllRelease.canal_id}>.`, ephemeral: true });
+        }
+        await interaction.deferReply();
+        try {
+            const releaseElegido = interaction.options.getString('release');
+            const { cartas } = await FUENTES_CARTAS.allcards.obtenerCartas(interaction.user.id);
+            const payload = construirEmbedResumenExpansiones(cartas || [], { prefijo: 'allcards', categoriaFiltro: releaseElegido });
+            await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando expansiones del release:', error?.message || error);
+            await interaction.editReply({ content: '❌ Could not show this release. Try again.', embeds: [], components: [] });
+        }
+        return;
     }
 
     // Atajo /card expansion:X (y opcionalmente rarity:Y) SIN elegir un nombre
@@ -8082,12 +8354,13 @@ client.on('interactionCreate', async interaction => {
         const { cartas } = await obtenerCartasGoldCacheadas(interaction.user.id);
         const base = cartas || [];
 
+        if (campoFocus.name === 'release') {
+            return interaction.respond(coincidenciasReleaseAutocomplete(base, focused)).catch(() => {});
+        }
+
         if (campoFocus.name === 'expansion') {
-            const expansiones = [...new Set(base.map(c => c.expansion))].sort((a, b) => a.localeCompare(b));
-            const coincidencias = (focused ? expansiones.filter(e => e.toLowerCase().includes(focused)) : expansiones)
-                .slice(0, 25)
-                .map(e => ({ name: e.slice(0, 100), value: e }));
-            return interaction.respond(coincidencias).catch(() => {});
+            const releaseElegido = interaction.options.getString('release');
+            return interaction.respond(coincidenciasExpansionAutocomplete(base, focused, releaseElegido)).catch(() => {});
         }
 
         const expansionElegida = interaction.options.getString('expansion');
@@ -8117,6 +8390,31 @@ client.on('interactionCreate', async interaction => {
             .slice(0, 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
         return interaction.respond(coincidencias).catch(() => {});
+    }
+
+    // Atajo /goldcards release:X sin expansion ni name -- mismo fix que /card.
+    if (interaction.isChatInputCommand() && interaction.commandName === 'goldcards' && !interaction.options.getString('name') && !interaction.options.getString('expansion') && interaction.options.getString('release')) {
+        const rowCardGoldRelease = await obtenerCanalComando(interaction.user.id, 'cmd_card_gold');
+        if (!rowCardGoldRelease) {
+            return await interaction.reply({ content: `❌ No channel synced for **Gold Cards**. Use **Sync Channels** first.`, ephemeral: true });
+        }
+        if (interaction.channelId !== rowCardGoldRelease.canal_id) {
+            return await interaction.reply({ content: `❌ This command only works in <#${rowCardGoldRelease.canal_id}>.`, ephemeral: true });
+        }
+        await interaction.deferReply();
+        if (!GOOGLE_DRIVE_API_KEY_BOT) {
+            return await interaction.editReply(advertenciaGoldSinApi());
+        }
+        try {
+            const releaseElegido = interaction.options.getString('release');
+            const { cartas } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const payload = construirEmbedResumenExpansiones(cartas || [], { prefijo: 'goldcards', categoriaFiltro: releaseElegido });
+            await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando expansiones del release:', error?.message || error);
+            await interaction.editReply({ content: '❌ Could not show this release. Try again.', embeds: [], components: [] });
+        }
+        return;
     }
 
     // Atajo /goldcards expansion:X sin nombre -- mismo fix que /card.
@@ -8192,12 +8490,13 @@ client.on('interactionCreate', async interaction => {
         const { cartas } = await FUENTES_CARTAS.wishlist.obtenerCartas();
         const base = cartas || [];
 
+        if (campoFocus.name === 'release') {
+            return interaction.respond(coincidenciasReleaseAutocomplete(base, focused)).catch(() => {});
+        }
+
         if (campoFocus.name === 'expansion') {
-            const expansiones = [...new Set(base.map(c => c.expansion))].sort((a, b) => a.localeCompare(b));
-            const coincidencias = (focused ? expansiones.filter(e => e.toLowerCase().includes(focused)) : expansiones)
-                .slice(0, 25)
-                .map(e => ({ name: e.slice(0, 100), value: e }));
-            return interaction.respond(coincidencias).catch(() => {});
+            const releaseElegido = interaction.options.getString('release');
+            return interaction.respond(coincidenciasExpansionAutocomplete(base, focused, releaseElegido)).catch(() => {});
         }
 
         // Campo "name": mismo criterio que /card - si ya se eligio expansion
@@ -8229,6 +8528,29 @@ client.on('interactionCreate', async interaction => {
             .slice(0, 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
         return interaction.respond(coincidencias).catch(() => {});
+    }
+
+    // Atajo /wishlist release:X sin expansion ni name -- mismo fix que /card.
+    if (interaction.isChatInputCommand() && interaction.commandName === 'wishlist' && !interaction.options.getString('name') && !interaction.options.getString('expansion') && interaction.options.getString('release')) {
+        const rowWishlistRelease = await obtenerCanalComando(interaction.user.id, 'cmd_card_wishlist');
+        if (!rowWishlistRelease) {
+            return await interaction.reply({ content: `❌ No channel synced for **Cards Wishlist**. Use **Sync Channels** first.`, ephemeral: true });
+        }
+        if (interaction.channelId !== rowWishlistRelease.canal_id) {
+            return await interaction.reply({ content: `❌ This command only works in <#${rowWishlistRelease.canal_id}>.`, ephemeral: true });
+        }
+        await interaction.deferReply();
+        try {
+            const releaseElegido = interaction.options.getString('release');
+            const { cartas, rutaMasterPath, mapaCopias } = await FUENTES_CARTAS.wishlist.obtenerCartas();
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = await construirEmbedListaCartas(cartas || [], 0, { prefijo: 'wishlist', titulo: FUENTES_CARTAS.wishlist.tituloLista, vacioTexto: FUENTES_CARTAS.wishlist.vacioTexto, mapaEmojis, categoriaFiltro: releaseElegido, rutaMasterPath, mapaCopias });
+            await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando expansiones del release:', error?.message || error);
+            await interaction.editReply({ content: '❌ Could not show this release. Try again.', embeds: [], components: [] });
+        }
+        return;
     }
 
     // Atajo /wishlist expansion:X sin nombre -- mismo fix que /card.
@@ -8920,9 +9242,19 @@ client.on('interactionCreate', async interaction => {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
             const expansionElegida = interaction.values[0];
-            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-            const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo, contexto: fuente.contexto, mapaEmojis });
+            // Wishlist salta directo a elegir carta (2026-08-30, a pedido explicito del
+            // usuario -- "que aparezca de frente que carta desea escoger"): una wishlist
+            // personal tiene pocas cartas por expansion, casi siempre 1 sola categoria --
+            // el paso intermedio de "Select a category" es friccion innecesaria. Muestra
+            // directo el collage con TODAS las categorias/elementos de esa expansion juntos
+            // (mismo criterio que ya usa el atajo expansion:X de /card, CATEGORIA_SIN_FILTRO).
+            // allcards/goldcards siguen pasando por categorias primero, ahi si hace falta
+            // filtrar (pueden ser cientos de cartas por expansion).
+            const payload = prefijo === 'wishlist'
+                ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, CATEGORIA_SIN_FILTRO, ELEMENTO_SIN_FILTRO, 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
+                : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo, contexto: fuente.contexto, mapaEmojis });
             return await interaction.editReply(payload);
         } catch (error) {
             // Red de seguridad (2026-08-20, bug real reportado: la interaccion se quedaba
@@ -8931,6 +9263,61 @@ client.on('interactionCreate', async interaction => {
             // abajo, agregado antes para un bug parecido).
             console.error('DEBUG: error mostrando categorías de la expansión:', error?.message || error);
             return await interaction.editReply({ content: '❌ Could not show this expansion. Try again.', embeds: [], components: [] });
+        }
+    }
+
+    // Paso de "release" (ej. "B3" agrupa "Extradimensional Crisis", "Eevee Grove",
+    // etc.) -- a pedido explicito del usuario (2026-08-29): se muestra ANTES del
+    // listado plano de expansiones cuando hay 2+ releases distintos.
+    if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_grupo_expansion_seleccion' || interaction.customId === 'allcards_grupo_expansion_seleccion' || interaction.customId === 'goldcards_grupo_expansion_seleccion')) {
+        await interaction.deferUpdate();
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const categoriaElegida = interaction.values[0];
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = (prefijo === 'allcards' || prefijo === 'goldcards')
+                ? construirEmbedResumenExpansiones(cartas || [], { prefijo, categoriaFiltro: categoriaElegida })
+                : await construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis, categoriaFiltro: categoriaElegida, rutaMasterPath, mapaCopias });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando expansiones del release:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this release. Try again.', embeds: [], components: [] });
+        }
+    }
+
+    if (interaction.isButton() && (interaction.customId === 'wishlist_expansion_ver_todas' || interaction.customId === 'allcards_expansion_ver_todas' || interaction.customId === 'goldcards_expansion_ver_todas')) {
+        await interaction.deferUpdate();
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = (prefijo === 'allcards' || prefijo === 'goldcards')
+                ? construirEmbedResumenExpansiones(cartas || [], { prefijo, verTodas: true })
+                : await construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis, verTodas: true, rutaMasterPath, mapaCopias });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando todas las expansiones:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show all expansions. Try again.', embeds: [], components: [] });
+        }
+    }
+
+    if (interaction.isButton() && (interaction.customId === 'wishlist_grupo_expansion_volver' || interaction.customId === 'allcards_grupo_expansion_volver' || interaction.customId === 'goldcards_grupo_expansion_volver')) {
+        await interaction.deferUpdate();
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = (prefijo === 'allcards' || prefijo === 'goldcards')
+                ? construirEmbedResumenExpansiones(cartas || [], { prefijo })
+                : await construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error volviendo a releases:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show releases. Try again.', embeds: [], components: [] });
         }
     }
 
@@ -9023,6 +9410,24 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply(payload);
         } catch (error) {
             console.error('DEBUG: error mostrando el detalle de la carta:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this card. Try again.', embeds: [], components: [] });
+        }
+    }
+
+    // Selector de carta directo desde la pagina principal del wishlist (2026-08-30, a pedido
+    // explicito del usuario -- ver comentario completo en construirEmbedListaCartas). Sin
+    // "volver" a una expansion puntual (no vino de ahi) -- mismo criterio que la busqueda por
+    // autocompletado de /card, que tampoco tiene pantalla anterior a la que volver.
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('wishlist_carta_directa_seleccion::')) {
+        await interaction.deferUpdate();
+        try {
+            const { cartas, rutaMasterPath } = await FUENTES_CARTAS.wishlist.obtenerCartas();
+            const cartaId = interaction.values[0];
+            const carta = (cartas || []).find(c => c.id === cartaId);
+            const payload = await construirEmbedDetalleCarta(cartaId, carta?.nombre || cartaId, rutaMasterPath, null, interaction.guild);
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando el detalle de la carta (wishlist directo):', error?.message || error);
             return await interaction.editReply({ content: '❌ Could not show this card. Try again.', embeds: [], components: [] });
         }
     }
@@ -9580,6 +9985,40 @@ client.on('interactionCreate', async interaction => {
         // Friend/Main/Aggressive Trade del mensaje original de la carta en el canal
         // de Trading -- deferUpdate no toca nada del mensaje, y el status va aparte.
         await interaction.deferUpdate();
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+        }
+
+        // Nuevo (2026-08-29, a pedido explicito del usuario): antes de arrancar la
+        // automatización de verdad, muestra un embed de confirmación con todo lo
+        // seleccionado (instancia, carta a transferir con código/nombre/foto, Friend
+        // ID, archivo de cuenta) y un botón "Start" -- no arranca nada hasta que se
+        // lo aprieta, para poder revisar que todo esté bien antes de comprometerse a
+        // prender las instancias.
+        const rutaMasterCfgConfirm = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+        const nombreCartaConfirm = resolverNombreCarta(cartaId, rutaMasterCfgConfirm?.webhook_url);
+        const payloadCartaConfirm = await construirEmbedDetalleCarta(cartaId, nombreCartaConfirm, rutaMasterCfgConfirm?.webhook_url, null, interaction.guild);
+        const embedConfirmacion = payloadCartaConfirm.embeds[0]
+            .setTitle(`📋 Confirm ${modo === 'main' ? 'Main Trade' : 'Friend Trade'}`)
+            .addFields(
+                { name: 'Instance', value: `**${nombre}**`, inline: true },
+                { name: 'Friend ID', value: `\`${friendId}\``, inline: true },
+                { name: 'Account file', value: `\`${fileName}\``, inline: true }
+            );
+        const filaStart = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`card_trade_confirmado::${cartaId}::${friendId}::${fileName}::${index}::${nombre}::${modo}`.slice(0, 100)).setLabel('▶️ Start').setStyle(ButtonStyle.Success)
+        );
+        return await interaction.followUp({ embeds: [embedConfirmacion], files: payloadCartaConfirm.files || [], components: [filaStart], ephemeral: true });
+    }
+
+    // Botón "Start" del embed de confirmación de arriba -- recién acá arranca la
+    // automatización de verdad.
+    if (interaction.isButton() && interaction.customId.startsWith('card_trade_confirmado::')) {
+        const [, cartaId, friendId, fileName, index, nombre, modo] = interaction.customId.split('::');
+        await interaction.update({ components: [] });
         try { await interaction.followUp({ content: `🟢 Preparing instance **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
         const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
@@ -9742,7 +10181,9 @@ client.on('interactionCreate', async interaction => {
                         // flujo normal de /card (probado, funciona) -- vuelve a preguntar la
                         // cuenta (redundante ya que Shinedust la conoce) pero es confiable.
                         payload.components = [new ActionRowBuilder().addComponents(
-                            new ButtonBuilder().setCustomId(`card_trade::${cartaId}`.slice(0, 100)).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary),
+                            // Deshabilitado (2026-08-30, ver comentario completo en el boton
+                            // Trade de construirEmbedDetalleCarta) -- mismo bloqueo total.
+                            new ButtonBuilder().setCustomId(`card_trade::${cartaId}`.slice(0, 100)).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(true),
                             new ButtonBuilder().setCustomId(`shinedust_result_extract::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
                             new ButtonBuilder().setCustomId(`shinedust_result_info_accounts::${fileName}`.slice(0, 100)).setLabel('📋 Info Accounts').setStyle(ButtonStyle.Secondary)
                         )];
@@ -9904,18 +10345,36 @@ client.on('interactionCreate', async interaction => {
             const esPrimeraVez = interaction.customId === `${prefijo}_ver`;
             const pagina = esPrimeraVez ? 0 : (parseInt(interaction.customId.replace(`${prefijo}_pagina_`, ''), 10) || 0);
 
-            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            // Defer INMEDIATO (2026-08-30, bug real reproducido en vivo: "Unknown interaction"
+            // / DiscordAPIError 10062) -- el collage por expansion (armado mas abajo) puede
+            // tardar mas de los 3 segundos que Discord da antes de invalidar la interaccion si
+            // no se responde nada. Ahora se difiere ANTES de cualquier trabajo pesado, publico
+            // (mismo motivo que ya usa allcards_ver_expansiones) para que la navegacion
+            // encadenada de despues siga funcionando igual.
+            if (esPrimeraVez) {
+                await interaction.deferReply();
+            } else {
+                await interaction.deferUpdate();
+            }
+
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
 
             if (cartas === null) {
-                if (esPrimeraVez) return await interaction.reply({ content: fuente.errorSinDatos });
-                return await interaction.update({ content: fuente.errorSinDatos, embeds: [], components: [] });
+                return await interaction.editReply({ content: fuente.errorSinDatos, embeds: [], components: [] });
             }
 
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-            const payload = construirEmbedListaCartas(cartas, pagina, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis });
-            // Pública, mismo motivo que en allcards_ver_expansiones.
-            if (esPrimeraVez) return await interaction.reply({ ...payload });
-            return await interaction.update(payload);
+            // Collage por expansion SOLO para wishlist (2026-08-30, a pedido explicito del
+            // usuario) -- allcards puede tener miles de cartas en decenas de expansiones por
+            // pagina, generar un collage HD por cada una seria lentisimo y no es lo que se
+            // pidio; se deja con el texto de siempre.
+            const opcionesLista = { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis };
+            if (prefijo === 'wishlist') {
+                opcionesLista.rutaMasterPath = rutaMasterPath;
+                opcionesLista.mapaCopias = mapaCopias;
+            }
+            const payload = await construirEmbedListaCartas(cartas, pagina, opcionesLista);
+            return await interaction.editReply(payload);
         }
 
         if (interaction.customId.startsWith('wishlist_expansion_pagina_') || interaction.customId.startsWith('allcards_expansion_pagina_') || interaction.customId.startsWith('goldcards_expansion_pagina_')) {
@@ -9957,11 +10416,11 @@ client.on('interactionCreate', async interaction => {
             await interaction.deferUpdate();
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
-            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojisExpansiones = await obtenerMapaEmojisGuild(interaction.guild);
             const payload = (prefijo === 'allcards' || prefijo === 'goldcards')
                 ? construirEmbedResumenExpansiones(cartas || [], { prefijo })
-                : construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis: mapaEmojisExpansiones });
+                : await construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis: mapaEmojisExpansiones, rutaMasterPath, mapaCopias });
             return await interaction.editReply(payload);
         }
 
@@ -10346,27 +10805,24 @@ client.on('interactionCreate', async interaction => {
         if (interaction.customId.startsWith('card_trade::')) {
             const cartaId = interaction.customId.replace('card_trade::', '');
             await interaction.deferReply({ ephemeral: true }); // armar la carta puede tardar más de 3s
+            // Main Trade activo SOLO en el servidor propio del usuario, para testear en vivo
+            // el mecanismo nuevo de wishlist+favorito (2026-08-29, a pedido explicito del
+            // usuario -- "solo quiero que este activo el main trade [ahí], lo demas
+            // deshabilitado, para testear"). En cualquier OTRO servidor (otros usuarios,
+            // ej. Naja) se mantiene el default de release de siempre: Friend Trade activo,
+            // Main/Aggressive deshabilitados.
+            // Los 3 modos deshabilitados para TODOS los usuarios (2026-08-30, a pedido
+            // explicito del usuario -- "bloquea el acceso de todos los usuarios al boton de
+            // trade... friend trade, main trade, aggressive y gold trade, todito"): el
+            // mecanismo de wishlist/Main Trade sigue en pruebas en vivo (ver
+            // project_pending_tasks #61) -- se bloquea de punta a punta hasta que el usuario
+            // pida reactivarlo para el proximo release.
             const fila = new ActionRowBuilder().addComponents(
-                // Reactivado 2026-08-22 a pedido explicito del usuario (estaba deshabilitado
-                // desde el 2026-08-06 por bugs conocidos, ya resueltos).
-                // Reactivado 2026-08-23 a pedido explicito del usuario -- Offer y Respond ya
-                // probados en vivo con exito de punta a punta; Finalize todavia sin probar en
-                // vivo (needle-verificado, copiado de _DonorRespondAndFinalize.ahk de Main
-                // Trade, pero nunca corrido de verdad en un trade real de Friend Trade).
-                new ButtonBuilder().setCustomId(`card_trade_friend::${cartaId}`).setLabel('🤝 Friend Trade').setStyle(ButtonStyle.Primary),
-                // Deshabilitado para release (2026-08-27, a pedido explicito del usuario): fotos
-                // de evidencia rotas en 2 puntos del pipeline (ver [[project_pending_tasks]] #59)
-                // -- se vuelve a habilitar cuando se corrijan.
+                new ButtonBuilder().setCustomId(`card_trade_friend::${cartaId}`).setLabel('🤝 Friend Trade').setStyle(ButtonStyle.Secondary).setDisabled(true),
                 new ButtonBuilder().setCustomId(`card_trade_main::${cartaId}`).setLabel('🏠 Main Trade').setStyle(ButtonStyle.Secondary).setDisabled(true),
                 // Deshabilitado a pedido explicito del usuario 2026-07-29: todavia no
-                // esta implementado, se libera en un release futuro.
-                // Habilitado 2026-08-24 a pedido explicito del usuario para probarlo en vivo
-                // por primera vez -- flujo completo armado (seleccion de cuentas paso a paso +
-                // fase paralela + cola con Main + Speed Mod), pero nunca corrido de punta a
-                // punta con instancias reales todavia.
-                // Re-deshabilitado para release (2026-08-27, a pedido explicito del usuario):
-                // sigue sin correr de punta a punta en un trade real -- vuelve a "Coming Soon"
-                // hasta probarlo en vivo.
+                // esta implementado, se libera en un release futuro. Sigue deshabilitado
+                // incluso en el servidor propio -- no corrio de punta a punta todavia.
                 new ButtonBuilder().setCustomId(`card_trade_agresivo::${cartaId}`).setLabel('⚡ Aggressive Trade').setStyle(ButtonStyle.Secondary).setDisabled(true)
             );
             return await reenviarCartaATrading(interaction, cartaId, null, [fila]);

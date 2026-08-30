@@ -73,6 +73,15 @@ AdbTap(adbPath, puerto, x, y) {
     AdbEjecutar(adbPath, puerto, "shell input tap " . x . " " . y)
 }
 
+; Boton "Atras" de Android (2026-08-30, a pedido explicito del usuario -- caso real visto en
+; vivo): algunas pantallas de pantalla completa sin ningun control visible (ej. el efecto que
+; aparece al marcar una carta como favorita por primera vez) NO se pueden cerrar con ningun tap
+; -- solo con el boton Atras del sistema. Generico, no depende de icono ni texto, funciona en
+; cualquier idioma.
+AdbKeyBack(adbPath, puerto) {
+    AdbEjecutar(adbPath, puerto, "shell input keyevent 4")
+}
+
 ; Nombre con sufijo "Propio" (no solo "AdbSwipe"): AutoHotkey no distingue
 ; mayusculas/minusculas en nombres de funcion, y el include\ADB.ahk de Kevin
 ; ya trae su propia "adbSwipe" -- con el mismo nombre (aunque distinta

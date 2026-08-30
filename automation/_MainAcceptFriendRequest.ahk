@@ -63,7 +63,13 @@ global g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
 ; Logico->dispositivo (mismo criterio que _CountShinedust.ahk/_WaitWelcomeScreens.ahk):
 ; coordenadas mapeadas en vivo 2026-08-03/04 con la herramienta de overlay del usuario,
 ; en escala logica 283x532 -- se convierten antes de tocar.
-tap(x, y, esperaMs := 4000) {
+; esperaMs bajado de 4000 a 0 (2026-08-27, a pedido explicito del usuario -- comparado en vivo
+; contra _SendFriendRequest.ahk de Kevin, cuyo adbClick() no espera nada despues del toque, se
+; apoya solo en el poll del loop de reintento para el timing). Seguro: cada paso de este script
+; ya confirma la pantalla siguiente con su propio needle antes de tocar de nuevo (poll cada
+; 500ms) -- ese chequeo YA cumple el rol de "esperar que asiente" que este Sleep fijo cumplia
+; de mas, sumando latencia innecesaria en cada uno de los ~6 toques de este script.
+tap(x, y, esperaMs := 0) {
     static convX := 540/283, convY := 960/488, offset := 40
     global adbPath, puerto
     AdbTap(adbPath, puerto, Round(x * convX), Round((y - offset) * convY))
@@ -155,11 +161,61 @@ chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
     return encontrado
 }
 
+; Igual que chequeoRapidoNeedle pero tambien devuelve la posicion nativa del match (2026-08-30,
+; a pedido explicito del usuario -- "tiene que ser para todos los idiomas"): el icono de
+; "Friends"/"Amigos" es el mismo dibujo en cualquier idioma, pero la PANTALLA de Comunidad
+; cambia de layout entre idiomas (en ingles es un tile chico en una esquina, en español es una
+; fila completa mas abajo) -- un tap a coordenada fija (39,463) calibrado contra el ingles cae
+; en el lugar equivocado en español. Usando la posicion real del match en vez de una coordenada
+; fija, el toque cae siempre sobre el icono real sin importar donde lo haya puesto ese idioma.
+chequeoRapidoNeedleConPosicion(nombreNeedleNativo, variationNativo, ByRef outX, ByRef outY) {
+    global g_hwndFast
+    if (nombreNeedleNativo = "" || !g_hwndFast)
+        return false
+    pBitmap := capturarVentana(g_hwndFast)
+    if (!pBitmap)
+        return false
+    encontrado := false
+    pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
+    if (pNeedle) {
+        vPos := ""
+        if (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1) {
+            encontrado := true
+            partes := StrSplit(vPos, ",")
+            outX := partes[1]
+            outY := partes[2]
+        }
+        Gdip_DisposeImage(pNeedle)
+    }
+    Gdip_DisposeImage(pBitmap)
+    return encontrado
+}
+
+; Poll puro (sin tocar) con un margen de asentamiento configurable ANTES de devolver true --
+; para pasos donde el icono que confirma la pantalla y el elemento que hay que tocar estan en
+; puntos distintos de la pantalla (uno puede estar listo antes que el otro). El llamador hace
+; el tap() aparte, ya con el margen ya esperado.
+esperarChequeoRapidoConMargen(nombreNeedleNativo, variationNativo, timeoutMs, margenMs) {
+    inicio := A_TickCount
+    Loop {
+        if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            Sleep, %margenMs%
+            return true
+        }
+        if (A_TickCount - inicio > timeoutMs)
+            return false
+        Sleep, 300
+    }
+}
+
 esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedleNativo := "", variationNativo := 30) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
+        ; Sleep de asentamiento antes del toque (2026-08-29, mismo bug real reproducido en vivo
+        ; con Speed Mod en 3x que esperarTileFriendsYTap mas arriba en este mismo archivo).
         if (chequeoRapidoNeedle(nombreNeedleNativo, variationNativo)) {
+            Sleep, 900
             tap(x, y)
             return true
         }
@@ -217,7 +273,10 @@ esperarAceptarOYaAmigos(timeoutMs := 15000) {
         ; Chequeo rapido cableado (2026-08-26): needle propia own_mainaccept_check_native (el
         ; check verde de aceptar), validada en vivo -- limpio contra las 18 capturas de otras
         ; pantallas que tengo hoy.
+        ; Sleep de asentamiento antes del toque (2026-08-29, mismo bug real reproducido en vivo
+        ; con Speed Mod en 3x que en los demas pasos de este archivo).
         if (chequeoRapidoNeedle("own_mainaccept_check_native", 30)) {
+            Sleep, 900
             tap(242, 202)
             return true
         }
@@ -259,15 +318,32 @@ esperarTileFriendsYTap(timeoutMs := 35000) {
     global adbPath, puerto, g_winTitle
     inicio := A_TickCount
     Loop {
-        tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
-        AdbScreenshot(adbPath, puerto, tempFile)
         ; Chequeo rapido cableado (2026-08-26): needle propia own_mainaccept_friends_icon_native
         ; (el tile "Friends" de Social Hub), validada en vivo -- match exacto, sin ningun falso
         ; positivo cruzado (los "matches" extra fueron la misma pantalla real duplicada).
-        if (chequeoRapidoNeedle("own_mainaccept_friends_icon_native", 30)) {
-            tap(39, 463)
+        ; Movido ANTES del AdbScreenshot (2026-08-27, ineficiencia real encontrada: esta funcion
+        ; sacaba una captura por ADB en CADA vuelta sin importar si el chequeo rapido ya
+        ; alcanzaba, al reves del patron usado en el resto del pipeline -- el screenshot lento
+        ; ahora solo se pide si el chequeo rapido no matcheo).
+        ; Sleep de asentamiento antes del toque (2026-08-29, bug real reproducido en vivo con
+        ; Speed Mod en 3x): la needle del tile ya matcheaba, pero el toque automatico no
+        ; registraba -- probado a mano el MISMO toque un instante despues y si funciono, mismo
+        ; patron de bug ya visto y arreglado en otros pasos de este pipeline (needle matchea un
+        ; frame antes de que el boton este de verdad tocable).
+        ; Toque a posicion DINAMICA en vez de coordenada fija (2026-08-30, bug real
+        ; reproducido en vivo -- ver comentario completo en chequeoRapidoNeedleConPosicion):
+        ; el icono de Friends/Amigos es el mismo en cualquier idioma, pero (39,463) esta
+        ; calibrado contra el layout en ingles -- en español la fila de Amigos esta mas abajo
+        ; y falla "no_aparecio_pantalla_comunidad_paso2". Tocando donde matcheo de verdad el
+        ; icono, funciona sin importar el idioma o el layout de esa pantalla.
+        foundX := "", foundY := ""
+        if (chequeoRapidoNeedleConPosicion("own_mainaccept_friends_icon_native", 30, foundX, foundY)) {
+            Sleep, 900
+            AdbTap(adbPath, puerto, Round(foundX * 540 / 275), Round(foundY * 960 / 528))
             return true
         }
+        tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
+        AdbScreenshot(adbPath, puerto, tempFile)
         if (FileExist(tempFile)) {
             pBitmap := Gdip_CreateBitmapFromFile(tempFile)
             FileDelete, %tempFile%
@@ -276,13 +352,17 @@ esperarTileFriendsYTap(timeoutMs := 35000) {
                 vPos := ""
                 if (pTile && Gdip_ImageSearch(pBitmap, pTile, vPos, 0, 0, 0, 0, 30) = 1) {
                     Gdip_DisposeImage(pBitmap)
-                    tap(39, 463)
+                    ; vPos ya esta en escala ADB (needle y screenshot son ambos a 540x960 aca) --
+                    ; tocar directo ahi, sin conversion, por la misma razon de arriba.
+                    partesTile := StrSplit(vPos, ",")
+                    AdbTap(adbPath, puerto, partesTile[1], partesTile[2])
                     return true
                 }
                 pNavbarActivo := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_mainmenu_navbar_activo.png")
                 vPos := ""
                 if (pNavbarActivo && Gdip_ImageSearch(pBitmap, pNavbarActivo, vPos, 0, 0, 0, 0, 30) = 1) {
                     Gdip_DisposeImage(pBitmap)
+                    Sleep, 400
                     tap(141, 511)
                     Sleep, 500
                     continue
@@ -291,6 +371,7 @@ esperarTileFriendsYTap(timeoutMs := 35000) {
                 vPos := ""
                 if (pNavbar && Gdip_ImageSearch(pBitmap, pNavbar, vPos, 0, 0, 0, 0, 30) = 1) {
                     Gdip_DisposeImage(pBitmap)
+                    Sleep, 400
                     tap(141, 511)
                     Sleep, 500
                     continue
@@ -306,12 +387,29 @@ esperarTileFriendsYTap(timeoutMs := 35000) {
 
 if (!esperarTileFriendsYTap())
     ExitConError("no_aparecio_pantalla_comunidad_paso2")
-; Chequeo rapido cableado (2026-08-26): needle propia own_mainaccept_tabbar_friends_native
-; (texto "Approve" de la tab bar), validada en vivo -- limpio hasta variation 60 contra 17
-; capturas de otras pantallas (el unico otro match real era la misma pantalla real de Friends
-; List, capturada antes con otra cuenta).
-if (!esperarNeedleYTap("own_mainaccept_tabbar_friends", 30, 230, 459, 15000, "own_mainaccept_tabbar_friends_native", 30))
+; BUG REAL encontrado y corregido en vivo (2026-08-29, cuenta de Main en español): la needle
+; vieja own_mainaccept_tabbar_friends_native era un recorte del texto en INGLES "Approve" de
+; la tab bar -- rompia por completo (timeout de 15s, siempre) en cualquier cuenta que no
+; tuviera el juego en ingles, violando la regla de "solo iconos, nunca texto" del proyecto.
+; Reemplazada por own_mainaccept_addfriend_icon_native (el icono de "agregar amigo" -- lupa +
+; persona + "+" -- en la barra de busqueda de la pantalla "Amigos"), validada en vivo: match
+; exacto (variation 0) contra 2 capturas reales de esta pantalla (tabs "Amigos" y "Solicitudes
+; recibidas"), 0 falsos positivos hasta variation 60 contra Comunidad/Home/Search Results.
+; NOTA: el chequeo rapido (needle nativa) es el que corre casi siempre (ver
+; chequeoRapidoNeedle, se intenta primero en cada vuelta) y ya usa el icono nuevo -- el
+; nombreNeedle lento de respaldo (1er arg, own_mainaccept_tabbar_friends) sigue siendo el
+; recorte viejo en ingles, solo se usaria si la captura rapida de ventana fallara (caso raro).
+; Pendiente real: reemplazar tambien ese needle lento por una version a escala ADB del mismo
+; icono para cerrar el hueco del todo.
+; Margen extra especifico para este paso (2026-08-29, bug real reproducido en vivo: el
+; toque a la tab "Solicitudes recibidas" seguia sin registrar incluso con 900ms) -- el icono
+; que confirma "ya cargo Amigos" esta ARRIBA (barra de busqueda) pero el toque va ABAJO DEL
+; TODO (la tab bar), que puede seguir renderizando un instante mas (la lista de amigos tiene
+; su propio spinner de carga visto en vivo). Se sube el margen solo aca, sin tocar el
+; comportamiento general de esperarNeedleYTap para el resto de los pasos.
+if (!esperarChequeoRapidoConMargen("own_mainaccept_addfriend_icon_native", 30, 15000, 1800))
     ExitConError("no_aparecio_pantalla_amigos_paso3")
+tap(230, 459)
 if (!esperarAceptarOYaAmigos())
     ExitConError("no_aparecio_solicitud_pendiente_paso4")
 ; Chequeo rapido cableado (2026-08-26): needle propia own_mainaccept_x_back_native. El recorte
