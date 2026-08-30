@@ -38,7 +38,15 @@ function leerVersion() {
 function leerDiscordIdConfigurado() {
     try {
         const db = new DatabaseSync(path.join(RAIZ,'database.db'));
-        const fila = db.prepare(`SELECT discord_id FROM configs_canales WHERE discord_id IS NOT NULL AND discord_id != '' LIMIT 1`).get();
+        // ORDER BY rowid ASC (2026-08-30, bug real reportado en vivo): sin esto, la fila
+        // devuelta era arbitraria -- "configs_canales" guarda una fila por cada
+        // (discord_id, tipo), asi que apenas OTRO usuario de un servidor con mas gente tocaba
+        // algo de configuracion, su discord_id podia aparecer antes que el del dueño real y el
+        // Panel de Control mostraba "User: <otra persona>" en vez del dueño de la instalacion.
+        // La fila mas antigua (rowid mas chico) es del primer usuario que corrio /setup en
+        // esta instalacion -- casi siempre el dueño real, ya que nadie mas puede tocar nada
+        // antes de que el bot este configurado por primera vez.
+        const fila = db.prepare(`SELECT discord_id FROM configs_canales WHERE discord_id IS NOT NULL AND discord_id != '' ORDER BY rowid ASC LIMIT 1`).get();
         return fila ? fila.discord_id : null;
     } catch (e) {
         return null;

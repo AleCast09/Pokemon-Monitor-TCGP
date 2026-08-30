@@ -3020,7 +3020,7 @@ async function reenviarCartaATrading(interaction, cartaId, datosGold, componente
         return await interaction.editReply({ content: '❌ Could not build this card. Try again.' });
     }
 
-    const canalTrading = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+    const canalTrading = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
     if (!canalTrading?.webhook_url) {
         return await interaction.editReply({ content: '❌ Your **Trading** channel isn\'t set up yet. Run **Sync Channels** first.' });
     }
@@ -3680,7 +3680,7 @@ async function enviarErrorMainTrade(interaction, mensaje, components = []) {
     } catch (e) {
         console.error('DEBUG: interaction.followUp fallo en Main Trade (probable token expirado), mandando por webhook:', e?.message || e);
         try {
-            const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
             if (canalRunInstance?.webhook_url) {
                 await axios.post(`${canalRunInstance.webhook_url}?wait=true`, { content: mensaje, components: components.map(c => (c.toJSON ? c.toJSON() : c)) }, { timeout: 10000 });
             }
@@ -3792,7 +3792,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         );
         const mensaje = `❌ Main Trade failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.`;
         try {
-            const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
             if (canalRunInstance?.webhook_url) {
                 await axios.post(`${canalRunInstance.webhook_url}?wait=true`, { content: mensaje, components: [filaStop.toJSON()] }, { timeout: 10000 });
                 return await interaction.followUp({ content: '⚠️ Error notice sent to your Trading channel.', ephemeral: true });
@@ -3886,7 +3886,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     const mandarFotoTradeAlCanal = async (rutaFoto, mensajeTexto, sinDatosCarta = false) => {
         if (!fs.existsSync(rutaFoto)) return;
         try {
-            const canalTradePhoto = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            const canalTradePhoto = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
             if (!canalTradePhoto?.webhook_url) return;
             const formFoto = new FormData();
             if (sinDatosCarta) {
@@ -4000,7 +4000,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             { etiqueta: 'Main — Received', ruta: rutaFaseRecibeMain }
         ]);
         if (collageFases) {
-            const canalCollage = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            const canalCollage = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
             if (canalCollage?.webhook_url) {
                 const embedCollage = new EmbedBuilder()
                     .setColor(0xE91E63)
@@ -4028,7 +4028,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     onProgreso({ paso: 'Trade completed', estado: 'ok', terminado: true });
     const mensaje = `✅ Main Trade completed: **${nombreCarta}** (\`${fileName}\`) sent to Main.`;
     try {
-        const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+        const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
         if (canalRunInstance?.webhook_url) {
             await axios.post(`${canalRunInstance.webhook_url}?wait=true`, { content: mensaje }, { timeout: 10000 });
             return await interaction.followUp({ content: '✅ Result sent to your Trading channel.', ephemeral: true });
@@ -4276,7 +4276,7 @@ async function ejecutarAggressiveTradeDesdeDiscord(interaction, { cartaId, frien
     // nombre exacto de la carta enviada por esta cuenta puntual), foto simple como Friend Trade.
     async function mandarMensajeAggressiveAlCanal(texto, rutaFoto) {
         try {
-            const canal = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+            const canal = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
             if (!canal?.webhook_url) return;
             if (rutaFoto && fs.existsSync(rutaFoto)) {
                 const form = new FormData();
@@ -4415,7 +4415,7 @@ async function ejecutarFreeTradeDesdeDiscord(interaction, { cartaId, friendId, f
     const mensaje = `✅ Injection completed on instance **${nombre}** (\`${fileName}\`), friend request sent to \`${friendId}\`.\n\nOnce your friend has accepted the request, press **▶️ Next Trade** to offer them the card from their wishlist. If something went wrong, press **🛑 Stop**.`;
 
     try {
-        const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+        const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
         if (canalRunInstance?.webhook_url) {
             await axios.post(`${canalRunInstance.webhook_url}?wait=true`, {
                 content: mensaje,
@@ -4486,10 +4486,10 @@ function ejecutarFriendTradeCheckPendingOffer(winTitle) {
 // carta (construirEmbedDetalleCarta necesita un cartaId que este handler no tiene a mano) --
 // solo la foto con un mensaje, mismo criterio que ya usa Main Trade para sus propias fotos
 // de "carta elegida a ciegas" (sinDatosCarta).
-async function mandarFotoFriendTradeAlCanal(discordUserId, rutaFoto, mensajeTexto) {
+async function mandarFotoFriendTradeAlCanal(guildId, rutaFoto, mensajeTexto) {
     if (!rutaFoto || !fs.existsSync(rutaFoto)) return;
     try {
-        const canalTradePhoto = await obtenerCanalComando(discordUserId, 'cmd_run_instance');
+        const canalTradePhoto = await obtenerCanalComando(guildId, 'cmd_run_instance');
         if (!canalTradePhoto?.webhook_url) return;
         const embedFoto = new EmbedBuilder().setColor(0xE91E63).setImage('attachment://trade_photo.png');
         const formFoto = new FormData();
@@ -7468,7 +7468,7 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
 
 async function ejecutarComandoEnCanal(interaction, commandKey) {
     const cfg = COMANDO_CONFIG[commandKey];
-    const row = await obtenerCanalComando(interaction.user.id, cfg.tipo);
+    const row = await obtenerCanalComando(interaction.guildId, cfg.tipo);
     if (!row) {
         return interaction.reply({
             content: `❌ No channel synced for **${cfg.label}**. Use **Sync Channels** first.`,
@@ -7571,9 +7571,9 @@ function ejecutarPM2Start(nombreProceso, script) {
     });
 }
 
-async function tieneConfiguracion(userId, tipoModulo) {
+async function tieneConfiguracion(guildId, tipoModulo) {
     try {
-        const row = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [userId, tipoModulo]);
+        const row = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [guildId, tipoModulo]);
         return !!(row && row.webhook_url);
     } catch (error) { return false; }
 }
@@ -8053,12 +8053,12 @@ async function generarPanelBuildEmbed(userId, guild = null) {
     };
 }
 
-async function generarPanelControl(userId) {
+async function generarPanelControl(guildId) {
     let estadoS4T = await verificarEstadoPM2('trading', 's4t.js');
     let estadoHB = await verificarEstadoPM2('heartbeat', 'heartbeat.js');
 
-    if (estadoS4T === '🟢 ONLINE' && !(await tieneConfiguracion(userId, 's4t'))) estadoS4T = '🔴 OFFLINE (Setup Needed)';
-    if (estadoHB === '🟢 ONLINE' && !(await tieneConfiguracion(userId, 'heartbeat'))) estadoHB = '🔴 OFFLINE (Setup Needed)';
+    if (estadoS4T === '🟢 ONLINE' && !(await tieneConfiguracion(guildId, 's4t'))) estadoS4T = '🔴 OFFLINE (Setup Needed)';
+    if (estadoHB === '🟢 ONLINE' && !(await tieneConfiguracion(guildId, 'heartbeat'))) estadoHB = '🔴 OFFLINE (Setup Needed)';
     const driveHdRegularOn = await driveHdRegularHabilitado();
     const autoApagadoSinCuentasOn = await autoApagadoSinCuentasHabilitado();
 
@@ -8240,7 +8240,7 @@ client.on('interactionCreate', async interaction => {
     // explicito del usuario): salta directo a la lista de expansiones de ese
     // release, igual que si lo hubiera elegido en el picker manual con botones.
     if (interaction.isChatInputCommand() && interaction.commandName === 'card' && !interaction.options.getString('name') && !interaction.options.getString('expansion') && interaction.options.getString('release')) {
-        const rowCardAllRelease = await obtenerCanalComando(interaction.user.id, 'cmd_card_all');
+        const rowCardAllRelease = await obtenerCanalComando(interaction.guildId, 'cmd_card_all');
         if (!rowCardAllRelease) {
             return await interaction.reply({ content: `❌ No channel synced for **All Cards**. Use **Sync Channels** first.`, ephemeral: true });
         }
@@ -8268,7 +8268,7 @@ client.on('interactionCreate', async interaction => {
     // puntual (segundo bug reportado: con expansion+rarity seguia mostrando
     // todas las categorias en vez de solo la elegida).
     if (interaction.isChatInputCommand() && interaction.commandName === 'card' && !interaction.options.getString('name') && interaction.options.getString('expansion')) {
-        const rowCardAll = await obtenerCanalComando(interaction.user.id, 'cmd_card_all');
+        const rowCardAll = await obtenerCanalComando(interaction.guildId, 'cmd_card_all');
         if (!rowCardAll) {
             return await interaction.reply({ content: `❌ No channel synced for **All Cards**. Use **Sync Channels** first.`, ephemeral: true });
         }
@@ -8314,7 +8314,7 @@ client.on('interactionCreate', async interaction => {
     // el banner+botón de "All Cards" — mismo canal/permiso que ese flujo.
     if (interaction.isChatInputCommand() && interaction.commandName === 'card' && interaction.options.getString('name')) {
         const cartaId = interaction.options.getString('name');
-        const rowCardAll = await obtenerCanalComando(interaction.user.id, 'cmd_card_all');
+        const rowCardAll = await obtenerCanalComando(interaction.guildId, 'cmd_card_all');
         if (!rowCardAll) {
             return await interaction.reply({ content: `❌ No channel synced for **All Cards**. Use **Sync Channels** first.`, ephemeral: true });
         }
@@ -8394,7 +8394,7 @@ client.on('interactionCreate', async interaction => {
 
     // Atajo /goldcards release:X sin expansion ni name -- mismo fix que /card.
     if (interaction.isChatInputCommand() && interaction.commandName === 'goldcards' && !interaction.options.getString('name') && !interaction.options.getString('expansion') && interaction.options.getString('release')) {
-        const rowCardGoldRelease = await obtenerCanalComando(interaction.user.id, 'cmd_card_gold');
+        const rowCardGoldRelease = await obtenerCanalComando(interaction.guildId, 'cmd_card_gold');
         if (!rowCardGoldRelease) {
             return await interaction.reply({ content: `❌ No channel synced for **Gold Cards**. Use **Sync Channels** first.`, ephemeral: true });
         }
@@ -8419,7 +8419,7 @@ client.on('interactionCreate', async interaction => {
 
     // Atajo /goldcards expansion:X sin nombre -- mismo fix que /card.
     if (interaction.isChatInputCommand() && interaction.commandName === 'goldcards' && !interaction.options.getString('name') && interaction.options.getString('expansion')) {
-        const rowCardGold = await obtenerCanalComando(interaction.user.id, 'cmd_card_gold');
+        const rowCardGold = await obtenerCanalComando(interaction.guildId, 'cmd_card_gold');
         if (!rowCardGold) {
             return await interaction.reply({ content: `❌ No channel synced for **Gold Cards**. Use **Sync Channels** first.`, ephemeral: true });
         }
@@ -8458,7 +8458,7 @@ client.on('interactionCreate', async interaction => {
     // patron que /card -- ya viene pre-filtrado a cartas Gold-elegibles.
     if (interaction.isChatInputCommand() && interaction.commandName === 'goldcards' && interaction.options.getString('name')) {
         const cartaId = interaction.options.getString('name');
-        const rowCardGold = await obtenerCanalComando(interaction.user.id, 'cmd_card_gold');
+        const rowCardGold = await obtenerCanalComando(interaction.guildId, 'cmd_card_gold');
         if (!rowCardGold) {
             return await interaction.reply({ content: `❌ No channel synced for **Gold Cards**. Use **Sync Channels** first.`, ephemeral: true });
         }
@@ -8532,7 +8532,7 @@ client.on('interactionCreate', async interaction => {
 
     // Atajo /wishlist release:X sin expansion ni name -- mismo fix que /card.
     if (interaction.isChatInputCommand() && interaction.commandName === 'wishlist' && !interaction.options.getString('name') && !interaction.options.getString('expansion') && interaction.options.getString('release')) {
-        const rowWishlistRelease = await obtenerCanalComando(interaction.user.id, 'cmd_card_wishlist');
+        const rowWishlistRelease = await obtenerCanalComando(interaction.guildId, 'cmd_card_wishlist');
         if (!rowWishlistRelease) {
             return await interaction.reply({ content: `❌ No channel synced for **Cards Wishlist**. Use **Sync Channels** first.`, ephemeral: true });
         }
@@ -8555,7 +8555,7 @@ client.on('interactionCreate', async interaction => {
 
     // Atajo /wishlist expansion:X sin nombre -- mismo fix que /card.
     if (interaction.isChatInputCommand() && interaction.commandName === 'wishlist' && !interaction.options.getString('name') && interaction.options.getString('expansion')) {
-        const rowWishlist = await obtenerCanalComando(interaction.user.id, 'cmd_card_wishlist');
+        const rowWishlist = await obtenerCanalComando(interaction.guildId, 'cmd_card_wishlist');
         if (!rowWishlist) {
             return await interaction.reply({ content: `❌ No channel synced for **Cards Wishlist**. Use **Sync Channels** first.`, ephemeral: true });
         }
@@ -8591,7 +8591,7 @@ client.on('interactionCreate', async interaction => {
     // el banner+botón de "Cards Wishlist" — mismo canal/permiso que ese flujo.
     if (interaction.isChatInputCommand() && interaction.commandName === 'wishlist' && interaction.options.getString('name')) {
         const cartaId = interaction.options.getString('name');
-        const rowWishlist = await obtenerCanalComando(interaction.user.id, 'cmd_card_wishlist');
+        const rowWishlist = await obtenerCanalComando(interaction.guildId, 'cmd_card_wishlist');
         if (!rowWishlist) {
             return await interaction.reply({ content: `❌ No channel synced for **Cards Wishlist**. Use **Sync Channels** first.`, ephemeral: true });
         }
@@ -8625,7 +8625,7 @@ client.on('interactionCreate', async interaction => {
         if (!tienePermisosGestion(interaction)) {
             return await interaction.reply({ content: '❌ Only administrators or users with the Manage Server permission can use this panel.', ephemeral: true });
         }
-        const rowSetup = await obtenerCanalComando(interaction.user.id, 'cmd_setup');
+        const rowSetup = await obtenerCanalComando(interaction.guildId, 'cmd_setup');
         const enCanalSetup = rowSetup && interaction.channelId === rowSetup.canal_id;
 
         if (rowSetup && !enCanalSetup) {
@@ -8649,7 +8649,7 @@ client.on('interactionCreate', async interaction => {
         // lo necesita como argumento aparte, y si quedara mezclado en el mismo
         // objeto terminaría colándose como un campo extra dentro del payload_json
         // real que se manda a Discord.
-        const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.user.id);
+        const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.guildId);
         if (enCanalSetup) {
             // Un solo panel parado en el canal (se edita in situ), en vez de uno
             // nuevo cada vez que alguien corre /setup de nuevo — pero correrlo a
@@ -8671,8 +8671,8 @@ client.on('interactionCreate', async interaction => {
                         await w.delete('Recreating invalid webhook').catch(() => {});
                     }
                     const webhookNuevo = await canal.createWebhook({ name: nombreDefaultWebhook('cmd_setup'), avatar: avatarDefaultWebhook('cmd_setup') });
-                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, 'cmd_setup']);
-                    await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.user.id, 'cmd_setup', rowSetup.canal_id, webhookNuevo.url]);
+                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, 'cmd_setup']);
+                    await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.guildId, 'cmd_setup', rowSetup.canal_id, webhookNuevo.url]);
                     await db.run(`DELETE FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, 'interfaz_msg_setup']);
                     await aplicarPersonalizacionWebhookSiExiste(interaction.user.id, 'cmd_setup', webhookNuevo.url);
                     await enviarOEditarInterfaz(interaction.user.id, 'setup', webhookNuevo.url, panel, archivosPanel || []);
@@ -8702,7 +8702,7 @@ client.on('interactionCreate', async interaction => {
         if (!tienePermisosGestion(interaction)) {
             return await interaction.reply({ content: '❌ Only administrators or users with the Manage Server permission can use this panel.', ephemeral: true });
         }
-        const rowBuild = await obtenerCanalComando(interaction.user.id, 'cmd_build_embed');
+        const rowBuild = await obtenerCanalComando(interaction.guildId, 'cmd_build_embed');
         if (rowBuild && interaction.channelId !== rowBuild.canal_id) {
             return await interaction.reply({ content: `❌ This command only works in <#${rowBuild.canal_id}>.`, ephemeral: true });
         }
@@ -8768,7 +8768,7 @@ client.on('interactionCreate', async interaction => {
         if (!tienePermisosGestion(interaction)) {
             return await interaction.reply({ content: '❌ Only administrators or users with the Manage Server permission can use this panel.', ephemeral: true });
         }
-        const rowWebhook = await obtenerCanalComando(interaction.user.id, 'cmd_build_webhooks');
+        const rowWebhook = await obtenerCanalComando(interaction.guildId, 'cmd_build_webhooks');
         if (rowWebhook && interaction.channelId !== rowWebhook.canal_id) {
             return await interaction.reply({ content: `❌ This command only works in <#${rowWebhook.canal_id}>.`, ephemeral: true });
         }
@@ -8783,7 +8783,7 @@ client.on('interactionCreate', async interaction => {
                 return await interaction.reply({ content: '❌ To upload an avatar directly, fill in both "channel" and "image".', ephemeral: true });
             }
             await interaction.deferReply({ ephemeral: true });
-            const filaWebhook = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipoSubida]);
+            const filaWebhook = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipoSubida]);
             if (!filaWebhook) return await interaction.editReply({ content: '❌ Webhook not found.' });
 
             if (!(imagenSubida.contentType || '').startsWith('image/')) {
@@ -8833,7 +8833,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'feedback') {
-        const rowFeedback = await obtenerCanalComando(interaction.user.id, 'cmd_feedback');
+        const rowFeedback = await obtenerCanalComando(interaction.guildId, 'cmd_feedback');
         if (rowFeedback && interaction.channelId !== rowFeedback.canal_id) {
             return await interaction.reply({ content: `❌ This command only works in <#${rowFeedback.canal_id}>.`, ephemeral: true });
         }
@@ -8885,7 +8885,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isButton() && interaction.customId.startsWith('webhook_modificar::')) {
         const tipo = interaction.customId.split('::')[1];
-        const fila = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
+        const fila = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
         if (!fila) return await interaction.reply({ content: '❌ Webhook not found.', ephemeral: true });
 
         let nombreActual = '';
@@ -9129,7 +9129,7 @@ client.on('interactionCreate', async interaction => {
             const nuevaAvatarUrl = interaction.fields.getTextInputValue('input_webhook_avatar').trim();
 
             await interaction.deferUpdate();
-            const fila = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
+            const fila = await db.get(`SELECT webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
             if (!fila) return await interaction.editReply({ content: '❌ Webhook not found.', embeds: [], components: [] });
 
             if (!nuevoNombre && !nuevaAvatarUrl) {
@@ -9208,7 +9208,7 @@ client.on('interactionCreate', async interaction => {
                 ];
                 await interaction.deferReply({ ephemeral: true });
                 for (const [tipo, valor] of filas) {
-                    await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, 'local', ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET webhook_url = ?`, [interaction.user.id, tipo, valor, valor]);
+                    await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, 'local', ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET webhook_url = ?`, [interaction.guildId, tipo, valor, valor]);
                 }
 
                 let notaIni = '';
@@ -9651,7 +9651,7 @@ client.on('interactionCreate', async interaction => {
                 new ButtonBuilder().setCustomId(`info_accounts::${fileName}`.slice(0, 100)).setLabel('📋 Info Accounts').setStyle(ButtonStyle.Secondary)
             );
 
-            const canalExtract = await obtenerCanalComando(interaction.user.id, 'cmd_extract_xlm');
+            const canalExtract = await obtenerCanalComando(interaction.guildId, 'cmd_extract_xlm');
             if (canalExtract?.webhook_url) {
                 try {
                     const webhookExtract = new WebhookClient({ url: canalExtract.webhook_url });
@@ -9737,7 +9737,7 @@ client.on('interactionCreate', async interaction => {
             return await interaction.followUp({ content: `❌ Could not find the saved JSON data for \`${fileName}\`.`, ephemeral: true });
         }
 
-        const canalInfoAccounts = await obtenerCanalComando(interaction.user.id, 'info_accounts');
+        const canalInfoAccounts = await obtenerCanalComando(interaction.guildId, 'info_accounts');
         if (!canalInfoAccounts?.webhook_url) {
             return await interaction.followUp({ content: `❌ No channel synced for **Info Accounts**. Use **Sync Channels** first.`, ephemeral: true });
         }
@@ -10188,7 +10188,7 @@ client.on('interactionCreate', async interaction => {
                             new ButtonBuilder().setCustomId(`shinedust_result_info_accounts::${fileName}`.slice(0, 100)).setLabel('📋 Info Accounts').setStyle(ButtonStyle.Secondary)
                         )];
 
-                        const canalShinedust = await obtenerCanalComando(interaction.user.id, 'shinedust');
+                        const canalShinedust = await obtenerCanalComando(interaction.guildId, 'shinedust');
                         if (canalShinedust?.webhook_url) {
                             try {
                                 const webhookShinedust = new WebhookClient({ url: canalShinedust.webhook_url });
@@ -10289,7 +10289,7 @@ client.on('interactionCreate', async interaction => {
         if (['panel_wishlist', 'panel_allcards', 'panel_goldcards', 'panel_extract_xml', 'panel_run_instance'].includes(interaction.customId)) {
             const commandKey = { panel_wishlist: 'card_wishlist', panel_allcards: 'card_all', panel_goldcards: 'card_gold', panel_extract_xml: 'extract_xlm', panel_run_instance: 'run_instance' }[interaction.customId];
             const cfg = COMANDO_CONFIG[commandKey];
-            const row = await obtenerCanalComando(interaction.user.id, cfg.tipo);
+            const row = await obtenerCanalComando(interaction.guildId, cfg.tipo);
 
             if (!row) {
                 return await interaction.reply({ content: `❌ No channel synced for **${cfg.label}**. Use **Sync Channels** first.`, ephemeral: true });
@@ -10722,7 +10722,7 @@ client.on('interactionCreate', async interaction => {
                             return await interaction.followUp({ content: `❌ Could not respond to the pending offer (${detalle}). Check the instance manually.`, ephemeral: true });
                         }
                         const rutaFoto = outputFile.replace(/\.txt$/, '_MainOfferPhoto.png');
-                        await mandarFotoFriendTradeAlCanal(interaction.user.id, rutaFoto, `<@${interaction.user.id}> Responded to the offer on instance **${nombre}**.`);
+                        await mandarFotoFriendTradeAlCanal(interaction.guildId, rutaFoto, `<@${interaction.user.id}> Responded to the offer on instance **${nombre}**.`);
                         await interaction.followUp({
                             content: `✅ Responded to the offer on instance **${nombre}**.\n\nOnce your friend confirms, press **🔄 Finalize Trade**.`,
                             components: [filaFinalize],
@@ -10741,7 +10741,7 @@ client.on('interactionCreate', async interaction => {
                         return await interaction.followUp({ content: `❌ Could not offer the card (${detalle}). Check that your friend has already accepted and is available in "Select a Friend".`, ephemeral: true });
                     }
                     const rutaFoto = outputFile.replace(/\.txt$/, '_OfferPhoto.png');
-                    await mandarFotoFriendTradeAlCanal(interaction.user.id, rutaFoto, `<@${interaction.user.id}> Card offered on instance **${nombre}**.`);
+                    await mandarFotoFriendTradeAlCanal(interaction.guildId, rutaFoto, `<@${interaction.user.id}> Card offered on instance **${nombre}**.`);
                     await interaction.followUp({
                         content: `✅ Card offered on instance **${nombre}**, waiting for your partner's response.\n\nOnce your friend has offered their card, press **🔄 Finalize Trade**.`,
                         components: [filaFinalize],
@@ -10763,9 +10763,9 @@ client.on('interactionCreate', async interaction => {
                         // 3 fotos (2026-08-23, "igualito que Main Trade"): _FriendTradeFinalize.ahk
                         // (copia de _DonorRespondAndFinalize.ahk) guarda las 3 mismas etapas de
                         // evidencia -- antes del swipe (2), y despues del swipe (1, "Got it!").
-                        await mandarFotoFriendTradeAlCanal(interaction.user.id, outputFile.replace(/\.txt$/, '_TradePhoto.png'), `<@${interaction.user.id}> Trade in progress on instance **${nombre}**!`);
-                        await mandarFotoFriendTradeAlCanal(interaction.user.id, outputFile.replace(/\.txt$/, '_SwipePhoto.png'), `Card sent on instance **${nombre}**.`);
-                        await mandarFotoFriendTradeAlCanal(interaction.user.id, outputFile.replace(/\.txt$/, '_SentPhoto.png'), `Swipe registered — card actually sent.`);
+                        await mandarFotoFriendTradeAlCanal(interaction.guildId, outputFile.replace(/\.txt$/, '_TradePhoto.png'), `<@${interaction.user.id}> Trade in progress on instance **${nombre}**!`);
+                        await mandarFotoFriendTradeAlCanal(interaction.guildId, outputFile.replace(/\.txt$/, '_SwipePhoto.png'), `Card sent on instance **${nombre}**.`);
+                        await mandarFotoFriendTradeAlCanal(interaction.guildId, outputFile.replace(/\.txt$/, '_SentPhoto.png'), `Swipe registered — card actually sent.`);
                     }
                     await interaction.followUp({
                         content: ok
@@ -10894,7 +10894,7 @@ client.on('interactionCreate', async interaction => {
                 ? `✅ Aggressive Trade completed: ${resultado.exitosos.length}/${resultado.total} card(s) sent to Main.` + (resultado.fallidos.length ? ` ${resultado.fallidos.length} failed (see errors above in your Trading channel).` : '')
                 : `❌ Aggressive Trade could not start (${resultado.motivo}).`;
             try {
-                const canalRunInstance = await obtenerCanalComando(interaction.user.id, 'cmd_run_instance');
+                const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
                 if (canalRunInstance?.webhook_url) {
                     await axios.post(`${canalRunInstance.webhook_url}?wait=true`, { content: mensajeFinal }, { timeout: 10000 });
                     return await interaction.followUp({ content: '✅ Result sent to your Trading channel.', ephemeral: true });
@@ -11144,7 +11144,7 @@ client.on('interactionCreate', async interaction => {
                 // orden de los campos en el payload, así que combinar content+embed en el
                 // primer mensaje ya da "Texto, Embed"; el XML/JSON va en un segundo mensaje
                 // aparte para que caiga despues.
-                const canalExtract = await obtenerCanalComando(interaction.user.id, 'cmd_extract_xlm');
+                const canalExtract = await obtenerCanalComando(interaction.guildId, 'cmd_extract_xlm');
                 if (canalExtract?.webhook_url) {
                     try {
                         const webhookExtract = new WebhookClient({ url: canalExtract.webhook_url });
@@ -11263,7 +11263,7 @@ client.on('interactionCreate', async interaction => {
                         }
                     }
 
-                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ?`, [interaction.user.id]);
+                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ?`, [interaction.guildId]);
 
                     const mensajeFinal = canalesConWebhook.length > 0
                         ? `✅ **Database reset.**\n🧹 Cleaned up old webhooks from: ${canalesConWebhook.join(', ')}`
@@ -11300,7 +11300,7 @@ client.on('interactionCreate', async interaction => {
                         await channel.delete().catch(console.error);
                     }
                     await categoria.delete().catch(console.error);
-                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ?`, [interaction.user.id]);
+                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ?`, [interaction.guildId]);
 
                     const mensajeFinal = canalesConWebhook.length > 0
                         ? `✅ **Structure deleted successfully.**\n🧹 Cleaned up old webhooks from: ${canalesConWebhook.join(', ')}`
@@ -11341,7 +11341,7 @@ client.on('interactionCreate', async interaction => {
 
             case 'btn_status':
                 await interaction.deferReply({ ephemeral: true });
-                const configs = await db.all(`SELECT tipo, canal_id, webhook_url FROM configs_canales WHERE discord_id = ?`, [interaction.user.id]);
+                const configs = await db.all(`SELECT tipo, canal_id, webhook_url FROM configs_canales WHERE discord_id = ?`, [interaction.guildId]);
                 let s4tStatus = '🔴 Not assigned', hbStatus = '🔴 Not assigned', rutaRaizStatus = '🔴 Not assigned', crearStatus = '🔴 Not assigned';
 
                 if (configs) {
@@ -11387,7 +11387,7 @@ client.on('interactionCreate', async interaction => {
                         // directa -- asi queda un aviso visible para cualquiera que
                         // entre despues a ese canal, no solo para quien chequeo.
                         try {
-                            const canalUpdates = await obtenerCanalComando(interaction.user.id, 'actualizaciones');
+                            const canalUpdates = await obtenerCanalComando(interaction.guildId, 'actualizaciones');
                             if (canalUpdates?.webhook_url) {
                                 await axios.post(`${canalUpdates.webhook_url}?wait=true`, {
                                     content: `<@${interaction.user.id}>`,
@@ -11563,7 +11563,7 @@ client.on('interactionCreate', async interaction => {
                             }
                         }
 
-                        const filaExistente = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
+                        const filaExistente = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
                         if (filaExistente && filaExistente.canal_id === canal.id && filaExistente.webhook_url && filaExistente.webhook_url !== 'N/A' && (await webhookEstaVivo(filaExistente.webhook_url))) {
                             return canal;
                         }
@@ -11588,8 +11588,8 @@ client.on('interactionCreate', async interaction => {
                         }
 
                         const webhook = await canal.createWebhook({ name: nombreDefaultWebhook(tipo), avatar: avatarDefaultWebhook(tipo) });
-                        await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, tipo]);
-                        await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.user.id, tipo, canal.id, webhook.url]);
+                        await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
+                        await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.guildId, tipo, canal.id, webhook.url]);
                         // Si el usuario ya le había puesto nombre/foto propia a este webhook
                         // con /webhook, se la reaplica al nuevo — si no, se queda con el
                         // nombre/foto por defecto (nada que reaplicar).
@@ -11599,7 +11599,7 @@ client.on('interactionCreate', async interaction => {
                         if (commandKeyReal) {
                             await enviarComandoAlCanal(commandKeyReal, interaction.user, { webhook_url: webhook.url, canal_id: canal.id }, false, interaction.guild);
                         } else if (tipo === 'cmd_setup') {
-                            const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.user.id);
+                            const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.guildId);
                             await enviarOEditarInterfaz(interaction.user.id, 'setup', webhook.url, panel, archivosPanel || [], false, interaction.guild);
                         } else {
                             const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
@@ -11639,8 +11639,8 @@ client.on('interactionCreate', async interaction => {
                         const grupo = grupos[i];
                         const categoria = await crearCategoriaSiNoExiste(grupo.categoria);
                         categoriasGestionadas.push(categoria);
-                        await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, grupo.tipoCategoria]);
-                        await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, 'N/A')`, [interaction.user.id, grupo.tipoCategoria, categoria.id]);
+                        await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, grupo.tipoCategoria]);
+                        await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, 'N/A')`, [interaction.guildId, grupo.tipoCategoria, categoria.id]);
 
                         for (const c of grupo.canales) {
                             const canal = await crearCanalSincronizado(categoria, c.tipo, c.name);
@@ -11677,12 +11677,12 @@ client.on('interactionCreate', async interaction => {
                     await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('trading', 'offline')`);
                     exec('pm2 stop trading', { windowsHide: true }, () => {});
                 } else {
-                    if (!(await tieneConfiguracion(interaction.user.id, 's4t'))) return await interaction.followUp({ content: '❌ First configure the S4T Webhook in the panel.', ephemeral: true });
+                    if (!(await tieneConfiguracion(interaction.guildId, 's4t'))) return await interaction.followUp({ content: '❌ First configure the S4T Webhook in the panel.', ephemeral: true });
                     await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('trading', 'online')`);
                     ejecutarPM2Start('trading', 's4t.js');
                 }
                 setTimeout(async () => {
-                    const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.user.id);
+                    const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.guildId);
                     await interaction.editReply({ ...panel, files: (archivosPanel || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename })) });
                 }, 1500);
                 break;
@@ -11694,12 +11694,12 @@ client.on('interactionCreate', async interaction => {
                     await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('heartbeat', 'offline')`);
                     exec('pm2 stop heartbeat');
                 } else {
-                    if (!(await tieneConfiguracion(interaction.user.id, 'heartbeat'))) return await interaction.followUp({ content: '❌ First configure the Heartbeat Webhook in the panel.', ephemeral: true });
+                    if (!(await tieneConfiguracion(interaction.guildId, 'heartbeat'))) return await interaction.followUp({ content: '❌ First configure the Heartbeat Webhook in the panel.', ephemeral: true });
                     await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('heartbeat', 'online')`);
                     exec('pm2 start heartbeat.js --name "heartbeat"');
                 }
                 setTimeout(async () => {
-                    const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.user.id);
+                    const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.guildId);
                     await interaction.editReply({ ...panel, files: (archivosPanel || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename })) });
                 }, 1500);
                 break;
@@ -11708,7 +11708,7 @@ client.on('interactionCreate', async interaction => {
                 await interaction.deferUpdate();
                 const yaEstaOn = await driveHdRegularHabilitado();
                 await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('drive_hd_regular', ?)`, [yaEstaOn ? 'off' : 'on']);
-                const { archivos: archivosPanelDrive, ...panelDrive } = await generarPanelControl(interaction.user.id);
+                const { archivos: archivosPanelDrive, ...panelDrive } = await generarPanelControl(interaction.guildId);
                 await interaction.editReply({ ...panelDrive, files: (archivosPanelDrive || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename })) });
                 break;
             }
@@ -11717,7 +11717,7 @@ client.on('interactionCreate', async interaction => {
                 await interaction.deferUpdate();
                 const yaEstaOnAutoApagado = await autoApagadoSinCuentasHabilitado();
                 await db.run(`INSERT OR REPLACE INTO estados_modulos (nombre, status) VALUES ('auto_apagado_sin_cuentas', ?)`, [yaEstaOnAutoApagado ? 'off' : 'on']);
-                const { archivos: archivosPanelAutoApagado, ...panelAutoApagado } = await generarPanelControl(interaction.user.id);
+                const { archivos: archivosPanelAutoApagado, ...panelAutoApagado } = await generarPanelControl(interaction.guildId);
                 await interaction.editReply({ ...panelAutoApagado, files: (archivosPanelAutoApagado || []).map(a => new AttachmentBuilder(a.ruta, { name: a.filename })) });
                 break;
             }

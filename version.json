@@ -1,7 +1,8 @@
 {
-  "version": "1.5.78",
-  "notesCount": 2,
+  "version": "1.5.79",
+  "notesCount": 1,
   "notes": [
+    "Fixed a real bug affecting servers with more than one Administrator: channel/webhook setup was tracked per-person instead of per-server, so if two admins each ran Sync Channels, one would silently delete and replace the other's webhooks, causing commands to fail with errors like \"Could not send All Cards\" and the Control Panel showing the wrong \"User\". Now shared per-server — IMPORTANT: run Sync Channels once after this update (in /setup) to migrate your existing setup, or commands will show \"No channel synced\" until you do.",
     "New: Wishlist now shows a visual collage with the real artwork and quantities of your cards instead of a plain text list, and lets you pick a card directly from a dropdown instead of navigating through expansions/categories first.",
     "Disabled: Trade, Friend Trade, Main Trade, Aggressive Trade and Gold Trade buttons while we finish a better version of Main Trade.",
     "Fixed a real bug: after 3 failed auto-update tries, the app kept looping the failure popup forever instead of showing it once.",
