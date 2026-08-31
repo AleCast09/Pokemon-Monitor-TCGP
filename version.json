@@ -1,7 +1,8 @@
 {
-  "version": "1.5.80",
+  "version": "1.5.81",
   "notesCount": 1,
   "notes": [
+    "Fixed a real chicken-and-egg bug reported by a real new user: without a token configured yet, the whole program used to shut itself down completely, including the Dashboard/Tutorials page — so a brand-new user had no way to even open the tutorial that explains how to get a token in the first place. Now the Dashboard and Tutorials page start normally with no token configured; only Discord itself stays offline until you save a real token from the Control Panel.",
     "Fixed a real bug affecting any account whose game language isn't English: wishlist matching for S4T alerts compared the on-screen card name (shown in the account's own language) against English reference data, so a real wishlist match (confirmed live: \"Irida\", a Chinese-language account) was never detected and never posted to the wishlist channel. Now matches by rarity + pull position instead of by name, which works regardless of language.",
     "Fixed a real bug affecting servers with more than one Administrator: channel/webhook setup was tracked per-person instead of per-server, so if two admins each ran Sync Channels, one would silently delete and replace the other's webhooks, causing commands to fail with errors like \"Could not send All Cards\" and the Control Panel showing the wrong \"User\". Now shared per-server — IMPORTANT: run Sync Channels once after this update (in /setup) to migrate your existing setup, or commands will show \"No channel synced\" until you do.",
     "New: Wishlist now shows a visual collage with the real artwork and quantities of your cards instead of a plain text list, and lets you pick a card directly from a dropdown instead of navigating through expansions/categories first.",

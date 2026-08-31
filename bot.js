@@ -58,9 +58,17 @@ try {
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID || null;
+// Ya NO se cierra el proceso si falta el token (2026-08-31, bug real encontrado en vivo, huevo
+// y gallina reportado por un usuario real: "como va a configurar su token si el tutorial para
+// eso esta dentro de tutorials"): antes, sin token, TODO el proceso terminaba con
+// process.exit(1) -- ni siquiera el servidor del Dashboard (mas abajo, `iniciarServidorDashboard`,
+// que no depende de Discord para nada) llegaba a levantarse, asi que un usuario nuevo sin token
+// todavia no tenia forma de abrir /tutorials para ver COMO conseguir un token en primer lugar.
+// Ahora sigue de largo sin loguearse a Discord (se salta client.login mas abajo) -- el Dashboard
+// y la pagina de Tutorials quedan disponibles igual, solo los comandos de Discord no responden
+// hasta que se guarde un token real desde el Panel de Control.
 if (!TOKEN) {
-    console.error('❌ DISCORD_BOT_TOKEN is not set. Create a .env file with DISCORD_BOT_TOKEN or set the environment variable.');
-    process.exit(1);
+    console.error('⚠️ DISCORD_BOT_TOKEN is not set yet -- Discord commands will stay offline, but the Dashboard/Tutorials page still starts. Configure your token from the Control Panel to bring Discord online.');
 }
 
 const client = new Client({
@@ -11922,4 +11930,8 @@ client.on('guildCreate', async (guild) => {
     }
 });
 
-client.login(TOKEN);
+// Solo intenta loguearse si de verdad hay un token guardado -- ver comentario completo arriba
+// de "if (!TOKEN)". Sin esto, discord.js tira un error al recibir undefined/'' como token.
+if (TOKEN) {
+    client.login(TOKEN);
+}
