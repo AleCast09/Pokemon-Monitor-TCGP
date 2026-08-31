@@ -1,7 +1,8 @@
 {
-  "version": "1.5.79",
+  "version": "1.5.80",
   "notesCount": 1,
   "notes": [
+    "Fixed a real bug affecting any account whose game language isn't English: wishlist matching for S4T alerts compared the on-screen card name (shown in the account's own language) against English reference data, so a real wishlist match (confirmed live: \"Irida\", a Chinese-language account) was never detected and never posted to the wishlist channel. Now matches by rarity + pull position instead of by name, which works regardless of language.",
     "Fixed a real bug affecting servers with more than one Administrator: channel/webhook setup was tracked per-person instead of per-server, so if two admins each ran Sync Channels, one would silently delete and replace the other's webhooks, causing commands to fail with errors like \"Could not send All Cards\" and the Control Panel showing the wrong \"User\". Now shared per-server — IMPORTANT: run Sync Channels once after this update (in /setup) to migrate your existing setup, or commands will show \"No channel synced\" until you do.",
     "New: Wishlist now shows a visual collage with the real artwork and quantities of your cards instead of a plain text list, and lets you pick a card directly from a dropdown instead of navigating through expansions/categories first.",
     "Disabled: Trade, Friend Trade, Main Trade, Aggressive Trade and Gold Trade buttons while we finish a better version of Main Trade.",

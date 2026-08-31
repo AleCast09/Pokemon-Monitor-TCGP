@@ -1377,15 +1377,26 @@ app.post('/', upload.any(), async (req, res) => {
                 const normalizedRareza = normalizeMatch(carta.rareza);
                 const candidates = cardsByRareza[normalizedRareza] || [];
 
+                // Match por NOMBRE primero (2026-08-31, sigue de respaldo -- funciona gratis en
+                // cuentas en ingles, y no cuesta nada intentarlo), pero el respaldo real ahora
+                // es POSICIONAL dentro del mismo grupo de rareza, no "solo si queda 1 sin usar".
+                // Bug real reportado en vivo -- cuenta en chino: `carta.nombre` viene de la
+                // pantalla del juego, en el idioma de esa cuenta ("Irida" en chino, no en
+                // ingles) -- nunca iba a matchear contra name/englishName/code (todos en
+                // ingles), asi que CUALQUIER carta de una cuenta no-inglesa que no fuera la
+                // unica de su rareza en el pull quedaba con isWishlist=false aunque si
+                // estuviera en la wishlist real. `cartasPull` (los codigos reales, sacados del
+                // JSON de la cuenta -- no de texto en pantalla) y `cartas` (lo mostrado en
+                // pantalla) vienen del MISMO pull, en el MISMO orden -- tomar el primer
+                // candidato sin usar de esa rareza es correcto sin importar el idioma.
                 let matched = candidates.find(c => !c.used && (
                     normalizeMatch(c.item.name) === normalizedNombre ||
                     normalizeMatch(c.item.englishName) === normalizedNombre ||
                     normalizeMatch(c.item.code) === normalizedNombre
                 ));
 
-                        if (!matched) {
-                    const remainingSameRareza = candidates.filter(c => !c.used);
-                    if (remainingSameRareza.length === 1) matched = remainingSameRareza[0];
+                if (!matched) {
+                    matched = candidates.find(c => !c.used);
                 }
 
                 if (!matched) {
