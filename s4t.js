@@ -1216,17 +1216,21 @@ app.post('/', upload.any(), async (req, res) => {
         const payload = req.body.payload_json ? JSON.parse(req.body.payload_json).content : (req.body.content || '');
         const lineas = payload.split('\n').map(l => l.trim());
 
-        const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
-        const rutaWishlistCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_wishlist'`);
-        const configsRaw = await db.all(`SELECT tipo, canal_id, webhook_url FROM configs_canales`);
+        const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master' ORDER BY rowid DESC LIMIT 1`);
+        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas' ORDER BY rowid DESC LIMIT 1`);
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas' ORDER BY rowid DESC LIMIT 1`);
+        const rutaWishlistCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_wishlist' ORDER BY rowid DESC LIMIT 1`);
+        const configsRaw = await db.all(`SELECT tipo, canal_id, webhook_url FROM configs_canales ORDER BY rowid ASC`);
         const configs = {};
         for (const row of configsRaw) {
-            // Prefer rows with a valid webhook over N/A ones
-            if (!configs[row.tipo] || (configs[row.tipo].webhook_url === 'N/A' && row.webhook_url !== 'N/A')) {
-                configs[row.tipo] = row;
-            }
+            // Puede haber filas huerfanas de antes de la migracion a config por
+            // servidor (discord_id viejo por-usuario en vez del guildId actual),
+            // que quedan con webhooks ya borrados. Como s4t.js no tiene contexto
+            // de guild, nos quedamos siempre con la fila MAS RECIENTE por tipo
+            // (rowid mas alto = ultima vez que se configuro), nunca con una vieja
+            // huerfana (bug real 2026-08-31: s4t seguia usando webhooks 404
+            // porque la fila vieja aparecia primero en el SELECT sin ORDER BY).
+            configs[row.tipo] = row;
         }
         console.log('DEBUG: configs cargados con webhook válido:', Object.keys(configs).filter(k => configs[k].webhook_url && configs[k].webhook_url !== 'N/A').join(', '));
 
@@ -1740,16 +1744,24 @@ function limpiarAvisoPuertoSiVuelveAlDefault(nombreServicio) {
 }
 
 const S4T_PORT_BASE = Number(process.env.S4T_PORT) || 3000;
-function iniciarServidorS4T(puerto, intento = 0) {
+function iniciarServidorS4T(puerto, intento = 0, intentosMismoPuerto = 0) {
     const servidor = app.listen(puerto, '127.0.0.1', () => {
         console.log(`🚀 S4T Online (port ${puerto})`);
         if (puerto !== S4T_PORT_BASE) avisarPuertoCambiado('S4T', puerto);
         else limpiarAvisoPuertoSiVuelveAlDefault('S4T');
     });
     servidor.on('error', (err) => {
-        if (err.code === 'EADDRINUSE' && intento < 10) {
+        if (err.code === 'EADDRINUSE' && intentosMismoPuerto < 5) {
+            // El puerto base puede seguir ocupado un instante por el proceso
+            // anterior justo despues de un pm2 restart (toggle On/Off desde
+            // /setup). Reintentar el MISMO puerto unas veces antes de saltar
+            // a otro: los clientes (AHK, dashboard) asumen el puerto fijo y
+            // nunca se enteran si el servidor real quedo en otro numero.
+            console.log(`⚠️ Port ${puerto} is busy, retrying same port (${intentosMismoPuerto + 1}/5)...`);
+            setTimeout(() => iniciarServidorS4T(puerto, intento, intentosMismoPuerto + 1), 1000);
+        } else if (err.code === 'EADDRINUSE' && intento < 10) {
             console.log(`⚠️ Port ${puerto} is busy, trying ${puerto + 1}...`);
-            iniciarServidorS4T(puerto + 1, intento + 1);
+            iniciarServidorS4T(puerto + 1, intento + 1, 0);
         } else {
             console.error(`❌ Could not start S4T: ${err.message}`);
         }

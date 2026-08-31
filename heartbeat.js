@@ -1028,16 +1028,22 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
     // Mismo criterio que s4t.js: todo lo que le manda datos corre en la misma PC.
     // Si el puerto ya está en uso, prueba automáticamente con el siguiente hasta
     // encontrar uno libre, sin necesitar tocar el .env a mano.
-    (function iniciarServidorHeartbeat(puerto, intento = 0) {
+    (function iniciarServidorHeartbeat(puerto, intento = 0, intentosMismoPuerto = 0) {
         const servidor = app.listen(puerto, '127.0.0.1', () => {
             console.log(`🚀 Production Monitor Online on port ${puerto}`);
             if (puerto !== PORT) avisarPuertoCambiado('Heartbeat', puerto);
             else limpiarAvisoPuertoSiVuelveAlDefault('Heartbeat');
         });
         servidor.on('error', (err) => {
-            if (err.code === 'EADDRINUSE' && intento < 10) {
+            if (err.code === 'EADDRINUSE' && intentosMismoPuerto < 5) {
+                // Mismo criterio que s4t.js: reintentar el mismo puerto unas
+                // veces antes de saltar a otro, para cubrir el toggle On/Off
+                // desde /setup (pm2 restart casi inmediato tras el stop).
+                console.log(`⚠️ Port ${puerto} is busy, retrying same port (${intentosMismoPuerto + 1}/5)...`);
+                setTimeout(() => iniciarServidorHeartbeat(puerto, intento, intentosMismoPuerto + 1), 1000);
+            } else if (err.code === 'EADDRINUSE' && intento < 10) {
                 console.log(`⚠️ Port ${puerto} is busy, trying ${puerto + 1}...`);
-                iniciarServidorHeartbeat(puerto + 1, intento + 1);
+                iniciarServidorHeartbeat(puerto + 1, intento + 1, 0);
             } else {
                 console.error(`❌ Could not start heartbeat: ${err.message}`);
             }
