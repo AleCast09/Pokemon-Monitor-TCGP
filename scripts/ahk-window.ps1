@@ -63,6 +63,21 @@ public class AhkWin {
         int pid; GetWindowThreadProcessId(hWnd, out pid); return pid;
     }
 
+    [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+    public const uint SMTO_ABORTIFHUNG = 0x0002;
+
+    // Mismo mecanismo que usa el Explorador de Windows para detectar "No responde" -- un
+    // WM_NULL con SendMessageTimeout/SMTO_ABORTIFHUNG. Una ventana con EnumWindows la sigue
+    // encontrando aunque este completamente colgada (el proceso sigue vivo, solo no procesa
+    // mensajes) -- confirmado en vivo 2026-08-31: "check" reportaba FOUND para un AHK realmente
+    // colgado ("AutoHotkey Unicode 64-bit no responde", visible con el cursor de carga de
+    // Windows), asi que la recuperacion automatica nunca lo detectaba ni lo forzaba a cerrar.
+    public static bool IsHung(IntPtr hWnd) {
+        IntPtr result;
+        IntPtr res = SendMessageTimeout(hWnd, 0x0000, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 1000, out result);
+        return res == IntPtr.Zero;
+    }
+
     [DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string lpszWindow);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
     public const uint BM_CLICK = 0x00F5;
@@ -127,6 +142,10 @@ if ($Action -eq "check") {
     if ($hwndPrincipal -eq [IntPtr]::Zero) {
         Write-Output "NOT_FOUND"
         exit 1
+    }
+    if ([AhkWin]::IsHung($hwndPrincipal)) {
+        Write-Output "HUNG:$([AhkWin]::Pid($hwndPrincipal))"
+        exit 2
     }
     Write-Output "FOUND:$([AhkWin]::Pid($hwndPrincipal))"
     exit 0

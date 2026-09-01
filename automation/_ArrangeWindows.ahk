@@ -27,6 +27,7 @@ SetBatchLines, -1
 scaleParam := 283
 titleHeight := 40
 rowHeight := titleHeight + 492
+pasoFila := rowHeight
 columnas := 2
 borderWidth := 3
 
@@ -34,8 +35,14 @@ borderWidth := 3
 ; chequeo unico de WinExist se la perdia seguido porque este script se dispara en paralelo
 ; justo cuando la instancia recien esta prendiendo, antes de que la ventana termine de
 ; aparecer -- se la saltaba para siempre sin reintentar). Hasta 20s de margen por ventana.
+;
+; rowHeight (tamaño REAL de la ventana, fijo) vs pasoFila (cuanto se corre cada fila en Y,
+; puede ser mas chico que rowHeight si hay RowGap negativo -- bug real reportado en vivo
+; 2026-08-31: al meter RowGap directo en rowHeight, se achicaba la ventana misma en vez de
+; solo acercar las filas entre si, dejando la instancia con un tamaño mas chico que las demas
+; y "desconectada" visualmente del panel de AHK, que sigue esperando su tamaño de siempre).
 esperarYAcomodar(titulo, idx) {
-    global scaleParam, rowHeight, columnas, borderWidth
+    global scaleParam, rowHeight, pasoFila, columnas, borderWidth
     winTitle := titulo . " ahk_class Qt5156QWindowIcon"
     SetTitleMatchMode, 3
     inicio := A_TickCount
@@ -44,7 +51,7 @@ esperarYAcomodar(titulo, idx) {
             fila := Floor(idx / columnas)
             col := Mod(idx, columnas)
             x := col * (scaleParam - borderWidth * 2)
-            y := fila * rowHeight
+            y := fila * pasoFila
             WinMove, %winTitle%,, %x%, %y%, %scaleParam%, %rowHeight%
             return true
         }
@@ -54,17 +61,52 @@ esperarYAcomodar(titulo, idx) {
     }
 }
 
-if (A_Args.Length() = 1 && A_Args[1] is integer) {
+if (A_Args.Length() >= 1 && A_Args[1] is integer) {
     ; Reacomodo de una sola instancia a su propio slot -- detecta si "Main" esta en la
     ; grilla (offset +1) o no (offset 0), ver comentario de arriba.
-    SetTitleMatchMode, 3
-    tieneMain := WinExist("Main ahk_class Qt5156QWindowIcon")
+    ;
+    ; Argumentos 2 y 3 opcionales (agregado 2026-08-31, a pedido explicito del usuario):
+    ; columnas reales y RowGap, sacados de Settings.ini de Kevin ([General] Columns= y
+    ; [ToolsAndSystem] RowGap=) por heartbeat.js -- antes "columnas" estaba fijo en 2,
+    ; asi que cualquiera con mas de 2 columnas configuradas (bug real reportado en vivo,
+    ; confirmado: Columns=5) quedaba con instancias mal ubicadas al recuperarse solas.
+    if (A_Args.Length() >= 2 && A_Args[2] is integer && A_Args[2] > 0)
+        columnas := A_Args[2]
+    if (A_Args.Length() >= 3 && A_Args[3] is integer)
+        pasoFila := rowHeight + A_Args[3]
+    ; Argumento 4 opcional (2026-08-31, a pedido explicito del usuario, bug real reportado en
+    ; vivo): "1"/"0" explicito de si Main ocupa el slot 0, sacado de runMain= en Settings.ini
+    ; (la fuente de verdad real del modo de operacion) en vez de adivinar mirando si una
+    ; ventana "Main" EXISTE en pantalla en este instante -- esa deteccion fallaba cuando el
+    ; script/hack de Main ya estaba corriendo pero su instancia real todavia no habia
+    ; arrancado, o cuando el estado de esa ventana cambiaba entre una llamada y la siguiente,
+    ; causando que dos instancias distintas calcularan el mismo offset y chocaran en el mismo
+    ; lugar. Sin este argumento (llamadas viejas, o Settings.ini sin ese campo), cae al
+    ; chequeo de ventana de siempre.
+    if (A_Args.Length() >= 4) {
+        tieneMain := (A_Args[4] = "1")
+    } else {
+        SetTitleMatchMode, 3
+        tieneMain := WinExist("Main ahk_class Qt5156QWindowIcon")
+    }
     offset := tieneMain ? 1 : 0
     esperarYAcomodar(A_Args[1], (A_Args[1] - 1) + offset)
     ExitApp, 0
 }
 
-Loop, % A_Args.Length() {
+; Columnas/RowGap opcionales al FINAL de la lista de titulos (agregado 2026-08-31, uso
+; puntual: reacomodar TODAS las ventanas de una sola pasada con idx fijo 0,1,2... en vez de
+; llamar una por una en modo single-instance -- ese modo recalcula "¿existe Main ahora?" en
+; CADA llamada por separado, y si el estado de esa ventana puntual cambia entre una llamada y
+; la siguiente [ej. minimizada un instante], dos instancias distintas pueden terminar
+; calculando el MISMO offset y choncando en el mismo slot -- bug real visto en vivo).
+cantidadTitulos := A_Args.Length()
+if (cantidadTitulos >= 3 && A_Args[cantidadTitulos] is integer && A_Args[cantidadTitulos - 1] is integer) {
+    pasoFila := rowHeight + A_Args[cantidadTitulos]
+    columnas := A_Args[cantidadTitulos - 1]
+    cantidadTitulos -= 2
+}
+Loop, % cantidadTitulos {
     esperarYAcomodar(A_Args[A_Index], A_Index - 1)
     Sleep, 100
 }

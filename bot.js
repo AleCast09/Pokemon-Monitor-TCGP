@@ -930,25 +930,41 @@ function construirEmbedCategoriasDeExpansion(categorias, mapaCategorias, totalCa
     return payload;
 }
 
-function construirEmbedResumenExpansiones(cartas, opciones = {}) {
+async function construirEmbedResumenExpansiones(cartas, opciones = {}) {
     const prefijo = opciones.prefijo || 'allcards';
     const categoriaFiltro = opciones.categoriaFiltro || null;
+    const grupoFiltro = opciones.grupoFiltro || null;
     const verTodas = !!opciones.verTodas;
 
     // hayReleases: si hay 2+ releases distintos, siempre hay a donde volver
     // ("View all expansions" también necesita su botón de vuelta, no solo el
     // filtro por release puntual -- a pedido explicito del usuario).
-    const hayReleases = Object.keys(categoriasDeExpansiones(cartas)).length > 1;
+    const mapaCategoriasCompleto = categoriasDeExpansiones(cartas);
+    const categoriasCompletas = Object.keys(mapaCategoriasCompleto);
+    const hayReleases = categoriasCompletas.length > 1;
 
-    if (!categoriaFiltro && !verTodas && hayReleases) {
-        const mapaCategorias = categoriasDeExpansiones(cartas);
-        const categorias = Object.keys(mapaCategorias).sort((a, b) => a.localeCompare(b));
-        return construirEmbedCategoriasDeExpansion(categorias, mapaCategorias, cartas.length, { prefijo });
+    // Paso nuevo "Which group do you want to browse?" (2026-08-31, a pedido explicito del
+    // usuario) -- ver construirEmbedGruposSerie. Solo si hay 2+ grupos reales (Serie A/B)
+    // entre los releases, y todavia no se eligio ni grupo, ni release, ni "ver todas".
+    const gruposDisponibles = [...new Set(categoriasCompletas.map(grupoDeRelease).filter(Boolean))];
+    if (!categoriaFiltro && !grupoFiltro && !verTodas && gruposDisponibles.length > 1) {
+        return await construirEmbedGruposSerie(gruposDisponibles, mapaCategoriasCompleto, cartas.length, { prefijo });
+    }
+
+    // Una vez elegido un grupo, ya no se muestra el picker de release (B1/B2/B3/B4/Promo-B)
+    // -- salta directo a la lista plana de expansiones de TODO el grupo (2026-08-31, a pedido
+    // explicito del usuario: "una vez dentro del grupo ya no nos salga esto, sino de frente
+    // el embed de las expansiones"). El picker de release solo sigue existiendo para cuando
+    // hay releases pero NINGUN grupo definido (catalogos sin Serie A/B configurada).
+    if (!categoriaFiltro && !grupoFiltro && !verTodas && hayReleases) {
+        return construirEmbedCategoriasDeExpansion(categoriasCompletas.sort((a, b) => a.localeCompare(b)), mapaCategoriasCompleto, cartas.length, { prefijo });
     }
 
     const cartasFiltradas = categoriaFiltro
         ? cartas.filter(c => categoriaBaseExpansionId(c.expansionId) === categoriaFiltro)
-        : cartas;
+        : grupoFiltro
+            ? cartas.filter(c => grupoDeRelease(categoriaBaseExpansionId(c.expansionId)) === grupoFiltro)
+            : cartas;
 
     const conteo = {};
     for (const c of cartasFiltradas) conteo[c.expansion] = (conteo[c.expansion] || 0) + 1;
@@ -957,7 +973,7 @@ function construirEmbedResumenExpansiones(cartas, opciones = {}) {
     const lineas = expansiones.map((exp, i) => `${i + 1}. **${exp}** — ${conteo[exp]} cards`);
 
     const embed = new EmbedBuilder()
-        .setTitle(categoriaFiltro ? `📋 Expansions — ${categoriaFiltro}` : '📋 All Expansions')
+        .setTitle(categoriaFiltro ? `📋 Expansions — ${categoriaFiltro}` : grupoFiltro ? `📋 Expansions — Group ${grupoFiltro}` : '📋 All Expansions')
         .setDescription((lineas.join('\n') || 'No expansions found.') + '\n\n🔎 **Select an expansion below:**')
         .setColor(0x3498DB)
         .setFooter({ text: `${expansiones.length} expansions • ${cartasFiltradas.length} total cards` });
@@ -970,9 +986,9 @@ function construirEmbedResumenExpansiones(cartas, opciones = {}) {
             .addOptions(expansiones.slice(0, 25).map(exp => ({ label: exp.slice(0, 100), value: exp })));
         componentes.push(new ActionRowBuilder().addComponents(menu));
     }
-    if (categoriaFiltro || (verTodas && hayReleases)) {
+    if (categoriaFiltro || grupoFiltro || (verTodas && hayReleases)) {
         componentes.push(new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`${prefijo}_grupo_expansion_volver`).setLabel('🔙 Back to releases').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`${prefijo}_grupo_expansion_volver`).setLabel(grupoFiltro && gruposDisponibles.length > 1 ? '🔙 Back to groups' : '🔙 Back to releases').setStyle(ButtonStyle.Secondary)
         ));
     }
 
@@ -1139,10 +1155,145 @@ const ORDEN_RAREZA = [
     '1-star-shiny', '2-star-shiny', 'crown-rare'
 ];
 
+// Cache en memoria de los iconos de rareza ya leidos de disco (son solo 4 archivos fijos,
+// reusados en cada collage -- no tiene sentido releerlos del disco en cada carta/expansion).
+const cacheIconosRarezaBuffer = {};
+async function obtenerIconoRarezaBuffer(nombreEmoji, tamano) {
+    const clave = `${nombreEmoji}_${tamano}`;
+    if (cacheIconosRarezaBuffer[clave] !== undefined) return cacheIconosRarezaBuffer[clave];
+    try {
+        const relativa = FUENTES_EMOJIS[nombreEmoji];
+        const rutaAbsoluta = relativa ? path.join(__dirname, 'assets', relativa) : null;
+        if (!rutaAbsoluta || !fs.existsSync(rutaAbsoluta)) {
+            cacheIconosRarezaBuffer[clave] = null;
+            return null;
+        }
+        // Bug real reportado en vivo 2026-08-31: los iconos de rareza no son cuadrados (ej.
+        // 36x45) -- sharp rellena el sobrante de "contain" con negro OPACO por defecto en vez
+        // de transparente, dejando un borde/caja negra visible alrededor del icono sobre el
+        // fondo oscuro de la celda. Fondo transparente explicito.
+        const buffer = await sharp(rutaAbsoluta)
+            .resize(tamano, tamano, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+            .png()
+            .toBuffer();
+        cacheIconosRarezaBuffer[clave] = buffer;
+        return buffer;
+    } catch (e) {
+        cacheIconosRarezaBuffer[clave] = null;
+        return null;
+    }
+}
+
+// Collage de la grilla de rarezas de una expansion (2026-08-31, a pedido explicito del
+// usuario: "quiero que se vea mas limpio", mostrando un mockup de un dashboard con cajas
+// redondeadas icono+titulo+numero) -- Discord no permite ese diseño con componentes nativos
+// (ni fields, que el usuario probo y prefirio descartar), asi que se genera como imagen igual
+// que los collages de cartas, reusando los mismos iconos de rareza que ya existen en disco
+// (ver FUENTES_EMOJIS en guild-emojis.js) en vez de depender de que el emoji custom ya este
+// subido a esta aplicacion de bot en particular.
+// Subtipos de Trainer (Item/Supporter/Pokemon Tool/Stadium) considerados "elementos" validos
+// para mostrar dentro de una celda de rareza (2026-08-31, a pedido explicito del usuario: "que
+// ponga los nombres que hay, pero solo de los elementos [trainer], no los elementos como
+// planta, fuego etc eso no porque es innecesario") -- los tipos elementales (Fire/Water/etc)
+// quedan afuera a proposito, serian ruido dentro de una celda ya cargada de info.
+const SUBTIPOS_TRAINER_VALIDOS = ['Supporter', 'Item', 'Pokémon Tool', 'Stadium'];
+
+async function generarCollageRarezas(categorias, conteo, tipoPorCategoria, subtiposPorCategoria = {}, elementosPorCategoria = {}) {
+    if (!categorias?.length) return null;
+    // Layout de 2 columnas dentro de la celda (2026-08-31, corregido a pedido explicito del
+    // usuario con foto de referencia exacta): columna izquierda = titulo (solo con el
+    // distintivo, sin iconos de rareza repetidos) + fila de tipos elementales + texto de
+    // subtipos Trainer + fila de iconos de esos subtipos; columna derecha = iconos de rareza
+    // (estrellas/diamantes) arriba, conteo de cartas debajo.
+    const CELL_W = 300, CELL_H = 140, GAP = 12, PADDING = 16, COLS = 2, ICONO = 20, ICONO_ELEM = 20, ICONO_SUB = 24;
+    const COL_DERECHA_X = 210;
+
+    const celdasBuffers = [];
+    for (const cat of categorias) {
+        const tipo = tipoPorCategoria[cat];
+        const config = tipo ? RAREZA_ICONOS_CARTAS[tipo] : null;
+        const etiqueta = config ? (config.distintivo ? `${config.distintivo} ${config.etiqueta}` : config.etiqueta) : textoSinEmoji(cat);
+        const cantidadCartas = conteo[cat] || 0;
+        const maxIconos = config ? Math.min(config.cantidad, 4) : 0;
+        const subtipos = [...(subtiposPorCategoria[cat] || [])].sort();
+        const textoSubtipos = subtipos.join(', ');
+        const elementos = [...(elementosPorCategoria[cat] || [])].sort().slice(0, 8);
+
+        const fondoSvg = Buffer.from(
+            `<svg width="${CELL_W}" height="${CELL_H}">` +
+            `<rect x="0" y="0" width="${CELL_W}" height="${CELL_H}" rx="14" ry="14" fill="#2a2a38" stroke="#43435a" stroke-width="1.5"/>` +
+            `<text x="18" y="30" font-size="15" font-family="Arial, sans-serif" font-weight="bold" fill="#ffffff">${etiqueta}</text>` +
+            `<text x="${CELL_W - 18}" y="${CELL_H - 14}" font-size="14" font-family="Arial, sans-serif" fill="#F0A93A" text-anchor="end">${cantidadCartas} cards</text>` +
+            (textoSubtipos ? `<text x="18" y="94" font-size="12" font-family="Arial, sans-serif" fill="#9a9ab0">${textoSubtipos}</text>` : '') +
+            `</svg>`
+        );
+
+        const composiciones = [];
+        // Columna derecha: iconos de rareza arriba, conteo (ya en el SVG) debajo.
+        if (config) {
+            const iconoBuf = await obtenerIconoRarezaBuffer(config.emoji, ICONO);
+            if (iconoBuf) {
+                for (let i = 0; i < maxIconos; i++) {
+                    composiciones.push({ input: iconoBuf, top: 14, left: COL_DERECHA_X + i * (ICONO + 4) });
+                }
+            }
+        }
+        // Columna izquierda: fila de tipos elementales presentes en esta rareza.
+        for (let i = 0; i < elementos.length; i++) {
+            const claveEmoji = emojiKeyDesdeElemento(elementos[i]);
+            if (!claveEmoji) continue;
+            const iconoElemBuf = await obtenerIconoRarezaBuffer(claveEmoji, ICONO_ELEM);
+            if (iconoElemBuf) composiciones.push({ input: iconoElemBuf, top: 44, left: 18 + i * (ICONO_ELEM + 4) });
+        }
+        // Fila de iconos de los subtipos Trainer, debajo del texto con sus nombres.
+        for (let i = 0; i < subtipos.length; i++) {
+            const claveEmoji = emojiKeyDesdeElemento(subtipos[i]);
+            if (!claveEmoji) continue;
+            const iconoSubBuf = await obtenerIconoRarezaBuffer(claveEmoji, ICONO_SUB);
+            if (iconoSubBuf) composiciones.push({ input: iconoSubBuf, top: 104, left: 18 + i * (ICONO_SUB + 6) });
+        }
+
+        try {
+            const celda = composiciones.length
+                ? await sharp(fondoSvg).composite(composiciones).png().toBuffer()
+                : await sharp(fondoSvg).png().toBuffer();
+            celdasBuffers.push(celda);
+        } catch (e) { /* si una celda falla, se salta -- no debe romper el collage entero */ }
+    }
+    if (!celdasBuffers.length) return null;
+
+    const filas = Math.ceil(celdasBuffers.length / COLS);
+    const anchoTotal = PADDING * 2 + COLS * CELL_W + (COLS - 1) * GAP;
+    const altoTotal = PADDING * 2 + filas * CELL_H + (filas - 1) * GAP;
+    const celdasPosicionadas = celdasBuffers.map((buf, indice) => {
+        const row = Math.floor(indice / COLS);
+        const inicioFila = row * COLS;
+        const itemsEnFila = Math.min(COLS, celdasBuffers.length - inicioFila);
+        const colEnFila = indice - inicioFila;
+        const anchoFila = itemsEnFila * CELL_W + (itemsEnFila - 1) * GAP;
+        const offsetCentrado = Math.round((anchoTotal - PADDING * 2 - anchoFila) / 2);
+        return {
+            input: buf,
+            top: PADDING + row * (CELL_H + GAP),
+            left: PADDING + offsetCentrado + colEnFila * (CELL_W + GAP)
+        };
+    });
+
+    try {
+        return await sharp({ create: { width: anchoTotal, height: altoTotal, channels: 4, background: { r: 30, g: 30, b: 36, alpha: 1 } } })
+            .composite(celdasPosicionadas)
+            .png()
+            .toBuffer();
+    } catch (e) {
+        console.error('DEBUG: error armando el collage de rarezas:', e?.message || e);
+        return null;
+    }
+}
+
 // Paso intermedio entre "elegir expansión" y "elegir carta": agrupa las cartas
 // de esa expansión por categoría (rareza) para no tener que scrollear una
 // lista enorme de entrada — a pedido del usuario.
-function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) {
+async function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
     const contexto = opciones.contexto || 'your wishlist';
     const mapaEmojis = opciones.mapaEmojis || {};
@@ -1150,10 +1301,20 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
 
     const conteo = {};
     const tipoPorCategoria = {};
+    const subtiposPorCategoria = {};
+    const elementosPorCategoria = {};
     for (const c of filtradas) {
         conteo[c.categoria] = (conteo[c.categoria] || 0) + 1;
         if (!tipoPorCategoria[c.categoria]) {
             tipoPorCategoria[c.categoria] = c.tipoRareza;
+        }
+        if (SUBTIPOS_TRAINER_VALIDOS.includes(c.elemento)) {
+            if (!subtiposPorCategoria[c.categoria]) subtiposPorCategoria[c.categoria] = new Set();
+            subtiposPorCategoria[c.categoria].add(c.elemento);
+        }
+        if (ELEMENTOS_TIPO_POKEMON.includes(c.elemento)) {
+            if (!elementosPorCategoria[c.categoria]) elementosPorCategoria[c.categoria] = new Set();
+            elementosPorCategoria[c.categoria].add(c.elemento);
         }
     }
     const ordenDe = (cat) => {
@@ -1162,16 +1323,18 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
     };
     const categorias = Object.keys(conteo).sort((a, b) => ordenDe(a) - ordenDe(b));
 
-    const lineas = categorias.map(cat => {
-        const emojiTexto = formatearCategoriaConIcono(tipoPorCategoria[cat], mapaEmojis) || textoSinEmoji(cat);
-        return `${emojiTexto} — ${conteo[cat]} cards`;
-    });
+    // Collage con la grilla de rarezas (2026-08-31, a pedido explicito del usuario, ver
+    // generarCollageRarezas) en vez del bloque de texto de siempre -- se probo primero con
+    // fields nativos de Discord, pero el usuario prefirio la imagen, mas parecida a su
+    // mockup de referencia (cajas redondeadas con icono+titulo+numero).
+    const collageBuffer = await generarCollageRarezas(categorias, conteo, tipoPorCategoria, subtiposPorCategoria, elementosPorCategoria);
 
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${expansion}`)
-        .setDescription((lineas.join('\n') || 'No cards found.') + `\n\n🔎 **Select a category** \n(${filtradas.length} cards in ${contexto}):`)
+        .setDescription((categorias.length ? '' : 'No cards found.\n\n') + `🔎 **Select a category** \n(${filtradas.length} cards in ${contexto}):`)
         .setColor(0xE91E63)
         .setFooter({ text: `${categorias.length} category(s)` });
+    if (collageBuffer) embed.setImage('attachment://rarezas.png');
 
     const componentes = [];
     if (categorias.length) {
@@ -1194,6 +1357,8 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
     ));
 
     const payload = { embeds: [embed], components: componentes };
+    const archivos = [];
+    if (collageBuffer) archivos.push(new AttachmentBuilder(collageBuffer, { name: 'rarezas.png' }));
     const rutaLogo = buscarLogoExpansionBot(expansion);
     if (rutaLogo) {
         // Nombre de archivo fijo sin espacios — Discord rechaza la URL
@@ -1201,10 +1366,10 @@ function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones = {}) 
         // trae espacios sin codificar.
         const extension = path.extname(rutaLogo) || '.png';
         embed.setThumbnail(`attachment://logo${extension}`);
-        payload.files = [new AttachmentBuilder(rutaLogo, { name: `logo${extension}` })];
-    } else {
-        payload.attachments = [];
+        archivos.push(new AttachmentBuilder(rutaLogo, { name: `logo${extension}` }));
     }
+    if (archivos.length) payload.files = archivos;
+    else payload.attachments = [];
     return payload;
 }
 
@@ -1222,7 +1387,74 @@ const ELEMENTO_SIN_FILTRO = '_';
 // de categorias comun, sin ningun aviso) -- usado cuando se filtra por expansion+elemento
 // a lo largo de TODAS las categorias de esa expansion, no una sola.
 const CATEGORIA_SIN_FILTRO = '_';
-function construirEmbedElementosPorCategoria(cartas, expansion, categoria, opciones = {}) {
+
+// Collage de la grilla de elemento/tipo dentro de una rareza puntual (2026-08-31, a pedido
+// explicito del usuario: el diseño de grilla con cajas redondeadas -- antes probado como
+// embed separado en la pantalla de categorias, descartado ahi -- en realidad iba en ESTA
+// pantalla, "Select an element/type"). Mismo estilo que generarCollageRarezas, un icono por
+// elemento (sin repetir), reusando los iconos de tipo/trainer ya existentes en disco via
+// emojiKeyDesdeElemento.
+async function generarCollageElementos(conteo) {
+    const elementos = Object.keys(conteo).sort((a, b) => a.localeCompare(b));
+    if (!elementos.length) return null;
+    const CELL_W = 300, CELL_H = 80, GAP = 12, PADDING = 16, COLS = 2, ICONO = 24;
+
+    const celdasBuffers = [];
+    for (const el of elementos) {
+        const cantidadCartas = conteo[el] || 0;
+        const fondoSvg = Buffer.from(
+            `<svg width="${CELL_W}" height="${CELL_H}">` +
+            `<rect x="0" y="0" width="${CELL_W}" height="${CELL_H}" rx="14" ry="14" fill="#2a2a38" stroke="#43435a" stroke-width="1.5"/>` +
+            `<text x="18" y="${CELL_H - 18}" font-size="15" font-family="Arial, sans-serif" font-weight="bold" fill="#ffffff">${el}</text>` +
+            `<text x="${CELL_W - 18}" y="${CELL_H - 18}" font-size="14" font-family="Arial, sans-serif" fill="#F0A93A" text-anchor="end">${cantidadCartas} cards</text>` +
+            `</svg>`
+        );
+
+        const composiciones = [];
+        const claveEmoji = emojiKeyDesdeElemento(el);
+        if (claveEmoji) {
+            const iconoBuf = await obtenerIconoRarezaBuffer(claveEmoji, ICONO);
+            if (iconoBuf) composiciones.push({ input: iconoBuf, top: 12, left: 18 });
+        }
+
+        try {
+            const celda = composiciones.length
+                ? await sharp(fondoSvg).composite(composiciones).png().toBuffer()
+                : await sharp(fondoSvg).png().toBuffer();
+            celdasBuffers.push(celda);
+        } catch (e) { /* si una celda falla, se salta -- no debe romper el collage entero */ }
+    }
+    if (!celdasBuffers.length) return null;
+
+    const filas = Math.ceil(celdasBuffers.length / COLS);
+    const anchoTotal = PADDING * 2 + COLS * CELL_W + (COLS - 1) * GAP;
+    const altoTotal = PADDING * 2 + filas * CELL_H + (filas - 1) * GAP;
+    const celdasPosicionadas = celdasBuffers.map((buf, indice) => {
+        const row = Math.floor(indice / COLS);
+        const inicioFila = row * COLS;
+        const itemsEnFila = Math.min(COLS, celdasBuffers.length - inicioFila);
+        const colEnFila = indice - inicioFila;
+        const anchoFila = itemsEnFila * CELL_W + (itemsEnFila - 1) * GAP;
+        const offsetCentrado = Math.round((anchoTotal - PADDING * 2 - anchoFila) / 2);
+        return {
+            input: buf,
+            top: PADDING + row * (CELL_H + GAP),
+            left: PADDING + offsetCentrado + colEnFila * (CELL_W + GAP)
+        };
+    });
+
+    try {
+        return await sharp({ create: { width: anchoTotal, height: altoTotal, channels: 4, background: { r: 30, g: 30, b: 36, alpha: 1 } } })
+            .composite(celdasPosicionadas)
+            .png()
+            .toBuffer();
+    } catch (e) {
+        console.error('DEBUG: error armando el collage de elementos:', e?.message || e);
+        return null;
+    }
+}
+
+async function construirEmbedElementosPorCategoria(cartas, expansion, categoria, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
     const contexto = opciones.contexto || 'your wishlist';
     const mapaEmojis = opciones.mapaEmojis || {};
@@ -1235,13 +1467,14 @@ function construirEmbedElementosPorCategoria(cartas, expansion, categoria, opcio
     }
     const elementos = Object.keys(conteo).sort((a, b) => a.localeCompare(b));
     const categoriaConEmoji = (filtradas[0] && formatearCategoriaConIcono(filtradas[0].tipoRareza, mapaEmojis)) || textoSinEmoji(categoria);
-    const lineas = elementos.map(el => `${el} — ${conteo[el]} cards`);
+    const collageBuffer = await generarCollageElementos(conteo);
 
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${expansion}`)
-        .setDescription(`${categoriaConEmoji}\n\n${(lineas.join('\n') || 'No cards found.')}\n\n🔎 **Select an element/type** \n(${filtradas.length} cards in ${contexto}):`)
+        .setDescription(`${categoriaConEmoji}\n\n${elementos.length ? '' : 'No cards found.\n\n'}🔎 **Select an element/type** \n(${filtradas.length} cards in ${contexto}):`)
         .setColor(0xE91E63)
         .setFooter({ text: `${elementos.length} option(s)` });
+    if (collageBuffer) embed.setImage('attachment://elementos.png');
 
     const componentes = [];
     if (elementos.length) {
@@ -1269,14 +1502,16 @@ function construirEmbedElementosPorCategoria(cartas, expansion, categoria, opcio
     ));
 
     const payload = { embeds: [embed], components: componentes };
+    const archivos = [];
+    if (collageBuffer) archivos.push(new AttachmentBuilder(collageBuffer, { name: 'elementos.png' }));
     const rutaLogo = buscarLogoExpansionBot(expansion);
     if (rutaLogo) {
         const extension = path.extname(rutaLogo) || '.png';
         embed.setThumbnail(`attachment://logo${extension}`);
-        payload.files = [new AttachmentBuilder(rutaLogo, { name: `logo${extension}` })];
-    } else {
-        payload.attachments = [];
+        archivos.push(new AttachmentBuilder(rutaLogo, { name: `logo${extension}` }));
     }
+    if (archivos.length) payload.files = archivos;
+    else payload.attachments = [];
     return payload;
 }
 
@@ -2264,7 +2499,7 @@ const RAREZA_ICONOS_CARTAS = {
     '2-star-trainer': { emoji: 'rareza_estrella', cantidad: 2, etiqueta: 'Trainer', pipe: true },
     '2-star-rainbow': { emoji: 'rareza_estrella', cantidad: 2, etiqueta: 'Rainbow', pipe: true, distintivo: '🌈' },
     '2-star-full-art': { emoji: 'rareza_estrella', cantidad: 2, etiqueta: 'Full Art', pipe: true, distintivo: '🎨' },
-    '2-star-shiny': { emoji: 'rareza_brillante', cantidad: 2, etiqueta: 'Shiny', pipe: true },
+    '2-star-shiny': { emoji: 'rareza_brillante', cantidad: 2, etiqueta: '2 Star Shiny', pipe: true },
     'crown-rare': { emoji: 'rareza_corona', cantidad: 1, etiqueta: 'Crown', pipe: false },
     'immersive': { emoji: 'rareza_estrella', cantidad: 3, etiqueta: 'Immersive', pipe: true, distintivo: '🌌' }
 };
@@ -2654,6 +2889,111 @@ async function asegurarInstanciaApagada(index, timeoutMs = 30000) {
     return false;
 }
 
+// Reabre la app de Pokemon TCGP por ADB directo (2026-08-31, a pedido explicito del usuario,
+// mismo mecanismo/motivo que reabrirAppPtcgpHb en heartbeat.js -- duplicado a proposito, ver
+// nota en rutaMuMuManagerHb ahi). Usado por el boton "🔧 Restart Instance" del aviso de
+// heartbeat cuando la auto-recuperacion fallo: asegurarInstanciaEncendida deja Android
+// arrancado, pero el JUEGO puede seguir sin abrirse solo.
+function reabrirAppPtcgp(index) {
+    const adbExe = rutaAdbExe();
+    if (!adbExe) return false;
+    const puerto = obtenerPuertoAdbInstancia(index);
+    if (!puerto) return false;
+    const device = `127.0.0.1:${puerto}`;
+    if (!ejecutarAdbComando(adbExe, ['connect', device], 10000)) return false;
+    return ejecutarAdbComando(adbExe, ['-s', device, 'shell', 'monkey', '-p', 'jp.pokemon.pokemontcgp', '-c', 'android.intent.category.LAUNCHER', '1'], 10000);
+}
+
+// Misma lectura que leerGrillaDesdeSettingsIniHb en heartbeat.js (Columns=/RowGap= del
+// Settings.ini de Kevin) pero con contexto de guild real, ya que bot.js SI tiene
+// interaction.guildId disponible aca (heartbeat.js no).
+async function obtenerRutaRaiz(guildId) {
+    try {
+        const rutaRaizConfig = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_raiz' AND discord_id = ? AND webhook_url NOT IN ('N/A', 'local') ORDER BY rowid DESC LIMIT 1`, [guildId]);
+        return rutaRaizConfig?.webhook_url || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function leerGrillaDesdeSettingsIni(guildId) {
+    try {
+        const rutaRaiz = await obtenerRutaRaiz(guildId);
+        if (!rutaRaiz) return {};
+        const rutaIni = path.join(rutaRaiz, 'Settings.ini');
+        if (!fs.existsSync(rutaIni)) return {};
+        const contenido = fs.readFileSync(rutaIni).toString('utf16le');
+        const columnas = parseInt((contenido.match(/\bColumns\s*=\s*(\S+)/i) || [])[1], 10);
+        const rowGap = parseInt((contenido.match(/\bRowGap\s*=\s*(-?\d+)/i) || [])[1], 10);
+        // Mismo criterio que leerGrillaDesdeSettingsIniHb en heartbeat.js: runMain= en
+        // Settings.ini es la fuente de verdad real de si Main ocupa el slot 0 de la grilla,
+        // en vez de adivinar mirando si una ventana "Main" existe en pantalla en ese instante
+        // (bug real reportado en vivo 2026-08-31: esa deteccion es inestable si Main tarda en
+        // abrir su instancia real, causando choques de posicion entre instancias).
+        const runMainMatch = contenido.match(/\brunMain\s*=\s*(\S+)/i);
+        return {
+            columnas: Number.isFinite(columnas) && columnas > 0 ? columnas : null,
+            rowGap: Number.isFinite(rowGap) ? rowGap : null,
+            incluyeMain: runMainMatch ? runMainMatch[1] === '1' : null
+        };
+    } catch (e) {
+        return {};
+    }
+}
+
+// Mismo criterio que elAhkEstaColgadoHb en heartbeat.js (duplicado a proposito) -- detecta un
+// AHK realmente "Not Responding" via SendMessageTimeout/SMTO_ABORTIFHUNG en ahk-window.ps1,
+// no solo "la ventana existe".
+function elAhkEstaColgado(index) {
+    try {
+        const rutaScript = path.join(__dirname, 'scripts', 'ahk-window.ps1');
+        if (!fs.existsSync(rutaScript)) return false;
+        const salida = execSync(
+            `powershell -NoProfile -ExecutionPolicy Bypass -File "${rutaScript}" -InstanceId "${index}" -Action "check"`,
+            { windowsHide: true, timeout: 10000 }
+        ).toString().trim();
+        return salida.startsWith('HUNG:');
+    } catch (e) {
+        const salida = (e?.stdout || '').toString().trim();
+        return salida.startsWith('HUNG:');
+    }
+}
+
+// Relanza el script numerado de Kevin directo (2026-08-31, a pedido explicito del usuario,
+// confirmado en vivo: el script queda esperando a que la instancia correspondiente este
+// disponible y se engancha solo apenas hace match). Necesario tras forzar el cierre de un AHK
+// colgado, o cuando "check" reporta NOT_FOUND -- a diferencia de un power-cycle de MuMu solo
+// (que deja el AHK VIEJO vivo, esperando a reengancharse), si el proceso ya no existe para
+// nada no hay nada que se vaya a reenganchar solo.
+function relanzarScriptAhk(index, rutaRaiz) {
+    try {
+        const ahkExe = rutaAutoHotkey();
+        if (!ahkExe || !rutaRaiz) return false;
+        const rutaScript = path.join(rutaRaiz, 'Scripts', `${index}.ahk`);
+        if (!fs.existsSync(rutaScript)) return false;
+        spawn(ahkExe, [rutaScript], { windowsHide: false, detached: true, stdio: 'ignore', cwd: path.dirname(rutaScript) }).unref();
+        return true;
+    } catch (e) {
+        console.error(`DEBUG: no se pudo relanzar el script AHK de la instancia ${index}:`, e?.message || e);
+        return false;
+    }
+}
+
+function reacomodarVentanaInstancia(index, columnas, rowGap, incluyeMain) {
+    try {
+        const ahkExe = rutaAutoHotkey();
+        if (!ahkExe || !fs.existsSync(RUTA_ARRANGE_WINDOWS_SCRIPT)) return;
+        const args = [RUTA_ARRANGE_WINDOWS_SCRIPT, String(index)];
+        if (columnas) {
+            args.push(String(columnas), rowGap != null ? String(rowGap) : '0');
+            if (incluyeMain !== null && incluyeMain !== undefined) args.push(incluyeMain ? '1' : '0');
+        }
+        spawn(ahkExe, args, { windowsHide: false, detached: true, stdio: 'ignore' }).unref();
+    } catch (e) {
+        console.error(`DEBUG: no se pudo reacomodar la ventana de la instancia ${index}:`, e?.message || e);
+    }
+}
+
 // Usado por el botón "Close Instance" del aviso de heartbeat cuando la
 // instancia ya se quedó sin cuentas de 24h (ver instanciaSinCuentasElegibles
 // en heartbeat.js) — no tiene sentido dejarla prendida consumiendo recursos
@@ -2746,11 +3086,20 @@ function forzarCierreAhkInstancia(index) {
     try {
         const rutaScript = path.join(__dirname, 'scripts', 'ahk-window.ps1');
         if (!fs.existsSync(rutaScript)) return false;
-        const salida = execSync(
-            `powershell -NoProfile -ExecutionPolicy Bypass -File "${rutaScript}" -InstanceId "${index}" -Action "check"`,
-            { windowsHide: true, timeout: 10000 }
-        ).toString().trim();
-        const match = salida.match(/^FOUND:(\d+)$/);
+        // Bug real reportado en vivo 2026-08-31 (mismo fix que forzarCierreAhkInstanciaHb en
+        // heartbeat.js): "check" sale con exit code 2 en el caso HUNG -- execSync tira
+        // excepcion con cualquier exit distinto de 0, asi que el caso HUNG (el que esta
+        // funcion necesita para forzar el cierre) nunca llegaba a leerse.
+        let salida;
+        try {
+            salida = execSync(
+                `powershell -NoProfile -ExecutionPolicy Bypass -File "${rutaScript}" -InstanceId "${index}" -Action "check"`,
+                { windowsHide: true, timeout: 10000 }
+            ).toString().trim();
+        } catch (e) {
+            salida = (e?.stdout || '').toString().trim();
+        }
+        const match = salida.match(/^(?:FOUND|HUNG):(\d+)$/);
         if (!match) return false; // ya no esta corriendo -- nada que forzar
         const pidObjetivo = match[1];
 
@@ -7513,18 +7862,33 @@ async function ejecutarComandoEnCanal(interaction, commandKey) {
 // chequea internamente en cada request (tabla estados_modulos) - esa es la
 // fuente de verdad real sin importar quien supervise los procesos (PM2 o
 // launcher.js).
+async function estadoDesdeDB(nombreProceso) {
+    try {
+        const fila = await db.get(`SELECT status FROM estados_modulos WHERE nombre = ?`, [nombreProceso]);
+        // Sin fila guardada = nunca se toco el toggle = arranca online
+        // por defecto, mismo criterio que ya usa heartbeat.js.
+        return (!fila || fila.status === 'online') ? '🟢 ONLINE' : '🔴 OFFLINE';
+    } catch (e) {
+        return '🟢 ONLINE';
+    }
+}
+
 function verificarEstadoPM2(nombreProceso, script = null) {
     return new Promise((resolve) => {
+        // El .exe empaquetado corre todo en un solo proceso via node:sea, sin PM2.
+        // Si esa PC ademas tiene pm2 instalado para otra cosa, "pm2 jlist" responde
+        // bien (sin error) pero nunca va a listar un proceso llamado "trading"/
+        // "heartbeat" porque no existen como procesos propios de PM2 - el boton
+        // quedaba marcado OFFLINE aunque estuviera funcionando de verdad (bug real
+        // reportado 2026-08-31). En modo empaquetado la fuente de verdad es siempre
+        // la base de datos, nunca PM2.
+        let esPaquete = false;
+        try { esPaquete = require('node:sea').isSea(); } catch (e) { /* Node sin soporte SEA */ }
+        if (esPaquete) return resolve(estadoDesdeDB(nombreProceso));
+
         exec('pm2 jlist', { windowsHide: true }, async (err, stdout) => {
             if (err) {
-                try {
-                    const fila = await db.get(`SELECT status FROM estados_modulos WHERE nombre = ?`, [nombreProceso]);
-                    // Sin fila guardada = nunca se toco el toggle = arranca online
-                    // por defecto, mismo criterio que ya usa heartbeat.js.
-                    return resolve((!fila || fila.status === 'online') ? '🟢 ONLINE' : '🔴 OFFLINE');
-                } catch (e) {
-                    return resolve('🟢 ONLINE');
-                }
+                return resolve(await estadoDesdeDB(nombreProceso));
             }
             try {
                 const procesos = JSON.parse(stdout);
@@ -7548,6 +7912,14 @@ function verificarEstadoPM2(nombreProceso, script = null) {
 }
 
 function ejecutarPM2Start(nombreProceso, script) {
+    // En modo empaquetado no hay un proceso PM2 real que arrancar - "trading"/
+    // "heartbeat" corren siempre dentro del mismo .exe. Si esta PC tiene pm2
+    // instalado igual (para otra cosa), esto evitaba que se creara un proceso
+    // fantasma duplicado escuchando en el mismo puerto que el ya embebido.
+    let esPaquete = false;
+    try { esPaquete = require('node:sea').isSea(); } catch (e) { /* Node sin soporte SEA */ }
+    if (esPaquete) return;
+
     exec('pm2 jlist', { windowsHide: true }, (err, stdout) => {
         if (err) {
             return exec(`pm2 start ${script} --name "${nombreProceso}"`, { windowsHide: true }, () => {});
@@ -7722,6 +8094,189 @@ function buscarLogoExpansionBot(nombreExpansion) {
         console.log('DEBUG: Error buscando logo de expansión (preview /embed):', e.message);
     }
     return null;
+}
+
+// Grupo real de una expansion (Serie A / Serie B), derivado del codigo de release (ej. "A1",
+// "B3", "PROMO-A") -- 2026-08-31, a pedido explicito del usuario, para el paso nuevo "Which
+// group do you want to browse?" antes del picker de releases de siempre.
+function grupoDeRelease(cat) {
+    const texto = String(cat || '');
+    const m = texto.match(/^([AB])\d/i) || texto.match(/^PROMO-([AB])$/i);
+    return m ? m[1].toUpperCase() : null;
+}
+
+// TODOS los sobres de una expansion (2026-08-31, corregido a pedido explicito del usuario tras
+// ver el resultado en vivo: expansiones con varios sobres distintos -- ej. "Space-Time
+// Smackdown" tiene Dialga Pack y Palkia Pack, con arte realmente distinto -- deben mostrar
+// TODOS lado a lado en la misma celda, no solo uno representativo elegido al azar).
+// Excepciones de orden (2026-08-31, a pedido explicito del usuario tras ver en vivo que
+// "Celestial Guardians" mostraba Lunala antes que Solgaleo -- alfabetico no siempre coincide
+// con el orden real de los sobres del juego). Clave = nombre de expansion normalizado, valor =
+// palabras clave en el orden real deseado; cualquier expansion sin excepcion sigue alfabetica.
+const ORDEN_SOBRES_EXCEPCION = {
+    celestialguardians: ['solgaleo', 'lunala']
+};
+const _cacheArchivosSerieBot = {};
+function buscarArtesSobresExpansionBot(nombreExpansion, letraGrupo) {
+    if (!nombreExpansion || !letraGrupo) return [];
+    const carpeta = path.join(EXPANSIONS_DIR_BOT, `Serie ${letraGrupo}`);
+    if (!_cacheArchivosSerieBot[carpeta]) {
+        try { _cacheArchivosSerieBot[carpeta] = fs.readdirSync(carpeta); } catch (e) { _cacheArchivosSerieBot[carpeta] = []; }
+    }
+    const objetivo = normalizarNombreExpansionBot(nombreExpansion);
+    const archivos = _cacheArchivosSerieBot[carpeta]
+        .filter(f => normalizarNombreExpansionBot(path.basename(f, path.extname(f))).startsWith(objetivo));
+
+    const ordenExcepcion = ORDEN_SOBRES_EXCEPCION[objetivo];
+    if (ordenExcepcion) {
+        archivos.sort((a, b) => {
+            const na = normalizarNombreExpansionBot(a), nb = normalizarNombreExpansionBot(b);
+            const ia = ordenExcepcion.findIndex(k => na.includes(k));
+            const ib = ordenExcepcion.findIndex(k => nb.includes(k));
+            return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+        });
+    } else {
+        archivos.sort();
+    }
+    return archivos.map(f => path.join(carpeta, f));
+}
+
+// Collage de un grupo entero (Serie A o B) para el paso "Which group do you want to browse?"
+// -- una celda por expansion, con su logo arriba y TODOS sus sobres lado a lado abajo (2026-
+// 08-31, a pedido explicito del usuario tras ver en vivo que expansiones como "Space-Time
+// Smackdown" tienen 2 sobres con arte realmente distinto -- Dialga/Palkia -- y no alcanza con
+// mostrar uno solo). Si a una expansion le falta el logo o el arte, se muestra igual con lo
+// que haya -- nunca rompe el collage entero por un asset faltante puntual.
+async function generarCollageGrupoSerie(letraGrupo, nombresExpansiones) {
+    if (!nombresExpansiones?.length) return null;
+    const CELL_W = 220, LOGO_H = 40, ART_H = 150, CELL_H = LOGO_H + ART_H + 12, GAP = 14, PADDING = 16, COLS = 3;
+
+    const celdas = [];
+    for (const nombre of nombresExpansiones) {
+        const rutasArte = buscarArtesSobresExpansionBot(nombre, letraGrupo);
+        const rutaLogo = buscarLogoExpansionBot(nombre);
+        if (!rutasArte.length && !rutaLogo) continue;
+
+        const composiciones = [];
+        try {
+            // Sin sobres reales (ej. Promo A/B, que no vienen en booster packs) -- el logo
+            // ocupa y se centra en la celda ENTERA en vez de quedar chico arriba con todo el
+            // resto vacio (bug real reportado en vivo 2026-08-31).
+            if (rutaLogo && !rutasArte.length) {
+                const alturaLogoGrande = CELL_H - 16;
+                const logoBuf = await sharp(rutaLogo)
+                    .resize(CELL_W - 16, alturaLogoGrande, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                    .png().toBuffer();
+                composiciones.push({ input: logoBuf, top: 8, left: 8 });
+            } else if (rutaLogo) {
+                const logoBuf = await sharp(rutaLogo)
+                    .resize(CELL_W - 16, LOGO_H, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                    .png().toBuffer();
+                composiciones.push({ input: logoBuf, top: 4, left: 8 });
+            }
+            if (rutasArte.length) {
+                // Varios sobres de la misma expansion (ej. Dialga/Palkia) se reparten el
+                // ancho disponible de la celda a partes iguales, uno al lado del otro.
+                const anchoDisponible = CELL_W - 16;
+                const gapSobres = 4;
+                const anchoPorSobre = Math.floor((anchoDisponible - gapSobres * (rutasArte.length - 1)) / rutasArte.length);
+                for (let i = 0; i < rutasArte.length; i++) {
+                    const arteBuf = await sharp(rutasArte[i])
+                        .resize(anchoPorSobre, ART_H, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                        .png().toBuffer();
+                    composiciones.push({ input: arteBuf, top: LOGO_H + 8, left: 8 + i * (anchoPorSobre + gapSobres) });
+                }
+            }
+            const celda = await sharp({ create: { width: CELL_W, height: CELL_H, channels: 4, background: { r: 42, g: 42, b: 56, alpha: 1 } } })
+                .composite(composiciones)
+                .png().toBuffer();
+            celdas.push(celda);
+        } catch (e) { /* asset puntual roto -- se salta esa celda, no rompe el collage */ }
+    }
+    if (!celdas.length) return null;
+
+    const filas = Math.ceil(celdas.length / COLS);
+    const anchoTotal = PADDING * 2 + COLS * CELL_W + (COLS - 1) * GAP;
+    const altoTotal = PADDING * 2 + filas * CELL_H + (filas - 1) * GAP;
+    const celdasPosicionadas = celdas.map((buf, indice) => {
+        const row = Math.floor(indice / COLS);
+        const inicioFila = row * COLS;
+        const itemsEnFila = Math.min(COLS, celdas.length - inicioFila);
+        const colEnFila = indice - inicioFila;
+        const anchoFila = itemsEnFila * CELL_W + (itemsEnFila - 1) * GAP;
+        const offsetCentrado = Math.round((anchoTotal - PADDING * 2 - anchoFila) / 2);
+        return { input: buf, top: PADDING + row * (CELL_H + GAP), left: PADDING + offsetCentrado + colEnFila * (CELL_W + GAP) };
+    });
+
+    try {
+        return await sharp({ create: { width: anchoTotal, height: altoTotal, channels: 4, background: { r: 30, g: 30, b: 36, alpha: 1 } } })
+            .composite(celdasPosicionadas)
+            .png().toBuffer();
+    } catch (e) {
+        console.error('DEBUG: error armando el collage del grupo de serie:', e?.message || e);
+        return null;
+    }
+}
+
+// Paso nuevo "Which group do you want to browse?" (2026-08-31, a pedido explicito del
+// usuario), antes del picker de releases de siempre -- solo se muestra cuando hay 2+ grupos
+// distintos (Serie A / Serie B) entre los releases reales, mismo criterio de "no agregar un
+// paso si no hay nada que elegir" que ya usa el resto del bot.
+//
+// Muestra UN SOLO grupo por vez (2026-08-31, corregido a pedido explicito del usuario tras
+// ver en vivo los 2 grupos juntos en el mismo mensaje -- "mejor pongamos solo uno y abajo
+// diga Grupo A / Next, asi sera mas ordenado"): un boton "Next" alterna al otro grupo sin
+// avanzar de paso, y un boton separado entra de verdad a explorar el grupo que se esta viendo.
+async function construirEmbedGruposSerie(gruposDisponibles, mapaCategorias, totalCartas, opciones = {}) {
+    const prefijo = opciones.prefijo || 'allcards';
+    const letras = [...gruposDisponibles].sort();
+    const letraActual = letras.includes(opciones.grupoActual) ? opciones.grupoActual : letras[0];
+    const otraLetra = letras.find(l => l !== letraActual) || letraActual;
+
+    const categoriasDelGrupo = Object.keys(mapaCategorias).filter(c => grupoDeRelease(c) === letraActual);
+    const expansionesDelGrupo = [...new Set(categoriasDelGrupo.flatMap(c => [...mapaCategorias[c]]))].sort((a, b) => a.localeCompare(b));
+    const collageBuffer = await generarCollageGrupoSerie(letraActual, expansionesDelGrupo);
+    const nombreArchivo = `grupo_${letraActual}.png`;
+
+    const embed = new EmbedBuilder()
+        .setTitle(`📦 Group ${letraActual}`)
+        .setDescription(`🔎 **Select an expansion directly below**, browse the whole group, or check the other one (${totalCartas} total cards):`)
+        .setColor(letraActual === 'A' ? 0x3498DB : 0xE91E63)
+        .setFooter({ text: `${categoriasDelGrupo.length} release(s) • ${expansionesDelGrupo.length} expansions` });
+
+    const archivos = [];
+    if (collageBuffer) {
+        embed.setImage(`attachment://${nombreArchivo}`);
+        archivos.push(new AttachmentBuilder(collageBuffer, { name: nombreArchivo }));
+    }
+
+    const componentes = [];
+    // Dropdown directo a una expansion puntual (2026-08-31, a pedido explicito del usuario:
+    // "podemos escoger mejor la expansion? asi vamos directo al grano") -- reusa el mismo
+    // customId/handler que ya existe para "Select an expansion" en cualquier otro lado del
+    // bot, asi que elegir una acá salta directo a sus categorias, sin pasos de mas.
+    if (expansionesDelGrupo.length) {
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`${prefijo}_expansion_seleccion`)
+            .setPlaceholder('Select an expansion')
+            .addOptions(expansionesDelGrupo.slice(0, 25).map(exp => ({ label: exp.slice(0, 100), value: exp })));
+        componentes.push(new ActionRowBuilder().addComponents(menu));
+    }
+    componentes.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`${prefijo}_grupo_serie_seleccion::${letraActual}`)
+            .setLabel(`🔎 Browse Group ${letraActual}`)
+            .setStyle(letraActual === 'A' ? ButtonStyle.Primary : ButtonStyle.Danger),
+        ...(letras.length > 1 ? [new ButtonBuilder()
+            .setCustomId(`${prefijo}_grupo_serie_ver::${otraLetra}`)
+            .setLabel(`Group ${otraLetra} ➡️`)
+            .setStyle(ButtonStyle.Secondary)] : [])
+    ));
+
+    const payload = { embeds: [embed], components: componentes };
+    if (archivos.length) payload.files = archivos;
+    else payload.attachments = [];
+    return payload;
 }
 
 // Construye la lista de cartas candidatas (con imagen real en CardImageCache,
@@ -8259,7 +8814,7 @@ client.on('interactionCreate', async interaction => {
         try {
             const releaseElegido = interaction.options.getString('release');
             const { cartas } = await FUENTES_CARTAS.allcards.obtenerCartas(interaction.user.id);
-            const payload = construirEmbedResumenExpansiones(cartas || [], { prefijo: 'allcards', categoriaFiltro: releaseElegido });
+            const payload = await construirEmbedResumenExpansiones(cartas || [], { prefijo: 'allcards', categoriaFiltro: releaseElegido });
             await interaction.editReply(payload);
         } catch (error) {
             console.error('DEBUG: error mostrando expansiones del release:', error?.message || error);
@@ -8308,7 +8863,7 @@ client.on('interactionCreate', async interaction => {
             } else if (elementoElegido) {
                 payload = await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, CATEGORIA_SIN_FILTRO, elementoElegido, 0, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
             } else {
-                payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis });
+                payload = await construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis });
             }
             await interaction.editReply(payload);
         } catch (error) {
@@ -8416,7 +8971,7 @@ client.on('interactionCreate', async interaction => {
         try {
             const releaseElegido = interaction.options.getString('release');
             const { cartas } = await obtenerCartasGoldCacheadas(interaction.user.id);
-            const payload = construirEmbedResumenExpansiones(cartas || [], { prefijo: 'goldcards', categoriaFiltro: releaseElegido });
+            const payload = await construirEmbedResumenExpansiones(cartas || [], { prefijo: 'goldcards', categoriaFiltro: releaseElegido });
             await interaction.editReply(payload);
         } catch (error) {
             console.error('DEBUG: error mostrando expansiones del release:', error?.message || error);
@@ -8452,7 +9007,7 @@ client.on('interactionCreate', async interaction => {
             } else if (elementoElegido) {
                 payload = await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, CATEGORIA_SIN_FILTRO, elementoElegido, 0, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
             } else {
-                payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis });
+                payload = await construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis });
             }
             await interaction.editReply(payload);
         } catch (error) {
@@ -8585,7 +9140,7 @@ client.on('interactionCreate', async interaction => {
             } else if (elementoElegido) {
                 payload = await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, CATEGORIA_SIN_FILTRO, elementoElegido, 0, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
             } else {
-                payload = construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis });
+                payload = await construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo: 'wishlist', contexto: fuente.contexto, mapaEmojis });
             }
             await interaction.editReply(payload);
         } catch (error) {
@@ -9262,7 +9817,7 @@ client.on('interactionCreate', async interaction => {
             // filtrar (pueden ser cientos de cartas por expansion).
             const payload = prefijo === 'wishlist'
                 ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, CATEGORIA_SIN_FILTRO, ELEMENTO_SIN_FILTRO, 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
-                : construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo, contexto: fuente.contexto, mapaEmojis });
+                : await construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo, contexto: fuente.contexto, mapaEmojis });
             return await interaction.editReply(payload);
         } catch (error) {
             // Red de seguridad (2026-08-20, bug real reportado: la interaccion se quedaba
@@ -9271,6 +9826,45 @@ client.on('interactionCreate', async interaction => {
             // abajo, agregado antes para un bug parecido).
             console.error('DEBUG: error mostrando categorías de la expansión:', error?.message || error);
             return await interaction.editReply({ content: '❌ Could not show this expansion. Try again.', embeds: [], components: [] });
+        }
+    }
+
+    // Paso de "grupo" (Serie A / Serie B) -- a pedido explicito del usuario (2026-08-31): se
+    // muestra ANTES del picker de release de siempre, cuando hay 2+ grupos distintos. Solo
+    // allcards/goldcards pasan por construirEmbedResumenExpansiones -- wishlist ya salta
+    // directo al collage+dropdown de cartas, nunca llega a este paso.
+    if (interaction.isButton() && interaction.customId.match(/^(allcards|goldcards)_grupo_serie_seleccion::([AB])$/)) {
+        await interaction.deferUpdate();
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const grupoElegido = interaction.customId.split('::')[1];
+            const fuente = FUENTES_CARTAS[prefijo];
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            const payload = await construirEmbedResumenExpansiones(cartas || [], { prefijo, grupoFiltro: grupoElegido });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error mostrando el grupo elegido:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this group. Try again.', embeds: [], components: [] });
+        }
+    }
+
+    // Boton "Next" (2026-08-31, a pedido explicito del usuario: "mejor pongamos solo uno y
+    // abajo diga Grupo A / Next") -- alterna que grupo se ve, SIN entrar a explorarlo todavia
+    // (a diferencia de _grupo_serie_seleccion, que si avanza de paso).
+    if (interaction.isButton() && interaction.customId.match(/^(allcards|goldcards)_grupo_serie_ver::([AB])$/)) {
+        await interaction.deferUpdate();
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const grupoAVer = interaction.customId.split('::')[1];
+            const fuente = FUENTES_CARTAS[prefijo];
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaCategoriasCompleto = categoriasDeExpansiones(cartas || []);
+            const gruposDisponibles = [...new Set(Object.keys(mapaCategoriasCompleto).map(grupoDeRelease).filter(Boolean))];
+            const payload = await construirEmbedGruposSerie(gruposDisponibles, mapaCategoriasCompleto, (cartas || []).length, { prefijo, grupoActual: grupoAVer });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error alternando de grupo:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not switch groups. Try again.', embeds: [], components: [] });
         }
     }
 
@@ -9286,7 +9880,7 @@ client.on('interactionCreate', async interaction => {
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
             const payload = (prefijo === 'allcards' || prefijo === 'goldcards')
-                ? construirEmbedResumenExpansiones(cartas || [], { prefijo, categoriaFiltro: categoriaElegida })
+                ? await construirEmbedResumenExpansiones(cartas || [], { prefijo, categoriaFiltro: categoriaElegida })
                 : await construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis, categoriaFiltro: categoriaElegida, rutaMasterPath, mapaCopias });
             return await interaction.editReply(payload);
         } catch (error) {
@@ -9303,7 +9897,7 @@ client.on('interactionCreate', async interaction => {
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
             const payload = (prefijo === 'allcards' || prefijo === 'goldcards')
-                ? construirEmbedResumenExpansiones(cartas || [], { prefijo, verTodas: true })
+                ? await construirEmbedResumenExpansiones(cartas || [], { prefijo, verTodas: true })
                 : await construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis, verTodas: true, rutaMasterPath, mapaCopias });
             return await interaction.editReply(payload);
         } catch (error) {
@@ -9320,7 +9914,7 @@ client.on('interactionCreate', async interaction => {
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
             const payload = (prefijo === 'allcards' || prefijo === 'goldcards')
-                ? construirEmbedResumenExpansiones(cartas || [], { prefijo })
+                ? await construirEmbedResumenExpansiones(cartas || [], { prefijo })
                 : await construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis, rutaMasterPath, mapaCopias });
             return await interaction.editReply(payload);
         } catch (error) {
@@ -9344,7 +9938,7 @@ client.on('interactionCreate', async interaction => {
             // a la lista de cartas (evita un clic de más cuando no aporta nada).
             const elementosDistintos = new Set((cartas || []).filter(c => c.expansion === expansion && c.categoria === categoria).map(c => c.elemento || 'Other'));
             const payload = elementosDistintos.size > 1
-                ? construirEmbedElementosPorCategoria(cartas || [], expansion, categoria, { prefijo, contexto: fuente.contexto, mapaEmojis })
+                ? await construirEmbedElementosPorCategoria(cartas || [], expansion, categoria, { prefijo, contexto: fuente.contexto, mapaEmojis })
                 : await construirEmbedCartasPorExpansion(cartas || [], expansion, categoria, ELEMENTO_SIN_FILTRO, 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
             return await interaction.editReply(payload);
         } catch (error) {
@@ -9380,7 +9974,7 @@ client.on('interactionCreate', async interaction => {
             const [expansion, categoria] = interaction.customId.replace(`${prefijo}_volver_elementos::`, '').split('::');
             const { cartas } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
-            const payload = construirEmbedElementosPorCategoria(cartas || [], expansion, categoria, { prefijo, contexto: fuente.contexto, mapaEmojis });
+            const payload = await construirEmbedElementosPorCategoria(cartas || [], expansion, categoria, { prefijo, contexto: fuente.contexto, mapaEmojis });
             return await interaction.editReply(payload);
         } catch (error) {
             console.error('DEBUG: error volviendo a elementos:', error?.message || error);
@@ -10326,7 +10920,7 @@ client.on('interactionCreate', async interaction => {
             if (cartas === null) {
                 return await interaction.editReply({ content: FUENTES_CARTAS.allcards.errorSinDatos });
             }
-            const payload = construirEmbedResumenExpansiones(cartas, { prefijo: 'allcards' });
+            const payload = await construirEmbedResumenExpansiones(cartas, { prefijo: 'allcards' });
             return await interaction.editReply(payload);
         }
 
@@ -10343,7 +10937,7 @@ client.on('interactionCreate', async interaction => {
             if (!cartas.length) {
                 return await interaction.editReply({ content: FUENTES_CARTAS.goldcards.vacioTexto });
             }
-            const payload = construirEmbedResumenExpansiones(cartas, { prefijo: 'goldcards' });
+            const payload = await construirEmbedResumenExpansiones(cartas, { prefijo: 'goldcards' });
             return await interaction.editReply(payload);
         }
 
@@ -10412,7 +11006,7 @@ client.on('interactionCreate', async interaction => {
                 const expansion = interaction.customId.replace(`${prefijo}_volver_categorias::`, '');
                 const { cartas } = await fuente.obtenerCartas(interaction.user.id);
                 const mapaEmojisVolver = await obtenerMapaEmojisGuild(interaction.guild);
-                const payload = construirEmbedCategoriasPorExpansion(cartas || [], expansion, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisVolver });
+                const payload = await construirEmbedCategoriasPorExpansion(cartas || [], expansion, { prefijo, contexto: fuente.contexto, mapaEmojis: mapaEmojisVolver });
                 return await interaction.editReply(payload);
             } catch (error) {
                 console.error('DEBUG: error volviendo a categorías:', error?.message || error);
@@ -10427,7 +11021,7 @@ client.on('interactionCreate', async interaction => {
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
             const mapaEmojisExpansiones = await obtenerMapaEmojisGuild(interaction.guild);
             const payload = (prefijo === 'allcards' || prefijo === 'goldcards')
-                ? construirEmbedResumenExpansiones(cartas || [], { prefijo })
+                ? await construirEmbedResumenExpansiones(cartas || [], { prefijo })
                 : await construirEmbedListaCartas(cartas || [], 0, { prefijo, titulo: fuente.tituloLista, vacioTexto: fuente.vacioTexto, mapaEmojis: mapaEmojisExpansiones, rutaMasterPath, mapaCopias });
             return await interaction.editReply(payload);
         }
@@ -10466,11 +11060,15 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.customId.startsWith('heartbeat_reload_ahk::')) {
-            // Botón del aviso de heartbeat cuando una instancia lleva varios
-            // minutos sin abrir sobres Y el log local NO dice "sin cuentas" —
-            // el usuario aclaró que en ese caso lo que se congela es el AHK,
-            // no necesariamente MuMu, así que hay que recargar el script (el
-            // mismo Reload/Shift+F5 que ya tiene) en vez de reiniciar MuMu.
+            // Botón del aviso de heartbeat cuando la auto-recuperación de una instancia
+            // congelada falló. Antes esto SOLO mandaba Shift+F5 al panel de AHK, asumiendo que
+            // MuMu ya estaba prendido — inútil si la auto-recuperación falló justamente porque
+            // MuMu nunca llegó a arrancar (bug real reportado en vivo 2026-08-31: el usuario
+            // pidió explícitamente que este botón también prenda la instancia y reabra el
+            // juego, no solo el AHK, para poder resolverlo entero desde el celular sin estar
+            // frente a la PC). Ahora hace el ciclo completo: prende MuMu si hace falta (espera
+            // el boot), reabre el juego por ADB, reacomoda la ventana, y recién ahí intenta el
+            // reload del AHK (por si sigue vivo pero atascado en una pantalla).
             if (!tienePermisosGestion(interaction)) {
                 return await interaction.reply({ content: "❌ You don't have permission to run control actions.", ephemeral: true });
             }
@@ -10484,8 +11082,31 @@ client.on('interactionCreate', async interaction => {
             // opaco de Discord.
             try {
                 await interaction.deferUpdate();
-                const ok = ejecutarAccionAhkInstancia(index, 'reload');
-                if (ok) {
+                const rutaRaiz = await obtenerRutaRaiz(interaction.guildId);
+                // Un AHK colgado de verdad (Not Responding) hay que matarlo y relanzarlo --
+                // reload (Shift+F5) nunca le llega a un proceso que no procesa mensajes.
+                if (elAhkEstaColgado(index)) {
+                    forzarCierreAhkInstancia(index);
+                    await new Promise((resolve) => setTimeout(resolve, 2000));
+                    relanzarScriptAhk(index, rutaRaiz);
+                }
+                const encendida = await asegurarInstanciaEncendida(index, 90000);
+                if (encendida) {
+                    const { columnas, rowGap, incluyeMain } = await leerGrillaDesdeSettingsIni(interaction.guildId);
+                    reacomodarVentanaInstancia(index, columnas, rowGap, incluyeMain);
+                    let reabierta = false;
+                    for (let intento = 0; intento < 4 && !reabierta; intento++) {
+                        if (intento > 0) await new Promise((resolve) => setTimeout(resolve, 3000));
+                        reabierta = reabrirAppPtcgp(index);
+                    }
+                    if (!reabierta) console.error(`DEBUG: heartbeat_reload_ahk::${index}: instancia prendida pero no se pudo reabrir la app por ADB.`);
+                }
+                let ok = ejecutarAccionAhkInstancia(index, 'reload');
+                // "reload" devuelve false si no encontro NINGUN AHK corriendo para esta
+                // instancia (ni siquiera colgado) -- ahi hay que relanzarlo de cero, no solo
+                // reintentar el reload (nada va a responder a Shift+F5 si el proceso no existe).
+                if (!ok) ok = relanzarScriptAhk(index, rutaRaiz);
+                if (encendida || ok) {
                     // A pedido del usuario: una vez reparada, el aviso se borra
                     // solo — si no, se van acumulando y terminan enterrando el
                     // panel principal de heartbeat (que se edita in situ, en su
@@ -10497,7 +11118,7 @@ client.on('interactionCreate', async interaction => {
                 const embedActualizado = embedOriginal ? EmbedBuilder.from(embedOriginal) : new EmbedBuilder();
                 embedActualizado.setColor(0xE74C3C);
                 embedActualizado.setDescription(
-                    `❌ Could not reload the AHK for **Instance ${index}** — its window wasn't found (maybe it's already closed).\n\n${embedOriginal?.description || ''}`
+                    `❌ Could not restart **Instance ${index}** — MuMu didn't turn on and its AHK window wasn't found either (maybe it's already closed, or something's wrong with that instance in MuMu itself).\n\n${embedOriginal?.description || ''}`
                 );
                 return await interaction.editReply({ embeds: [embedActualizado] });
             } catch (e) {

@@ -48,11 +48,84 @@ function rutaAutoHotkeyHb() {
     return _rutaAutoHotkeyCacheadaHb;
 }
 const RUTA_ARRANGE_WINDOWS_SCRIPT_HB = path.join(__dirname, 'automation', '_ArrangeWindows.ahk');
-function reacomodarVentanaInstanciaHb(index) {
+
+// La cantidad de columnas de la grilla (y el espacio entre filas) la define cada
+// usuario DENTRO de la herramienta de Kevin (Settings.ini, [General] Columns= y
+// [ToolsAndSystem] RowGap=) - varia por usuario (algunos usan 5, otros 10, 20...).
+// _ArrangeWindows.ahk tenia esto hardcodeado a 2 columnas fijas, así que cualquier
+// instancia con indice >= 2 quedaba mal ubicada para quien usara mas de 2 columnas
+// (bug real reportado en vivo 2026-08-31, confirmado: Columns=5 en su Settings.ini
+// real). Se lee siempre fresco (no cacheado) por si el usuario lo cambia sin
+// reiniciar heartbeat.
+async function obtenerRutaRaizHb() {
+    try {
+        const rutaRaizConfig = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_raiz' AND webhook_url NOT IN ('N/A', 'local') ORDER BY rowid DESC LIMIT 1`);
+        return rutaRaizConfig?.webhook_url || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function leerGrillaDesdeSettingsIniHb() {
+    try {
+        const rutaRaiz = await obtenerRutaRaizHb();
+        if (!rutaRaiz) return {};
+        const rutaIni = path.join(rutaRaiz, 'Settings.ini');
+        if (!fs.existsSync(rutaIni)) return {};
+        // Settings.ini de Kevin es UTF-16LE con BOM (formato tipico de .NET WriteAllText).
+        const contenido = fs.readFileSync(rutaIni).toString('utf16le');
+        const columnas = parseInt((contenido.match(/\bColumns\s*=\s*(\S+)/i) || [])[1], 10);
+        const rowGap = parseInt((contenido.match(/\bRowGap\s*=\s*(-?\d+)/i) || [])[1], 10);
+        // Bug real reportado en vivo 2026-08-31: _ArrangeWindows.ahk decidia si Main ocupa el
+        // slot 0 de la grilla mirando si una ventana titulada "Main" EXISTE en pantalla en ese
+        // instante -- si Main tarda en abrir su propia instancia (el script/hack puede estar
+        // corriendo sin que la instancia real haya arrancado todavia), o esa ventana cambia de
+        // estado entre una llamada y la siguiente, dos instancias distintas podian calcular el
+        // mismo offset y terminar en el mismo lugar. runMain= en Settings.ini es la fuente de
+        // verdad real y estable (la define el modo de operacion elegido, no el estado de una
+        // ventana en un instante puntual).
+        const runMainMatch = contenido.match(/\brunMain\s*=\s*(\S+)/i);
+        return {
+            columnas: Number.isFinite(columnas) && columnas > 0 ? columnas : null,
+            rowGap: Number.isFinite(rowGap) ? rowGap : null,
+            incluyeMain: runMainMatch ? runMainMatch[1] === '1' : null
+        };
+    } catch (e) {
+        return {};
+    }
+}
+
+// Relanza el script numerado de Kevin directo (2026-08-31, a pedido explicito del usuario,
+// confirmado en vivo: "si tu corres el 2.ahk, va a estar ahi pendiente hasta que abras la
+// instancia 2 -- una vez que hacen match se conectan automaticamente y siguen su flujo solos").
+// Necesario porque forzar el cierre de un AHK colgado (ver elAhkEstaColgadoHb) mata el proceso
+// entero -- a diferencia de un power-cycle de MuMu solo (que deja el AHK VIEJO vivo, esperando
+// a reengancharse), aca no queda nada corriendo para esa instancia si no se relanza el script.
+function relanzarScriptAhkHb(index, rutaRaiz) {
+    try {
+        const ahkExe = rutaAutoHotkeyHb();
+        if (!ahkExe || !rutaRaiz) return false;
+        const rutaScript = path.join(rutaRaiz, 'Scripts', `${index}.ahk`);
+        if (!fs.existsSync(rutaScript)) return false;
+        spawn(ahkExe, [rutaScript], { windowsHide: false, detached: true, stdio: 'ignore', cwd: path.dirname(rutaScript) }).unref();
+        return true;
+    } catch (e) {
+        console.error(`[HB] No se pudo relanzar el script AHK de la instancia ${index}:`, e?.message || e);
+        return false;
+    }
+}
+
+async function reacomodarVentanaInstanciaHb(index) {
     try {
         const ahkExe = rutaAutoHotkeyHb();
         if (!ahkExe || !fs.existsSync(RUTA_ARRANGE_WINDOWS_SCRIPT_HB)) return;
-        spawn(ahkExe, [RUTA_ARRANGE_WINDOWS_SCRIPT_HB, String(index)], { windowsHide: false, detached: true, stdio: 'ignore' }).unref();
+        const { columnas, rowGap, incluyeMain } = await leerGrillaDesdeSettingsIniHb();
+        const args = [RUTA_ARRANGE_WINDOWS_SCRIPT_HB, String(index)];
+        if (columnas) {
+            args.push(String(columnas), rowGap != null ? String(rowGap) : '0');
+            if (incluyeMain !== null) args.push(incluyeMain ? '1' : '0');
+        }
+        spawn(ahkExe, args, { windowsHide: false, detached: true, stdio: 'ignore' }).unref();
     } catch (e) {
         console.error(`[HB] No se pudo reacomodar la ventana de la instancia ${index}:`, e?.message || e);
     }
@@ -141,14 +214,42 @@ function estaAhkCorriendoHb(index) {
             ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', rutaScript, '-InstanceId', String(index), '-Action', 'check'],
             { windowsHide: true, timeout: 10000 }
         ).toString().trim();
-        return salida.startsWith('FOUND:');
+        // HUNG cuenta como "sigue corriendo" aca -- no es un cierre a proposito, necesita
+        // recuperacion igual (ver elAhkEstaColgadoHb, que es el chequeo especifico para esto).
+        return salida.startsWith('FOUND:') || salida.startsWith('HUNG:');
     } catch (e) {
-        // powershell devuelve exit code 1 en NOT_FOUND -- eso es informacion valida, no un
-        // error real. Solo lo tratamos como "sigue corriendo" (comportamiento de siempre) si
-        // la salida no es reconocible.
+        // powershell devuelve exit code 1 en NOT_FOUND y exit code 2 en HUNG -- ambos son
+        // informacion valida, no un error real. Solo lo tratamos como "sigue corriendo"
+        // (comportamiento de siempre) si la salida no es reconocible.
         const salida = (e?.stdout || '').toString().trim();
         if (salida.startsWith('NOT_FOUND')) return false;
+        if (salida.startsWith('HUNG:')) return true;
         return true;
+    }
+}
+
+// Chequeo especifico de "colgado" (Windows "Not Responding" real, via
+// SendMessageTimeout/SMTO_ABORTIFHUNG en ahk-window.ps1) -- bug real reportado en vivo
+// 2026-08-31: un AHK genuinamente colgado ("AutoHotkey Unicode 64-bit no responde", visible
+// con el cursor de carga de Windows) segui pasando el chequeo de "check" de siempre (la
+// ventana EXISTE, solo no responde), asi que recuperarInstanciaCongelada solo reiniciaba MuMu
+// en loop sin efecto: el AHK colgado nunca se reenganchaba porque el proceso viejo seguia
+// vivo, trabado, ocupando el lugar. Se llama ANTES del power-cycle de MuMu para forzar el
+// cierre del AHK colgado primero (via forzarCierreAhkInstanciaHb, mismo mecanismo elevado por
+// Tarea Programada), dejando que Kevin arranque uno fresco solo apenas la instancia vuelva.
+function elAhkEstaColgadoHb(index) {
+    const rutaScript = path.join(__dirname, 'scripts', 'ahk-window.ps1');
+    if (!fs.existsSync(rutaScript)) return false;
+    try {
+        const salida = execFileSync(
+            'powershell',
+            ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', rutaScript, '-InstanceId', String(index), '-Action', 'check'],
+            { windowsHide: true, timeout: 10000 }
+        ).toString().trim();
+        return salida.startsWith('HUNG:');
+    } catch (e) {
+        const salida = (e?.stdout || '').toString().trim();
+        return salida.startsWith('HUNG:');
     }
 }
 
@@ -206,12 +307,23 @@ function forzarCierreAhkInstanciaHb(index) {
     try {
         const rutaScript = path.join(__dirname, 'scripts', 'ahk-window.ps1');
         if (!fs.existsSync(rutaScript)) return false;
-        const salida = execFileSync(
-            'powershell',
-            ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', rutaScript, '-InstanceId', String(index), '-Action', 'check'],
-            { windowsHide: true, timeout: 10000 }
-        ).toString().trim();
-        const match = salida.match(/^FOUND:(\d+)$/);
+        // Bug real reportado en vivo 2026-08-31: "check" ahora sale con exit code 2 en el
+        // caso HUNG (antes solo existia 0=FOUND / 1=NOT_FOUND) -- execFileSync TIRA una
+        // excepcion con cualquier exit code distinto de 0, asi que el caso HUNG (justo el que
+        // esta funcion necesita para forzar el cierre) caia directo al catch de abajo sin
+        // llegar a leer el PID nunca. Mismo criterio que estaAhkCorriendoHb/elAhkEstaColgadoHb
+        // (que ya leian e.stdout en el catch) -- se aplica aca tambien.
+        let salida;
+        try {
+            salida = execFileSync(
+                'powershell',
+                ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', rutaScript, '-InstanceId', String(index), '-Action', 'check'],
+                { windowsHide: true, timeout: 10000 }
+            ).toString().trim();
+        } catch (e) {
+            salida = (e?.stdout || '').toString().trim();
+        }
+        const match = salida.match(/^(?:FOUND|HUNG):(\d+)$/);
         if (!match) return false;
         const pidObjetivo = match[1];
         try {
@@ -255,9 +367,50 @@ async function cerrarInstanciaAutoSinCuentasHb(index) {
     }, 20000);
 }
 
+// Cola global para serializar TODAS las recuperaciones de MuMu, sin importar cuantas
+// instancias distintas se detecten congeladas en el mismo ciclo (2026-08-31, bug real
+// encontrado en vivo probando esta misma sesion): con muchas instancias corriendo, si 2+ se
+// congelan cerca en el tiempo, cada una dispara su propio recuperarInstanciaCongelada SIN
+// esperar a la anterior (avisarInstanciaCongeladaSiHaceFalta se llama con .catch(() => {}),
+// sin await, por cada instancia del loop) -- varios shutdown/launch de MuMuManager casi
+// simultaneos terminan tumbando su backend entero ("mainnx request failed" en TODAS las
+// instancias, incluidas las que estaban bien). Confirmado reproduciendolo en vivo. Ahora cada
+// recuperacion espera a que termine la anterior antes de arrancar, cueste lo que cueste
+// (nunca se rompe la cola si una falla).
+let colaRecuperacionMuMuHb = Promise.resolve();
+function recuperarInstanciaCongeladaEnCola(index) {
+    const resultado = colaRecuperacionMuMuHb.then(() => recuperarInstanciaCongelada(index));
+    colaRecuperacionMuMuHb = resultado.catch(() => {});
+    return resultado;
+}
+
 async function recuperarInstanciaCongelada(index) {
     const managerPath = rutaMuMuManagerHb();
     if (!managerPath) return false;
+
+    // Bug real reportado en vivo 2026-08-31: un AHK realmente colgado ("Not Responding" de
+    // Windows) seguia ahi ocupando el lugar despues de reiniciar MuMu -- power-cyclear la VM no
+    // toca el proceso de AHK para nada, asi que el mismo proceso trabado seguia sin engancharse
+    // nunca, en loop, sin que el usuario tuviera que estar presente para forzar "Finalizar
+    // tarea" a mano. Se fuerza su cierre (mismo mecanismo elevado por Tarea Programada que ya
+    // usa el auto-apagado sin cuentas) ANTES del power-cycle.
+    //
+    // CORRECCION 2026-08-31 (aclarado en vivo por el usuario tras confirmar que la instancia 2
+    // se quedo sin NINGUN AHK corriendo despues de este paso): a diferencia de un power-cycle
+    // de MuMu solo (que deja el AHK VIEJO vivo, esperando a reengancharse solo), matar el
+    // proceso colgado entero NO deja nada corriendo para esa instancia -- hay que relanzar el
+    // script fresco nosotros mismos. Una vez relanzado, el propio script de Kevin queda
+    // esperando a que la instancia este disponible y se engancha solo apenas hace match (mismo
+    // criterio confirmado en vivo por el usuario).
+    if (elAhkEstaColgadoHb(index)) {
+        console.error(`[HB] AHK de la instancia ${index} detectado colgado (Not Responding) -- forzando su cierre antes de reiniciar MuMu.`);
+        forzarCierreAhkInstanciaHb(index);
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const rutaRaiz = await obtenerRutaRaizHb();
+        if (!relanzarScriptAhkHb(index, rutaRaiz)) {
+            console.error(`[HB] No se pudo relanzar el script AHK de la instancia ${index} tras cerrar el colgado.`);
+        }
+    }
 
     try {
         execFileSync(managerPath, ['control', 'shutdown', '-v', String(index)], { windowsHide: true, timeout: 15000 });
@@ -287,12 +440,30 @@ async function recuperarInstanciaCongelada(index) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
     }
 
-    try {
-        execFileSync(managerPath, ['control', 'launch', '-v', String(index)], { windowsHide: true, timeout: 15000 });
-    } catch (e) {
-        console.error(`[HB] Error prendiendo instancia ${index} para recuperacion:`, e?.stderr?.toString() || e?.message || e);
-        return false;
+    // Bug real reportado en vivo 2026-08-31: MuMuManager puede devolver un error DENTRO del
+    // JSON (ej. {"errcode":-502,"errmsg":"mainnx request failed"}) sin lanzar excepcion ni
+    // devolver un exit code distinto de 0 -- antes esto se trataba como "encendido pedido
+    // con exito" y se pasaba directo a esperar 60s a que Android arrancara, cosa que nunca
+    // iba a pasar. Confirmado en vivo: el mismo error salio 2 veces seguidas en instancias
+    // distintas, sugiriendo que es transitorio (servicio de MuMu momentaneamente ocupado) --
+    // se reintenta unas veces con espera antes de rendirse, para que esto se resuelva solo
+    // sin necesitar que alguien este ahi para abrirla a mano.
+    let lanzada = false;
+    for (let intento = 0; intento < 3 && !lanzada; intento++) {
+        if (intento > 0) await new Promise((resolve) => setTimeout(resolve, 5000));
+        try {
+            const salida = execFileSync(managerPath, ['control', 'launch', '-v', String(index)], { windowsHide: true, timeout: 15000 }).toString();
+            const resultado = JSON.parse(salida);
+            if (resultado?.errcode === 0 || resultado?.errcode === undefined) {
+                lanzada = true;
+            } else {
+                console.error(`[HB] MuMuManager devolvio error al prender instancia ${index} (intento ${intento + 1}/3): ${resultado.errmsg || resultado.errcode}`);
+            }
+        } catch (e) {
+            console.error(`[HB] Error prendiendo instancia ${index} para recuperacion (intento ${intento + 1}/3):`, e?.stderr?.toString() || e?.message || e);
+        }
     }
+    if (!lanzada) return false;
     // A pedido explicito del usuario 2026-08-21 (bug real en vivo: la ventana quedaba mal
     // ubicada/con tamaño raro despues de una recuperacion automatica, porque este flujo nunca
     // llamaba al mismo acomodo de ventanas que ya usa Main Trade). No bloqueante -- cosmetico,
@@ -314,13 +485,27 @@ async function recuperarInstanciaCongelada(index) {
         if (infoBoot?.is_android_started) { androidListo = true; break; }
     }
     if (androidListo) {
-        const reabierta = await reabrirAppPtcgpHb(managerPath, index);
+        // "Android listo" (is_android_started) no significa que el daemon de ADB ya
+        // este aceptando comandos de forma confiable -- bug real visto en vivo
+        // (2026-08-31): "error: closed" al reabrir la app justo despues de detectar
+        // Android listo, dejando la instancia con MuMu abierto pero el juego nunca
+        // reabierto. Reintenta unas veces con espera antes de rendirse.
+        let reabierta = false;
+        for (let intento = 0; intento < 4 && !reabierta; intento++) {
+            if (intento > 0) await new Promise((resolve) => setTimeout(resolve, 3000));
+            reabierta = await reabrirAppPtcgpHb(managerPath, index);
+        }
         if (!reabierta) console.error(`[HB] No se pudo reabrir la app por ADB en instancia ${index} (MuMu si arranco) -- puede necesitar el Reload/reintento manual del AHK igual.`);
-    } else {
-        console.error(`[HB] Instancia ${index}: Android no termino de arrancar en 60s, no se intento reabrir la app por ADB.`);
+        // Bug real reportado en vivo 2026-08-31: esto siempre devolvia true aca abajo sin
+        // importar si la app realmente reabrio o no -- avisarInstanciaCongeladaSiHaceFalta
+        // mandaba "auto-recovered" (que se autoborra a los 30s) igual, y como "avisado" ya
+        // queda marcado, la instancia se quedaba muerta para siempre sin ningun aviso
+        // persistente ni boton para reintentar a mano.
+        return reabierta;
     }
 
-    return true;
+    console.error(`[HB] Instancia ${index}: Android no termino de arrancar en 60s, no se intento reabrir la app por ADB.`);
+    return false;
 }
 
 async function enviarConThumbnail(url, metodo, payload) {
@@ -430,7 +615,7 @@ async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, ti
         // "auto-recovery failed" con el boton manual, en vez de morir en silencio.
         let recuperado = false;
         try {
-            recuperado = await recuperarInstanciaCongelada(instId);
+            recuperado = await recuperarInstanciaCongeladaEnCola(instId);
         } catch (e) {
             console.error(`[HB] Excepcion sin capturar en recuperarInstanciaCongelada(${instId}), tratada como fallo de recuperacion:`, e?.message || e);
         }
@@ -441,7 +626,12 @@ async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, ti
         } else {
             titulo = '⚠️ Frozen instance detected — auto-recovery failed';
             cuerpo = `**Instance ${instId}** hasn't opened any new packs in the last ${minutos} minute(s) (stuck at **${packs}** packs) while others keep progressing, and the automatic restart didn't work (MuMuManager.exe not found, or it failed to respond). Try manually, or use the button below.`;
-            boton = { type: 2, style: 4, custom_id: `heartbeat_reload_ahk::${instId}`, label: '🔄 Reload AHK' };
+            // Renombrado de "Reload AHK" (2026-08-31, a pedido explicito del usuario): ese
+            // boton antes SOLO mandaba Shift+F5 al panel de AHK, asumiendo que MuMu ya estaba
+            // prendido -- inutil si la auto-recuperacion fallo justamente porque MuMu no
+            // arranco (ver bot.js, mismo customId). Ahora hace el ciclo completo: prende MuMu
+            // si hace falta, reabre el juego por ADB, y recien despues intenta el reload.
+            boton = { type: 2, style: 4, custom_id: `heartbeat_reload_ahk::${instId}`, label: '🔧 Restart Instance' };
         }
     }
 
@@ -484,6 +674,61 @@ async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, ti
 // ruta_raiz) — como heartbeat.js corre en la misma PC, se puede leer directo
 // en vez de depender de lo que llega por Discord. Se lee solo la cola del
 // archivo (pueden pesar 1MB+) en vez de todo entero.
+// Lee el ultimo "stuck" real que el PROPIO script de Kevin ya detecto y resolvio solo (2026-08-31,
+// a pedido explicito del usuario: "por que no mejor leemos los logs de cada instancia" -- Kevin
+// ya tiene su propia deteccion de atascos por PANTALLA especifica, mas fina y rapida que la
+// nuestra por packs estancados, incluida Main -- que ni siquiera abre sobres, asi que nuestro
+// chequeo de packs nunca la cubre). Formato real visto en Log_Main.txt:
+//   [warn] Instance Main has been stuck at Social for 90s. (EL: 4521, sT: 0) Killing it...
+//   [info] Restarted game. Reason: Stuck at Social...
+// Solo reporta EVENTOS NUEVOS (dedupeado por el timestamp exacto de la linea, guardado en
+// statsCache) -- Kevin ya se recupera solo, esto es puramente informativo.
+function leerUltimoStuckKevin(rutaLogsInstancias, instId) {
+    if (!rutaLogsInstancias) return null;
+    try {
+        const rutaLog = path.join(rutaLogsInstancias, `Log_${instId}.txt`);
+        if (!fs.existsSync(rutaLog)) return null;
+        const stats = fs.statSync(rutaLog);
+        const tamanoLectura = Math.min(stats.size, 4000);
+        const fd = fs.openSync(rutaLog, 'r');
+        const buffer = Buffer.alloc(tamanoLectura);
+        fs.readSync(fd, buffer, 0, tamanoLectura, Math.max(0, stats.size - tamanoLectura));
+        fs.closeSync(fd);
+        const lineas = buffer.toString('utf8').trim().split(/\r?\n/);
+        for (let i = lineas.length - 1; i >= 0; i--) {
+            const m = lineas[i].match(/^\[([^\]]+)\]\s*\[warn\]\s*Instance\s+\S+\s+has been stuck at\s+(\S+)\s+for\s+(\d+)s/i);
+            if (m) return { timestamp: m[1], razon: m[2], segundos: m[3] };
+        }
+        return null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function reportarStuckKevinSiEsNuevo(webhookUrl, instId, rutaLogsInstancias) {
+    if (!webhookUrl) return;
+    const stuck = leerUltimoStuckKevin(rutaLogsInstancias, instId);
+    if (!stuck) return;
+    statsCache[instId] = statsCache[instId] || {};
+    if (statsCache[instId].ultimoStuckKevin === stuck.timestamp) return; // ya reportado
+    statsCache[instId].ultimoStuckKevin = stuck.timestamp;
+    guardarCache();
+    try {
+        const respuesta = await axios.post(`${webhookUrl}?wait=true`, {
+            embeds: [{
+                title: 'ℹ️ Kevin auto-recovered a stuck screen',
+                description: `**Instance ${instId}** was stuck at **${stuck.razon}** for ${stuck.segundos}s — Kevin's own tool detected it and restarted the game automatically. No action needed.`,
+                color: 0x5865F2
+            }]
+        });
+        if (respuesta?.data?.id) {
+            setTimeout(() => { axios.delete(`${webhookUrl}/messages/${respuesta.data.id}`).catch(() => {}); }, 30000);
+        }
+    } catch (e) {
+        console.error(`[HB] Error mandando aviso de stuck de Kevin (${instId}):`, e?.message || e);
+    }
+}
+
 function instanciaSinCuentasElegibles(rutaLogsInstancias, instId) {
     if (!rutaLogsInstancias) return false;
     try {
@@ -641,7 +886,19 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
             console.log(`[HB-DEBUG] Config seleccionada canal=${hbConfig.canal_id} webhook=${redactarValor(hbConfig.webhook_url)}`);
 
             let DISCORD_WEBHOOK = hbConfig.webhook_url;
-            const RUTA_BALANCE_RESULT = rutaConfig.webhook_url; 
+
+            // Reporta stuck's que el propio Kevin ya detecto/resolvio solo (ver
+            // leerUltimoStuckKevin) -- incluye "Main" (nunca cubierta por el chequeo de packs
+            // estancados de mas abajo, ya que Main no abre sobres) mas cualquier instancia
+            // numerada ya conocida por ciclos anteriores. No bloqueante -- puramente
+            // informativo, nunca debe frenar el resto del procesamiento del heartbeat.
+            (async () => {
+                for (const inst of ['Main', ...Object.keys(statsCache).filter(k => k !== 'Main')]) {
+                    await reportarStuckKevinSiEsNuevo(DISCORD_WEBHOOK, inst, RUTA_LOGS_INSTANCIAS).catch(() => {});
+                }
+            })().catch(() => {});
+
+            const RUTA_BALANCE_RESULT = rutaConfig.webhook_url;
             const RUTA_CARPETA_XML = path.dirname(RUTA_BALANCE_RESULT); 
             const RUTA_ID_TXT_LEGACY = path.join(__dirname, 'mensaje_id.txt'); 
 

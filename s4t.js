@@ -728,6 +728,35 @@ function buscarPullPorFechaObjetivo(data, fechaObjetivo) {
     return mejor;
 }
 
+// Busqueda RECURSIVA por subcarpetas (2026-08-31, bug real reportado en vivo: el XML de un
+// usuario nunca se encontraba por este camino, pero "Extract XML" -- que SI busca recursivo,
+// ver buscarArchivoXmlPorNombre en bot.js -- lo encontraba sin problema en el mismo folder
+// configurado. Confirmado: el XML vivia en una subcarpeta de "Ruta XML Cuentas", no suelto en
+// la raiz. Duplicado a proposito, mismo criterio que bot.js.
+function buscarArchivoXmlRecursivo(rutaBase, nombreBuscado) {
+    if (!rutaBase || !fs.existsSync(rutaBase)) return null;
+    const objetivoNorm = nombreBuscado.toLowerCase();
+    const pendientes = [rutaBase];
+    while (pendientes.length) {
+        const actual = pendientes.pop();
+        let entradas;
+        try {
+            entradas = fs.readdirSync(actual, { withFileTypes: true });
+        } catch (e) {
+            continue;
+        }
+        for (const entrada of entradas) {
+            const rutaCompleta = path.join(actual, entrada.name);
+            if (entrada.isDirectory()) {
+                pendientes.push(rutaCompleta);
+            } else if (entrada.name.toLowerCase() === objetivoNorm) {
+                return rutaCompleta;
+            }
+        }
+    }
+    return null;
+}
+
 function resolverXmlDesdeEntrada(req, archivo, rutaXmlCfg) {
     if (req.files && req.files.length) {
         const xmlAdjunto = req.files.find(f => f.originalname && f.originalname.toLowerCase().endsWith('.xml'));
@@ -747,6 +776,14 @@ function resolverXmlDesdeEntrada(req, archivo, rutaXmlCfg) {
         if (fs.existsSync(candidato) && fs.lstatSync(candidato).isFile()) {
             return { xmlContent: fs.readFileSync(candidato, 'utf8'), xmlName: path.basename(candidato), source: 'disk' };
         }
+    }
+
+    // Respaldo recursivo -- confirmado en vivo que el archivo puede vivir en una subcarpeta
+    // (ej. "Saved\<algo>\20260829040257_13.xml") en vez de suelto en la raiz configurada.
+    const nombreConExtension = nombreArchivo.toLowerCase().endsWith('.xml') ? nombreArchivo : `${nombreArchivo}.xml`;
+    const encontrado = buscarArchivoXmlRecursivo(rutaXml, nombreConExtension);
+    if (encontrado) {
+        return { xmlContent: fs.readFileSync(encontrado, 'utf8'), xmlName: path.basename(encontrado), source: 'disk-recursivo' };
     }
 
     return null;
