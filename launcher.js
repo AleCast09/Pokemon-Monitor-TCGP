@@ -34,7 +34,7 @@ if (!process.env.MONITOR_LAUNCHER_HIDDEN) {
 try {
     for (const nombre of ['MonitorPokemon.exe', 'bundle.js']) {
         const ruta = path.join(__dirname, nombre);
-        if (fs.existsSync(ruta)) execSync(`attrib +h "${ruta}"`);
+        if (fs.existsSync(ruta)) execSync(`attrib +h "${ruta}"`, { windowsHide: true });
     }
 } catch (e) { /* no critico -- si falla, el archivo sigue funcionando, solo queda visible */ }
 
@@ -71,7 +71,7 @@ function avisarYaAbierto() {
     // ser muy usada históricamente en malware — nada confiable para esto.
     const mensaje = 'Monitor Pokemon is already running in the background. No need to open it again.\n\nIf you want to change the token or add the Google Drive API key, open "MonitorPokemonPanel" and use "Open Token / API Settings".';
     const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${mensaje}', 'Monitor Pokemon')`;
-    exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script}"`, () => {});
+    exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script}"`, { windowsHide: true }, () => {});
 }
 
 const ACCESO_CONFIGURAR_PATH = path.join(__dirname, 'Change token or API key.lnk');
@@ -81,7 +81,7 @@ function crearAccesoDirectoConfigurar() {
     const destino = path.join(__dirname, 'Advanced', 'Reconfigure.bat');
     if (!fs.existsSync(destino)) return;
     const script = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${ACCESO_CONFIGURAR_PATH.replace(/'/g, "''")}'); $s.TargetPath = '${destino.replace(/'/g, "''")}'; $s.WorkingDirectory = '${__dirname.replace(/'/g, "''")}'; $s.Save()`;
-    exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, () => {});
+    exec(`powershell -NoProfile -WindowStyle Hidden -Command "${script.replace(/"/g, '\\"')}"`, { windowsHide: true }, () => {});
 }
 
 // v1.5.19 dejo de crear "Monitor Pokemon.lnk" (redundante con MonitorPokemonPanel.exe,
@@ -435,7 +435,7 @@ function cerrarTodo() {
         if (def.instancia && !def.instancia.killed) def.instancia.kill();
     }
     if (procesoBandeja && !procesoBandeja.killed) {
-        try { exec(`taskkill /pid ${procesoBandeja.pid} /T /F`); } catch (e) {}
+        try { exec(`taskkill /pid ${procesoBandeja.pid} /T /F`, { windowsHide: true }); } catch (e) {}
     }
     liberarLock();
     process.exit(0);

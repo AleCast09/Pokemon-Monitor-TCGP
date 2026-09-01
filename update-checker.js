@@ -272,7 +272,7 @@ async function descargarYExtraerAssets(remota) {
             `$zip.Dispose()`,
             `if ($malos) { 'UNSAFE' } else { 'SAFE' }`
         ].join('; ');
-        const resultadoValidacion = execSync(`powershell -NoProfile -Command "${scriptValidar}"`, { encoding: 'utf8' }).trim();
+        const resultadoValidacion = execSync(`powershell -NoProfile -Command "${scriptValidar}"`, { encoding: 'utf8', windowsHide: true }).trim();
         if (resultadoValidacion !== 'SAFE') {
             console.error('DEBUG: assets.zip contiene rutas sospechosas, se aborta la extracción por seguridad.');
             return;
@@ -282,7 +282,7 @@ async function descargarYExtraerAssets(remota) {
         // nuevos, pero no borra los que ya no vienen en el zip — alcanza para
         // el caso de uso real (sumar assets nuevos), no hace falta más.
         const script = `Expand-Archive -Path '${ASSETS_ZIP_TEMP_PATH}' -DestinationPath '${__dirname}' -Force`;
-        execSync(`powershell -NoProfile -Command "${script}"`, { stdio: 'ignore' });
+        execSync(`powershell -NoProfile -Command "${script}"`, { stdio: 'ignore', windowsHide: true });
     } catch (e) {
         console.error('DEBUG: error actualizando assets/:', describirError(e));
     } finally {
