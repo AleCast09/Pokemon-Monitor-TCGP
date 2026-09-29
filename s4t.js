@@ -678,6 +678,39 @@ function clasificarGodPack(cartas) {
     return 'dead';
 }
 
+// Indice nombre(normalizado)->codigos, y su uso para resolver las cartas notables detectadas
+// por texto a codigos reales (2026-09-09, bug real reproducido en vivo dos veces: el collage
+// del canal general de S4T mostro un sobre completamente distinto al que genero la alerta --
+// "Archaludon"/"Team Rocket's Raticate EX" en el texto, pero Gimmighoul/Espurr/Basculegion/
+// Pincurchin en las imagenes; despues "Team Rocket's Tinkaton" en el texto, mismo problema).
+// cardmaster.json es codigo->{Name, ...} en el idioma interno del juego -- en_US.json traduce
+// ese Name interno al nombre en ingles, que es el que se parsea del texto del mensaje.
+function construirIndiceNombrePorCodigo(masterData) {
+    const indice = new Map();
+    const cardmaster = masterData?.cardmaster || {};
+    for (const code of Object.keys(cardmaster)) {
+        const card = cardmaster[code];
+        if (!card || !card.Name) continue;
+        const nombreIngles = (masterData.en_US && masterData.en_US[card.Name]) || card.Name;
+        const normalizado = normalizeMatch(normalizarNombreEx(nombreIngles));
+        if (!normalizado) continue;
+        if (!indice.has(normalizado)) indice.set(normalizado, new Set());
+        indice.get(normalizado).add(normalizeCode(code));
+    }
+    return indice;
+}
+
+function obtenerCodigosEsperados(cartas, indiceNombrePorCodigo) {
+    const codigos = new Set();
+    for (const c of (cartas || [])) {
+        if (!c?.nombre) continue;
+        const normalizado = normalizeMatch(c.nombre);
+        const candidatos = indiceNombrePorCodigo.get(normalizado);
+        if (candidatos) for (const code of candidatos) codigos.add(code);
+    }
+    return codigos;
+}
+
 function obtenerPullsDesdeCuenta(data) {
     if (!data || typeof data !== 'object') return [];
     if (Array.isArray(data.pulls)) return data.pulls.filter(p => p && p.timestamp && Array.isArray(p.cards));
@@ -687,11 +720,45 @@ function obtenerPullsDesdeCuenta(data) {
     return Object.values(data).filter(item => item && item.timestamp && Array.isArray(item.cards));
 }
 
-function buscarPullPorFechaObjetivo(data, fechaObjetivo) {
+function buscarPullPorFechaObjetivo(data, fechaObjetivo, codigosEsperados) {
     const pulls = obtenerPullsDesdeCuenta(data);
     if (!pulls.length) return null;
 
     const objetivo = fechaObjetivo || new Date();
+
+    // Prioridad 1: coincidencia por CONTENIDO (2026-09-09, causa real confirmada en vivo dos
+    // veces -- ver comentario completo en construirIndiceNombrePorCodigo): esta cuenta abre
+    // sobres cada 10-30s, asi que incluso un hueco de apenas 28-90s (visto en los logs reales)
+    // ya alcanza para que el pull "mas cercano en el tiempo" sea de OTRO sobre distinto al que
+    // genero la alerta -- ninguna tolerancia de tiempo, por chica que sea, es confiable sola.
+    // Si se conocen los codigos de las cartas notables detectadas por texto, se prioriza
+    // CUALQUIER pull dentro de una ventana amplia (10 min, generosa a proposito ya que el
+    // contenido es la garantia real, no el tiempo) que realmente CONTENGA alguna de esas
+    // cartas -- de haber mas de uno, se elige el mas cercano en el tiempo entre esos. Recien si
+    // ninguno califica (ej. carta nueva sin resolver todavia en cardmaster.json) se cae al
+    // viejo criterio de solo cercania en el tiempo, como respaldo.
+    if (codigosEsperados && codigosEsperados.size > 0) {
+        const VENTANA_CONTENIDO_MS = 10 * 60 * 1000;
+        let mejorPorContenido = null;
+        let mejorDiferenciaContenido = Infinity;
+        for (const pull of pulls) {
+            const fechaPull = parseFechaHora(pull.timestamp);
+            if (!fechaPull) continue;
+            const diff = Math.abs(objetivo.getTime() - fechaPull.getTime());
+            if (diff > VENTANA_CONTENIDO_MS) continue;
+            const contieneEsperada = (pull.cards || []).some(raw => codigosEsperados.has(normalizeCode(raw)));
+            if (contieneEsperada && diff < mejorDiferenciaContenido) {
+                mejorDiferenciaContenido = diff;
+                mejorPorContenido = pull;
+            }
+        }
+        if (mejorPorContenido) {
+            console.log(`DEBUG: Pull elegido por CONTENIDO (contiene carta notable esperada), diff=${Math.round(mejorDiferenciaContenido / 1000)}s`);
+            return mejorPorContenido;
+        }
+        console.log('DEBUG: Ningun pull cercano contiene las cartas notables esperadas -- cae al criterio viejo de solo cercania en el tiempo.');
+    }
+
     const claveObjetivoMin = formatearFechaHoraMinutos(objetivo);
     const pullsMismoMinuto = [];
 
@@ -710,6 +777,18 @@ function buscarPullPorFechaObjetivo(data, fechaObjetivo) {
         return pullsMismoMinuto[pullsMismoMinuto.length - 1].pull;
     }
 
+    // Tolerancia maxima agregada (2026-09-09, bug real reportado en vivo: el canal de S4T
+    // mostro "Archaludon"/"Team Rocket's Raticate EX" como cartas notables (texto correcto,
+    // sacado del payload real) pero el COLLAGE de imagenes mostro un sobre totalmente distinto
+    // -- Gimmighoul/Espurr/Basculegion/Pincurchin, ninguna de las 2 cartas notables entre
+    // ellas). Causa real: este fallback elegia el pull MAS CERCANO en el tiempo sin ningun
+    // limite de distancia -- si por la razon que sea (json de la cuenta todavia no se
+    // actualizo, reloj desincronizado, etc.) no hay un pull exacto en el minuto objetivo,
+    // terminaba devolviendo con total confianza un pull de OTRA apertura de sobre, minutos u
+    // horas antes, como si fuera el de ahora. Mas alla de este limite, mejor no mostrar
+    // ninguna imagen de pull (cae al respaldo existente, mostrar solo las cartas notables)
+    // que mostrar una con confianza y que sea la equivocada.
+    const TOLERANCIA_MAXIMA_PULL_MS = 5 * 60 * 1000;
     let mejor = null;
     let mejorDiferencia = Infinity;
 
@@ -723,6 +802,11 @@ function buscarPullPorFechaObjetivo(data, fechaObjetivo) {
             mejorDiferencia = diff;
             mejor = pull;
         }
+    }
+
+    if (mejor && mejorDiferencia > TOLERANCIA_MAXIMA_PULL_MS) {
+        console.log(`DEBUG: pull mas cercano descartado por estar demasiado lejos del objetivo (${Math.round(mejorDiferencia / 1000)}s > ${TOLERANCIA_MAXIMA_PULL_MS / 1000}s)`);
+        return null;
     }
 
     return mejor;
@@ -1327,6 +1411,12 @@ app.post('/', upload.any(), async (req, res) => {
         }
 
         const masterData = rutaMasterCfg ? cargarMaster(rutaMasterCfg.webhook_url) : { cardmaster: {}, en_US: {} };
+        // Indice nombre->codigos (2026-09-09, ver comentario completo en buscarPullPorFechaObjetivo):
+        // deja cruzar las cartas notables detectadas por texto (solo tienen nombre, no codigo)
+        // contra el contenido real de cada pull candidato (que solo tiene codigos), para elegir
+        // por CONTENIDO en vez de solo por cercania en el tiempo.
+        const indiceNombrePorCodigo = construirIndiceNombrePorCodigo(masterData);
+        const codigosEsperados = obtenerCodigosEsperados(cartas, indiceNombrePorCodigo);
         const mapa = rutaMasterCfg ? obtenerMapa(rutaMasterCfg.webhook_url) : {};
         const cardMap = rutaMasterCfg ? cargarCardMap(rutaMasterCfg.webhook_url) : {};
         let accountData = null;
@@ -1345,7 +1435,7 @@ app.post('/', upload.any(), async (req, res) => {
                     console.log(`DEBUG: XML source=${xmlInput.source} xml=${xmlInput.xmlName} accountId=${redactarValor(accountId)} jsonPath=${rutaSegura(jsonPath)}`);
                     if (fs.existsSync(jsonPath)) {
                         accountData = cargarJson(jsonPath);
-                        pullSeleccionado = buscarPullPorFechaObjetivo(accountData, fechaObjetivo);
+                        pullSeleccionado = buscarPullPorFechaObjetivo(accountData, fechaObjetivo, codigosEsperados);
                         if (pullSeleccionado) {
                             console.log('DEBUG: Pull seleccionado:', pullSeleccionado.timestamp, 'objetivo=', formatearFechaHoraMinutos(fechaObjetivo));
                             for (const rawCardCode of pullSeleccionado.cards) {
@@ -1523,20 +1613,25 @@ app.post('/', upload.any(), async (req, res) => {
             if (cartas.length > 0) console.log('DEBUG: cartas sintetizadas desde pull wishlist=', cartas.map(c => c.nombre).join(', '));
         }
 
-        if (cartas.length > 0 || cartasPull.length > 0) {
+        // Requiere cartasPull real (2026-09-09, a pedido explicito del usuario -- "no debe
+        // llegar, por algo cada canal tiene cada categoria donde va cada imagen"): el canal
+        // general de S4T existe especificamente para mostrar el SOBRE COMPLETO real (comunes
+        // incluidas) -- si no se encontro un pull confiable (ver buscarPullPorFechaObjetivo),
+        // no tiene sentido mandar aca una version reducida (solo la carta notable sola), que
+        // ademas duplica lo que el canal de categoria ya manda por su cuenta (ese SI resuelve
+        // el arte oficial por nombre, sin depender de ningun pull). Antes caia a mostrar la
+        // notable sola como respaldo -- eso es justo lo que este canal NO deberia mostrar.
+        if (cartasPull.length > 0) {
             // El canal general de S4T muestra el texto de la(s) carta(s) NOTABLE(s)
             // nomás (igual que siempre — el mismo texto corto que ya se manda a los
             // canales de rareza), pero la FOTO es el sobre completo tal cual salió
             // (comunes incluidas, con el corazón marcando la carta de wishlist si la
             // hay) — así queda igual que se veía antes de los cambios de HD, pedido
-            // explícito 2026-07-23. cartasPull tiene todas las cartas del pull real;
-            // si no hay ruta_json_cuentas configurada (o no se encontró el pull), se
-            // cae a mostrar solo las notables como imagen también, como respaldo.
+            // explícito 2026-07-23.
             const displayGeneral = cartas.length > 0
                 ? cartas.map(c => c.display).join('\n\n')
                 : cartasPull.filter(c => c.isWishlist).map(c => `> **${normalizarNombreEx(c.englishName || c.name)}**`).join('\n\n');
-            const cartasGeneral = cartasPull.length > 0 ? cartasPull : cartas.map(c => c.matchedCard || c);
-            envios.push({ tipoCanal: 's4t', display: displayGeneral, cartasGeneral });
+            envios.push({ tipoCanal: 's4t', display: displayGeneral, cartasGeneral: cartasPull });
         }
 
         // Canal aparte "s4t-categoria": el comportamiento VIEJO de "s4t" antes de

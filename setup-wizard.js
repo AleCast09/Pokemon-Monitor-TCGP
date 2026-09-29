@@ -255,6 +255,14 @@ body {
         </div>
       </div>
 
+      <label class="field">
+        <span class="field__label">Discord server ID for Trade<span class="badge badge--opt">OPTIONAL</span></span>
+        <span class="field__hint">Only if you want the Trade button enabled. It stays disabled everywhere until you paste your own server ID here. Discord Settings &rarr; Advanced &rarr; Developer Mode, then right-click your server name &rarr; Copy Server ID.</span>
+        <span class="input-wrap">
+          <input id="guildInput" type="text" placeholder="123456789012345678 (leave empty to keep Trade disabled)" autocomplete="off">
+        </span>
+      </label>
+
       <div class="toggle-card is-locked" id="hdCard">
         <div class="toggle-card__text">
           <p class="toggle-card__title">Save high-definition images on your PC</p>
@@ -421,7 +429,7 @@ async function guardar() {
     const resp = await fetch('/guardar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, driveKey, driveKeyQuitada, hdEnabled })
+      body: JSON.stringify({ token, driveKey, driveKeyQuitada, hdEnabled, guildTrade: document.getElementById('guildInput').value.trim() })
     });
     if (!resp.ok) throw new Error('fallo');
 
@@ -504,6 +512,15 @@ function ejecutarWizard() {
                         } else {
                             // Drive key no tocada (ya estaba conectada) — solo se actualiza el switch de HD.
                             valores.GOOGLE_DRIVE_HD_ENABLED = valores.GOOGLE_DRIVE_API_KEY ? String(hdEnabled) : 'false';
+                        }
+                        // ID del servidor donde se habilita el boton de Trade (2026-09-25, a
+                        // pedido de Ale para la release publica): antes solo se podia poner
+                        // editando el .env a mano, asi que en la practica nadie que recibiera el
+                        // paquete podia habilitarlo. Vacio = Trade sigue deshabilitado en todos
+                        // los servidores, que es el comportamiento por defecto y seguro.
+                        if (datos.guildTrade !== null && datos.guildTrade !== undefined) {
+                            const gid = String(datos.guildTrade).trim();
+                            valores.GUILD_ID_TRADE_HABILITADO = /^[0-9]{5,25}$/.test(gid) ? gid : '';
                         }
                         guardarEnv(valores);
 

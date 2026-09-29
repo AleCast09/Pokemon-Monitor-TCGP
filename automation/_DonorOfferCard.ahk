@@ -29,6 +29,7 @@ if (A_Args.Length() >= 4) {
 }
 
 #Include %A_ScriptDir%\_AdbUtils.ahk
+#Include %A_ScriptDir%\_ZonasNeedles.ahk
 #Include %A_ScriptDir%\_OcrUtils.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Extra.ahk
@@ -69,6 +70,34 @@ AdbConectar(adbPath, puerto)
 ; 100% por ADB como siempre, el chequeo rapido simplemente no se usa en ese caso.
 global g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
 
+; Re-resolucion del handle (2026-09-23): igual que en _WaitWelcomeScreens*.ahk y
+; _DonorRespondAndFinalize.ahk. Se resolvia UNA sola vez arriba; si la ventana no existia en ese
+; instante o se recreo despues, capturarVentana devuelve 0 para siempre y TODA la comparacion de
+; arte (que es lo unico que decide el match del Wishlist) queda ciega sin decir nada.
+asegurarHwndFast() {
+    global g_hwndFast, g_winTitle
+    if (!g_hwndFast || !DllCall("IsWindow", "Ptr", g_hwndFast))
+        g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
+    return g_hwndFast
+}
+
+; Fuerza el tamaño nativo esperado (283x532) apenas arranca (2026-09-04, bug real
+; reproducido en vivo -- "no_aparecio_trade_landing_paso6"): _SendFriendRequest.ahk (el
+; script que corre justo ANTES en el pipeline) restaura la ventana a su tamaño ORIGINAL
+; (grande) al terminar (ver RestoreMuMuWindow ahi) -- pero este script nunca vuelve a
+; achicarla, asi que arranca corriendo TODOS sus chequeos nativos (capturarVentana,
+; calibrados contra ~275x528) contra una ventana mas grande, haciendolos fallar en
+; silencio uno por uno (el peor caso: el popup de "trade terminated", que solo usa el
+; camino nativo sin respaldo por ADB, nunca se cierra y tapa el boton del paso siguiente
+; para siempre). Mismo WinMove que ya usa _SendFriendRequest.ahk en su propio arranque.
+if (g_hwndFast) {
+    WinGetPos, , , wFastActual, hFastActual, ahk_id %g_hwndFast%
+    if (wFastActual != 283 || hFastActual != 532) {
+        WinMove, ahk_id %g_hwndFast%, , , , 283, 532
+        Sleep, 200
+    }
+}
+
 tap(x, y, esperaMs := 0) {
     static convX := 540/283, convY := 960/488, offset := 40
     global adbPath, puerto
@@ -94,7 +123,17 @@ clickMouseReal(nativeX, nativeY) {
     ; este visible/al frente), esto mueve el mouse REAL de la PC -- si otra ventana tapara la
     ; instancia en ese pixel exacto, el click caeria en el lugar equivocado. Se restaura el
     ; foco anterior despues del click para no interferir con lo que el usuario este haciendo.
+    ; Guarda y restaura tambien la POSICION del cursor, no solo el foco de ventana (2026-09-03,
+    ; a pedido explicito del usuario -- "no me gustaria hacer un click falso por accidente" tras
+    ; ver el cursor real moverse solo mientras el usaba la PC en otra cosa): antes el cursor se
+    ; quedaba donde clickeo, visible moviendose solo por la pantalla del usuario. Restaurar la
+    ; posicion despues NO elimina el riesgo de que un click manual del usuario se cruce con este
+    ; en el instante exacto (siguen compartiendo el mismo cursor fisico) -- pero al menos no deja
+    ; el mouse desplazado el resto del tiempo, reduciendo la ventana real de conflicto a los
+    ; ~100-200ms que dura el propio MouseClick.
     hwndAnterior := WinExist("A")
+    CoordMode, Mouse, Screen
+    MouseGetPos, xAnterior, yAnterior
     WinActivate, ahk_id %g_hwndFast%
     WinWaitActive, ahk_id %g_hwndFast%, , 2
     VarSetCapacity(pt, 8, 0)
@@ -103,8 +142,8 @@ clickMouseReal(nativeX, nativeY) {
     DllCall("ClientToScreen", "ptr", g_hwndFast, "ptr", &pt)
     screenX := NumGet(pt, 0, "int")
     screenY := NumGet(pt, 4, "int")
-    CoordMode, Mouse, Screen
     MouseClick, Left, %screenX%, %screenY%, 1, 0
+    MouseMove, %xAnterior%, %yAnterior%, 0
     if (hwndAnterior && hwndAnterior != g_hwndFast)
         WinActivate, ahk_id %hwndAnterior%
     return true
@@ -162,7 +201,7 @@ verificarEsperandoRespuestaUnaVez(nombreNeedle) {
         pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
         if (pNeedle) {
             vPos := ""
-            encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 15) = 1)
+            encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, 15, nombreNeedle) = 1)
         }
         Gdip_DisposeImage(pBitmap)
     } catch e {
@@ -194,7 +233,7 @@ tapSiApareceNeedle(nombreNeedle, x, y, variation := 30, nombreNeedleNativo := ""
         pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
         if (pNeedle) {
             vPos := ""
-            encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+            encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
         }
         Gdip_DisposeImage(pBitmap)
     } catch e {
@@ -230,7 +269,7 @@ tapSiApareceNeedlePolling(nombreNeedle, x, y, timeoutMs := 10000) {
                     ; los 3) -- verificado con un diff pixel a pixel real: el borde de la flecha
                     ; tenia un pixel con diferencia de canal individual de 41/255, por eso nunca
                     ; pasaba con 30 pese a que el needle en si es correcto (avg de solo 0.86/255).
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 50) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, 50, nombreNeedle) = 1)
                 }
                 Gdip_DisposeImage(pBitmap)
             } catch e {
@@ -266,7 +305,7 @@ verificarNoCrasheado() {
         pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_tapstart_logo.png")
         if (pNeedle) {
             vPos := ""
-            if (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 75) = 1)
+            if (buscarNeedleZonal(pBitmap, pNeedle, vPos, 75, "own_tapstart_logo") = 1)
                 crasheado := true
         }
         Gdip_DisposeImage(pBitmap)
@@ -297,7 +336,7 @@ chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
     pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
     if (pNeedle) {
         vPos := ""
-        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variationNativo, nombreNeedleNativo) = 1)
         Gdip_DisposeImage(pNeedle)
     }
     Gdip_DisposeImage(pBitmap)
@@ -337,7 +376,7 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedl
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
                 }
                 ; Chequeo de crash EN CADA poll (2026-08-19, bug real reproducido en vivo --
                 ; ver comentario completo en _MainAcceptTradeOffer.ahk, mismo fix aplicado a
@@ -347,7 +386,7 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedl
                     pCrash := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_tapstart_logo.png")
                     if (pCrash) {
                         vPosCrash := ""
-                        if (Gdip_ImageSearch(pBitmap, pCrash, vPosCrash, 0, 0, 0, 0, 75) = 1) {
+                        if (buscarNeedleZonal(pBitmap, pCrash, vPosCrash, 75, "own_tapstart_logo") = 1) {
                             Gdip_DisposeImage(pBitmap)
                             ExitConError("juego_crasheo_volvio_al_titulo")
                         }
@@ -357,6 +396,13 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedl
             }
         }
         if (encontrado) {
+            ; Mismo asentamiento que el camino rapido de arriba (2026-09-04, bug real
+            ; reproducido en vivo -- "no_aparecio_x_extra_paso3": el toque del paso2 (Cancel/OK
+            ; de Friend ID Search) caia sobre la coordenada correcta pero no registraba, dejando
+            ; el dialogo abierto para siempre -- mismo patron de bug ya encontrado y arreglado
+            ; hoy en _MainAcceptFriendRequest.ahk (2 veces). Esta funcion generica se usa en casi
+            ; todos los pasos de este script, asi que este fix cubre todos los call sites de una.
+            Sleep, 900
             tap(x, y)
             return true
         }
@@ -396,7 +442,7 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
                 }
                 Gdip_DisposeImage(pBitmap)
             }
@@ -422,8 +468,11 @@ esperarTradeIconOBadgeRechazo(timeoutMs := 15000) {
         ; Speed Mod en 3x -- mismo patron ya encontrado y arreglado hoy en
         ; _MainAcceptFriendRequest.ahk): la needle del tile "Trade" ya matcheaba pero el toque
         ; automatico no registraba, dejando el script parado en Social Hub sin avanzar.
+        ; Subido de 400 a 900ms (2026-09-04, misma falla reproducida en vivo de nuevo -- 400ms
+        ; no alcanzaba consistente, 900ms es el valor que probo funcionar en todo el resto del
+        ; pipeline hoy).
         if (chequeoRapidoNeedle("own_donoroffer_trade_icon_native", 30) || chequeoRapidoNeedle("own_donoroffer_notradeagreement_badge_native", 30)) {
-            Sleep, 400
+            Sleep, 900
             tap(207, 402)
             return true
         }
@@ -437,13 +486,13 @@ esperarTradeIconOBadgeRechazo(timeoutMs := 15000) {
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_donoroffer_trade_icon.png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 30) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, 30, "own_donoroffer_trade_icon") = 1)
                 }
                 Gdip_DisposeImage(pBitmap)
             }
         }
         if (encontrado) {
-            Sleep, 400
+            Sleep, 900
             tap(207, 402)
             return true
         }
@@ -470,15 +519,47 @@ esperarTradeIconOBadgeRechazo(timeoutMs := 15000) {
 ; no corta el flujo. El needle own_speedmod_icon no matcheo de forma confiable en las
 ; pruebas de hoy pese a que el icono se veia bien en pantalla -- se usa el toque a ciegas en
 ; (18,109), confirmado funcionando 2 veces en vivo esa misma sesion.
+; Confirmado con el engranaje (2026-09-28, pedido de Ale): antes era un toque a ciegas en el
+; dragoncito; si ese toque no abria el panel, el deslizamiento caia sobre el juego y la velocidad
+; no cambiaba sin que nadie se enterara. Ahora se toca hasta ver el engranaje del panel abierto
+; (hasta 3 intentos). Si nunca se abre, no se desliza nada y se deja constancia en el log.
+engranajeSpeedModVisible() {
+    return chequeoRapidoNeedle("own_speedmod_panel_gear_native", 30)
+}
+
 deslizarSpeedMod(direccion) {
     global adbPath, puerto
-    tap(18, 109, 900)
+    abierto := false
+    Loop, 3 {
+        tap(18, 109, 0)
+        t := A_TickCount
+        while (A_TickCount - t < 2000) {
+            if (engranajeSpeedModVisible()) {
+                abierto := true
+                break
+            }
+            Sleep, 150
+        }
+        if (abierto)
+            break
+    }
+    if (!abierto) {
+        logDebugWishlist("speed mod: el panel no se abrio tras 3 toques, NO se cambio la velocidad (" . direccion . ")")
+        return false
+    }
+    Sleep, 400
     if (direccion = "min")
         RunWait, %ComSpec% /c ""%adbPath%" -s 127.0.0.1:%puerto% shell input swipe 363 248 33 248 600", , Hide
     else
         RunWait, %ComSpec% /c ""%adbPath%" -s 127.0.0.1:%puerto% shell input swipe 33 248 363 248 600", , Hide
     Sleep, 1000
-    tap(171, 285, 400)  ; minimizar panel
+    Loop, 3 {
+        tap(171, 285, 400)  ; minimizar panel
+        if (!engranajeSpeedModVisible())
+            break
+    }
+    logDebugWishlist("speed mod: velocidad cambiada a " . direccion)
+    return true
 }
 
 ; Swipe vertical en escala logica (229x488), mismo helper usado en los scripts de
@@ -526,7 +607,7 @@ chequeoRapidoNeedleConPosicion(nombreNeedleNativo, variationNativo, ByRef outX, 
     pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
     if (pNeedle) {
         vPos := ""
-        if (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1) {
+        if (buscarNeedleZonal(pBitmap, pNeedle, vPos, variationNativo, nombreNeedleNativo) = 1) {
             encontrado := true
             partes := StrSplit(vPos, ",")
             outX := partes[1]
@@ -564,9 +645,19 @@ esperarChequeoRapido(nombreNeedleNativo, variationNativo, timeoutMs) {
 ; 30 confirmado sin falsos positivos contra 6 capturas de otras pantallas, empieza a fallar
 ; recien en variation 60). Se llama despues de CADA swipe en el loop de paso 2 -- si aparece,
 ; lo cierra y listo, el mismo loop reintenta el swipe en la vuelta siguiente.
+; RETIRADO 2026-09-27 a pedido de Ale: el popup de emblema salia cuando un swipe corto se leia
+; como toque, y eso ya se soluciono (velocidad a 1x antes del perfil). La funcion queda vacia para
+; no tocar los lugares que la llaman.
+; Reusada 2026-09-27 (con Ale, "a un amigo tambien le pasaba"): ahora cierra la pantalla de
+; "Player's Featured" (las cartas destacadas del perfil), que se abre si un deslizamiento en el
+; perfil se lee como toque justo sobre esa seccion. Ahi no existe el corazon de la wishlist y la
+; donante se quedaba trabada. Needle: el icono del ojo tachado de "Hide Buttons" (sin letras;
+; la X de abajo no sirve para reconocerla porque es igual a la de la carta abierta). Se cierra
+; con la X de abajo. Se llama despues de CADA deslizamiento, igual que antes.
 cerrarEmblemPopupSiAparece() {
-    if (chequeoRapidoNeedle("own_donoroffer_emblempopup_close_x_native", 30)) {
-        tap(141, 407, 600)
+    if (chequeoRapidoNeedle("own_donoroffer_featured_hide_native", 30)) {
+        logDebugWishlist("pantalla Player's Featured abierta por error, tocando X")
+        tap(138, 500, 800)
         return true
     }
     return false
@@ -580,10 +671,44 @@ cerrarEmblemPopupSiAparece() {
 ; verdad. La estrella de favorito (marcada o sin marcar) SOLO existe en la vista ampliada de
 ; una carta -- validado en vivo: matchea limpio contra la carta abierta y da 0 contra "Select
 ; a Friend".
+; Needle de respaldo por ADB (2026-09-03, bug real reproducido en vivo con Ale: la estrella de
+; favorito NO existe en absoluto en una carta que Main no tiene ("Not obtained") -- confirmado
+; comparando capturas reales, Repel (que si tiene) muestra estrella+corazon juntos, Magikarp
+; (que no tiene) SOLO muestra el corazon "Wishlist". Ningun tiempo de espera arregla esto: el
+; icono de la estrella simplemente no esta ahi para tocar. El corazon "Wishlist" (boton de
+; agregar ESTA carta al wishlist propio, no un indicador del wishlist de Main) SI esta siempre
+; presente en la misma posicion sin importar si la carta esta obtenida o no -- validado en vivo
+; con match pixel-perfecto contra las 2 capturas reales, y sin match contra "Select a Friend"
+; (maxdiff 99, por encima de cualquier tolerancia razonable). Esta needle es a escala ADB
+; (540x960, recortada de un screenshot real), no nativa -- por eso usa AdbScreenshot en vez de
+; chequeoRapidoNeedle/capturarVentana.
+chequeoCorazonWishlistPorAdb() {
+    global adbPath, puerto
+    tempFile := A_ScriptDir . "\Logs\_donoroffer_openconfirm_check.png"
+    AdbScreenshot(adbPath, puerto, tempFile)
+    if (!FileExist(tempFile))
+        return false
+    encontrado := false
+    try {
+        pBitmap := Gdip_CreateBitmapFromFile(tempFile)
+        pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_donoroffer_wishlistcard_wishlistbtn_adb.png")
+        if (pNeedle) {
+            vPos := ""
+            encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, 30, "own_donoroffer_wishlistcard_wishlistbtn_adb") = 1)
+        }
+        Gdip_DisposeImage(pBitmap)
+    } catch e {
+    }
+    FileDelete, %tempFile%
+    return encontrado
+}
+
 esperarAperturaCartaConfirmada(timeoutMs) {
     inicio := A_TickCount
     Loop {
         if (chequeoRapidoNeedle("own_donoroffer_userprofile_favoritestar_native", 60) || chequeoRapidoNeedle("own_donoroffer_userprofile_favoritestar_marked_native", 60))
+            return true
+        if (chequeoCorazonWishlistPorAdb())
             return true
         cerrarEmblemPopupSiAparece()
         if (A_TickCount - inicio > timeoutMs)
@@ -598,26 +723,152 @@ esperarAperturaCartaConfirmada(timeoutMs) {
 ; a "Select a Friend") nunca encontraba esa pantalla y todo el trade fallaba con
 ; "no_aparecio_selectfriend_paso7b"). Best-effort con timeout corto -- si no encuentra la
 ; needle de cierre, no bloquea el retorno (el llamador sigue con el metodo viejo igual).
+; Reescrito para priorizar el boton Atras de Android (2026-09-03, a pedido explicito del
+; usuario: "debio ir al menu principal y presionar trade" -- en vez de depender de encontrar
+; un boton X puntual desde una posicion de scroll que puede variar, el boton Atras de Android
+; sube un nivel en la pila de navegacion sin importar donde este el scroll, mucho mas directo
+; y confiable que buscar+tocar un needle. Confirmado que AdbKeyBack ya se usa en este mismo
+; archivo (recuperacion de "vista sin controles" de la estrella) -- mismo mecanismo, ya
+; probado. Se manda Atras 2 veces (carta ampliada, si sigue abierta, + perfil) y se confirma
+; que de verdad volvimos a "Select a Friend" antes de devolver el control -- si por algun
+; motivo no alcanza, cae al metodo viejo (buscar+tocar el boton X) como respaldo.
 cerrarPerfilSiEstaAbierto() {
-    if (esperarChequeoRapido("own_donoroffer_userprofile_close_x_native", 60, 2000)) {
-        tap(140, 500, 1000)
+    global adbPath, puerto
+    ; Reescrito con mas margen de asentamiento (2026-09-03, bug real reproducido en vivo con
+    ; Ale: "le dio doble click al X y no entro en trade del perfil del usuario" -- el chequeo
+    ; anterior esperaba solo 700ms fijos antes de decidir si hacia falta un SEGUNDO Atras,
+    ; insuficiente bajo carga real -- terminaba mandando un Atras de mas y se pasaba de largo
+    ; "Select a Friend" hasta la pantalla generica de Trade (un nivel mas atras de lo debido,
+    ; sin forma de "avanzar" de nuevo con el boton Atras). Ahora cada intento hace un POLL real
+    ; (hasta 2.5s, revisando cada 300ms) antes de decidir si hace falta otro Atras, en vez de
+    ; una espera fija corta -- si la pantalla ya llego, nunca dispara un segundo toque de mas.
+    ;
+    ; Reescrito otra vez (2026-09-23) con DOS cambios, tras el tercer
+    ; "no_aparecio_selectfriend_paso7b" real en vivo con Ale (corrida de las 08:54):
+    ;   1) LOG. Esta rutina no escribia una sola linea -- el log saltaba de "carta 3/3" a "FIN"
+    ;      con 35 segundos mudos, y por eso las dos correcciones anteriores fueron a ciegas
+    ;      ("subir de 3 a 6 swipes"), sin saber nunca cual de las tacticas fallaba.
+    ;   2) Reintento estilo Kevin: en vez de 3 Atras contados y despues 6 swipes contados, se
+    ;      alternan las tacticas hasta que aparece la pantalla SIGUIENTE ("Select a Friend"),
+    ;      con techo de 45s. Y despues de tocar la X se CONFIRMA que llegamos, en vez de
+    ;      devolver el control dando por hecho que funciono (eso era lo que dejaba la instancia
+    ;      colgada adentro del perfil y hacia fallar el paso siguiente).
+    asegurarHwndFast()
+    if (chequeoRapidoNeedle("own_donoroffer_selectfriend_trade_native", 30)) {
+        logDebugWishlist("cerrarPerfil: ya estabamos en Select a Friend, no hay nada que cerrar")
         return
     }
-    ; El boton X no es visible desde cualquier posicion de scroll -- si el swipe hacia el
-    ; Wishlist quedo mas abajo de lo esperado, primero hay que subir de nuevo antes de
-    ; encontrarlo (confirmado en vivo: needle en 0 desde la vista de "Achievements").
-    ; Y de arranque corregido de 36 a 100 (2026-08-30, bug real reproducido en vivo): con
-    ; offset=40, y=36 da una coordenada de dispositivo NEGATIVA ((36-40)*960/488 ≈ -8) -- el
-    ; swipe arrancaba fuera del area tocable y nunca scrolleaba, dejando la pantalla pegada en
-    ; "Achievements" para siempre. Confirmado en vivo: con y=100 el swipe sí sube el scroll.
-    Loop, 3 {
-        swipeLogico(250, 100, 450, 600)
-        Sleep, 600
-        if (esperarChequeoRapido("own_donoroffer_userprofile_close_x_native", 60, 1500)) {
+    inicioTotal := A_TickCount
+    sobrepasado := false
+    vuelta := 0
+    Loop {
+        vuelta++
+        if (sobrepasado)
+            break
+        AdbKeyBack(adbPath, puerto)
+        logDebugWishlist("cerrarPerfil: vuelta " . vuelta . " -- Atras enviado")
+        inicioEspera := A_TickCount
+        Loop {
+            if (chequeoRapidoNeedle("own_donoroffer_selectfriend_trade_native", 30)) {
+                ; Doble confirmacion (2026-09-23, bug real medido en vivo con Ale, corrida de las
+                ; 22:09): "vuelta 2 -- Atras enviado" a las .787 y "OK por Atras" a las .868, 80ms
+                ; despues. El PRIMER Atras ya habia llegado a Select a Friend pero tardo mas de
+                ; los 2.5s del poll en renderizar, asi que se mando un SEGUNDO Atras; justo
+                ; despues se detecto la pantalla del primero, con el segundo ya en camino -- y ese
+                ; segundo llevo la instancia un nivel mas atras, al Trade genrico. El script
+                ; siguio creyendo que estaba en Select a Friend y nadie toco "Trade".
+                ; Se reconfirma despues de 900ms: si el Atras de mas ya se aplico, no matchea y
+                ; seguimos al respaldo del boton X en vez de devolver el control a ciegas.
+                Sleep, 900
+                if (chequeoRapidoNeedle("own_donoroffer_selectfriend_trade_native", 30)) {
+                    logDebugWishlist("cerrarPerfil: OK por Atras (vuelta " . vuelta . ")")
+                    return
+                }
+                logDebugWishlist("cerrarPerfil: vuelta " . vuelta . " -- parecia Select a Friend pero se paso de largo")
+                sobrepasado := true
+                break
+            }
+            ; Chequeo de sobrepaso (2026-09-03): si el Atras ya paso "Select a Friend" de largo
+            ; y llego a la pantalla generica de Trade (own_maintrade_trade_button_native, sin
+            ; ningun amigo en pantalla), un Atras MAS solo empeoraria las cosas (seguiria
+            ; subiendo hacia Social Hub) -- se corta ahi mismo y se cae al respaldo de abajo en
+            ; vez de insistir a ciegas.
+            if (chequeoRapidoNeedle("own_maintrade_trade_button_native", 30)) {
+                logDebugWishlist("cerrarPerfil: OJO -- el Atras se paso de largo hasta Trade generico, se deja de mandar Atras")
+                sobrepasado := true
+                break
+            }
+            if (A_TickCount - inicioEspera > 2500)
+                break
+            Sleep, 300
+        }
+        if (A_TickCount - inicioTotal > 20000) {
+            logDebugWishlist("cerrarPerfil: 20s de Atras sin resultado, se pasa al boton X")
+            break
+        }
+    }
+    ; Recuperacion por ADELANTE cuando el Atras se paso de largo (2026-09-23, medido en vivo con
+    ; Ale en la corrida de las 23:39): el log mostro la cadena completa -- vuelta 2 detecto el
+    ; sobrepaso, pero igual se mando una vuelta 3 de Atras que llevo hasta el Trade generico, y
+    ; de ahi las 7 vueltas buscando la X eran imposibles porque ya no habia ningun perfil abierto.
+    ; El comentario original de este bloque ya lo anticipaba: pasado "Select a Friend" no hay
+    ; forma de volver con Atras. Pero SI se puede avanzar: desde el Trade generico, tocar el
+    ; boton Trade devuelve justo a "Select a Friend". Misma coordenada que usa paso6.
+    if (sobrepasado) {
+        Loop, 3 {
+            logDebugWishlist("cerrarPerfil: sobrepasado -- avanzando con el boton Trade (intento " . A_Index . ")")
+            tap(139, 427, 1200)
+            if (esperarChequeoRapido("own_donoroffer_selectfriend_trade_native", 30, 3000)) {
+                logDebugWishlist("cerrarPerfil: OK, se recupero avanzando desde el Trade generico")
+                return
+            }
+        }
+        logDebugWishlist("cerrarPerfil: no se pudo recuperar avanzando, se prueba el boton X")
+    }
+
+    ; Respaldo (busca+toca el boton X). Ahora se reintenta hasta llegar a "Select a Friend" en
+    ; vez de tocar una vez y devolver el control a ciegas, y cada tactica queda logueada.
+    inicioX := A_TickCount
+    vueltaX := 0
+    Loop {
+        vueltaX++
+        if (esperarChequeoRapido("own_donoroffer_userprofile_close_x_native", 60, 2000)) {
+            logDebugWishlist("cerrarPerfil: vuelta X " . vueltaX . " -- X encontrada, tocando (140,500)")
             tap(140, 500, 1000)
+            if (esperarChequeoRapido("own_donoroffer_selectfriend_trade_native", 30, 2500)) {
+                logDebugWishlist("cerrarPerfil: OK por boton X (vuelta X " . vueltaX . ")")
+                return
+            }
+            logDebugWishlist("cerrarPerfil: se toco la X pero NO aparecio Select a Friend")
+        } else {
+            logDebugWishlist("cerrarPerfil: vuelta X " . vueltaX . " -- X no visible, subiendo el scroll")
+            swipeLogico(250, 200, 450, 600)  ; y1 100 -> 200 (2026-09-23, ver nota de la cortina de notificaciones)
+            Sleep, 600
+        }
+        if (A_TickCount - inicioX > 25000) {
+            ; Captura del estado atascado (2026-09-23): tras la corrida de las 20:42 sabemos que
+            ; 8 Atras no hacen nada y la X no aparece en ninguna posicion de scroll -- o sea que
+            ; la pantalla NO es el perfil que este codigo asume. Sin ver esa pantalla no se puede
+            ; arreglar, y se borra sola en cada corrida, asi que se guarda con nombre propio.
+            AdbScreenshot(adbPath, puerto, A_ScriptDir . "\Logs\_cerrarperfil_atascado.png")
+            logDebugWishlist("cerrarPerfil: SE AGOTO el tiempo sin poder volver a Select a Friend -- captura guardada en Logs\_cerrarperfil_atascado.png")
             return
         }
     }
+    ; Cortina de notificaciones (2026-09-23, bug real reproducido en vivo con Ale -- "el juego se
+    ; cerro wtf"): el juego NO se habia cerrado. Medido en el momento, pidof devolvia 3132 (proceso
+    ; vivo) pero mCurrentFocus era "NotificationShade" -- la cortina de Android tapando el juego.
+    ; La causa es este swipe: swipeLogico(250, 100, ...) arrancaba en device y=118, dentro de la
+    ; zona de la barra de estado, y un arrastre hacia abajo desde ahi es exactamente el gesto que
+    ; abre las notificaciones. Subido el arranque a y=200 logico (device y=315), bien lejos del
+    ; borde, conservando 492px de recorrido -- suficiente para el scroll que se busca.
+    ; Nota historica (el bucle de 6 swipes contados que habia aca quedo absorbido por el bucle
+    ; de arriba): el boton X no es visible desde cualquier posicion de scroll -- si el swipe
+    ; hacia el Wishlist quedo mas abajo de lo esperado, primero hay que subir de nuevo antes de
+    ; encontrarlo (confirmado en vivo: needle en 0 desde la vista de "Achievements"). El arranque
+    ; del swipe es y=100 y no 36 (2026-08-30, bug real): con offset=40, y=36 da una coordenada de
+    ; dispositivo NEGATIVA ((36-40)*960/488 ≈ -8), el swipe arrancaba fuera del area tocable y
+    ; nunca scrolleaba, dejando la pantalla pegada en "Achievements" para siempre.
 }
 
 ; Compara el arte de dos recortes de tamaños distintos reduciendolos a una grilla chica de
@@ -634,7 +885,8 @@ cerrarPerfilSiEstaAbierto() {
 ; Ninguna de las llamadas de abajo verificaba que el paso anterior haya devuelto un puntero
 ; valido antes de usarlo -- ahora cada una se chequea, y si algo falla se limpia lo que si se
 ; alcanzo a crear y devuelve false (nunca match) en vez de crashear el script entero.
-compararArteCartas(pBitmapVivo, rectVivo, pBitmapReferencia, rectReferencia, grilla := 8, tolerancia := 45) {
+compararArteCartas(pBitmapVivo, rectVivo, pBitmapReferencia, rectReferencia, grilla := 8, tolerancia := 45, ByRef promedioOut := "") {
+    promedioOut := -1
     if (!pBitmapVivo || !pBitmapReferencia)
         return false
 
@@ -682,6 +934,7 @@ compararArteCartas(pBitmapVivo, rectVivo, pBitmapReferencia, rectReferencia, gri
     Gdip_DisposeImage(pGrillaVivo)
     Gdip_DisposeImage(pGrillaRef)
     promedio := sumaDiferencias / (grilla * grilla * 3)
+    promedioOut := promedio
     return (promedio <= tolerancia)
 }
 
@@ -695,9 +948,96 @@ logDebugWishlist(msg) {
     FileAppend, % A_Hour ":" A_Min ":" A_Sec "." A_MSec " -- " msg "`n", % A_ScriptDir . "\Logs\_donoroffer_wishlist_debug.log"
 }
 
+; Espera a que la carta del carrusel TERMINE de asentarse antes de medirla (2026-09-18, bug
+; real reproducido en vivo con Ale y confirmado con capturas del carrusel en pleno movimiento:
+; el comparador medía mientras la carta seguía deslizándose -- una captura mostraba a Magmar
+; saliendo por la izquierda e Igglybuff entrando por la derecha en el MISMO frame, y la
+; siguiente mostraba a Igglybuff todavía corrida, sin centrar. Con la carta fuera de su
+; posición final, el rect del arte agarra la parte equivocada y nunca puede matchear, aunque
+; la carta pedida esté ahí. Eso explica los `matchea=0` en las 3 cartas pese a que la carta
+; SI estaba en el wishlist).
+; En vez de confiar en un Sleep fijo (900ms, insuficiente cuando la animacion rebota o el PC
+; está cargado), toma 2 capturas separadas y las compara ENTRE SI sobre el mismo rect del
+; arte: cuando dos capturas seguidas son practicamente identicas, la animacion ya termino.
+; Mismo criterio de "verificar en vez de confiar en un timing fijo" que el resto del pipeline.
+esperarPantallaQuieta(timeoutMs := 3000) {
+    global g_hwndFast
+    inicio := A_TickCount
+    rectArte := {x: 30, y: 140, w: 215, h: 122}
+    Loop {
+        pA := capturarVentana(g_hwndFast)
+        Sleep, 250
+        pB := capturarVentana(g_hwndFast)
+        quieta := false
+        if (pA && pB)
+            quieta := compararArteCartas(pB, rectArte, pA, rectArte, 8, 3)
+        if (pA)
+            Gdip_DisposeImage(pA)
+        if (pB)
+            Gdip_DisposeImage(pB)
+        if (quieta)
+            return true
+        if (A_TickCount - inicio > timeoutMs)
+            return false
+    }
+}
+
 ; Funcion principal nueva -- ver comentario del bloque completo arriba. Devuelve true si
 ; encontro y dejo marcada una coincidencia en el Wishlist de Main, false en cualquier otro
 ; caso (el llamador debe seguir con el metodo viejo a ciegas, SIN cortar el trade).
+; Corazon de "View Wishlist" buscado en captura ADB (2026-09-28, bug real en vivo con Ale: en 2
+; corridas los 8 deslizamientos dieron "no match" aunque el corazon paso por la pantalla -- la foto
+; lo muestra arriba de todo). La captura nativa esta reducida a la mitad; el trazo del corazon mide
+; 1 px y, segun en que posicion exacta quede el scroll, se dibuja distinto y la needle nativa solo
+; coincidia en algunas posiciones. A 540x960 el trazo se ve siempre igual. Devuelve el CENTRO del
+; corazon en coordenadas ADB.
+chequeoCorazonPorAdb(ByRef outX, ByRef outY) {
+    global adbPath, puerto, g_winTitle
+    tempFile := A_ScriptDir . "\Logs\_donoroffer_corazon_check_" . g_winTitle . ".png"
+    AdbScreenshot(adbPath, puerto, tempFile)
+    if (!FileExist(tempFile))
+        return false
+    encontrado := false
+    try {
+        pBitmap := Gdip_CreateBitmapFromFile(tempFile)
+        pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_donoroffer_wishlist_heart_adb.png")
+        if (pBitmap && pNeedle) {
+            vPos := ""
+            if (buscarNeedleZonal(pBitmap, pNeedle, vPos, 40, "own_donoroffer_wishlist_heart_adb") = 1) {
+                partes := StrSplit(vPos, ",")
+                outX := partes[1] + 12
+                outY := partes[2] + 11
+                encontrado := true
+            }
+        }
+        if (pNeedle)
+            Gdip_DisposeImage(pNeedle)
+        if (pBitmap)
+            Gdip_DisposeImage(pBitmap)
+    } catch e {
+    }
+    FileDelete, %tempFile%
+    return encontrado
+}
+
+; Busca el corazon y, si quedo tan arriba que la fila de cartas de la wishlist esta cortada,
+; retrocede un poco el scroll y lo vuelve a buscar (en la foto del fallo el corazon quedo en
+; Y ADB 121 con las cartas casi fuera de la pantalla).
+buscarCorazonWishlist(ByRef outX, ByRef outY) {
+    if (!chequeoCorazonPorAdb(outX, outY))
+        return false
+    Loop, 3 {
+        if (outY >= 230)
+            return true
+        logDebugWishlist("corazon muy arriba (Y ADB=" . outY . "), retrocediendo un poco el scroll")
+        swipeLogico(250, 280, 350, 500)
+        esperarPantallaQuieta(2500)
+        if (!chequeoCorazonPorAdb(outX, outY))
+            return false
+    }
+    return (outY >= 230)
+}
+
 intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     global g_hwndFast, adbPath, puerto
 
@@ -732,7 +1072,25 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     ; Paso 1b: esperar a que el perfil cargue de verdad (needle Battle Record) antes de
     ; swipear -- si arranca antes, un swipe puede leerse como toque y abrir un Emblem por
     ; error (bug real reproducido en vivo 2026-08-28).
-    battlerecordOk := esperarChequeoRapido("own_donoroffer_userprofile_battlerecord_native", 60, 10000)
+    ; Estilo Kevin (2026-09-28, revision con Ale): el avatar se tocaba una sola vez. Si ese toque se
+    ; perdia, se esperaban 10 s y la wishlist fallaba. Ahora, si a los 4 s el perfil no abrio y
+    ; seguimos en Select a Friend (el perfil no tapa esa pantalla), se vuelve a tocar el avatar.
+    battlerecordOk := false
+    inicioPerfil := A_TickCount
+    ultimoTapAvatar := A_TickCount
+    while (A_TickCount - inicioPerfil < 12000) {
+        if (chequeoRapidoNeedle("own_donoroffer_userprofile_battlerecord_native", 60)) {
+            battlerecordOk := true
+            break
+        }
+        cerrarEmblemPopupSiAparece()
+        if (A_TickCount - ultimoTapAvatar >= 4000 && chequeoRapidoNeedle("own_donoroffer_selectfriend_trade_native", 30)) {
+            logDebugWishlist("paso1: el perfil no abrio, tocando el avatar de nuevo")
+            tap(54, 151)
+            ultimoTapAvatar := A_TickCount
+        }
+        Sleep, 300
+    }
     logDebugWishlist("paso1b: battlerecord match=" . battlerecordOk)
     if (!battlerecordOk) {
         Gdip_DisposeImage(pBitmapReferencia)
@@ -753,11 +1111,16 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     matcheoCorazon := false
     Loop, 2 {
         swipeLogico(250, 450, 36, 600)
-        Sleep, 700
+        ; Esperar a que el perfil deje de moverse (2026-09-28, bug real en vivo con Ale): antes era
+        ; un Sleep fijo de 700 ms y UNA sola mirada. A 1x el perfil sigue deslizandose por inercia
+        ; mas tiempo; el corazon pasaba de largo sin verse y el siguiente swipe lo empujaba mas
+        ; alla -- los 8 intentos fallaban aunque la wishlist se veia. Ademas la posicion del corazon
+        ; se usa para tocar la carta de arriba, asi que tiene que tomarse con la pantalla quieta.
+        esperarPantallaQuieta(2500)
         cerrarEmblemPopupSiAparece()
-        if (chequeoRapidoNeedleConPosicion("own_donoroffer_wishlist_heart_native", 75, foundX, foundY)) {
+        if (buscarCorazonWishlist(foundX, foundY)) {
             matcheoCorazon := true
-            logDebugWishlist("paso2: swipe fuerte " . A_Index . " -- MATCH corazon en X=" . foundX . " Y=" . foundY)
+            logDebugWishlist("paso2: swipe fuerte " . A_Index . " -- MATCH corazon (ADB) en X=" . foundX . " Y=" . foundY)
             break
         }
         logDebugWishlist("paso2: swipe fuerte " . A_Index . " -- no match")
@@ -765,28 +1128,38 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     if (!matcheoCorazon) {
         Loop, 6 {
             swipeLogico(250, 350, 280, 500)
-            Sleep, 600
+            esperarPantallaQuieta(2500)   ; mismo motivo que en el swipe fuerte de arriba
             cerrarEmblemPopupSiAparece()
-            if (chequeoRapidoNeedleConPosicion("own_donoroffer_wishlist_heart_native", 75, foundX, foundY)) {
+            if (buscarCorazonWishlist(foundX, foundY)) {
                 matcheoCorazon := true
-                logDebugWishlist("paso2: swipe fino " . A_Index . " -- MATCH corazon en X=" . foundX . " Y=" . foundY)
+                logDebugWishlist("paso2: swipe fino " . A_Index . " -- MATCH corazon (ADB) en X=" . foundX . " Y=" . foundY)
                 break
             }
             logDebugWishlist("paso2: swipe fino " . A_Index . " -- no match")
         }
     }
     if (!matcheoCorazon) {
+        ; Evidencia (2026-09-28): foto de lo que se veia ANTES de cerrar el perfil (no quedaba
+        ; ninguna cuando esto fallaba). Queda en Logs\_wishlist_sin_corazon_<instancia>.png.
+        AdbScreenshot(adbPath, puerto, A_ScriptDir . "\Logs\_wishlist_sin_corazon_" . g_winTitle . ".png")
         Gdip_DisposeImage(pBitmapReferencia)
         cerrarPerfilSiEstaAbierto()
         deslizarSpeedMod("max")
-        logDebugWishlist("SALIDA: corazon nunca matcheo tras 2 swipes")
+        logDebugWishlist("SALIDA: corazon nunca matcheo tras 2 swipes (foto en Logs)")
         return false
     }
 
     ; Paso 3: posicion de la carta 1 -- offset fijo de 67px arriba del corazon (Y nativo ->
     ; Y logico = Ynativo + 40, validado en 4+ corridas con el corazon en posiciones Y
     ; distintas).
-    yCarta := (foundY + 40) - 67
+    ; Needle del corazon recortado a solo el trazo (2026-09-26, estilo Kevin): el viejo
+    ; incluia el borde del boton "View Wishlist", cuyo ancho cambia con el idioma, y no
+    ; matcheaba. Su esquina queda 7 px mas abajo que la del viejo, por eso el -7: el toque
+    ; sobre la carta cae exactamente donde caia antes.
+    ; Desde 2026-09-28 foundY es el CENTRO del corazon en ADB. Pasado a la Y de tap() da la misma
+    ; posicion que la formula vieja ((Ynativo - 7 + 40) - 67, validada en muchas corridas):
+    ; la carta queda 80 px ADB arriba del centro del corazon.
+    yCarta := Round(foundY * 488 / 960)
     logDebugWishlist("paso3: yCarta calculado=" . yCarta . " (tap en 137," . yCarta . ")")
 
     ; Paso 3b: abrir la primera carta -- da igual cual sea, el swipe interno cicla las 3
@@ -807,14 +1180,21 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     logDebugWishlist("paso3b: toque 1 en (137," . yCarta . ")")
     tap(137, yCarta, 1500)
     cerrarEmblemPopupSiAparece()
-    confirmoApertura := esperarAperturaCartaConfirmada(6000)
+    ; Timeout subido de 6000 a 12000 (2026-09-02, bug real reproducido en vivo con Ale: la
+    ; carta SI se abria (confirmado con captura real comparada a mano contra la carta pedida,
+    ; 8.1/255 de diferencia -- muy por debajo del umbral de 45, hubiera matcheado bien), pero
+    ; el needle de la estrella de favorito no llegaba a confirmar dentro de los 6s, dos veces
+    ; seguidas, cortando el trade ANTES de llegar a comparar nada. PC bajo carga (varias
+    ; instancias + Chrome/Discord/VSCode abiertos) hace que la animacion de apertura tarde
+    ; mas de lo que tardaba cuando se calibro este numero originalmente.
+    confirmoApertura := esperarAperturaCartaConfirmada(12000)
     logDebugWishlist("paso3b: confirmacion toque 1 = " . confirmoApertura)
     if (!confirmoApertura) {
         Sleep, 1500
         logDebugWishlist("paso3b: toque 2 (reintento) en (137," . yCarta . ")")
         tap(137, yCarta, 1500)
         cerrarEmblemPopupSiAparece()
-        confirmoApertura := esperarAperturaCartaConfirmada(6000)
+        confirmoApertura := esperarAperturaCartaConfirmada(12000)
         logDebugWishlist("paso3b: confirmacion toque 2 = " . confirmoApertura)
         if (!confirmoApertura) {
             Gdip_DisposeImage(pBitmapReferencia)
@@ -826,15 +1206,32 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     }
     logDebugWishlist("paso3b: carta abierta confirmada, empezando loop de comparacion")
 
+    ; Bug real reportado en vivo 2026-09-15 (confirmado con el usuario mirando la pantalla:
+    ; la carta 1 SI era la pedida y aun asi dio matchea=0, reproducido 2 veces seguidas) --
+    ; ver log _donoroffer_wishlist_debug.log: en TODAS las corridas completas, el match
+    ; solo aparecio nunca en la carta 1, siempre en la 2 o mas tarde. Causa real: las
+    ; cartas 2/3 tienen 900ms de sobra antes de compararse (el Sleep del paso 8, de la
+    ; animacion del swipe entre una carta y la siguiente) -- la carta 1 se comparaba
+    ; INSTANTANEO, en el mismo instante que confirma que abrio, sin darle tiempo al arte
+    ; a terminar de renderizarse/animarse. Mismo margen que ya usan las demas.
+    Sleep, 900
     encontroMatch := false
     Loop, 3 {
+        ; Espera de asentamiento REAL antes de medir (2026-09-18, ver comentario completo de
+        ; esperarPantallaQuieta): reemplaza la confianza en los Sleep fijos de antes, que no
+        ; alcanzaban cuando la animacion del carrusel seguia en curso.
+        quedoQuieta := esperarPantallaQuieta(3000)
+        if (!quedoQuieta)
+            logDebugWishlist("carta " . A_Index . "/3: OJO -- la pantalla nunca se quedo quieta en 3s, se mide igual")
         ; Paso 6: comparar el arte de la carta actual contra la referencia.
+        asegurarHwndFast()
         pBitmapVivo := capturarVentana(g_hwndFast)
         matchea := false
+        diffCarta := -1
         if (pBitmapVivo) {
             rectVivo := {x: 30, y: 140, w: 215, h: 122}
             rectReferencia := {x: 12, y: 58, w: 250, h: 137}
-            matchea := compararArteCartas(pBitmapVivo, rectVivo, pBitmapReferencia, rectReferencia)
+            matchea := compararArteCartas(pBitmapVivo, rectVivo, pBitmapReferencia, rectReferencia, 8, 45, diffCarta)
             Gdip_DisposeImage(pBitmapVivo)
         }
 
@@ -857,7 +1254,49 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
             ; 26x20; Gdip_ImageSearch devuelve la esquina superior-izquierda, no el centro, asi
             ; que sin sumar la mitad el click caia corrido y todavia disparaba el bug de la
             ; "vista sin controles" en vez de marcar/desmarcar de verdad).
-            clickMouseReal(starX + 13, starY + 10)
+            ; Marcado VERIFICADO con reintento (2026-09-24, bug real reportado por Ale: "hizo match
+            ; pero no lo marco otra vez"). El log de esa corrida lo muestra -- carta 1/3 matcheo
+            ; clarisimo (diff=11.80 contra umbral 45) con estabaMarcada=0, o sea que tocaba
+            ; marcarla, pero todo este tramo era MUDO y nadie comprobaba el resultado.
+            ; Este es ademas el unico punto del pipeline que no usa tap() por ADB: usa
+            ; clickMouseReal, que mueve el mouse REAL de la PC y depende de que la ventana este al
+            ; frente y sin nada encima. Si algo la tapa en ese instante, el click cae en otro lado
+            ; y nadie se entera. Ahora se reintenta hasta 4 veces confirmando que la estrella
+            ; quedo dorada, y cada intento queda logueado.
+            ; ADB primero, mouse real como respaldo (2026-09-24, probado en vivo con Ale sobre una
+            ; carta real del Wishlist -- Magikarp, dos veces, marcando y desmarcando):
+            ; `adb shell input swipe X Y X Y 120` (pulsacion SOSTENIDA en un mismo punto) SI marca
+            ; la estrella, donde `input tap` falla abriendo la vista sin controles. La diferencia
+            ; es el tipo de evento: tap manda un DOWN+UP instantaneo, swipe manda una pulsacion con
+            ; duracion, y la app las distingue. El comentario historico de clickMouseReal sigue
+            ; siendo cierto para tap/motionevent -- swipe simplemente no se habia probado.
+            ; Ventaja real: por ADB no hace falta que la ventana este al frente ni visible, asi que
+            ; deja de importar que algo la tape (hoy mismo la cortina de notificaciones de Android
+            ; rompio una corrida) y deja de robarle el foco al usuario con WinActivate.
+            ; Se deja clickMouseReal como ULTIMO intento porque lleva meses en produccion y porque
+            ; ADB tampoco es infalible (visto hoy: Android puede rechazar la inyeccion con
+            ; SecurityException de forma intermitente). El log dice cual de los dos funciono.
+            marcadaOk := false
+            idxCarta := A_Index   ; dentro del Loop de abajo, A_Index pasa a ser el del reintento
+            ; Offset (+13,+10) -> (+10,+6) al recortar las dos estrellas a 14x14 estilo Kevin
+            ; (2026-09-26, mismo corte en ambas): el toque sigue cayendo en el centro.
+            starAdbX := Round((starX + 10) * (540/283))
+            starAdbY := Round(((starY + 6) - 40) * (960/488))
+            Loop, 4 {
+                if (A_Index < 4)
+                    RunWait, %ComSpec% /c ""%adbPath%" -s 127.0.0.1:%puerto% shell input swipe %starAdbX% %starAdbY% %starAdbX% %starAdbY% 120", , Hide
+                else
+                    clickMouseReal(starX + 10, starY + 6)
+                Sleep, 900
+                if (chequeoRapidoNeedle("own_donoroffer_userprofile_favoritestar_marked_native", 60)) {
+                    logDebugWishlist("carta " . idxCarta . "/3: estrella marcada OK (intento " . A_Index . ", " . ((A_Index < 4) ? "ADB" : "mouse real") . ")")
+                    marcadaOk := true
+                    break
+                }
+                logDebugWishlist("carta " . idxCarta . "/3: la estrella no se marco con " . ((A_Index < 4) ? "ADB" : "mouse real") . ", reintento " . A_Index)
+            }
+            if (!marcadaOk)
+                logDebugWishlist("carta " . idxCarta . "/3: OJO -- 4 clicks y la estrella sigue sin marcar")
             Sleep, 600
 
             ; Chequeo de seguridad: si por algun motivo SI aparecio la vista sin controles
@@ -876,7 +1315,7 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
         if (matchea)
             encontroMatch := true
 
-        logDebugWishlist("carta " . A_Index . "/3: matchea=" . matchea . " estabaMarcada=" . estaMarcada)
+        logDebugWishlist("carta " . A_Index . "/3: matchea=" . matchea . " diff=" . Round(diffCarta, 2) . " (umbral 45) quieta=" . (quedoQuieta ? 1 : 0) . " estabaMarcada=" . estaMarcada)
 
         ; Paso 8 (2026-08-30, CORREGIDO tras prueba real en vivo -- ver comentario completo en
         ; swipeCardHorizontal): el swipe horizontal pasa a la carta siguiente DENTRO del mismo
@@ -918,7 +1357,9 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     ; match, no el centro -- esta needle mide 40x26, sin sumar la mitad se clickeaba corrido y
     ; disparaba el mismo bug de "vista sin controles" en vez de cerrar de verdad.
     if (encontroClose)
-        clickMouseReal(closeX + 20, closeY + 13)
+        ; (+20,+13) -> (+7,+5) al recortar la X a 14x14 estilo Kevin (2026-09-26): el recorte
+        ; empieza en (13,8) del needle viejo, asi el clic sigue cayendo en el mismo punto.
+        clickMouseReal(closeX + 7, closeY + 5)
     Sleep, 1000
 
     ; Paso 10: cerrar el perfil completo. CORREGIDO (2026-08-30, bug real reproducido en
@@ -929,6 +1370,25 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     ; nuevo). Se usa la misma funcion robusta de los early-return de arriba (sube con swipes
     ; si hace falta antes de buscar el boton).
     cerrarPerfilSiEstaAbierto()
+
+    ; Subir la velocidad al salir del perfil (2026-09-28, pedido de Ale: "es obligatorio que
+    ; suba"). La bajada a 1x solo hace falta para los deslizamientos dentro del perfil; antes solo
+    ; se volvia a subir si la wishlist fallaba, y en el camino normal la donante se quedaba en 1x
+    ; hasta el final. Los pasos siguientes ya manejan la carta agrandada y los popups.
+    deslizarSpeedMod("max")
+
+    ; Aviso al usuario (2026-09-03, a pedido explicito del usuario): si se revisaron las 3
+    ; cartas del wishlist de verdad (llego hasta aca, no un early-return de arriba por perfil
+    ; que no cargo o corazon que nunca aparecio) y ninguna coincidio con la carta pedida, se
+    ; deja un marcador para que bot.js avise en el canal de Trading -- de otra forma esto
+    ; pasaba en silencio, sin que el usuario supiera que tiene que marcarla de favorito el
+    ; mismo a mano.
+    if (!encontroMatch) {
+        try {
+            FileAppend, % "1", % StrReplace(g_outputFile, ".txt", "_WishlistNoMatch.txt")
+        } catch e {
+        }
+    }
 
     Gdip_DisposeImage(pBitmapReferencia)
     logDebugWishlist("FIN: encontroMatch=" . encontroMatch)
@@ -942,42 +1402,113 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
 ; toque final de seleccion de siempre, ahora sobre la unica carta filtrada); false si algo
 ; fallo -- el llamador cae al toque de siempre sin filtro (a ciegas, mismo comportamiento
 ; que ya existia).
+; Instrumentada con logDebugWishlist (2026-09-03, a pedido explicito del usuario tras un fallo
+; real en vivo -- "no le dio en OK cuando busco la carta en favoritas": esta funcion no tenia
+; NINGUN log, a diferencia de intentarMarcarFavoritoPorWishlist justo arriba, asi que no habia
+; forma de ver en que paso se trababa. Usa el mismo logDebugWishlist ya definido mas arriba en
+; este archivo (global, sin necesidad de declarar nada nuevo).
+; Tolerancia del + del panel 60 -> 40 (2026-09-26, bug real medido con Ale): con 60 el
+; needle daba exactamente 60 en la pantalla de la carta abierta, o sea un match falso, y el
+; script podia creer que el panel seguia abierto. Con 40 queda a 20+ de cualquier otra pantalla.
+; Toca (x,y) y vuelve a tocar cada intervaloMs hasta ver la needle nativa (estilo Kevin).
+tocarHastaVerNeedle(x, y, needle, variation, intervaloMs, timeoutMs) {
+    inicio := A_TickCount
+    ultimoTap := 0
+    Loop {
+        if (chequeoRapidoNeedle(needle, variation))
+            return true
+        if (A_TickCount - inicio > timeoutMs)
+            return false
+        if (A_TickCount - ultimoTap >= intervaloMs) {
+            if (ultimoTap)
+                logDebugWishlist("  " . needle . " todavia no aparece, tocando de nuevo (" . x . "," . y . ")")
+            tap(x, y)
+            ultimoTap := A_TickCount
+        }
+        Sleep, 250
+    }
+}
+
 seleccionarCartaPorFavoritos() {
     ; Abrir el panel de filtros (lupa).
-    tap(247, 146, 800)
-    if (!esperarChequeoRapido("own_donoroffer_filterpanel_plusicon_native", 60, 8000))
+    logDebugWishlist("filtroFav paso1: abriendo panel de filtros (247,146)")
+    ; Estilo Kevin (2026-09-28, pregunta de Ale "por que fallaria si es la unica lupa"): antes era
+    ; UN toque y 8 s de espera; si ese toque se perdia (pantalla terminando de cargar, aviso encima)
+    ; nunca se volvia a tocar. Ahora se vuelve a tocar cada 2 s hasta ver el panel abierto.
+    if (!tocarHastaVerNeedle(247, 146, "own_donoroffer_filterpanel_plusicon_native", 40, 2000, 10000)) {
+        logDebugWishlist("filtroFav paso1: FALLO -- nunca aparecio el panel de filtros")
         return false
+    }
 
     ; Tocar "Favorites". Coordenada corregida en vivo -- (138,326) cae mal en "Cards on
     ; wishlist only".
-    tap(80, 330, 600)
-    ; Timeout subido de 5000 a 10000 (2026-08-30, bug real reproducido en vivo): 5s no alcanzo
-    ; en una corrida real -- el chequeo se dio por vencido antes de tiempo pese a que el juego
-    ; SI habia marcado la casilla bien, dejando el panel de filtros abierto sin tocar OK nunca
-    ; (el toque a ciegas de la carta, mas abajo en el flujo, cayo dentro del panel en vez de
-    ; sobre una carta). El loop de adentro (esperarChequeoRapido) ya toca apenas matchea, sin
-    ; ninguna demora agregada -- subir el limite NO afecta el caso normal (rapido), solo evita
-    ; rendirse antes de tiempo en el caso raro donde tarda un poco mas.
-    if (!esperarChequeoRapido("own_donoroffer_favtoggle_selected_native", 60, 10000))
+    logDebugWishlist("filtroFav paso2: panel OK, tocando 'Favorites' (80,330)")
+    ; Mismo arreglo que la lupa: se vuelve a tocar si el toque se perdio. Cada 3 s (no menos) para
+    ; no desmarcar la casilla si el primer toque si entro y el juego solo tardaba en mostrarla.
+    if (!tocarHastaVerNeedle(80, 330, "own_donoroffer_favtoggle_selected_native", 60, 3000, 10000)) {
+        logDebugWishlist("filtroFav paso2: FALLO -- el toggle de Favorites nunca se marco")
         return false
+    }
+    ; (Timeout de 10 s del toggle: 2026-08-30, 5 s no alcanzo en una corrida real.)
 
     ; OK del filtro. Coordenada corregida en vivo -- (137,424) tambien cae mal.
-    tap(147, 457, 1200)
-    return true
+    ; Confirmacion real agregada (2026-09-04, bug real reproducido en vivo): a diferencia de
+    ; paso1/paso2, este toque nunca confirmaba que el panel de verdad se haya cerrado -- solo
+    ; asumia "filtro deberia estar aplicado" sin chequear nada, un supuesto que resulto falso
+    ; (visto en vivo: el panel de filtros seguia abierto despues, y el toque siguiente a la
+    ; carta caia adentro del panel sin efecto, dejando todo trabado ahi). Ahora reintenta el
+    ; toque (cooldown 900ms, mismo patron que el resto del pipeline) mientras el panel siga
+    ; detectado como abierto, hasta 6s.
+    logDebugWishlist("filtroFav paso3: toggle marcado, tocando OK (147,457)")
+    inicioOk := A_TickCount
+    ultimoTapOk := 0
+    Loop {
+        if (!chequeoRapidoNeedle("own_donoroffer_filterpanel_plusicon_native", 40)) {
+            logDebugWishlist("filtroFav paso3: panel cerrado, filtro aplicado")
+            return true
+        }
+        if (A_TickCount - ultimoTapOk >= 900) {
+            tap(147, 457)
+            ultimoTapOk := A_TickCount
+        }
+        if (A_TickCount - inicioOk > 6000) {
+            logDebugWishlist("filtroFav paso3: FALLO -- el panel de filtros nunca se cerro")
+            return false
+        }
+        Sleep, 300
+    }
 }
 ; ============================================================================
 
-if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 141, 499))
+; Logging agregado a estos primeros pasos (2026-09-04, a pedido explicito del usuario tras
+; varias fallas seguidas en "no_aparecio_trade_landing_paso6" sin poder ver POR DONDE se
+; trababa antes de eso -- estos pasos 1-6 nunca escribian nada en _donoroffer_wishlist_debug.log,
+; a diferencia del resto del script. Mismo archivo de log de siempre (logDebugWishlist),
+; solo para no crear un log nuevo separado.
+logDebugWishlist("paso1: esperando Search Results")
+if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 141, 499)) {
+    logDebugWishlist("paso1: FALLO -- nunca aparecio Search Results")
     ExitConError("no_aparecio_search_results_paso1")
-if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 81, 367))
+}
+logDebugWishlist("paso2: esperando Friend ID Search")
+if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 81, 367)) {
+    logDebugWishlist("paso2: FALLO -- nunca aparecio Friend ID Search")
     ExitConError("no_aparecio_friendid_search_paso2")
+}
 ; 1 "X" mas (misma coordenada, 146,504) antes de que el tap de Comunidad funcione de
 ; verdad -- mapeado en vivo 2026-08-04, quedaba un overlay de por medio. Misma needle de
 ; X reutilizada (confirmado en vivo 2026-08-05, matchea en ambas pantallas).
-if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 146, 504))
+logDebugWishlist("paso3: esperando X extra")
+if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 146, 504)) {
+    logDebugWishlist("paso3: FALLO -- nunca aparecio la X extra")
     ExitConError("no_aparecio_x_extra_paso3")
-if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 146, 504))
+}
+logDebugWishlist("paso4: esperando volver a Comunidad")
+if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 146, 504)) {
+    logDebugWishlist("paso4: FALLO -- nunca volvio a Comunidad")
     ExitConError("no_aparecio_comunidad_paso4")
+}
+logDebugWishlist("paso5: esperando tile Trade en Social Hub")
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_trade_icon_native (el
 ; tile "Trade" de Social Hub), validada en vivo en _FriendTradeCheckPendingOffer.ahk (misma
 ; pantalla real, sin falsos positivos cruzados).
@@ -989,8 +1520,11 @@ if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 146, 504))
 ; own_donoroffer_notradeagreement_badge_native, validada en vivo: limpio contra Social Hub
 ; normal y contra otra captura de Social Hub, hasta variation 60 (empieza a fallar recien en
 ; 80, muy por encima de la tolerancia 30 usada aca).
-if (!esperarTradeIconOBadgeRechazo())
+if (!esperarTradeIconOBadgeRechazo()) {
+    logDebugWishlist("paso5: FALLO -- nunca aparecio el tile Trade en Social Hub")
     ExitConError("no_aparecio_socialhub_paso5")
+}
+logDebugWishlist("paso5: OK, tile Trade tocado -- chequeando popup de trade terminado")
 
 ; Popup "The trade has been terminated and no trade agreement was reached" (2026-08-27, a
 ; pedido explicito del usuario, caso real visto en vivo -- justo el que dispara el badge de
@@ -998,14 +1532,57 @@ if (!esperarTradeIconOBadgeRechazo())
 ; antes de llegar a la landing normal de Trade. Se cierra tocando OK y de ahi sigue derecho
 ; el flujo de siempre (la landing de Trade es identica despues). Opcional -- si no aparece
 ; (caso normal, sin rechazo previo), no hace nada y sigue de largo.
-; Needle propia own_donoroffer_tradeterminated_dimmedsprite_native (mascota de fondo
-; atenuada por el popup, sin texto ni datos personales -- la foto/nombre del trade partner en
-; este popup NUNCA se usan como needle, varian por cuenta y son datos personales). Validada en
-; vivo: match exacto contra 2 capturas reales de este popup, 0 contra Social Hub normal (x2),
-; Trade Offer Received y Friends. Coordenada de OK (140,380) tambien confirmada en vivo (cierra
-; el popup de verdad, verificado con captura despues del toque).
-if (chequeoRapidoNeedle("own_donoroffer_tradeterminated_dimmedsprite_native", 30))
-    tap(140, 380)
+; REESCRITO (2026-09-17, bug real reproducido en vivo con Ale, cuenta cancelada a proposito
+; para probar esto): el chequeo viejo era una UNICA foto instantanea con chequeoRapidoNeedle,
+; sin reintentos -- si el popup tardaba un instante de mas en renderizar despues del tap del
+; tile Trade, este chequeo lo perdia para siempre y el flujo seguia directo a paso6 con el
+; popup todavia tapando la pantalla, haciendo fallar "no_aparecio_trade_landing_paso6".
+; Ademas su needle (own_donoroffer_tradeterminated_dimmedsprite_native, la mascota de fondo
+; atenuada) depende del mismo personaje que resulto ser intermitente en otras pantallas
+; (aparece/desaparece en la MISMA pantalla de la MISMA cuenta, ver auditoria de mascota en
+; _MainAcceptTradeOffer.ahk) -- no confiable tampoco. Reemplazado por own_maintrade_offered_confirm
+; (la curva del boton OK, ya validada e independiente de texto/mascota en otras 2 pantallas)
+; en un POLL real de hasta 4s (le da tiempo a la animacion de apertura del popup), en vez de
+; una sola foto. Confirmado contra la captura real de este popup: variation=50.
+; Timeout subido de 4000 a 10000ms (2026-09-18, bug real reproducido en vivo con Ale): el
+; popup en si y el needle estan bien (confirmado con captura limpia despues), pero el cliente
+; del juego a veces tarda mas en terminar de renderizar este popup (visto en vivo con un icono
+; de carga trabado tapando parte del texto) -- 4s no alcanzaba siempre para ese caso.
+; Estilo Kevin (2026-09-27, pedido de Ale): ya NO se espera a ver si sale el popup de "tradeo
+; cancelado" (se perdian 10 s en cada tradeo aunque no saliera). En cada vuelta: si esta el popup
+; se toca OK; si ya se ve la pantalla de Trade (reloj de Historial) o la de "respuesta recibida"
+; (el "!" de View), se sigue al instante. Tope 15 s; si se vence, sigue igual y los pasos de abajo
+; deciden. El popup se reconoce por la esquina del OK centrado (own_maintrade_offered_confirm).
+; Estable 2,5 s (2026-09-28, mismo bug visto en vivo con el aviso "elige una carta"): la pantalla
+; de Trade puede aparecer primero y el popup un instante despues, encima.
+inicioLlegada := A_TickCount
+llegadaDesde := 0
+Loop {
+    if (chequeoRapidoNeedle("own_maintrade_trade_button_native", 30)
+     || chequeoRapidoNeedle("own_donorfinalize_waiting_title_native", 30)) {
+        if (!llegadaDesde)
+            llegadaDesde := A_TickCount
+        else if (A_TickCount - llegadaDesde >= 2500) {
+            logDebugWishlist("paso5: pantalla de Trade estable, sin popup")
+            break
+        }
+    } else {
+        llegadaDesde := 0
+    }
+    if (esperarNeedleSinAccion("own_maintrade_offered_confirm", 50, 1)) {
+        llegadaDesde := 0
+        logDebugWishlist("popup 'trade terminated' visible, tocando OK")
+        Sleep, 900
+        tap(140, 380)
+        Sleep, 1200
+        continue
+    }
+    if (A_TickCount - inicioLlegada > 15000) {
+        logDebugWishlist("OJO: 15 s sin ver la pantalla de Trade, se sigue igual")
+        break
+    }
+    Sleep, 250
+}
 
 ; Chequeo condicional (2026-08-05, a pedido explicito del usuario): si Main YA ofrecio
 ; algo antes (de un Retry anterior), esta pantalla no muestra el boton azul normal de
@@ -1030,18 +1607,23 @@ if (chequeoRapidoNeedle("own_donoroffer_tradeterminated_dimmedsprite_native", 30
 ; a matchear. Pendiente: una vez confirmado que el flujo entero anda, volver a un icono
 ; real (no un recorte de fondo) para que funcione en cualquier idioma de nuevo.
 if (verificarEsperandoRespuesta("own_donoroffer_waitingresponse_pill", 147, 423)) {
+    logDebugWishlist("ya habia una oferta esperando respuesta -- cortando aca (OK)")
     WriteResult("OK")
     Gdip_Shutdown(pToken)
     ExitApp, 0
 }
+logDebugWishlist("paso6: esperando Trade landing")
 
 ; Chequeo rapido cableado (2026-08-26): needle propia own_maintrade_trade_button_native ya
 ; validada en vivo hoy mismo contra una captura real de esta pantalla (match perfecto, avg
 ; 0.00/255, variation 0 alcanza) y cruzada contra 7 capturas de otras pantallas (titulo x2,
 ; social hub x2, friends x2, menu principal) sin ningun falso positivo -- variation 30 usado
 ; igual, con margen.
-if (!esperarNeedleYTap("own_donoroffer_trade_button", 30, 139, 427, 15000, "own_maintrade_trade_button_native", 30))
+if (!esperarNeedleYTap("own_donoroffer_trade_button", 30, 139, 427, 15000, "own_maintrade_trade_button_native", 30)) {
+    logDebugWishlist("paso6: FALLO -- nunca aparecio el Trade landing")
     ExitConError("no_aparecio_trade_landing_paso6")
+}
+logDebugWishlist("paso6: OK, Trade landing confirmado")
 ; Causa real encontrada (2026-08-19, bug reproducido en vivo varias veces): el recorte
 ; original tenia contaminacion en la esquina superior-izquierda (unos 8x6 pixeles de otro
 ; elemento de fondo que varia), con diferencia de hasta 153/255 ahi -- por eso subir la
@@ -1057,9 +1639,38 @@ if (!esperarNeedleSinAccion("own_donoroffer_selectfriend_trade", 30, 15000, "own
     ExitConError("no_aparecio_selectfriend_paso7")
 
 ; Nuevo (2026-08-29): intenta marcar la carta correcta como favorita en el Wishlist de Main
-; ANTES de tocar "Trade" -- ver bloque de funciones nuevas mas arriba. Si falla en
-; cualquier paso, sigue con el metodo viejo (a ciegas) sin cortar el trade.
+; ANTES de tocar "Trade" -- ver bloque de funciones nuevas mas arriba. Si falla en un paso
+; TECNICO (perfil no cargo, corazon nunca aparecio, etc.) sigue con el metodo viejo a ciegas
+; sin cortar el trade -- pero si se revisaron las 3 cartas de verdad y ninguna matcheo, ver
+; el corte explicito de abajo.
 g_favoritoMarcado := intentarMarcarFavoritoPorWishlist(g_rutaImagenReferencia)
+
+; Bug real reportado en vivo 2026-09-15, a pedido explicito del usuario (viendo la pantalla
+; el mismo, reproducido 2 veces seguidas): antes, si se revisaban las 3 cartas del Wishlist
+; de verdad y ninguna coincidia con la pedida, el script igual seguia con el metodo a ciegas
+; ("mas cantidad primero") y terminaba ofreciendole a Main una carta DISTINTA a la pedida,
+; sin que nadie se enterara hasta despues de que el trade ya se mando. El marcador
+; _WishlistNoMatch.txt (mismo que ya usa bot.js para avisar "no se encontro la carta,
+; ponela de favorito vos" en el canal de Trading) solo se escribe cuando se llego a revisar
+; las 3 de verdad -- NO en un early-return tecnico (perfil/corazon) de mas arriba, asi que es
+; la senal correcta para distinguir ambos casos. Si existe, se corta el trade aca (en vez de
+; seguir a ciegas) -- mejor perder este intento y que el usuario reintente (bot.js ya tiene
+; el boton Retry armado para esto) que mandarle a Main una carta que no pidio. NO se borra el
+; marcador -- bot.js todavia lo necesita leer para mandar el aviso de "no matcheo" de siempre.
+if (FileExist(StrReplace(g_outputFile, ".txt", "_WishlistNoMatch.txt"))) {
+    cerrarPerfilSiEstaAbierto()
+    ExitConError("wishlist_sin_match")
+}
+
+; Sin carta marcada = NO se ofrece nada (2026-09-28, pedido de Ale): antes, si fallaba un paso
+; tecnico (perfil no cargo, corazon nunca aparecio, carta no abrio), se seguia a ciegas tocando la
+; primera carta; ese toque "confirmaba" el paso y Main terminaba aceptando una carta equivocada.
+; Solo se sigue a ciegas si no hay imagen de referencia (llamador viejo, sin carta pedida).
+if (!g_favoritoMarcado && g_rutaImagenReferencia != "") {
+    logDebugWishlist("CORTE: no se marco la carta pedida -- no se ofrece ninguna carta a ciegas")
+    cerrarPerfilSiEstaAbierto()
+    ExitConError("wishlist_no_se_marco_carta")
+}
 
 if (!esperarNeedleYTap("own_donoroffer_selectfriend_trade", 30, 213, 179, 15000, "own_donoroffer_selectfriend_trade_native", 30))
     ExitConError("no_aparecio_selectfriend_paso7b")
@@ -1067,7 +1678,7 @@ if (!esperarNeedleYTap("own_donoroffer_selectfriend_trade", 30, 213, 179, 15000,
 ; Popup explicativo "Choose a Card to Trade" -- puede no aparecer siempre. Reintenta unos
 ; segundos (ver tapSiApareceNeedlePolling) en vez de un chequeo unico -- confirmado en vivo
 ; que a veces tarda en renderizar y un chequeo de una sola vez se lo perdia.
-tapSiApareceNeedlePolling("own_donoroffer_willsend_popup", 141, 436)
+esperarElegirCartaOAviso()
 
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_choosecard_title_native
 ; (el titulo "Choose a Card to Trade", estable -- no depende de la carta), validada en vivo --
@@ -1087,46 +1698,44 @@ if (!esperarNeedleSinAccion("own_donoroffer_choosecard_title", 30, 15000, "own_d
 ; Nuevo (2026-08-29): si se marco una carta como favorita en el Wishlist, aplica el filtro
 ; "Favorites" ANTES de elegir -- si falla en cualquier paso del filtro, cae al toque de
 ; siempre sin filtro (a ciegas, mismo comportamiento que ya existia).
-if (g_favoritoMarcado && !seleccionarCartaPorFavoritos())
-    g_favoritoMarcado := false
+; Si el filtro falla, se corta en vez de tocar a ciegas (2026-09-28, pedido de Ale: sin el filtro
+; la carta de (48,357) es cualquiera y Main la aceptaria igual).
+if (g_favoritoMarcado && !seleccionarCartaPorFavoritos()) {
+    logDebugWishlist("CORTE: el filtro de favoritos fallo -- no se ofrece ninguna carta a ciegas")
+    ExitConError("filtro_favoritos_fallo")
+}
+logDebugWishlist("post-filtro: g_favoritoMarcado=" . g_favoritoMarcado . " -- tocando carta en (48,357)")
 
 ; Con el filtro aplicado, la unica carta visible cae en la misma posicion de siempre --
 ; mismo toque (48,357) sirve para ambos casos (filtrado o a ciegas). Bajar el Speed Mod a 1x
 ; solo cuando el filtro se aplico de verdad (a 3x, tocar la carta del Wishlist la agranda sin
 ; querer -- mismo motivo que el paso 0 de intentarMarcarFavoritoPorWishlist).
-if (g_favoritoMarcado)
-    deslizarSpeedMod("min")
+; Bajada a 1x de aca RETIRADA 2026-09-27 (con Ale): era un toque A CIEGAS redundante. Si hay
+; carta favorita marcada, la donante ya esta en 1x desde el paso 0 de
+; intentarMarcarFavoritoPorWishlist (y solo vuelve a subir si la wishlist falla, en cuyo caso
+; g_favoritoMarcado es falso y esta bajada tampoco corria). Probado ademas con Ale: tocar la
+; carta al maximo la selecciona normal, sin agrandarla.
 tap(48, 357)
-if (g_favoritoMarcado)
-    deslizarSpeedMod("max")
-; Recuperacion "vista ampliada" (2026-08-25, bug real reproducido en vivo -- el toque de
-; seleccion de arriba a veces deja la carta en vista ampliada/zoom en vez de solo
-; seleccionarla con el check -- sospecha del usuario, a confirmar: el Speed Mod a 3x puede
-; estar alterando el timing real del toque). Needle own_donoroffer_cardinfo_zoomed (el icono
-; "Card Info", SOLO visible en esa vista ampliada -- confirmado en vivo contra 2 capturas
-; reales del bug + 1 captura normal sin match). Si aparece: foto de evidencia (mismo criterio
-; que _OfferPhoto.png, bot.js la manda a Discord si existe) + UN SOLO toque en la coordenada
-; de OK (en la vista ampliada cae en zona vacia debajo de la carta, cierra el zoom) -- SIN
-; retocar la carta de nuevo (a pedido explicito del usuario: el toque de mas volvia a caer
-; en la carta, no en OK). El flujo normal de mas abajo sigue solo desde aca.
-tempFileZoom := A_ScriptDir . "\Logs\_donoroffer_zoomcheck.png"
-AdbScreenshot(adbPath, puerto, tempFileZoom)
-if (FileExist(tempFileZoom)) {
-    pBitmapZoom := Gdip_CreateBitmapFromFile(tempFileZoom)
-    if (pBitmapZoom) {
-        pNeedleZoom := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_donoroffer_cardinfo_zoomed.png")
-        vPosZoom := ""
-        estaAmpliada := (pNeedleZoom && Gdip_ImageSearch(pBitmapZoom, pNeedleZoom, vPosZoom, 0, 0, 0, 0, 30) = 1)
-        if (pNeedleZoom)
-            Gdip_DisposeImage(pNeedleZoom)
-        if (estaAmpliada) {
-            FileCopy, %tempFileZoom%, % StrReplace(g_outputFile, ".txt", "_ZoomRecoveryPhoto.png"), 1
-            tap(145, 458)  ; coordenada de OK -- zona vacia en la vista ampliada, cierra el zoom
-        }
-        Gdip_DisposeImage(pBitmapZoom)
-    }
-    FileDelete, %tempFileZoom%
+; Salir de la carta agrandada SIN tocar OK (2026-09-27, idea de Ale, probado en vivo en Main):
+; si la velocidad esta alta, tocar la carta puede abrirla agrandada. Tocar FUERA de la carta la
+; cierra; se toca 2 veces el titulo "Choose a Card to Trade" (150,60): el primero cierra el zoom,
+; el segundo ya cae en la pantalla normal, donde el titulo es texto y no hace nada. Un punto en el
+; medio no sirve porque la carta agrandada lo tapa. Recien despues se toca OK (paso 10).
+Sleep, 1000
+Loop, 2 {
+    tap(150, 60)
+    Sleep, 700
 }
+; Ya NO se vuelve a subir a "max" aca (2026-09-04, a pedido explicito del usuario, visto en
+; vivo repetidas veces): con el Speed Mod devuelta a 3x, el resto del flujo (paso10 en
+; adelante -- habilitar OK, confirmar la carta, confirmar el envio) fallaba consistentemente
+; sin encontrar needles que estaban visiblemente en pantalla (ej. "Choose a Card to Trade"
+; seguia mostrandose pero el chequeo igual reportaba que la pantalla "se perdio"). Se deja en
+; 1x por el resto de este script -- ya no queda ningun swipe/toque sensible a la velocidad
+; despues de este punto que necesite volver a 3x.
+; Recuperacion de "vista ampliada" RETIRADA 2026-09-27 (pedido de Ale): la carta se abria
+; ampliada por el Speed Mod a 3x, y eso ya se soluciono bajando la velocidad a 1x antes de
+; tocarla (deslizarSpeedMod("min") de arriba). Ademas ahorra una captura ADB por tradeo.
 
 ; Paso 10 (2026-08-05, a pedido explicito del usuario): NO se puede needlear "OK ya
 ; habilitado" -- el boton tiene un shimmer de color que cambia de tono en cada captura
@@ -1141,22 +1750,41 @@ if (FileExist(tempFileZoom)) {
 ; en que la needle del titulo (estable) ya daba OK. Mismo patron ya usado en otros lados de
 ; este pipeline para esta misma clase de bug: needle SIN tocar + Sleep + tap manual, en vez
 ; de esperarNeedleYTap (que toca apenas encuentra, sin margen).
-if (!esperarNeedleSinAccion("own_donoroffer_choosecard_title", 30, 15000, "own_donoroffer_choosecard_title_native", 30))
-    ExitConError("no_aparecio_ok_habilitado_paso10")
+; Chequeo de confirmacion sacado (2026-09-04, causa real encontrada en vivo tras 7 fallas
+; seguidas en este mismo paso: comparacion pixel a pixel confirmo que la needle
+; own_donoroffer_choosecard_title/_native YA NO matchea en ningun lado de la pantalla real
+; (mejor diferencia encontrada, 93-125/255, muy por encima de la tolerancia 30 usada aca) --
+; el icono que representaba cambio de apariencia con el update del juego de hoy. Ya
+; llegamos a esta pantalla por el flujo normal (paso1-9 ya la confirmaron), asi que esta
+; segunda confirmacion es puramente defensiva -- con la needle rota, solo garantizaba fallar
+; siempre. Se saca del todo y se deja el mismo criterio de "toque a ciegas" que ya se usaba
+; para el boton OK en si (ver comentario de paso10 arriba).
+logDebugWishlist("paso10: tocando OK a ciegas (sin needle de confirmacion, ver comentario)")
 Sleep, 1500
 tap(145, 458)
+; Reintento del OK RETIRADO 2026-09-28 (bug real en vivo con Ale): volvia a tocar OK si 1,5 s
+; despues la lupa seguia a la vista, pero a veces la pantalla todavia no habia terminado de
+; cambiar; el segundo toque caia sobre la vista previa y desordenaba los pasos siguientes. La
+; carta agrandada ya la resuelven los 2 toques en el titulo (150,60) antes del OK.
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_tradepartner_header_native
 ; ("Trade Partner"), validada en vivo -- match exacto contra una captura real y sin ningun
 ; falso positivo hasta variation 80 contra 12 capturas de otras pantallas.
-if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 30, 197, 461, 15000, "own_donoroffer_tradepartner_header_native", 30))
+logDebugWishlist("paso11: esperando preview de envio (Trade Partner)")
+if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 20, 197, 461, 15000, "own_donoroffer_tradepartner_header_native", 30)) {
+    logDebugWishlist("paso11: FALLO -- nunca aparecio el preview de envio")
     ExitConError("no_aparecio_preview_envio_paso11")
+}
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_setcard_confirm_native
 ; (el texto especifico de este popup, "Do you want to set this as your card to be traded?" --
 ; NO el boton OK generico, que es solo un color solido y dio falsos positivos en vivo contra
 ; otras pantallas con botones celestes). Validada en vivo: match exacto, sin ningun falso
 ; positivo hasta variation 80 contra 13 capturas de otras pantallas.
-if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 20))
+logDebugWishlist("paso12: esperando confirmacion 'set this as your card'")
+if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 20)) {
+    logDebugWishlist("paso12: FALLO -- nunca aparecio la confirmacion de set card")
     ExitConError("no_aparecio_confirmar_set_card_paso12")
+}
+logDebugWishlist("paso12: OK, carta confirmada")
 
 ; Aviso "solo te queda 1 copia" -- puede no aparecer siempre. Pasado a needle real
 ; (2026-08-05, a pedido del usuario) -- ya no queda ningun chequeo por OCR en este script.
@@ -1164,17 +1792,64 @@ if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_don
 ; (el texto de advertencia "This will trade a card that you only have one remaining copy of"),
 ; validada en vivo -- match exacto, sin ningun falso positivo hasta variation 80 contra 14
 ; capturas de otras pantallas.
-tapSiApareceNeedle("own_donoroffer_remainingcopy_popup", 204, 383, 30, "own_donoroffer_remainingcopy_popup_native", 30)
+; Cambiado de tapSiApareceNeedle (chequeo UNICO) a tapSiApareceNeedlePolling (2026-09-04, bug
+; real reproducido en vivo -- captura mostrando el popup "This will trade a card that you only
+; have one remaining copy of. Is this OK?" totalmente abierto y sin tocar, bloqueando el resto
+; del flujo para siempre): el chequeo unico se lo perdia si el popup tardaba un poco de mas en
+; aparecer (ej. la nueva UI de "Number of cards" que agrego el update de hoy, mas lenta en
+; renderizar) -- sin reintento, una vez perdido el momento exacto, nunca mas se volvia a
+; chequear. tapSiApareceNeedlePolling ya reintenta el chequeo hasta por 10s.
+; Estilo Kevin (2026-09-27, pedido de Ale): antes se ESPERABA hasta 10 s por el aviso de "ultima
+; copia", que solo sale si la donante da su ULTIMA copia -- con 2 o mas copias se perdian esos
+; 10 s en cada tradeo. Ahora, en cada vuelta: si ya salio la confirmacion final (OK centrado) se
+; sigue; si esta el aviso de ultima copia, se toca OK. Tope 15 s; el paso 14 de abajo decide.
+inicioCopia := A_TickCount
+ultimoTapSetCard := A_TickCount
+Loop {
+    if (esperarNeedleSinAccion("own_maintrade_offered_confirm", 60, 1))
+        break
+    ; Toque perdido del OK de "set this as your card" (2026-09-28, revision estilo Kevin con Ale):
+    ; se tocaba una sola vez; si no entraba, el popup quedaba abierto y aca solo se esperaba.
+    if (A_TickCount - ultimoTapSetCard >= 2500 && chequeoRapidoNeedle("own_donoroffer_setcard_confirm_native", 20)) {
+        logDebugWishlist("paso12: la confirmacion de set card sigue abierta, tocando OK de nuevo")
+        tap(200, 365)
+        ultimoTapSetCard := A_TickCount
+        continue
+    }
+    if (esperarNeedleSinAccion("own_donoroffer_remainingcopy_popup", 50, 1)) {
+        logDebugWishlist("aviso de ultima copia visible, tocando OK")
+        Sleep, 2000
+        tap(204, 383)
+        Sleep, 1000
+        continue
+    }
+    if (A_TickCount - inicioCopia > 15000)
+        break
+    Sleep, 250
+}
 
 ; Foto real de cuando la donante ofrece la carta (2026-08-18, a pedido explicito del
 ; usuario -- mismo criterio que la foto que ya saca _DonorRespondAndFinalize.ahk): se saca
 ; ANTES de tocar, mientras la pantalla de confirmacion todavia esta completa. Nombre
 ; derivado del outputFile para que bot.js sepa donde buscarla.
-; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_offered_text_native
-; ("You have offered the card to your trade partner."), validada en vivo -- match exacto,
-; sin ningun falso positivo hasta variation 80 contra 15 capturas de otras pantallas.
-if (!esperarNeedleSinAccion("own_donoroffer_offered_text", 30, 15000, "own_donoroffer_offered_text_native", 30))
+; Needle reemplazado (2026-09-16, a pedido explicito del usuario -- el anterior,
+; own_donoroffer_offered_text/_native, era literalmente el texto en ingles "You have offered
+; the card to your trade partner."). Se probaron e invalidaron primero la flecha de fondo
+; (matchea Home/Choose-a-Card desde variation 20/30), la esquina del cuadro de nota y el borde
+; del boton OK (ninguno separa limpio) -- la mascota corredora parecia funcionar (validada
+; contra 14 capturas de otras pantallas, CERO matches hasta variation=100) pero se DESCARTO al
+; dia siguiente (2026-09-17), confirmado en vivo con Ale: la mascota aparece y desaparece en la
+; MISMA pantalla de la MISMA cuenta de Main (presente con "Heatmor", ausente con "Pawmot"
+; minutos despues) -- no es un elemento fijo del juego, probablemente un cosmetico/animacion
+; condicional. Reemplazada por own_maintrade_offered_confirm (la curva redondeada del boton OK,
+; needle ya existente y validada del lado de Main, reusada aca porque esta pantalla es
+; identica en ambos lados) -- confirmada contra la captura real de la donante (Igglybuff,
+; variation=30). Variation subida a 60 por el mismo margen que del lado de Main.
+logDebugWishlist("paso14: esperando confirmacion final (offered)")
+if (!esperarNeedleSinAccion("own_maintrade_offered_confirm", 60, 15000)) {
+    logDebugWishlist("paso14: FALLO -- nunca aparecio la confirmacion final")
     ExitConError("no_aparecio_confirmacion_final_paso14")
+}
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_OfferPhoto.png"))
 ; Sleep antes del toque ciego (2026-08-27, bug real reproducido en vivo en _MainAcceptTradeOffer.ahk,
 ; mismo patron aca por prevencion): el chequeo rapido nuevo confirma la pantalla casi al
@@ -1182,6 +1857,88 @@ AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_OfferPhoto.png
 Sleep, 1200
 tap(136, 438)
 
+; Reintento del OK estilo Kevin (2026-09-23, bug real fotografiado en vivo por Ale: la donante
+; se quedo con el popup "You have offered the card..." abierto y el OK sin tocar). El log de esa
+; corrida lo muestra claro: el needle matcheo (no hubo FALLO), se saco la foto y se toco OK UNA
+; sola vez -- ese toque no entro, el popup se quedo, y paso15 espero 8s una pantalla que ya no
+; iba a llegar. Peor todavia: el script igual termino con "FIN: OK, carta ofrecida" y el pipeline
+; siguio como si la oferta hubiera quedado confirmada.
+; Mismo patron clickUntilNeedle ya aplicado al boton View en _DonorRespondAndFinalize.ahk: se
+; reintenta hasta que aparece la pantalla SIGUIENTE ("Waiting for a Response"), y solo se vuelve
+; a tocar mientras el popup siga visible -- asi, si el OK ya entro y el juego esta cargando, no
+; se toca nada de mas.
+; Se usa la via lenta (esperarNeedleSinAccion, captura por ADB) a proposito: estos dos needles
+; NO tienen variante _native, asi que chequeoRapidoNeedle devolveria false siempre y el bucle no
+; reintentaria nada.
+Loop {
+    if (esperarNeedleSinAccion("own_donoroffer_waitingresponse_icon", 50, 2000))
+        break
+    if (!esperarNeedleSinAccion("own_maintrade_offered_confirm", 60, 2000))
+        break  ; el popup ya no esta: o entro el OK, o la pantalla cambio sola
+    if (A_Index > 6) {
+        logDebugWishlist("paso14: OJO -- se toco OK " . A_Index . " veces y el popup sigue ahi")
+        break
+    }
+    logDebugWishlist("paso14: el popup sigue abierto, reintentando OK (intento " . A_Index . ")")
+    tap(136, 438)
+    Sleep, 1200
+}
+
+; Paso 15 (2026-09-16, a pedido explicito del usuario): segunda foto de evidencia, de la
+; pantalla "Waiting for a Response" que queda despues de tocar OK arriba -- bot.js arma un
+; collage de 2 paneles con esta + _OfferPhoto.png (etiqueta en franja SEPARADA arriba de cada
+; imagen, nunca superpuesta). Needle propia own_donoroffer_waitingresponse_icon (el icono
+; circular de "Refresh", sin texto -- no toca la carta ni ningun dato personal). Validada
+; contra 13 capturas reales de otras pantallas del pipeline: el falso positivo mas cercano
+; recien aparece en variation=80, la propia pantalla objetivo matchea desde variation=10-20 en
+; una captura de referencia -- pero una corrida real en vivo (2026-09-17, Igglybuff) recien
+; matcheo en variation=50 (probablemente una leve diferencia de renderizado/compresion del
+; boton Refresh en esa captura puntual). Subido de 30 a 50 para no perder ese margen real visto
+; en vivo, todavia con 30 puntos de aire respecto al falso positivo mas cercano (80).
+; Best-effort: si por algun motivo esta pantalla no llega a aparecer a tiempo, no corta el
+; trade (la oferta ya se mando de verdad en el paso de arriba) -- bot.js manda la foto sola
+; (_OfferPhoto.png) si esta segunda captura no existe.
+if (esperarNeedleSinAccion("own_donoroffer_waitingresponse_icon", 50, 8000)) {
+    AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_WaitingResponsePhoto.png"))
+    logDebugWishlist("paso15: OK, foto de Waiting for a Response capturada")
+} else {
+    logDebugWishlist("paso15: nunca aparecio Waiting for a Response a tiempo -- se sigue solo con la primera foto")
+}
+logDebugWishlist("FIN: OK, carta ofrecida")
+
 WriteResult("OK")
 Gdip_Shutdown(pToken)
 ExitApp, 0
+
+; Estilo Kevin (2026-09-27, pedido de Ale): antes se ESPERABA hasta 10 s a ver si salia el aviso
+; "elige una carta" (flecha verde) y se perdian esos segundos cuando no salia. Ahora, en cada
+; vuelta: si ya se ve la pantalla de elegir carta (la lupa) se sigue al instante; si esta el
+; aviso, se toca OK. Tope 15 s; despues el chequeo de abajo decide igual que antes.
+esperarElegirCartaOAviso() {
+    ; Corregido 2026-09-28 (bug real en vivo con Ale): se salia apenas se veia la lupa, pero la
+    ; pantalla de elegir carta aparece PRIMERO y el aviso sale un instante DESPUES, encima; la
+    ; donante seguia de largo con el aviso abierto y fallaba todo lo de despues. Ahora solo se sale
+    ; cuando la lupa se ve estable 2,5 s sin que haya salido el aviso.
+    inicio := A_TickCount
+    lupaDesde := 0
+    Loop {
+        if (chequeoRapidoNeedle("own_donoroffer_choosecard_title_native", 30)) {
+            if (!lupaDesde)
+                lupaDesde := A_TickCount
+            else if (A_TickCount - lupaDesde >= 2500)
+                return
+        } else {
+            lupaDesde := 0
+        }
+        if (esperarNeedleSinAccion("own_donoroffer_willsend_popup", 50, 1)) {
+            lupaDesde := 0
+            Sleep, 2000   ; el aviso entra deslizandose; se deja asentar antes de tocar
+            tap(141, 436)
+            Sleep, 1000
+            continue
+        }
+        if (A_TickCount - inicio > 15000)
+            return
+        Sleep, 250
+    }
+}

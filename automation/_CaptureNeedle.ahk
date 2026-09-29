@@ -26,7 +26,7 @@ else {
 }
 
 ; Copia propia autorizada por Kevin 2026-07-29 (ver charla con el usuario) --
-; antes apuntaba a C:\POKEMON\PTCGPB-ALE\Scripts\Include\, una ruta externa que
+; antes apuntaba a C:\PTCGPB\Scripts\Include\, una ruta externa que
 ; solo existia en la PC de Ale y rompia para cualquier otro usuario del bot
 ; empaquetado. Ahora vive junto al proyecto, funciona igual para todos.
 #Include %A_ScriptDir%\include\Config.ahk
@@ -75,7 +75,9 @@ botConfig.loadSettingsToConfig("ALL")
 
 hwnd := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
 if (!hwnd) {
-    MsgBox, 16, Capture Needle, No se encontró la ventana de la instancia "%g_winTitle%".`n`nAsegúrate de que esté abierta.
+    ; sin MsgBox (2026-09-26): bloqueaba esperando un click y obligaba a matar todos los
+    ; AutoHotkey de la maquina para cerrarlo -- incluidos los del bot trabajando.
+    FileAppend, ventana_no_encontrada, % A_ScriptDir . "\Logs\_ultima_captura.txt"
     Gdip_Shutdown(pToken)
     ExitApp
 }
@@ -97,7 +99,7 @@ if (!InStr(FileExist(carpetaNeedles), "D"))
 
 pBitmap := from_window(hwnd)
 if (!pBitmap) {
-    MsgBox, 16, Capture Needle, No se pudo capturar la ventana.
+    FileAppend, no_se_pudo_capturar, % A_ScriptDir . "\Logs\_ultima_captura.txt"
     Gdip_Shutdown(pToken)
     ExitApp
 }
@@ -113,5 +115,10 @@ Gdip_SaveBitmapToFile(pBitmap, salida)
 Gdip_DisposeImage(pBitmap)
 Gdip_Shutdown(pToken)
 
-MsgBox, 64, Capture Needle, Captura guardada en:`n%salida%`n`nAhora abrila con Paint (u otro editor)`, recortá SOLO el botón o zona que quieras usar como referencia (bien ajustado`, sin espacio de sobra alrededor)`, y guardala como PNG con el nombre que te indique.
+; MsgBox QUITADO (2026-09-26). Dejaba una ventana esperando un click, y para cerrarla se
+; venia usando "taskkill /F /IM AutoHotkeyU64.exe" -- que mata TODOS los AutoHotkey de la
+; maquina, incluidos los scripts del bot que estuvieran trabajando. Eso fue exactamente lo que
+; dejo sin explicacion a dos corridas de farmeo de likes: los procesos no fallaban, se los
+; estaba matando esa limpieza. Sin MsgBox el script termina solo y no hace falta matar nada.
+FileAppend, %salida%, % A_ScriptDir . "\Logs\_ultima_captura.txt"
 ExitApp

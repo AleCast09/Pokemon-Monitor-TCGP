@@ -39,6 +39,7 @@ global g_folderPath := A_Args[2]
 global g_outputFile := A_Args[3]
 
 #Include %A_ScriptDir%\_AdbUtils.ahk
+#Include %A_ScriptDir%\_ZonasNeedles.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Imagesearch.ahk
 
@@ -108,7 +109,7 @@ esperarIconoYTap(timeoutMs := 25000) {
         encontrado := false
         if (pBitmap) {
             vPos := ""
-            encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 60) = 1)
+            encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, 60, "own_speedmod_icon") = 1)
             Gdip_DisposeImage(pBitmap)
         }
         if (encontrado) {

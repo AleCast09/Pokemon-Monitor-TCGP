@@ -301,6 +301,34 @@ GetSpeedModClickY(speed) {
     return session.get("muMuAndroid15") ? 166 : 172
 }
 
+;==============================================================================================================================
+; Farm Shop Tickets (2026-09-26) -- dar likes a las galerias publicas para ganar tickets de tienda.
+;
+; Needles propios, recortados de capturas NATIVAS en vivo de la instancia 1 y registrados con el
+; mismo formato que los de Kevin: chicos y con su rectangulo de busqueda acotado. El tamaño y la
+; zona van juntos -- un needle de 14x14 solo es seguro porque no se busca en los 275x528 enteros,
+; sino en su ventanita. Buscar chico en grande es lo que da falsos positivos.
+;
+; OJO con la escala: estos son NATIVOS (275x528, captura de from_window), porque el script de
+; likes copia a _SendFriendRequest.ahk, que busca sobre la ventana y no sobre capturas de ADB.
+; Un needle recortado de una captura ADB (540x960) aca no matchea nunca -- error ya cometido y
+; corregido el mismo dia en los needles de arranque.
+;
+; El recorrido completo, verificado en vivo con Ale:
+;   Comunidad -> Community Showcases -> Friend ID Search -> escribir ID -> OK -> perfil -> pulgar
+; Los primeros pasos (llegar a Comunidad) reusan los needles de Kevin que ya estan mas arriba.
+
+needlesDict.Add(new Needle("Like_ShowcasesTile",     "like_showcases_tile",     new Coordinate(118, 296, 165, 345)))
+needlesDict.Add(new Needle("Like_IdSearchMagnifier", "like_idsearch_magnifier", new Coordinate(168, 452, 195, 480)))
+needlesDict.Add(new Needle("Like_IdOkEnabled",       "like_id_ok_enabled",      new Coordinate(138, 344, 175, 375)))
+needlesDict.Add(new Needle("Like_ThumbUnliked",      "like_thumb_unliked",      new Coordinate( 96, 180, 125, 208)))
+
+; PENDIENTE: Like_ThumbLiked -- el pulgar YA marcado, que es la confirmacion de que el like
+; entro de verdad. No se pudo recortar todavia porque hace falta gastar un like real (cada
+; cuenta solo puede darle like a un perfil UNA vez en su vida, asi que no es reversible).
+; Sin ese needle el script NO debe escribir en likes_dados: dar por bueno un like sin
+; confirmarlo quemaria cuentas que quiza no dieron nada, y eso no se puede deshacer.
+
 IsSpeedModImageName(imageName) {
     return (imageName = "speedmodMenu"
         || imageName = "One" || imageName = "Two" || imageName = "Three"

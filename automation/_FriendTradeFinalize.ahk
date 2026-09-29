@@ -19,6 +19,7 @@ global g_folderPath := A_Args[2]
 global g_outputFile := A_Args[3]
 
 #Include %A_ScriptDir%\_AdbUtils.ahk
+#Include %A_ScriptDir%\_ZonasNeedles.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Imagesearch.ahk
 
@@ -77,7 +78,7 @@ verificarNoCrasheado() {
         pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_tapstart_logo.png")
         if (pNeedle) {
             vPos := ""
-            if (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 75) = 1)
+            if (buscarNeedleZonal(pBitmap, pNeedle, vPos, 75, "own_tapstart_logo") = 1)
                 crasheado := true
         }
         Gdip_DisposeImage(pBitmap)
@@ -102,7 +103,7 @@ chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
     pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
     if (pNeedle) {
         vPos := ""
-        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variationNativo, nombreNeedleNativo) = 1)
         Gdip_DisposeImage(pNeedle)
     }
     Gdip_DisposeImage(pBitmap)
@@ -146,7 +147,7 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedl
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
                 }
                 ; Chequeo de crash EN CADA poll (2026-08-19, bug real reproducido en vivo --
                 ; ver comentario completo en _MainAcceptTradeOffer.ahk, mismo fix aplicado a
@@ -156,7 +157,7 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedl
                     pCrash := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_tapstart_logo.png")
                     if (pCrash) {
                         vPosCrash := ""
-                        if (Gdip_ImageSearch(pBitmap, pCrash, vPosCrash, 0, 0, 0, 0, 75) = 1) {
+                        if (buscarNeedleZonal(pBitmap, pCrash, vPosCrash, 75, "own_tapstart_logo") = 1) {
                             Gdip_DisposeImage(pBitmap)
                             ExitConError("juego_crasheo_volvio_al_titulo")
                         }
@@ -203,7 +204,7 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
                 }
                 Gdip_DisposeImage(pBitmap)
             }
@@ -279,7 +280,9 @@ Sleep, 3000
 ; UNICA prueba real de que se registro. Se espera la pantalla SIN tocarla todavia (mismo
 ; patron que esperarNeedleSinAccion ya usa mas arriba) para sacar la foto limpia antes de
 ; tocar "Tap to Proceed" y avanzar.
-if (!esperarNeedleSinAccion("own_donorfinalize_tap_to_proceed", 30, 15000, "own_donorfinalize_tap_to_proceed_native", 30))
+; Needle del fondo lila de "Got it!" (2026-09-29): el viejo (esquina de la letra G) lo tapa el
+; icono del speed mod y nunca coincidia -- mismo arreglo que en la donante y en Main.
+if (!esperarNeedleSinAccion("own_donorfinalize_gotit_bg", 20, 15000, "own_donorfinalize_gotit_bg_native", 20))
     ExitConError("no_aparecio_tap_to_proceed_paso5")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_SentPhoto.png"))
 ; Sleep antes del toque ciego (2026-08-27, bug real reproducido en vivo en

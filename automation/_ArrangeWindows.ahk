@@ -41,6 +41,20 @@ borderWidth := 3
 ; 2026-08-31: al meter RowGap directo en rowHeight, se achicaba la ventana misma en vez de
 ; solo acercar las filas entre si, dejando la instancia con un tamaño mas chico que las demas
 ; y "desconectada" visualmente del panel de AHK, que sigue esperando su tamaño de siempre).
+; Reemplaza "Var is Integer" (2026-09-17, bug real reproducido en vivo -- "instancia 1 y Main
+; nuevamente se pusieron ambos en el mismo lugar"): el operador `is` de AHK v1 NO es confiable
+; dentro de una expresion compuesta con && o entre parentesis (solo funciona bien en su forma
+; clasica de comando standalone `if Var is Integer`) -- confirmado con una prueba aislada:
+; `("Main" is integer)` devuelve TRUE. Eso hacia que la llamada real de bot.js,
+; `_ArrangeWindows.ahk "Main" "1"`, entrara por error a la rama de "un solo indice numerico"
+; (linea ~64 de antes) tratando "Main" como si fuera un numero -- esa rama solo procesa el
+; primer argumento y corta con ExitApp, asi que "1" (la donante) nunca se acomodaba, quedando
+; superpuesta con Main en la posicion que sea que el propio MuMu recordara. Con `esEntero()`
+; (RegEx, sin el operador `is`) el chequeo da el resultado correcto para ambos casos.
+esEntero(v) {
+    return RegExMatch(v, "^-?\d+$") ? true : false
+}
+
 esperarYAcomodar(titulo, idx) {
     global scaleParam, rowHeight, pasoFila, columnas, borderWidth
     winTitle := titulo . " ahk_class Qt5156QWindowIcon"
@@ -61,7 +75,7 @@ esperarYAcomodar(titulo, idx) {
     }
 }
 
-if (A_Args.Length() >= 1 && A_Args[1] is integer) {
+if (A_Args.Length() >= 1 && esEntero(A_Args[1])) {
     ; Reacomodo de una sola instancia a su propio slot -- detecta si "Main" esta en la
     ; grilla (offset +1) o no (offset 0), ver comentario de arriba.
     ;
@@ -70,9 +84,9 @@ if (A_Args.Length() >= 1 && A_Args[1] is integer) {
     ; [ToolsAndSystem] RowGap=) por heartbeat.js -- antes "columnas" estaba fijo en 2,
     ; asi que cualquiera con mas de 2 columnas configuradas (bug real reportado en vivo,
     ; confirmado: Columns=5) quedaba con instancias mal ubicadas al recuperarse solas.
-    if (A_Args.Length() >= 2 && A_Args[2] is integer && A_Args[2] > 0)
+    if (A_Args.Length() >= 2 && esEntero(A_Args[2]) && A_Args[2] > 0)
         columnas := A_Args[2]
-    if (A_Args.Length() >= 3 && A_Args[3] is integer)
+    if (A_Args.Length() >= 3 && esEntero(A_Args[3]))
         pasoFila := rowHeight + A_Args[3]
     ; Argumento 4 opcional (2026-08-31, a pedido explicito del usuario, bug real reportado en
     ; vivo): "1"/"0" explicito de si Main ocupa el slot 0, sacado de runMain= en Settings.ini
@@ -101,7 +115,7 @@ if (A_Args.Length() >= 1 && A_Args[1] is integer) {
 ; la siguiente [ej. minimizada un instante], dos instancias distintas pueden terminar
 ; calculando el MISMO offset y choncando en el mismo slot -- bug real visto en vivo).
 cantidadTitulos := A_Args.Length()
-if (cantidadTitulos >= 3 && A_Args[cantidadTitulos] is integer && A_Args[cantidadTitulos - 1] is integer) {
+if (cantidadTitulos >= 3 && esEntero(A_Args[cantidadTitulos]) && esEntero(A_Args[cantidadTitulos - 1])) {
     pasoFila := rowHeight + A_Args[cantidadTitulos]
     columnas := A_Args[cantidadTitulos - 1]
     cantidadTitulos -= 2

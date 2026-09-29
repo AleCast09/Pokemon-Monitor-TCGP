@@ -22,6 +22,7 @@ global g_folderPath := A_Args[2]
 global g_outputFile := A_Args[3]
 
 #Include %A_ScriptDir%\_AdbUtils.ahk
+#Include %A_ScriptDir%\_ZonasNeedles.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Imagesearch.ahk
 
@@ -83,7 +84,7 @@ tapSiApareceNeedle(nombreNeedle, x, y, variation := 30, nombreNeedleNativo := ""
         pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
         if (pNeedle) {
             vPos := ""
-            encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+            encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
         }
         Gdip_DisposeImage(pBitmap)
     } catch e {
@@ -107,7 +108,7 @@ tapSiApareceNeedlePolling(nombreNeedle, x, y, timeoutMs := 10000) {
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 50) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, 50, nombreNeedle) = 1)
                 }
                 Gdip_DisposeImage(pBitmap)
             } catch e {
@@ -138,7 +139,7 @@ chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
     pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
     if (pNeedle) {
         vPos := ""
-        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variationNativo, nombreNeedleNativo) = 1)
         Gdip_DisposeImage(pNeedle)
     }
     Gdip_DisposeImage(pBitmap)
@@ -163,7 +164,7 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedl
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
                 }
                 Gdip_DisposeImage(pBitmap)
             }
@@ -203,7 +204,7 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
                 }
                 Gdip_DisposeImage(pBitmap)
             }
@@ -232,7 +233,7 @@ tap(209, 457)
 
 ; De aca en mas es EXACTAMENTE la misma pantalla "Choose a Card to Trade" que
 ; _FriendTradeOfferCard.ahk -- mismas needles de la donante, copiadas tal cual.
-tapSiApareceNeedlePolling("own_donoroffer_willsend_popup", 141, 436)
+esperarElegirCartaOAviso()
 
 ; Chequeos rapidos cableados (2026-08-26): needles nativas ya validadas en vivo en
 ; _DonorOfferCard.ahk / _FriendTradeOfferCard.ahk -- misma pantalla real, mismo needle.
@@ -243,14 +244,24 @@ if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357, 15000, "o
 }
 if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 145, 458, 15000, "own_donoroffer_choosecard_title_native", 30))
     ExitConError("no_aparecio_ok_habilitado_paso10")
-if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 30, 197, 461, 15000, "own_donoroffer_tradepartner_header_native", 30))
+if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 20, 197, 461, 15000, "own_donoroffer_tradepartner_header_native", 30))
     ExitConError("no_aparecio_preview_envio_paso11")
 if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 20))
     ExitConError("no_aparecio_confirmar_set_card_paso12")
 
 tapSiApareceNeedle("own_donoroffer_remainingcopy_popup", 204, 383, 30, "own_donoroffer_remainingcopy_popup_native", 30)
 
-if (!esperarNeedleSinAccion("own_donoroffer_offered_text", 30, 15000, "own_donoroffer_offered_text_native", 30))
+; Chequeo rapido DESACTIVADO a proposito (2026-09-25, auditoria de texto en needles con Ale):
+; own_donoroffer_offered_text_native era literalmente la frase en ingles "You have offered the
+; card to your trade partner.", asi que nunca podia matchear con el juego en otro idioma.
+; Se buscó un reemplazo sin texto en la captura nativa real de esa pantalla y NO hay ninguno
+; bueno: la carta cambia en cada trade, el boton tiene degradado (mismo problema que el
+; corazon que se descarto el 17/09), el recuadro de la nota lleva texto y las flechas de
+; fondo no tienen contraste. En vez de poner un needle malo, se deja vacio el parametro
+; nativo: el chequeo cae siempre a la via lenta por ADB, cuyo needle (own_donoroffer_offered_text)
+; ya es un recorte sin texto y funciona. Cuesta unos cientos de ms mas por vuelta, nada al lado
+; de un falso negativo permanente.
+if (!esperarNeedleSinAccion("own_donoroffer_offered_text", 30, 15000))
     ExitConError("no_aparecio_confirmacion_final_paso14")
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainOfferPhoto.png"))
 ; Sleep antes del toque ciego (2026-08-27, bug real reproducido en vivo en
@@ -261,3 +272,36 @@ tap(136, 438)
 WriteResult("OK")
 Gdip_Shutdown(pToken)
 ExitApp, 0
+
+; Estilo Kevin (2026-09-27, pedido de Ale): antes se ESPERABA hasta 10 s a ver si salia el aviso
+; "elige una carta" (flecha verde) y se perdian esos segundos cuando no salia. Ahora, en cada
+; vuelta: si ya se ve la pantalla de elegir carta (la lupa) se sigue al instante; si esta el
+; aviso, se toca OK. Tope 15 s; despues el chequeo de abajo decide igual que antes.
+esperarElegirCartaOAviso() {
+    ; Corregido 2026-09-28 (bug real en vivo con Ale): se salia apenas se veia la lupa, pero la
+    ; pantalla de elegir carta aparece PRIMERO y el aviso sale un instante DESPUES, encima; la
+    ; donante seguia de largo con el aviso abierto y fallaba todo lo de despues. Ahora solo se sale
+    ; cuando la lupa se ve estable 2,5 s sin que haya salido el aviso.
+    inicio := A_TickCount
+    lupaDesde := 0
+    Loop {
+        if (chequeoRapidoNeedle("own_donoroffer_choosecard_title_native", 30)) {
+            if (!lupaDesde)
+                lupaDesde := A_TickCount
+            else if (A_TickCount - lupaDesde >= 2500)
+                return
+        } else {
+            lupaDesde := 0
+        }
+        if (esperarNeedleSinAccion("own_donoroffer_willsend_popup", 50, 1)) {
+            lupaDesde := 0
+            Sleep, 2000   ; el aviso entra deslizandose; se deja asentar antes de tocar
+            tap(141, 436)
+            Sleep, 1000
+            continue
+        }
+        if (A_TickCount - inicio > 15000)
+            return
+        Sleep, 250
+    }
+}

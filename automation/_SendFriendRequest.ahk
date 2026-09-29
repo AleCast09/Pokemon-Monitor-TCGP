@@ -83,6 +83,8 @@ LogTrace(message, logFile := "") {
 LogToDiscord(message, screenshotFile := "", ping := false, xmlFile := "", screenshotFile2 := "", altWebhookURL := "", altUserId := "") {
 }
 
+global g_yaEranAmigos := false
+
 EscribirResultado(texto) {
     global g_outputFile
     try {
@@ -193,10 +195,40 @@ tap(X, Y) {
     adbClick(X, Y)
 }
 
+; Popup "el juego se ha cerrado mientras se abria un sobre, pero has conseguido las cartas"
+; (2026-09-27, visto en vivo con Ale en Main). Desde que este script tambien hace el arranque de
+; la donante, si sale este popup los toques en la pestana de Comunidad no lo cierran y la donante
+; quedaba trabada hasta el timeout. Needle: la esquina del boton Vale (sin letras), en su zona.
+cerrarPopupJuegoCerrado() {
+    global g_mumuHwnd
+    static pNeedle := 0
+    if (!pNeedle)
+        pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_gameclosed_native.png")
+    if (!pNeedle)
+        return false
+    pBitmap := from_window(g_mumuHwnd)
+    if (!pBitmap)
+        return false
+    vPos := ""
+    ; Tolerancia 45: el boton Vale "respira" (74 de diferencia entre sus dos tonos extremos);
+    ; el needle es el color promedio. La pantalla ajena mas parecida en la zona queda en 89.
+    visible := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 70, 334, 108, 372, 45) = 1)
+    Gdip_DisposeImage(pBitmap)
+    if (visible) {
+        LogInfo("popup de juego cerrado visible, tocando Vale")
+        tap(150, 369)
+        Sleep, 1200
+    }
+    return visible
+}
+
+
 clickUntilNeedle(needleName, clickX, clickY, timeoutSec := 30, retryMs := 800) {
     start := A_TickCount
     lastClick := 0
     Loop {
+        if (cerrarPopupJuegoCerrado())
+            continue
         if (findNeedle(needleName))
             return true
         if ((A_TickCount - lastClick) >= retryMs) {
@@ -211,6 +243,13 @@ clickUntilNeedle(needleName, clickX, clickY, timeoutSec := 30, retryMs := 800) {
 }
 
 SubmitFriendIdSearchAndWait(fid) {
+    ; Logging agregado (2026-09-04, a pedido explicito del usuario -- bug real reproducido en
+    ; vivo DOS veces: el pipeline reportaba "aceptada o ya eran amigos" pero la donante despues
+    ; veia "You have no friends at this time" en Select a Friend, o sea la solicitud nunca se
+    ; establecio de verdad). Este archivo tiene toda la infraestructura de logging ya armada
+    ; (LogInfo escribe de verdad a Log_SendFriendRequest.txt) pero nunca se llamaba en ningun
+    ; paso real -- por eso quedaba vacio y no se podia ver si esto fallaba en silencio.
+    LogInfo("SubmitFriendIdSearchAndWait: escribiendo id " . fid . " y tocando buscar")
     Sleep, 300
     adbInput(fid)
     Sleep, 500
@@ -228,11 +267,16 @@ SubmitFriendIdSearchAndWait(fid) {
     ; usuario 2026-07-29, mismo dia): con 800ms podia reintentar el toque antes
     ; de que la pantalla terminara de reaccionar al anterior. El cooldown
     ; arranca ANTES del primer toque tambien (no solo entre reintentos).
-    lastTapSend := A_TickCount
+    ; lastTapSend arranca en 0 (2026-09-27, bug real medido con Ale): antes arrancaba en el momento
+    ; de tocar BUSCAR, y como Send solo se toca si pasaron 5 s desde lastTapSend, el primer toque en
+    ; Send esperaba siempre 5-6 s aunque el boton ya estuviera a la vista. Kevin sigue apenas lo ve.
+    ; Los 5 s quedan solo ENTRE dos toques de Send, para no mandar la solicitud dos veces.
+    lastTapSend := 0
     start := A_TickCount
     Loop {
         if (findNeedle("Friend_RequestButtonInSearchResult")) {
             if ((A_TickCount - lastTapSend) >= 5000) {
+                LogInfo("SubmitFriendIdSearchAndWait: boton 'Send Request' visible, tocando (225,258)")
                 tap(225, 258) ; movido un poco a la izquierda (2026-07-29): el toque caia en el borde del boton
                 lastTapSend := A_TickCount
             }
@@ -240,19 +284,34 @@ SubmitFriendIdSearchAndWait(fid) {
             continue
         }
         if (findNeedle("Friend_WithdrawButton")) {
+            LogInfo("SubmitFriendIdSearchAndWait: OK -- Withdraw visible (solicitud enviada/pendiente)")
             Sleep, 800
             return true
         }
         if (findNeedle("Friend_AcceptedButtonInSearchResult")) {
+            LogInfo("SubmitFriendIdSearchAndWait: OK -- ya son amigos (Accepted visible)")
+            ; 2026-09-23 (a pedido de Ale tras medirlo en vivo): este dato se perdia. El script
+            ; distinguia perfectamente "solicitud enviada/pendiente" (Withdraw) de "ya son
+            ; amigos" (Accepted), pero escribia "OK" en los dos casos. Resultado medido en la
+            ; corrida de las 20:40: aca se confirmaba "ya son amigos" a las 20:40:14 y aun asi
+            ; el paso siguiente (_MainAcceptFriendRequest.ahk) se quedaba 30s esperando una
+            ; solicitud pendiente que no existia, mas el resto del script: 39 segundos tirados.
+            ; Ahora se avisa hacia afuera y bot.js se saltea ese paso entero.
+            g_yaEranAmigos := true
             Sleep, 800
             return true
         }
-        if (findNeedle("Friend_CannotFriendRequest"))
+        if (findNeedle("Friend_CannotFriendRequest")) {
+            LogWarn("SubmitFriendIdSearchAndWait: FALLO -- Friend_CannotFriendRequest detectado")
             return false
-        if ((A_TickCount - start) // 1000 > 30)
+        }
+        if ((A_TickCount - start) // 1000 > 30) {
+            LogWarn("SubmitFriendIdSearchAndWait: FALLO -- timeout de 30s, ninguna needle matcheo nunca")
             return false
-        if (!lastTapSend)
-            adbInputEvent("59 122 67")
+        }
+        ; Quitado (2026-09-27): "if (!lastTapSend) adbInputEvent(59 122 67)". Esas teclas BORRAN el
+        ; campo del ID; Kevin las usa ANTES de escribir, no despues de buscar. Nunca corria porque
+        ; lastTapSend nunca valia 0, pero con el arreglo de arriba empezaria a borrar el ID.
         Sleep, 300
     }
 }
@@ -278,16 +337,28 @@ gotoFriendSearchPanel(timeoutSec := 60) {
 }
 
 SendFriendRequestFromMainMenu(fid) {
-    if (!clickUntilNeedle("Common_ActivatedSocialInMainMenu", 143, 518, 240, 1500))
+    LogInfo("INICIO -- friendId=" . fid)
+    if (!clickUntilNeedle("Common_ActivatedSocialInMainMenu", 143, 518, 240, 1500)) {
+        LogWarn("FALLO -- no_llego_al_menu_principal")
         return "no_llego_al_menu_principal"
-    if (!gotoFriendSearchPanel(60))
+    }
+    if (!gotoFriendSearchPanel(60)) {
+        LogWarn("FALLO -- no_llego_al_panel_de_busqueda")
         return "no_llego_al_panel_de_busqueda"
-    if (!clickUntilNeedle("Friend_SearchFriendWindowCancelButtonCorner", 75, 440, 20, 1000))
+    }
+    if (!clickUntilNeedle("Friend_SearchFriendWindowCancelButtonCorner", 75, 440, 20, 1000)) {
+        LogWarn("FALLO -- no_abrio_dialogo_agregar_por_id")
         return "no_abrio_dialogo_agregar_por_id"
-    if (!clickUntilNeedle("Friend_FriendIDInputReady", 138, 265, 20, 1000))
+    }
+    if (!clickUntilNeedle("Friend_FriendIDInputReady", 138, 265, 20, 1000)) {
+        LogWarn("FALLO -- no_enfoco_campo_id")
         return "no_enfoco_campo_id"
-    if (!SubmitFriendIdSearchAndWait(fid))
+    }
+    if (!SubmitFriendIdSearchAndWait(fid)) {
+        LogWarn("FALLO -- solicitud_no_confirmada")
         return "solicitud_no_confirmada"
+    }
+    LogInfo("FIN: OK")
     return ""
 }
 
@@ -306,7 +377,7 @@ motivoError := SendFriendRequestFromMainMenu(g_friendId)
 if (motivoError != "")
     ExitConError(motivoError)
 
-EscribirResultado("OK")
+EscribirResultado(g_yaEranAmigos ? "OK_YA_AMIGOS" : "OK")
 RestoreMuMuWindow()
 try {
     if (session.get("adbShell"))

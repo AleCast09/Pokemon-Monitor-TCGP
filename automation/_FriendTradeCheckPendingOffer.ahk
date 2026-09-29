@@ -31,6 +31,7 @@ global g_folderPath := A_Args[2]
 global g_outputFile := A_Args[3]
 
 #Include %A_ScriptDir%\_AdbUtils.ahk
+#Include %A_ScriptDir%\_ZonasNeedles.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Imagesearch.ahk
 
@@ -93,7 +94,7 @@ buscarNeedle(nombreNeedle, variation) {
             pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
             if (pNeedle) {
                 vPos := ""
-                encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
                 Gdip_DisposeImage(pNeedle)
             }
             Gdip_DisposeImage(pBitmap)
@@ -116,7 +117,7 @@ chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
     pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
     if (pNeedle) {
         vPos := ""
-        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variationNativo, nombreNeedleNativo) = 1)
         Gdip_DisposeImage(pNeedle)
     }
     Gdip_DisposeImage(pBitmap)
@@ -143,7 +144,7 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedl
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
                 }
                 Gdip_DisposeImage(pBitmap)
             }
@@ -193,7 +194,7 @@ if (FileExist(tempFileAtajo)) {
     if (pBitmapAtajo) {
         pNeedleAtajo := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_friendtrade_offer_view_badge.png")
         vPosAtajo := ""
-        badgeYaVisible := (pNeedleAtajo && Gdip_ImageSearch(pBitmapAtajo, pNeedleAtajo, vPosAtajo, 0, 0, 0, 0, 50) = 1)
+        badgeYaVisible := (pNeedleAtajo && buscarNeedleZonal(pBitmapAtajo, pNeedleAtajo, vPosAtajo, 50, "own_friendtrade_offer_view_badge") = 1)
         if (pNeedleAtajo)
             Gdip_DisposeImage(pNeedleAtajo)
         Gdip_DisposeImage(pBitmapAtajo)
@@ -233,7 +234,7 @@ if (FileExist(tempFileTutorial)) {
     if (pBitmapTutorial) {
         pNeedleTutorial := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_friendtrade_offer_tutorial_help.png")
         vPosTutorial := ""
-        hayTutorial := (pNeedleTutorial && Gdip_ImageSearch(pBitmapTutorial, pNeedleTutorial, vPosTutorial, 0, 0, 0, 0, 30) = 1)
+        hayTutorial := (pNeedleTutorial && buscarNeedleZonal(pBitmapTutorial, pNeedleTutorial, vPosTutorial, 30, "own_friendtrade_offer_tutorial_help") = 1)
         if (pNeedleTutorial)
             Gdip_DisposeImage(pNeedleTutorial)
         Gdip_DisposeImage(pBitmapTutorial)
@@ -265,7 +266,7 @@ Loop {
             ; en dias distintos -- con 30 fallaba contra la segunda, hay variacion real de
             ; color entre capturas; con 50 matchean las 2 y sigue sin falsos positivos contra
             ; las 4 pantallas de tutorial, probado hasta variation=90).
-            unMatch := (pNeedle && Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, 50) = 1)
+            unMatch := (pNeedle && buscarNeedleZonal(pBitmap, pNeedle, vPos, 50, "own_friendtrade_offer_view_badge") = 1)
             Gdip_DisposeImage(pBitmap)
         }
     }

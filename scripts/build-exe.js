@@ -66,6 +66,12 @@ function copiarAssets() {
     fs.cpSync(path.join(RAIZ, 'assets'), path.join(DIST, 'assets'), {
         recursive: true,
         filter: (origen) => !origen.includes(`${path.sep}drive_cache`) && !origen.endsWith('drive_folder_map.json')
+            // Caches locales de esta PC (2026-09-29, auditoria antes de la release publica): los
+            // IDs de emojis del servidor propio y el mapa de Drive de Gold. Cada instalacion los
+            // genera sola.
+            && !origen.endsWith('guild_emojis_cache.json')
+            && !origen.endsWith('drive_folder_map_gold.json')
+            && !origen.includes(`${path.sep}wallpapers_cache`)
     });
     if (fs.existsSync(path.join(RAIZ, 'cardmap.json'))) {
         fs.cpSync(path.join(RAIZ, 'cardmap.json'), path.join(DIST, 'cardmap.json'));
@@ -79,9 +85,51 @@ function copiarAssets() {
     if (fs.existsSync(automationDir)) {
         fs.cpSync(automationDir, path.join(DIST, 'automation'), {
             recursive: true,
-            filter: (origen) => !origen.includes(`${path.sep}Logs${path.sep}`) && !origen.endsWith(`${path.sep}Logs`)
+            filter: (origen) => !origen.includes(`${path.sep}Logs${path.sep}`)
+                && !origen.endsWith(`${path.sep}Logs`)
+                && !esArchivoDeDepuracion(origen)
         });
     }
+}
+
+// Capturas y volcados de depuracion que se acumulan en automation/ durante las sesiones de
+// trabajo (2026-09-25, a pedido de Ale). NO son parte del programa: son fotos de las pantallas
+// reales de SUS instancias -- se ven los nombres de las cuentas, los niveles, la lista de
+// amigos y las cartas que estaba moviendo. Se quedan en el repo local a proposito, porque son
+// el banco de pruebas con el que se valida que un needle nuevo no de falsos positivos contra
+// otras pantallas (el 25/09 se uso con 156 capturas para confirmar dos needles). Lo que no
+// pueden hacer es viajar en el paquete que se distribuye: son datos del usuario y ademas
+// pesaban 34 MB de los 195 del zip.
+// Los needles de verdad viven en automation/Needles/ y NO se tocan.
+function esArchivoDeDepuracion(origen) {
+    const nombre = path.basename(origen);
+
+    // Respaldos de needles reemplazados y capturas sueltas de _CaptureNeedle.ahk: basura
+    // en cualquier carpeta, incluida Needles/.
+    if (nombre.endsWith('.bak')) return true;
+    if (/^captura\d*\.png$/i.test(nombre)) return true;
+
+    // Carpetas de needles retirados (se guardan por si hay que volver atras, no se distribuyen).
+    if (origen.includes(`${path.sep}_needles_retirados`)) return true;
+
+    // Copias por instancia que genera el farmeo de likes en cada corrida (_LikePublicCards_1.ahk,
+    // _2, ...). Se regeneran solas desde _LikePublicCards.ahk, no se distribuyen.
+    if (/^_LikePublicCards_\d+\.ahk$/i.test(nombre)) return true;
+
+    // Herramientas de depuracion locales (2026-09-29): scripts _Diag*, borradores _scratch*,
+    // generadores .py, paginas .html y configs .ini sueltas en automation/. No son parte del
+    // programa.
+    if (/^_Diag.*\.ahk$/i.test(nombre)) return true;
+    if (/^_scratch/i.test(nombre)) return true;
+    if (path.basename(path.dirname(origen)) === 'automation' && /\.(py|html|ini)$/i.test(nombre)) return true;
+
+    // Regla general en vez de una lista de prefijos (que se quedaba corta cada vez: _scratch,
+    // _debug, _boot, _check...): ninguna imagen ni volcado de texto suelto en la RAIZ de
+    // automation/. Ahi solo van los .ahk. Los needles de verdad estan en automation/Needles/
+    // y esta regla no los toca.
+    const carpeta = path.basename(path.dirname(origen));
+    if (carpeta !== 'automation') return false;
+    return /\.(png|jpg|jpeg|txt|bmp)$/i.test(nombre);
 }
 
 function copiarBin() {

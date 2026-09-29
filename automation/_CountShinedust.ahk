@@ -29,6 +29,13 @@ if (A_Args.Length() < 3) {
 global g_winTitle   := A_Args[1]
 global g_folderPath := A_Args[2]
 global g_outputFile := A_Args[3]
+; 4to arg opcional (2026-09-16, a pedido explicito del usuario para "Track Shinedust" --
+; solo necesita el numero de Shinedust en si, no el resto del inventario, asi que no tiene
+; sentido pagar el tiempo del swipe + segunda captura + OCR de 3 campos que ni se van a
+; mostrar). "1" salta el bloque de abajo (Wonder/Rewind/Trade Hourglass quedan en "0").
+; Retrocompatible: sin este arg (llamadores viejos, ej. Info Accounts) se comporta IGUAL
+; que siempre, leyendo el inventario completo.
+global g_soloShinedust := (A_Args.Length() >= 4 && A_Args[4] = "1")
 
 #Include %A_ScriptDir%\_AdbUtils.ahk
 #Include %A_ScriptDir%\_OcrUtils.ahk
@@ -174,7 +181,33 @@ leerCampoOcr(pBitmapOriginal, x, y, w, h, resize := 300, contrast := 75, etiquet
         }
         crudo := GetTextFromBitmap(pBitmapFormatted, allowedChars)
         Gdip_DisposeImage(pBitmapFormatted)
-        valor := RegExReplace(crudo, "[^\d,]", "")
+        ; Bug real reportado en vivo 2026-09-14 (cuenta en español -- "Polvo iris: 31470"
+        ; leido como "1131470"): el recorte es ancho A PROPOSITO para ayudar a detectar un
+        ; digito UNICO aislado (ver comentario de mas arriba, 2026-08-08), asi que incluye
+        ; tambien el TEXTO de la etiqueta -- y como allowedChars fuerza al OCR a interpretar
+        ; TODO como digito/coma/punto/espacio (nunca letras), la etiqueta en otros idiomas
+        ; puede generar digitos falsos con forma parecida (ej. "ii" de "iris" leido como
+        ; "11"). Antes esto pegaba TODOS los digitos encontrados en el recorte entero
+        ; (etiqueta + numero) sin distinguirlos. El numero real SIEMPRE es el ULTIMO grupo de
+        ; digitos de la fila (la etiqueta va ANTES del numero, nunca despues) -- quedarse solo
+        ; con ese ultimo grupo descarta cualquier digito falso que la etiqueta genere, sin
+        ; perder la deteccion de un digito aislado real (que sigue siendo el ultimo grupo).
+        ; Correccion 2026-09-14 (mismo bug, reproducido en vivo en el siguiente intento):
+        ; "[\d,]+" no incluye el ESPACIO -- y en cuentas en español el separador de miles del
+        ; juego es un espacio, no una coma ("31 470", no "31,470"). Sin el espacio en el
+        ; patron, "31 470" se partia en 2 grupos separados ("31" y "470"), y quedarse con el
+        ; "ultimo grupo" perdia el "31" (resultado: "470" en vez de "31470"). El patron nuevo
+        ; prioriza un numero agrupado de verdad (1-3 digitos, seguido de uno o mas bloques de
+        ; separador+3 digitos, ej. "31 470" o "1,234,567") sobre un simple digito suelto --
+        ; asi un digito falso de la etiqueta (que NO sigue ese patron de a-3-en-3) nunca se
+        ; termina uniendo al numero real solo por compartir un espacio de por medio.
+        valor := ""
+        pos := 1
+        while (encontrado := RegExMatch(crudo, "\d{1,3}(?:[ ,]\d{3})+|\d+", grupoDigitos, pos)) {
+            valor := grupoDigitos
+            pos := encontrado + StrLen(grupoDigitos)
+        }
+        valor := RegExReplace(valor, "[^\d,]", "")
     } catch e {
         valor := ""
     }
@@ -283,36 +316,41 @@ Gdip_DisposeImage(pBitmapOriginal)
 ;    FileDelete, %shinedustScreenshotFile%
 
 ; ============ Swipe + segunda captura (parte de abajo del inventario) ============
-; AdbSwipePropio solo acepta un X fijo (swipe vertical puro, ver _AdbUtils.ahk) -- el swipe
-; real mapeado en vivo iba de (269,755) a (261,144), una diferencia de X minima (derivan
-; natural del dedo), asi que se usa un X promedio fijo sin perder precision real.
-; Duracion mas larga (era 400ms -- reporte del usuario 2026-08-03: a veces el emulador lo
-; interpretaba como un tap en vez de un swipe, abriendo el popup de detalle del item que
-; quedaba justo debajo del punto de inicio en vez de scrollear la lista).
-AdbSwipePropio(adbPath, puerto, 265, 755, 144, 700)
-Sleep, 2000
-
-shinedustScreenshotFile2 := LogsDir . "\" . g_winTitle . "_Shinedust2.png"
-AdbScreenshot(adbPath, puerto, shinedustScreenshotFile2)
-Sleep, 500
-
+; Saltado por completo en modo "solo Shinedust" (g_soloShinedust) -- estos 3 campos no se
+; muestran nunca en ese flujo, asi que ni vale la pena el tiempo del swipe/segunda
+; captura/OCR. Quedan en "0" (default de conValorODefaultCero mas abajo).
 wonderHourglass := ""
 rewindWatch := ""
 tradeHourglass := ""
-pBitmapOriginal2 := Gdip_CreateBitmapFromFile(shinedustScreenshotFile2)
-if (pBitmapOriginal2) {
-    wonderHourglass := leerCampoOcrEscalado(pBitmapOriginal2, 55, 495, 100, 35)
-    rewindWatch     := leerCampoOcrEscalado(pBitmapOriginal2, 55, 650, 100, 35)
-    ; Contraste 50 en vez de 75 (confirmado en vivo 2026-08-03: este campo puntual fallaba
-    ; justo con 75 pero funcionaba con 0/25/50/100 -- no se entendio del todo por que, se
-    ; evita ese valor especifico en vez de insistir).
-    tradeHourglass  := leerCampoOcrEscalado(pBitmapOriginal2, 55, 805, 100, 35, 300, 50)
-    Gdip_DisposeImage(pBitmapOriginal2)
-}
+if (!g_soloShinedust) {
+    ; AdbSwipePropio solo acepta un X fijo (swipe vertical puro, ver _AdbUtils.ahk) -- el
+    ; swipe real mapeado en vivo iba de (269,755) a (261,144), una diferencia de X minima
+    ; (deriva natural del dedo), asi que se usa un X promedio fijo sin perder precision real.
+    ; Duracion mas larga (era 400ms -- reporte del usuario 2026-08-03: a veces el emulador lo
+    ; interpretaba como un tap en vez de un swipe, abriendo el popup de detalle del item que
+    ; quedaba justo debajo del punto de inicio en vez de scrollear la lista).
+    AdbSwipePropio(adbPath, puerto, 265, 755, 144, 700)
+    Sleep, 2000
 
-; DEBUG TEMPORAL (2026-08-08): comentado, mismo motivo que el FileDelete de arriba.
-;if (FileExist(shinedustScreenshotFile2))
-;    FileDelete, %shinedustScreenshotFile2%
+    shinedustScreenshotFile2 := LogsDir . "\" . g_winTitle . "_Shinedust2.png"
+    AdbScreenshot(adbPath, puerto, shinedustScreenshotFile2)
+    Sleep, 500
+
+    pBitmapOriginal2 := Gdip_CreateBitmapFromFile(shinedustScreenshotFile2)
+    if (pBitmapOriginal2) {
+        wonderHourglass := leerCampoOcrEscalado(pBitmapOriginal2, 55, 495, 100, 35)
+        rewindWatch     := leerCampoOcrEscalado(pBitmapOriginal2, 55, 650, 100, 35)
+        ; Contraste 50 en vez de 75 (confirmado en vivo 2026-08-03: este campo puntual fallaba
+        ; justo con 75 pero funcionaba con 0/25/50/100 -- no se entendio del todo por que, se
+        ; evita ese valor especifico en vez de insistir).
+        tradeHourglass  := leerCampoOcrEscalado(pBitmapOriginal2, 55, 805, 100, 35, 300, 50)
+        Gdip_DisposeImage(pBitmapOriginal2)
+    }
+
+    ; DEBUG TEMPORAL (2026-08-08): comentado, mismo motivo que el FileDelete de arriba.
+    ;if (FileExist(shinedustScreenshotFile2))
+    ;    FileDelete, %shinedustScreenshotFile2%
+}
 
 ; Solo el Shinedust es critico (es lo unico que ya se usaba antes) -- si algun otro campo
 ; no se pudo leer bien, se asume "0" en vez de hacer fallar todo el resultado. Confirmado en

@@ -1,6 +1,6 @@
 ; _AdbUtils.ahk
 ; Utilidades propias de ADB/ventana MuMu -- sin ningun #Include de la carpeta de
-; Kevin (C:\POKEMON\PTCGPB-ALE\Scripts\Include\). Reimplementa desde cero, con
+; Kevin (C:\PTCGPB\Scripts\Include\). Reimplementa desde cero, con
 ; tecnicas genericas de ADB/Android (documentadas publicamente, no logica
 ; propietaria de nadie), lo minimo que necesitan nuestros propios scripts de
 ; automatizacion (_CountShinedust.ahk, _SendTradeCard.ahk, _FinalizeTradeCard.ahk):
@@ -115,6 +115,110 @@ AdbEjecutarConSalida(adbPath, puerto, argumentos) {
         FileDelete, %tempOut%
     }
     return salida
+}
+
+; Ocultar la consola negra de adb.exe (2026-09-22, bug real reportado con foto por Ale -- una
+; ventana "C:\Program Files\Netease\MuMuPlayer\nx_main\adb.exe" apareciendo encima de todo a
+; mitad del trade). Esa ventana la crea WScript.Shell.Exec, que NO tiene opcion de ocultar; el
+; bot de Kevin usa exactamente la misma llamada (include\ADB.ahk:259) y tambien abre una, pero
+; la abre UNA sola vez por instancia al arrancar y la deja viva toda la sesion, asi que queda
+; detras de las ventanas de MuMu y nunca se ve. Nosotros abrimos una shell nueva en cada
+; inyeccion, por eso saltan ventanas nuevas al frente. Ademas de reusar la shell (ver
+; _InjectAccountFast.ahk), aca se oculta la consola apenas aparece.
+;
+; Se toma una foto de las consolas que YA existian antes del Exec y se oculta solo la que
+; aparecio despues -- asi nunca se toca la consola del bot de Kevin si esta corriendo al mismo
+; tiempo. Ocultar la ventana no afecta los pipes de StdIn/StdOut: Exec los redirige aparte.
+consolasVisiblesActuales() {
+    previas := {}
+    for indice, clase in ["ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS"] {
+        WinGet, ids, List, ahk_class %clase%
+        Loop, %ids% {
+            hwnd := ids%A_Index%
+            previas[hwnd] := true
+        }
+    }
+    return previas
+}
+
+; timeoutMs bajado de 3000 a 600 (2026-09-22): medido en vivo, ocultar la consola de verdad
+; tarda ~220ms. Los 3s solo se pagaban cuando la consola NO aparecia (Exec fallido porque el
+; device todavia no estaba listo) -- y eso son 3s perdidos dentro del presupuesto de 30s que
+; bot.js le da al paso de inyeccion, justo en el caso malo de instancia recien prendida.
+ocultarConsolaNueva(previas, aguja := "adb.exe", timeoutMs := 600) {
+    inicio := A_TickCount
+    Loop {
+        for indice, clase in ["ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS"] {
+            WinGet, ids, List, ahk_class %clase%
+            Loop, %ids% {
+                hwnd := ids%A_Index%
+                if (previas[hwnd])
+                    continue
+                WinGetTitle, titulo, ahk_id %hwnd%
+                if (InStr(titulo, aguja)) {
+                    WinHide, ahk_id %hwnd%
+                    return true
+                }
+            }
+        }
+        if (A_TickCount - inicio > timeoutMs)
+            return false
+        Sleep, 100
+    }
+}
+
+; Chequeo REAL de si el proceso del juego esta corriendo (2026-09-19, a pedido explicito del
+; usuario -- "por que a Kevin nunca le pasa"). Equivalente al isTerminatePTCGPApp() de
+; include\ADB.ahk de Kevin. Distingue "juego cerrado" de "juego cargando lento": las dos veces
+; que se intento relanzar el juego a ciegas (2026-08-03 y 2026-08-05) se saco porque se
+; deducia "cerrado" de "no reconozco ninguna pantalla", y una pantalla de carga tambien da eso
+; -- el relanzamiento lo interrumpia a mitad de carga y lo crasheaba. pidof no se equivoca asi.
+juegoCorriendo(adbPath, puerto) {
+    salida := AdbEjecutarConSalida(adbPath, puerto, "shell pidof jp.pokemon.pokemontcgp")
+    return RegExMatch(salida, "^\s*\d+") ? true : false
+}
+
+; Chequeo de que el juego este REALMENTE en primer plano (2026-09-23, bug real fotografiado en
+; vivo con Ale: Main mostraba el escritorio de Android con el icono del juego sin abrir, pero
+; "pidof jp.pokemon.pokemontcgp" devolvia 2983 -- el proceso existia en segundo plano, asi que
+; juegoCorriendo() decia que si y abrirJuegoVerificado() se daba por satisfecho y seguia de
+; largo. Los 64 chequeos de la bienvenida en 130s no reconocieron nada porque en pantalla no
+; habia juego, solo el escritorio. Esto es waitUntilActivatePTCGPApp() de Kevin
+; (include\ADB.ahk): pregunta que VENTANA tiene el foco, no si el proceso existe.
+; El comando del shell va entre comillas propias para que el pipe lo interprete el shell de
+; Android y no el cmd de Windows (AdbEjecutarConSalida arma un "%ComSpec% /c").
+juegoEnPrimerPlano(adbPath, puerto) {
+    salida := AdbEjecutarConSalida(adbPath, puerto, "shell ""dumpsys window | grep -E mCurrentFocus""")
+    return InStr(salida, "jp.pokemon.pokemontcgp") ? true : false
+}
+
+; Abre el juego y VERIFICA que de verdad abrio (2026-09-19), mismo esquema que startPTCGPApp()
+; de Kevin: solo manda "am start" si el juego esta realmente cerrado, espera a que el proceso
+; aparezca, confirma que SIGUE vivo unos segundos despues (detecta el crash al arrancar, que es
+; lo que dejaba las instancias en el escritorio de Android) y reintenta hasta 3 veces. Antes
+; nuestros scripts mandaban un unico "am start" y seguian de largo sin comprobar nada.
+abrirJuegoVerificado(adbPath, puerto, intentos := 3) {
+    Loop, %intentos% {
+        ; 2026-09-23: ahora tambien se manda el "am start" cuando el proceso EXISTE pero no esta
+        ; al frente (ver juegoEnPrimerPlano). Antes solo se miraba el pid, asi que el caso real
+        ; de Ale -- proceso vivo en segundo plano, escritorio de Android en pantalla -- nunca
+        ; disparaba un nuevo arranque y la instancia se quedaba ahi hasta el timeout.
+        if (!juegoCorriendo(adbPath, puerto) || !juegoEnPrimerPlano(adbPath, puerto))
+            AdbEjecutar(adbPath, puerto, "shell am start -W -n jp.pokemon.pokemontcgp/com.unity3d.player.UnityPlayerActivity -f 0x10018000")
+        inicio := A_TickCount
+        Loop {
+            if (juegoCorriendo(adbPath, puerto) && juegoEnPrimerPlano(adbPath, puerto)) {
+                Sleep, 3000
+                if (juegoCorriendo(adbPath, puerto))
+                    return true
+                break  ; se cerro solo al arrancar (crash) -- se reintenta
+            }
+            if (A_TickCount - inicio > 15000)
+                break
+            Sleep, 1000
+        }
+    }
+    return false
 }
 
 ; NOTA (2026-08-05): se probo agregar una captura por GDI+ (estilo Kevin, ver

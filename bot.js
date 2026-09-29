@@ -29,6 +29,29 @@ const { obtenerMapaEmojisGuild, FUENTES_EMOJIS, obtenerErroresEmojisGuild } = re
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
 iniciarAutoSyncCardTypes();
 
+// Trade quedo bloqueado por completo para TODOS los servidores el 2026-08-30 mientras
+// el mecanismo de wishlist/Main Trade estaba en pruebas en vivo (ver los comentarios
+// junto a cada boton de Trade). Reactivado 2026-09-02 a pedido explicito del usuario
+// ("habilitalo en mi server") -- pero SOLO en su propio servidor, igual que ya era el
+// comportamiento antes del bloqueo total (Main Trade "activo SOLO en el servidor propio
+// del usuario, para testear en vivo"). Cualquier otro servidor se mantiene bloqueado.
+// Movido a variable de entorno (2026-09-16, auditoria de privacidad antes de un release
+// publico -- el guild ID de Ale estaba hardcodeado en el codigo compartido, bloqueando
+// Trade para CUALQUIER otro usuario del release sin que puedan configurarlo). Vacio por
+// defecto (Trade sigue bloqueado en todo lado hasta que alguien lo habilite a proposito
+// en su propio .env) -- el .env de Ale ya tiene GUILD_ID_TRADE_HABILITADO seteado a su
+// guild, asi que su comportamiento actual no cambia.
+const GUILD_ID_TRADE_HABILITADO = process.env.GUILD_ID_TRADE_HABILITADO || '';
+// TRADE_ABIERTO_A_TODOS (2026-09-25, a pedido explicito de Ale para que un amigo pueda probar
+// el Trade desde su propio servidor): con esto en true el boton queda habilitado en CUALQUIER
+// servidor, sin depender de GUILD_ID_TRADE_HABILITADO. Poner en false para volver al
+// comportamiento seguro de siempre (Trade deshabilitado salvo en el guild configurado).
+const TRADE_ABIERTO_A_TODOS = true;
+function tradeHabilitadoEnGuild(guildId) {
+    if (TRADE_ABIERTO_A_TODOS) return true;
+    return !!GUILD_ID_TRADE_HABILITADO && guildId === GUILD_ID_TRADE_HABILITADO;
+}
+
 // Limpieza de seguridad (2026-08-08, a pedido explicito del usuario): un usuario reporto
 // haber visto el token/API real en una captura del PDF viejo de tutoriales via Foxit PDF
 // Reader. Los tutoriales ya no se distribuyen como PDF (ver /tutorials + tutorial_pdf::),
@@ -486,6 +509,543 @@ function normalizarComando(interaction) {
     return COMANDO_CONFIG[key] ? key : null;
 }
 
+// ============ Farm Shop Tickets (2026-09-26) ============
+// Farmeo de tickets de tienda dando likes a las galerias publicas (Community Showcases).
+//
+// Como funciona en el juego, confirmado con Ale y con la documentacion oficial:
+//   - Cada like que RECIBE tu perfil te da 1 Shop Ticket.
+//   - El tope son 5 tickets por dia, contando likes y "thanks" juntos. Pasado ese tope los
+//     likes siguen llegando pero SIN regalo adjunto.
+//   - El contador se reinicia con el reinicio diario del juego: 06:00 UTC.
+//   - Una cuenta que ya le dio like a un perfil NO puede volver a darselo nunca.
+// De ahi la regla que pidio Ale: nunca dar mas de 5 likes por dia a un mismo perfil, porque
+// los likes extra queman cuentas (que no se recuperan) sin devolver ningun ticket.
+//
+// Lo que se quema es la PAREJA cuenta + perfil, no la cuenta sola: una XML que ya trabajo con
+// la cuenta principal A sigue disponible para la B. Por eso la clave primaria de likes_dados
+// es (cuenta, friend_id).
+//
+// IMPORTANTE (pedido explicito de Ale): el historial NO se borra nunca, ni aunque el usuario
+// quite ese ID de su lista. Si lo borrara y el usuario reagregara el mismo ID, el sistema
+// creeria que tiene todas las cuentas disponibles, sortearia cinco que ya dieron like, y las
+// quemaria sin recibir un solo ticket -- ademas sin ninguna señal de que algo fue mal.
+// Por eso son DOS tablas separadas: farm_ids (la lista, editable) y likes_dados (el historial,
+// permanente).
+//
+// Todo vive en database.db a proposito: es el archivo que el usuario ya mueve junto con su
+// .env, asi que el historial viaja solo, sin ficheros sueltos que se puedan perder.
+
+const FARM_TICKETS_MAX_DIARIO = 5;
+const FARM_TICKETS_MAX_INSTANCIAS = 5;
+
+async function asegurarTablasFarmTickets() {
+    await db.run(`CREATE TABLE IF NOT EXISTS farm_ids (
+        discord_id TEXT,
+        friend_id  TEXT,
+        alias      TEXT,
+        PRIMARY KEY (discord_id, friend_id)
+    )`);
+    await db.run(`CREATE TABLE IF NOT EXISTS likes_dados (
+        cuenta    TEXT,
+        friend_id TEXT,
+        fecha     TEXT,
+        PRIMARY KEY (cuenta, friend_id)
+    )`);
+    await db.run(`CREATE TABLE IF NOT EXISTS farm_tandas (
+        friend_id TEXT PRIMARY KEY,
+        ts        INTEGER,
+        tickets   INTEGER
+    )`);
+}
+
+// --- Historial de transferencias de cartas (2026-09-28, pedido de Ale) ---
+// El JSON de cada cuenta cuenta las cartas de los sobres abiertos (pulls) y NUNCA baja cuando la
+// carta se transfiere. Cada transferencia exitosa queda anotada aca, y lo disponible de verdad es
+// copiasEnJson - transferidas. Si despues se farmea otra copia en esa cuenta, el JSON sube y lo
+// disponible sube solo.
+function normalizarCuentaTransferencia(fileName) {
+    return String(fileName || '').replace(/\.xml$/i, '').trim().toLowerCase();
+}
+
+async function asegurarTablaTransferencias() {
+    await db.run(`CREATE TABLE IF NOT EXISTS transferencias_cartas (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        cuenta     TEXT,
+        carta_id   TEXT,
+        modo       TEXT,
+        discord_id TEXT,
+        ts         INTEGER,
+        destino    TEXT
+    )`);
+}
+
+// destino = Friend ID de la cuenta que recibio la carta (en Main Trade, la propia Main).
+async function registrarTransferenciaCarta(fileName, cartaId, modo, discordId, destino) {
+    await asegurarTablaTransferencias();
+    await db.run(`INSERT INTO transferencias_cartas (cuenta, carta_id, modo, discord_id, ts, destino) VALUES (?, ?, ?, ?, ?, ?)`,
+        [normalizarCuentaTransferencia(fileName), String(cartaId), modo, String(discordId || ''), Date.now(), String(destino || '')]);
+}
+
+// Transferidas por cuenta para una carta: { cuentaNormalizada: n }
+async function transferenciasPorCuenta(cartaId) {
+    await asegurarTablaTransferencias();
+    const filas = await db.all(`SELECT cuenta, COUNT(*) AS n FROM transferencias_cartas WHERE carta_id = ? GROUP BY cuenta`, [String(cartaId)]);
+    const mapa = {};
+    for (const f of filas || []) mapa[f.cuenta] = f.n;
+    return mapa;
+}
+
+// Auditoria de una cuenta + carta: copias en el JSON, transferidas y disponibles, mas las otras
+// cuentas que todavia tienen copias disponibles de esa carta (para recomendarlas).
+async function auditarStockCarta(fileName, cartaId) {
+    const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+    const mapaCopias = construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url);
+    const transferidasPorCuenta = await transferenciasPorCuenta(cartaId);
+    const cuenta = normalizarCuentaTransferencia(fileName);
+    const registros = (mapaCopias?.[cartaId] || []).map(r => {
+        const clave = normalizarCuentaTransferencia(r.fileName);
+        const transferidas = transferidasPorCuenta[clave] || 0;
+        return { fileName: r.fileName, clave, enJson: r.cantidad || 0, transferidas, disponible: Math.max(0, (r.cantidad || 0) - transferidas) };
+    });
+    const propio = registros.find(r => r.clave === cuenta) || { enJson: 0, transferidas: transferidasPorCuenta[cuenta] || 0, disponible: 0 };
+    const otras = registros.filter(r => r.clave !== cuenta && r.disponible > 0).sort((a, b) => b.disponible - a.disponible);
+    return { enJson: propio.enJson, transferidas: propio.transferidas, disponible: propio.disponible, otras };
+}
+
+// /transfers (2026-09-28, pedido de Ale): UN solo embed con el historial del usuario; las
+// flechas editan ese mismo embed (sin mensajes nuevos).
+// Una transferencia por pagina, con la foto de la carta (mismo embed de carta que /card) mas la
+// fecha, la cuenta XML, el destino y el Friend ID.
+async function construirEmbedTransferencias(discordId, pagina, guild = null) {
+    await asegurarTablaTransferencias();
+    const total = (await db.get(`SELECT COUNT(*) AS n FROM transferencias_cartas WHERE discord_id = ?`, [String(discordId)]))?.n || 0;
+    const cuentas = (await db.get(`SELECT COUNT(DISTINCT cuenta) AS n FROM transferencias_cartas WHERE discord_id = ?`, [String(discordId)]))?.n || 0;
+    if (!total) {
+        const vacio = new EmbedBuilder().setColor(0x2ECC71).setTitle('📦 Your transfers').setDescription('You have no transfers saved yet.');
+        return { embeds: [vacio], components: [], files: [], attachments: [] };
+    }
+    pagina = Math.min(Math.max(0, pagina), total - 1);
+    const f = await db.get(`SELECT cuenta, carta_id, modo, destino, ts FROM transferencias_cartas WHERE discord_id = ? ORDER BY ts DESC LIMIT 1 OFFSET ?`,
+        [String(discordId), pagina]);
+    const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+    const nombre = resolverNombreCarta(f.carta_id, rutaMasterCfg?.webhook_url) || f.carta_id;
+    let embed, files = [];
+    try {
+        const payloadCarta = await construirEmbedDetalleCarta(f.carta_id, nombre, rutaMasterCfg?.webhook_url, null, guild);
+        embed = payloadCarta.embeds[0];
+        files = payloadCarta.files || [];
+    } catch (e) {
+        embed = new EmbedBuilder().setDescription(`**${nombre}**`);
+    }
+    const segundos = Math.floor(f.ts / 1000);
+    embed.setColor(0x2ECC71)
+        .setTitle(`📦 Transfer #${total - pagina}`)
+        .addFields(
+            { name: 'Date', value: `<t:${segundos}:f> (<t:${segundos}:R>)`, inline: false },
+            { name: 'Card', value: `**${nombre}**`, inline: true },
+            { name: 'From account (XML)', value: `\`${f.cuenta}\``, inline: true },
+            { name: 'Sent to', value: f.modo === 'main' ? 'Main' : 'Friend', inline: true },
+            { name: 'Friend ID', value: f.destino ? `\`${f.destino}\`` : '—', inline: true }
+        )
+        .setFooter({ text: `${total} transfer(s) · ${cuentas} account(s) used · ${pagina + 1}/${total}` });
+    const componentes = total > 1 ? [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`transfers_pag::${discordId}::${pagina - 1}`).setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(pagina === 0),
+        new ButtonBuilder().setCustomId(`transfers_pag::${discordId}::${pagina + 1}`).setLabel('▶').setStyle(ButtonStyle.Secondary).setDisabled(pagina >= total - 1)
+    )] : [];
+    // attachments: [] para que al cambiar de pagina se reemplace la foto en vez de acumularse.
+    return { embeds: [embed], components: componentes, files, attachments: [] };
+}
+
+// --- La lista de IDs del usuario (editable) ---
+
+// Reusa la lista de amigos guardados que el bot YA administra (favoriteFriendIDs del
+// InjectAccount.ini, la que se ve en el panel de Settings con su boton de quitar), en vez de
+// mantener una lista propia y paralela. Decidido asi el 2026-09-26 tras ver que ya existia:
+// una segunda lista obligaria al usuario a registrar el mismo ID dos veces y a mantenerlas
+// sincronizadas a mano.
+async function idsFarmRegistrados(discordId) {
+    const rutaIniCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_inject_ini'`);
+    const friends = parsearListaFriends(rutaIniCfg?.webhook_url || undefined);
+    return (friends || []).map(f => ({ friend_id: String(f.id || '').replace(/\D/g, ''), alias: f.label || '' }))
+                          .filter(f => f.friend_id.length >= 10);
+}
+
+async function agregarIdFarm(discordId, friendId, alias) {
+    await db.run(
+        `INSERT INTO farm_ids (discord_id, friend_id, alias) VALUES (?, ?, ?)
+         ON CONFLICT(discord_id, friend_id) DO UPDATE SET alias = ?`,
+        [discordId, friendId, alias || '', alias || '']
+    );
+}
+
+// Solo saca el ID de la LISTA. El historial de likes_dados se queda intacto a proposito
+// (ver comentario de arriba) -- si el usuario lo reagrega, el sistema sigue sabiendo que
+// cuentas ya lo trabajaron.
+async function quitarIdFarm(discordId, friendId) {
+    await db.run(`DELETE FROM farm_ids WHERE discord_id = ? AND friend_id = ?`, [discordId, friendId]);
+}
+
+// --- El historial permanente ---
+
+async function cuentasYaUsadasParaId(friendId) {
+    const filas = await db.all(`SELECT cuenta FROM likes_dados WHERE friend_id = ?`, [friendId]);
+    return new Set((filas || []).map(f => f.cuenta));
+}
+
+// Se llama SOLO cuando el like quedo confirmado en pantalla, nunca por haber tocado el boton:
+// si una cuenta fallo a mitad, no puede quedar quemada sin haber dado nada.
+async function registrarLikeDado(cuenta, friendId) {
+    await db.run(
+        `INSERT INTO likes_dados (cuenta, friend_id, fecha) VALUES (?, ?, ?)
+         ON CONFLICT(cuenta, friend_id) DO NOTHING`,
+        [cuenta, friendId, new Date().toISOString()]
+    );
+}
+
+// Sortea al azar entre las que nunca trabajaron con ESE perfil.
+function sortearCuentasFarm(todasLasCuentas, yaUsadas, cuantas) {
+    const elegibles = (todasLasCuentas || []).filter(c => !yaUsadas.has(c));
+    for (let i = elegibles.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [elegibles[i], elegibles[j]] = [elegibles[j], elegibles[i]];
+    }
+    return elegibles.slice(0, cuantas);
+}
+
+// --- El reinicio diario ---
+
+// El juego reinicia sus contadores diarios a las 06:00 UTC (confirmado: coincide con Pokemon
+// Masters EX y Cafe ReMix). NO son 24 horas rodantes desde la ultima tanda -- eso importa y
+// juega a favor del usuario: si farmea a las 23:00 hora Peru, a las 01:00 (dos horas despues)
+// ya puede volver, en vez de esperar hasta las 23:00 del dia siguiente.
+function ultimoReinicioDiarioUTC(ahora = Date.now()) {
+    const d = new Date(ahora);
+    const hoy6 = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 6, 0, 0, 0);
+    return ahora >= hoy6 ? hoy6 : hoy6 - 24 * 60 * 60 * 1000;
+}
+
+function proximoReinicioDiarioUTC(ahora = Date.now()) {
+    return ultimoReinicioDiarioUTC(ahora) + 24 * 60 * 60 * 1000;
+}
+
+// Cuantos tickets se farmearon YA en el dia de juego en curso, para este perfil.
+async function ticketsFarmeadosHoy(friendId) {
+    const fila = await db.get(`SELECT ts, tickets FROM farm_tandas WHERE friend_id = ?`, [friendId]);
+    if (!fila || !fila.ts) return 0;
+    return fila.ts >= ultimoReinicioDiarioUTC() ? (fila.tickets || 0) : 0;
+}
+
+async function guardarTandaFarm(friendId, ticketsNuevos) {
+    const yaHoy = await ticketsFarmeadosHoy(friendId);
+    await db.run(
+        `INSERT INTO farm_tandas (friend_id, ts, tickets) VALUES (?, ?, ?)
+         ON CONFLICT(friend_id) DO UPDATE SET ts = ?, tickets = ?`,
+        [friendId, Date.now(), yaHoy + ticketsNuevos, Date.now(), yaHoy + ticketsNuevos]
+    );
+}
+
+function textoTiempoRestante(ms) {
+    const total = Math.max(0, Math.floor(ms / 60000));
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    if (h <= 0) return `${m} min`;
+    return `${h}h ${String(m).padStart(2, '0')}min`;
+}
+
+// --- Pool de cuentas disponibles para farmear ---
+// Son los XML de cuentas, las mismas que usa el autotrade. Se listan por nombre de archivo,
+// que es la clave con la que se guardan en likes_dados.
+async function cuentasPoolFarmTickets() {
+    const cfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+    const ruta = cfg?.webhook_url;
+    if (!ruta || !fs.existsSync(ruta)) return [];
+    // RECURSIVO a proposito (2026-09-26, bug real: la primera version solo miraba el primer
+    // nivel y devolvia CERO cuentas). Los XML no estan sueltos en la carpeta: estan repartidos
+    // en subcarpetas numeradas (Accounts\Saved\1\, \2\, ...) -- 1196 archivos en la
+    // instalacion de Ale. Es el mismo error que ya se habia cometido y corregido con la
+    // busqueda de XML de la wishlist.
+    const salida = [];
+    const recorrer = (dir, prof) => {
+        if (prof > 3) return;
+        let entradas;
+        try { entradas = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+        for (const e of entradas) {
+            const completo = path.join(dir, e.name);
+            if (e.isDirectory()) recorrer(completo, prof + 1);
+            else if (e.name.toLowerCase().endsWith('.xml')) salida.push(e.name);
+        }
+    };
+    recorrer(ruta, 0);
+    return salida;
+}
+
+// --- El panel ---
+// Muestra una fila por ID registrado con su estado real: cuantos tickets quedan hoy, cuando
+// vuelve a estar disponible, y cuantas cuentas le quedan sin usar. Cada ID lleva su propia
+// cuenta de todo, porque el limite de 5 tickets diarios es POR PERFIL que recibe los likes,
+// no global (confirmado con Ale).
+async function construirPanelFarmTickets(discordId) {
+    await asegurarTablasFarmTickets();
+    const ids = await idsFarmRegistrados(discordId);
+    const pool = await cuentasPoolFarmTickets();
+
+    const embed = new EmbedBuilder()
+        .setTitle('🎟️ Farm Shop Tickets')
+        .setColor(0xF0A93A);
+
+    if (!pool.length) {
+        embed.setDescription('❌ No accounts found. Set the **XML accounts folder** in the setup panel first.');
+        return { embeds: [embed], components: [] };
+    }
+
+    if (!ids.length) {
+        embed.setDescription(
+            `You haven't added any account yet.\n\n` +
+            `Add the **friend ID** of each account you want to receive likes on. ` +
+            `Every account gets its own daily allowance of **${FARM_TICKETS_MAX_DIARIO} tickets**.\n\n` +
+            `📦 **${pool.length}** accounts available to farm with.`
+        );
+    } else {
+        const ahora = Date.now();
+        const lineas = [];
+        for (const fila of ids) {
+            const hechos = await ticketsFarmeadosHoy(fila.friend_id);
+            const usadas = await cuentasYaUsadasParaId(fila.friend_id);
+            const libres = pool.filter(c => !usadas.has(c)).length;
+            const restantes = FARM_TICKETS_MAX_DIARIO - hechos;
+            const estado = restantes > 0
+                ? `\`${restantes}/${FARM_TICKETS_MAX_DIARIO}\` left today`
+                : `⏳ back in **${textoTiempoRestante(proximoReinicioDiarioUTC(ahora) - ahora)}**`;
+            const nombre = fila.alias ? `**${fila.alias}**` : `**${formatearFriendId(fila.friend_id)}**`;
+            lineas.push(`${nombre} — ${estado} · 📦 ${libres} accounts left`);
+        }
+        embed.setDescription(
+            lineas.join('\n') +
+            `\n\nDaily allowance resets at **06:00 UTC**.\n` +
+            `An account that already liked a profile can never like it again — but it stays available for your other profiles.`
+        );
+    }
+
+    const componentes = [];
+    if (ids.length) {
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId('farmtickets_elegir_id')
+            .setPlaceholder('Pick the account to farm tickets for')
+            .addOptions(ids.slice(0, 25).map(f => ({
+                label: (f.alias || formatearFriendId(f.friend_id)).slice(0, 100),
+                description: formatearFriendId(f.friend_id).slice(0, 100),
+                value: f.friend_id
+            })));
+        componentes.push(new ActionRowBuilder().addComponents(menu));
+    }
+    // Sin botones de agregar/quitar a proposito: la lista de amigos se administra desde el
+    // panel de Settings (Status ID -- Saved Friends), que es de donde se lee. Tener aqui una
+    // segunda forma de editarla solo llevaria a que las dos se desincronicen.
+    componentes.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('farmtickets_refrescar').setLabel('🔄 Refresh').setStyle(ButtonStyle.Secondary)
+    ));
+    return { embeds: [embed], components: componentes };
+}
+
+// 1234567812345678 -> 1234-5678-1234-5678. El juego los muestra con guiones pero los pide sin
+// ellos, asi que se guardan limpios y solo se formatean al mostrarlos.
+function formatearFriendId(id) {
+    const limpio = String(id || '').replace(/\D/g, '');
+    return limpio.length === 16 ? limpio.replace(/(\d{4})(?=\d)/g, '$1-') : limpio;
+}
+
+// Segundo paso: elegido el ID, se elige cuantas instancias abrir.
+// Aviso explicito pedido por Ale: si eliges menos de 5, no pierdes tickets -- el bot repite
+// tandas hasta completarlos -- pero conviene que el usuario entienda por que va a tardar mas.
+async function construirPanelInstanciasFarm(friendId, alias) {
+    const hechos = await ticketsFarmeadosHoy(friendId);
+    const restantes = FARM_TICKETS_MAX_DIARIO - hechos;
+    const ahora = Date.now();
+
+    const embed = new EmbedBuilder()
+        .setTitle('🎟️ Farm Shop Tickets')
+        .setColor(0xF0A93A);
+
+    if (restantes <= 0) {
+        embed.setDescription(
+            `**${alias || formatearFriendId(friendId)}** already claimed all **${FARM_TICKETS_MAX_DIARIO}** tickets today.\n\n` +
+            `⏳ Come back in **${textoTiempoRestante(proximoReinicioDiarioUTC(ahora) - ahora)}** (daily reset at 06:00 UTC).\n\n` +
+            `Running it again now would burn accounts for nothing: the likes would still arrive, but without any ticket attached.`
+        );
+        return { embeds: [embed], components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary)
+        )] };
+    }
+
+    embed.setDescription(
+        `**${alias || formatearFriendId(friendId)}**\n` +
+        `🎟️ **${restantes}** ticket(s) left to claim today.\n\n` +
+        `How many instances do you want to run at once?`
+    );
+
+    const opciones = [];
+    for (let n = 1; n <= FARM_TICKETS_MAX_INSTANCIAS; n++) {
+        const tandas = Math.ceil(restantes / n);
+        opciones.push({
+            label: `${n} instance${n > 1 ? 's' : ''}`,
+            description: n >= restantes
+                ? 'All at once — fastest'
+                : `${tandas} rounds — slower, but lighter on your PC`,
+            value: String(n)
+        });
+    }
+    return {
+        embeds: [embed],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder()
+                    .setCustomId(`farmtickets_elegir_instancias::${friendId}`)
+                    .setPlaceholder('Number of instances')
+                    .addOptions(opciones)
+            ),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary)
+            )
+        ]
+    };
+}
+
+// Tercer paso: confirmacion, con el desglose de las tandas.
+// Ejemplo real que pidio Ale: con 2 instancias y 5 tickets -> 2 + 2 + 1.
+function planTandasFarm(instancias, restantes) {
+    const tandas = [];
+    let quedan = restantes;
+    while (quedan > 0) {
+        const n = Math.min(instancias, quedan);
+        tandas.push(n);
+        quedan -= n;
+    }
+    return tandas;
+}
+
+// --- Motor de farmeo de tickets (2026-09-26) ---
+// Corre UNA tanda: enciende N instancias EN PARALELO, les inyecta N cuentas sorteadas, espera
+// a que cada juego arranque, y (cuando el AHK exista) da el like en cada una.
+//
+// En paralelo a proposito, a pedido explicito de Ale: "todas tienen que correr a la misma vez,
+// no una por una". Mismo patron que ya usa el pipeline de trade -- Promise.all con 5 segundos
+// de escalon entre arranques, que no es para serializar sino para no pedirle a MuMu que
+// levante cinco maquinas virtuales en el mismo instante.
+//
+// Devuelve por cada instancia que paso: { index, cuenta, ok, motivo }.
+async function correrTandaFarmTickets(indices, cuentas, friendId, onPaso) {
+    const avisar = (txt) => { try { onPaso && onPaso(txt); } catch (e) { /* el aviso nunca debe romper la tanda */ } };
+
+    // 1. Encender todas a la vez, escalonadas 5s
+    avisar(`Turning on ${indices.length} instance(s)...`);
+    const encendidas = await Promise.all(indices.map((idx, i) => (async () => {
+        // Escalonado bajado de 5s a 3s (2026-09-26): con 5 instancias eran 20 segundos de
+        // espera solo para que arrancara la ultima. Sigue escalonado para no pedirle a MuMu
+        // que levante N maquinas virtuales en el mismo instante.
+        if (i > 0) await new Promise(r => setTimeout(r, 3000 * i));
+        return { index: idx, ok: await asegurarInstanciaEncendida(idx, 90000, 0) };
+    })()));
+    const vivas = encendidas.filter(e => e.ok).map(e => e.index);
+    if (!vivas.length) return indices.map((idx, i) => ({ index: idx, cuenta: cuentas[i], ok: false, motivo: 'no_encendio' }));
+    // Ordenar las ventanas en grilla, igual que Kevin y que el Main Trade (2026-09-29, pedido
+    // de Ale). Best-effort: no bloquea la tanda si falla.
+    try {
+        const ahkExeArrange = rutaAutoHotkey();
+        const listaInst = obtenerInstanciasMuMu() || [];
+        const nombresVivas = vivas
+            .map(idx => listaInst.find(x => String(x.index) === String(idx))?.name)
+            .filter(Boolean);
+        if (ahkExeArrange && nombresVivas.length && fs.existsSync(RUTA_ARRANGE_WINDOWS_SCRIPT)) {
+            spawn(ahkExeArrange, [RUTA_ARRANGE_WINDOWS_SCRIPT, ...nombresVivas], { windowsHide: false, detached: true, stdio: 'ignore' }).unref();
+        }
+    } catch (e) {
+        console.error('DEBUG: no se pudo acomodar las ventanas de Farm Tickets:', e?.message || e);
+    }
+    // Margen corto (2026-09-26, bajado de 10s a 2s tras medirlo con Ale: "nuevamente demora
+    // en abrirse el juego"). Los 10 segundos venian copiados del pipeline de trade, donde
+    // estaban ajustados para otra cosa. Aca no aportan nada: el paso siguiente es la
+    // inyeccion, que CIERRA el juego a la fuerza y lo vuelve a abrir con am start -- o sea
+    // que "dejar que la instancia se asiente" no sirve de nada, se tira a la basura enseguida.
+    // asegurarInstanciaEncendida ya espera a que Android reporte is_android_started, que es
+    // la condicion que de verdad importa.
+    await new Promise(r => setTimeout(r, 2000));
+
+    // 2. Inyectar la cuenta sorteada en cada una, UNA POR UNA (ver nota de abajo)
+    // UNA POR UNA a proposito, no en paralelo (2026-09-26, bug real reproducido en vivo con
+    // Ale en la primera corrida de verdad). inyectarCuentaPorAdb ejecuta `adb root`, que
+    // REINICIA el demonio de adb -- que es compartido por todas las instancias. Lanzando dos
+    // inyecciones a la vez, una le reinicia adb a la otra por debajo y la deja colgada.
+    // Se vio exacto en Logs\_welcomeback_debug.txt: la instancia 1 escribio "INICIO" a las
+    // 14:11:34 y NUNCA volvio a escribir -- se quedo esperando su primera captura por adb
+    // hasta que el timeout externo de 150s la mato (codigo 4294967295). La instancia 2, que
+    // no tenia a nadie reiniciandole el demonio, llego al menu en 25 segundos.
+    // Serializar cuesta poco: la inyeccion son unos segundos por cuenta. Lo que SI se queda en
+    // paralelo es lo caro -- encender las instancias y esperar a que arranque el juego.
+    avisar('Injecting accounts...');
+    const cfgXml = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+    const resultados = [];
+    for (const idx of vivas) {
+        const cuenta = cuentas[indices.indexOf(idx)];
+        const rutaXml = buscarArchivoXmlPorNombre(cfgXml?.webhook_url, cuenta);
+        if (!rutaXml) { resultados.push({ index: idx, cuenta, ok: false, motivo: 'xml_no_encontrado' }); continue; }
+        const iny = await inyectarCuentaPorAdb(idx, rutaXml);
+        resultados.push(iny.ok
+            ? { index: idx, cuenta, ok: true, motivo: '' }
+            : { index: idx, cuenta, ok: false, motivo: `inyeccion_${iny.motivo}` });
+    }
+
+    // 3. (paso ELIMINADO 2026-09-26) Aca se llamaba a _WaitWelcomeScreens.ahk y era un error
+    //    de diseño mio, señalado por Ale: "solamente te he dicho que agarres el hack de Kevin
+    //    y cambies algunos movimientos". Dos motivos para sacarlo:
+    //      a) Es REDUNDANTE: inyectarCuentaPorAdb ya termina lanzando el juego con `am start`.
+    //      b) Es el script que colgaba la corrida. Saca capturas por ADB (200ms cada una) en
+    //         cada vuelta, y con dos instancias a la vez la 1 se quedaba esperando su primera
+    //         captura para siempre: en Logs\_welcomeback_debug.txt escribia "INICIO" y nunca
+    //         mas nada, hasta morir por el timeout externo (codigo 4294967295). Paso las dos
+    //         veces, y serializar la inyeccion no lo arreglo.
+    //    El script de likes no lo necesita: copia a _SendFriendRequest.ahk, que se encarga solo
+    //    del arranque con clickUntilNeedle("Common_ActivatedSocialInMainMenu", 143, 518, 240,
+    //    1500) -- 240 segundos de margen tocando hasta llegar a Comunidad, y con capturas
+    //    NATIVAS de 8ms en vez de 200ms. Eso explica tambien lo que noto Ale: el de Kevin abre
+    //    el juego en un segundo y el nuestro tardaba quince.
+
+    // 4. Dar el like con _LikePublicCards.ahk -- copia del de Kevin: captura NATIVA y
+    //    busqueda acotada, un proceso independiente por instancia, igual que sus 1.ahk/2.ahk.
+    //    Kevin distingue la instancia por el NOMBRE del archivo (A_ScriptName); nosotros por
+    //    argumento, que evita mantener diez copias sincronizadas. El resultado es el mismo.
+    //    OJO: el script todavia termina en 'falta_needle_de_confirmacion' a proposito -- falta
+    //    el needle del pulgar YA marcado. Hasta tenerlo NO se puede devolver OK, porque
+    //    bot.js escribiria la fila en likes_dados y quemaria la cuenta para siempre (una
+    //    cuenta solo puede darle like a un perfil UNA vez) quiza sin haber recibido el ticket.
+    const listos = resultados.filter(x => x.ok);
+    // La velocidad la sube el propio _LikePublicCards.ahk (estilo Kevin, como su
+    // _SendFriendRequest), no un script aparte (2026-09-29, pedido de Ale).
+    if (listos.length) {
+        avisar('Giving likes...');
+        const instancias2 = obtenerInstanciasMuMu();
+        // En paralelo, escalonadas 3s. El script es de captura NATIVA (no ADB), asi que varias
+        // a la vez no se pisan entre si como pasaba con el de pantallas de bienvenida.
+        await Promise.all(listos.map((r, i) => new Promise(async (resolve) => {
+            if (i > 0) await new Promise(r2 => setTimeout(r2, 3000 * i));
+            const info = (instancias2 || []).find(x => String(x.index) === String(r.index));
+            if (!info) { r.ok = false; r.motivo = 'instancia_no_listada'; return resolve(); }
+            ejecutarLikePublicCards(info.name, friendId, (ok, detalle) => {
+                if (!ok) { r.ok = false; r.motivo = detalle || 'like_fallo'; }
+                resolve();
+            });
+        })));
+    }
+
+    // 5. NO se cierran aca (2026-09-26). Antes se cerraban al final de CADA tanda, y eso
+    //    obligaba a pagar el arranque completo de Android en cada ronda -- con 3 rondas, tres
+    //    arranques de 20-40s cada uno. Kevin no hace eso: abre una vez y trabaja.
+    //    No hace falta cerrarlas para cambiar de cuenta: inyectarCuentaPorAdb ya cierra el
+    //    JUEGO a la fuerza y lo reabre, asi que la cuenta siguiente entra sin tocar el
+    //    emulador. Ale pidio que se cierren "una vez que termine la run de todo", y eso se
+    //    hace ahora al final del bucle de tandas, no aqui.
+    return resultados;
+}
+
 async function obtenerCanalComando(userId, tipo) {
     return db.get(
         `SELECT canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ? AND webhook_url NOT IN ('N/A', 'local') ORDER BY rowid DESC LIMIT 1`,
@@ -530,7 +1090,7 @@ function construirEmbedWishlistInicio(user, mapaEmojis = {}) {
             `5- View image of each card!\n`
         )
         .setColor(0xE91E63)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
+        .setFooter({ text: "Monitor Pokémon" })
         .setTimestamp();
 }
 
@@ -641,6 +1201,20 @@ function agregarCartaAWishlist(rutaWishlistCfg, cartaId, nombre) {
     }
 }
 
+// Entrada EXTRA para las cartas corregidas (2026-09-25, a pedido explicito de Ale: "los que
+// son 00 deben aparecer en sus expansiones correspondientes, y los que son 01 en deluxe y a su
+// vez con 00"). La tabla de correcciones dice cual es la expansion ORIGINAL de una carta, pero
+// esa misma carta TAMBIEN esta en Deluxe -- es el mismo carton, compartido por los dos sobres.
+// Como el resto del codigo filtra por `c.expansion === X`, la forma mas simple de que salga en
+// las dos es emitir DOS entradas de catalogo: una con su expansion original y otra con la que
+// trae cardmap (Deluxe). No hace falta tocar ningun filtro, collage ni PDF.
+// Devuelve [] cuando la carta no esta corregida, que es el caso de casi todas.
+function entradasExtraPorExpansionCompartida(base, cardMap, expansiones) {
+    const crudo = cardMap?.[base.id]?.ExpansionID;
+    if (!crudo || crudo === base.expansionId) return [];
+    return [{ ...base, expansionId: crudo, expansion: expansiones[crudo] || crudo, extra: true }];
+}
+
 function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
     const archivoWishlist = resolverArchivoWishlist(rutaWishlistCfg?.webhook_url);
     if (!archivoWishlist) return null;
@@ -665,9 +1239,17 @@ function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
         const tipoRareza = tipoRarezaDesdeInfo(cardmaster?.[id]);
         const elemento = elementoDesdeInfo(cardmaster?.[id], nombre);
         return { id, nombre, expansion, expansionId, categoria, tipoRareza, elemento };
-    });
+    }).flatMap(c => [c, ...entradasExtraPorExpansionCompartida(c, cardMap, expansiones)]);
 
-    cartas.sort((a, b) => a.expansion.localeCompare(b.expansion) || a.nombre.localeCompare(b.nombre));
+    // Orden del catalogo BASE (2026-09-25, a pedido de Ale: "que en todos se ordene bien").
+    // Antes era expansion + nombre alfabetico, y ese orden se propagaba a TODAS las pantallas
+    // que no reordenan por su cuenta -- por eso los elementos salian entreverados (planta,
+    // fantasma, planta, fantasma...) en el collage y en las listas generales, aunque la lista
+    // por expansion ya estuviera arreglada.
+    // Ahora: primero agrupa por expansion (eso no cambia, varias pantallas cuentan con ello) y
+    // dentro de cada una aplica compararCartasParaLista: rareza de mayor a menor, elementos
+    // agrupados y nombre alfabetico para desempatar.
+    cartas.sort((a, b) => a.expansion.localeCompare(b.expansion) || compararCartasParaLista(a, b));
     return cartas;
 }
 
@@ -690,9 +1272,17 @@ function obtenerTodasLasCartas(rutaMasterCfg) {
         const tipoRareza = tipoRarezaDesdeInfo(info);
         const elemento = elementoDesdeInfo(info, nombre);
         return { id, nombre, expansion, expansionId, categoria, tipoRareza, elemento };
-    });
+    }).flatMap(c => [c, ...entradasExtraPorExpansionCompartida(c, cardMap, expansiones)]);
 
-    cartas.sort((a, b) => a.expansion.localeCompare(b.expansion) || a.nombre.localeCompare(b.nombre));
+    // Orden del catalogo BASE (2026-09-25, a pedido de Ale: "que en todos se ordene bien").
+    // Antes era expansion + nombre alfabetico, y ese orden se propagaba a TODAS las pantallas
+    // que no reordenan por su cuenta -- por eso los elementos salian entreverados (planta,
+    // fantasma, planta, fantasma...) en el collage y en las listas generales, aunque la lista
+    // por expansion ya estuviera arreglada.
+    // Ahora: primero agrupa por expansion (eso no cambia, varias pantallas cuentan con ello) y
+    // dentro de cada una aplica compararCartasParaLista: rareza de mayor a menor, elementos
+    // agrupados y nombre alfabetico para desempatar.
+    cartas.sort((a, b) => a.expansion.localeCompare(b.expansion) || compararCartasParaLista(a, b));
     return cartas;
 }
 
@@ -810,11 +1400,17 @@ async function elegirBannerConRespaldoRepo(carpetaLocal, carpetaRepo, rutaDefaul
     if (remoto) return remoto;
     return rutaDefault;
 }
-const CARPETA_FUNDAS_ALLCARDS = 'C:\\Users\\Ale TCG\\Pictures\\pokemon\\Pokemon Fundas';
+// Movidas a variables de entorno (2026-09-11, bug real encontrado en vivo: la ruta
+// hardcodeada quedaba embebida tal cual dentro del bundle/.exe distribuido a otros
+// usuarios -- ej. wR98 -- exponiendo el nombre de usuario de Windows del autor en
+// el binario compartido, aunque la carpeta en si nunca exista en su PC). Sin la variable de
+// entorno seteada (cualquier instalacion que no sea la de Ale), quedan vacias y el resto del
+// codigo ya cae de vuelta al estado sin wallpapers de siempre.
+const CARPETA_FUNDAS_ALLCARDS = process.env.ALE_WALLPAPER_FUNDAS_DIR || '';
 async function elegirBannerAllCardsAleatorio() {
     return elegirBannerConRespaldoRepo(CARPETA_FUNDAS_ALLCARDS, 'Pokemon Fundas', path.join(__dirname, 'assets', 'embeds', 'card_banner.png'));
 }
-const CARPETA_PORTADAS_WISHLIST = 'C:\\Users\\Ale TCG\\Pictures\\pokemon\\Pokemon Portadas';
+const CARPETA_PORTADAS_WISHLIST = process.env.ALE_WALLPAPER_PORTADAS_DIR || '';
 async function elegirBannerWishlistAleatorio() {
     return elegirBannerConRespaldoRepo(CARPETA_PORTADAS_WISHLIST, 'Pokemon Portadas', path.join(__dirname, 'assets', 'embeds', 'wishlist_banner.png'));
 }
@@ -830,7 +1426,7 @@ function construirEmbedAllCardsInicio(user) {
             `3-› View each card, quantity & XML.\n`
         )
         .setColor(0x3498DB)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
+        .setFooter({ text: "Monitor Pokémon" })
         .setTimestamp();
 }
 
@@ -845,7 +1441,7 @@ function construirEmbedGoldCardsInicio(user) {
             `3-› Only cards with 10+ copies in at least one account show up — those are the ones that turn Gold in-game.\n`
         )
         .setColor(0xF0A93A)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
+        .setFooter({ text: "Monitor Pokémon" })
         .setTimestamp();
 }
 
@@ -1352,8 +1948,29 @@ async function construirEmbedCategoriasPorExpansion(cartas, expansion, opciones 
             }));
         componentes.push(new ActionRowBuilder().addComponents(menu));
     }
+    // Refresh + Threshold (2026-09-01, a pedido explicito del usuario, solo para Gold Cards):
+    // antes habia que salir con Back y volver a entrar para que el conteo de copias releyera
+    // los JSON de cuentas (el cache normal tarda hasta 90s en refrescarse solo) o para cambiar
+    // cuantas copias hacen falta para calificar como Gold -- ese boton ya existia (⚙️
+    // Threshold, ver goldcards_umbral) pero solo en el panel principal, nunca adentro de una
+    // expansion ya elegida. Reusa el mismo customId/handler global, no hace falta uno nuevo.
+    // "View All" (2026-09-25, a pedido explicito de Ale): saltea el paso de elegir categoria y
+    // muestra TODAS las cartas de la expansion de una, ya ordenadas por rareza de mayor a
+    // menor y agrupadas por elemento (ver ordenarCartasParaLista). Reusa el mismo camino que
+    // ya existia para /card sin rarity -- CATEGORIA_SIN_FILTRO -- asi que no agrega logica de
+    // filtrado nueva, solo el boton y su handler. Solo aparece si hay algo que mostrar.
     componentes.push(new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`${prefijo}_volver_expansiones`).setLabel('🔙 Back').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`${prefijo}_volver_expansiones`).setLabel('🔙 Back').setStyle(ButtonStyle.Secondary),
+        ...(categorias.length ? [
+            new ButtonBuilder().setCustomId(`${prefijo}_categoria_todas::${expansion}`.slice(0, 100)).setLabel('📋 View All').setStyle(ButtonStyle.Primary),
+            // PDF de la expansion entera (2026-09-25). Aca no hay categoria ni elemento
+            // elegidos todavia, asi que van los dos como "sin filtro".
+            new ButtonBuilder().setCustomId(`${prefijo}_pdf::${expansion}::${CATEGORIA_SIN_FILTRO}::${ELEMENTO_SIN_FILTRO}`.slice(0, 100)).setLabel('📄 PDF').setStyle(ButtonStyle.Secondary)
+        ] : []),
+        ...(prefijo === 'goldcards' ? [
+            new ButtonBuilder().setCustomId(`goldcards_categorias_refresh::${expansion}`).setLabel('🔄 Refresh').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('goldcards_umbral').setLabel('⚙️ Threshold').setStyle(ButtonStyle.Secondary)
+        ] : [])
     ));
 
     const payload = { embeds: [embed], components: componentes };
@@ -1515,6 +2132,66 @@ async function construirEmbedElementosPorCategoria(cartas, expansion, categoria,
     return payload;
 }
 
+// Aviso de "cargando" para la navegacion de cartas (2026-09-25, a pedido explicito de Ale:
+// "si presiona y no hay algo que le informe que esta cargando, seguira intentando y ocasionara
+// un bug"). El problema real no es solo la falta de aviso: con deferUpdate() el mensaje se
+// queda IGUAL, con todos sus botones y menus activos, asi que el usuario vuelve a clickear y
+// se encadenan varias interacciones sobre el mismo mensaje.
+// Esto lo resuelve de las dos maneras a la vez: avisa, Y deja el mensaje sin componentes
+// mientras carga, asi no hay nada que clickear de nuevo. No hace falta borrarlo despues: el
+// editReply con el resultado real lo reemplaza, o sea que desaparece solo.
+// Se llama SIEMPRE despues de deferUpdate()/deferReply(), nunca antes.
+async function avisarCargandoCartas(interaction) {
+    try {
+        await interaction.editReply({
+            embeds: [new EmbedBuilder()
+                .setDescription('⏳ **Please wait a few seconds — loading your data...**')
+                .setColor(0xE91E63)],
+            components: [],
+            files: [],
+            attachments: []
+        });
+    } catch (e) {
+        // Si la interaccion ya expiro o el mensaje ya no existe, no pasa nada: esto es solo
+        // un aviso intermedio, el editReply de verdad viene despues y ese si maneja su error.
+    }
+}
+
+// Orden de la lista de cartas (2026-09-25, a pedido explicito de Ale: "que se ordene de mayor
+// a menor por categoria y a su vez los elementos igual, que sea por separado y no combinado").
+// Antes no se ordenaba nada: las cartas salian en el orden en que venian del JSON, asi que en
+// "All categories" quedaban rarezas y elementos entreverados.
+// Tres niveles, en este orden:
+//   1. RAREZA de mayor a menor -- ORDEN_RAREZA esta definido de menor a mayor (1-diamond
+//      primero, crown-rare ultimo), asi que aca se invierte.
+//   2. ELEMENTO agrupado, no mezclado: primero los tipos Pokemon en el orden de
+//      ELEMENTOS_TIPO_POKEMON, despues los subtipos de Trainer, y al final cualquier otro.
+//   3. NOMBRE alfabetico, para que dentro de un mismo bloque el orden sea estable entre
+//      llamadas (si no, dos cartas empatadas podian salir en distinto orden cada vez).
+// Comparador suelto, para poder reusar el MISMO criterio en el catalogo base (donde ademas hay
+// que agrupar por expansion) y en cada lista suelta, sin duplicar la logica ni que se vayan
+// desincronizando. Ale lo pidio explicito: "que en todos se ordene bien".
+function compararCartasParaLista(a, b) {
+    // ORDEN_RAREZA va de menor a mayor, asi que el indice YA es el peso: ordenando de mayor a
+    // menor queda crown-rare primero y 1-diamond ultimo. Las rarezas desconocidas dan -1 y con
+    // ese mismo orden caen al fondo, que es donde deben ir.
+    const pesoRareza = (c) => ORDEN_RAREZA.indexOf(c.tipoRareza);
+    const pesoElemento = (c) => {
+        const iP = ELEMENTOS_TIPO_POKEMON.indexOf(c.elemento);
+        if (iP !== -1) return iP;
+        const iT = SUBTIPOS_TRAINER_VALIDOS.indexOf(c.elemento);
+        if (iT !== -1) return ELEMENTOS_TIPO_POKEMON.length + iT;
+        return ELEMENTOS_TIPO_POKEMON.length + SUBTIPOS_TRAINER_VALIDOS.length;
+    };
+    return (pesoRareza(b) - pesoRareza(a))
+        || (pesoElemento(a) - pesoElemento(b))
+        || String(a.nombre || '').localeCompare(String(b.nombre || ''));
+}
+
+function ordenarCartasParaLista(lista) {
+    return [...lista].sort(compararCartasParaLista);
+}
+
 async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, elemento = ELEMENTO_SIN_FILTRO, pagina = 0, opciones = {}) {
     const prefijo = opciones.prefijo || 'wishlist';
     const contexto = opciones.contexto || 'your wishlist';
@@ -1525,7 +2202,9 @@ async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, el
     // TODAS las categorias en vez de una sola.
     const filtroCategoria = categoria && categoria !== CATEGORIA_SIN_FILTRO ? categoria : null;
 
-    const filtradas = cartas.filter(c => c.expansion === expansion && (!filtroCategoria || c.categoria === filtroCategoria) && (!filtroElemento || c.elemento === filtroElemento));
+    const filtradas = ordenarCartasParaLista(
+        cartas.filter(c => c.expansion === expansion && (!filtroCategoria || c.categoria === filtroCategoria) && (!filtroElemento || c.elemento === filtroElemento))
+    );
 
     // Bug real: en categorías como "4 Diamonds", cada carta repite el tag de
     // emoji custom 4 veces (uno por diamante) — con 25 cartas por página como
@@ -1615,6 +2294,15 @@ async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, el
             new ButtonBuilder().setCustomId(`${prefijo}_expansion_pagina_${paginaSegura + 1}::${expansion}::${categoria}::${elemento}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
         );
     }
+    // PDF de lo que hay en pantalla (2026-09-25, a pedido explicito de Ale: "o si selecciona
+    // una categoria especial tambien deberia aparecer"). Lleva los mismos filtros que la vista
+    // actual, asi que el PDF sale con exactamente las cartas que se estan viendo -- todas las
+    // paginas, no solo la actual.
+    if (items.length > 0) {
+        filaNavegacion.push(
+            new ButtonBuilder().setCustomId(`${prefijo}_pdf::${expansion}::${categoria}::${elemento}`.slice(0, 100)).setLabel('📄 PDF').setStyle(ButtonStyle.Secondary)
+        );
+    }
     componentes.push(new ActionRowBuilder().addComponents(...filaNavegacion));
 
     const payload = { embeds: [embed], components: componentes };
@@ -1686,11 +2374,27 @@ function cargarCardMap(rutaMaster) {
 // corrige la expansion mostrada/usada para buscar -- NO se usa para resolver
 // imagenes (esas siguen usando el ExpansionID/CollectionNumber reales, que es
 // donde el arte existe de verdad).
-const OVERRIDES_EXPANSION_A1 = {
+// Alcance medido (2026-09-25, a raiz de un Zeraora que solo aparecia bajo "Deluxe Pack: ex"
+// y no bajo "Extradimensional Crisis"): el problema que corrige esta tabla NO es solo de
+// Genetic Apex. Sobre cardmap.json hay 116 especies (232 cartas) cuyos prints estan TODOS
+// marcados como A4b, o sea que perdieron su expansion original -- las 51 de abajo son las
+// unicas corregidas. Se decidio NO seguir agregando a mano (Ale, mismo dia): el dashboard de
+// Lean muestra lo mismo, asi que es una limitacion del cardmap.json de Kevin, y conviene
+// mostrar lo mismo que las demas herramientas antes que divergir carta por carta.
+// Si alguna vez se retoma, quedo medido que sirve y que no:
+//   - Distinguir cual de los dos prints es el de Deluxe SI se puede medir: los de Deluxe son
+//     mas oscuros (observacion de Ale). Comparando el brillo medio de la franja inferior de
+//     las dos imagenes y exigiendo una diferencia >= 12, clasifica 78 de las 116 especies sin
+//     ningun error sobre los 51 casos ya confirmados de abajo.
+//   - Deducir A QUE expansion pertenece el print original NO se puede con los datos locales:
+//     inferirlo por las especies vecinas (el numero de especie es casi cronologico) solo
+//     acierta 37 de 44. Para eso harian falta los checklists oficiales por expansion.
+const OVERRIDES_EXPANSION = {
+    'PK_10_007410_00': 'A3a', // Zeraora -- Extradimensional Crisis (2026-09-29, pedido de Ale)
     'PK_10_000010_00': 'A1', // Bulbasaur
     'PK_10_000020_00': 'A1', // Ivysaur
     'PK_10_000040_00': 'A1', // Venusaur ex
-    'PK_10_005220_00': 'A1', // Kakuna
+    'PK_10_005220_00': 'A2b', // Kakuna
     'PK_10_000210_00': 'A1', // Exeggcute
     'PK_10_000230_00': 'A1', // Exeggutor ex
     'PK_10_000330_00': 'A1', // Charmander
@@ -1718,33 +2422,273 @@ const OVERRIDES_EXPANSION_A1 = {
     'PK_10_001230_00': 'A1', // Gengar ex
     'PK_10_001270_00': 'A1', // Jynx
     'PK_10_001290_00': 'A1', // Mewtwo ex
-    'PK_10_003500_00': 'A1', // Kirlia
+    'PK_10_003500_00': 'A2', // Kirlia
     'PK_10_001320_00': 'A1', // Gardevoir
     'PK_10_001430_00': 'A1', // Machop
     'PK_10_001440_00': 'A1', // Machoke
     'PK_10_001460_00': 'A1', // Machamp ex
     'PK_10_001510_00': 'A1', // Cubone
     'PK_10_001530_00': 'A1', // Marowak ex
-    'PK_10_004730_00': 'A1', // Golbat
-    'PK_10_008440_00': 'A1', // Dragonair
+    'PK_10_004730_00': 'A2a', // Golbat
+    'PK_10_008440_00': 'A3b', // Dragonair
     'PK_10_001930_00': 'A1', // Jigglypuff
     'PK_10_001950_00': 'A1', // Wigglytuff ex
     'PK_10_001980_00': 'A1', // Farfetch'd
-    'PK_10_004050_00': 'A1', // Lickitung
+    'PK_10_004050_00': 'A2', // Lickitung
     'TR_10_000100_00': 'A1', // Old Amber
     'TR_10_000110_00': 'A1', // Erika
     'TR_10_000150_00': 'A1', // Giovanni
     'TR_10_000170_00': 'A1', // Sabrina
-    'PK_20_000890_01': 'A1', // Greninja (AR)
-    'PK_20_001320_01': 'A1', // Gardevoir (AR)
-    'PK_20_001980_01': 'A1', // Farfetch'd (AR)
+    'PK_20_000890_01': 'A3a', // Greninja (AR)
+    'PK_20_001320_01': 'A3b', // Gardevoir (AR)
+    'PK_20_001980_01': 'A3b', // Farfetch'd (AR)
+
+    // --- Cartas que Deluxe Pack: ex comparte con su expansion original (2026-09-25) ---
+    // Bug reportado en vivo por Ale: "busco un Zeraora que pertenece a crisis dimensional pero
+    // solo aparece en el deluxe pack". Deluxe reimprime cartas de otras expansiones con DOS
+    // versiones: la de fondo normal (_00), que es la MISMA carta que la de la expansion
+    // original, y una de fondo oscuro (_01) exclusiva de Deluxe. Como cardmap.json solo admite
+    // una expansion por carta, la _00 quedo marcada solo como Deluxe y desaparecio de su sobre.
+    //
+    // Como se identificaron (las tres señales coincidieron):
+    //   1. De los dos prints, el de numero de coleccion MENOR (_00) es el de la expansion
+    //      original -- mismo criterio que ya se habia usado para las 51 de Genetic Apex.
+    //   2. El _01 tiene el fondo mas oscuro, que es lo que Ale noto a simple vista. Medido:
+    //      comparando el brillo de la franja inferior, el _00 sale mas claro en 100 de 116
+    //      pares, con una diferencia mediana de 17 puntos.
+    //   3. Los contadores de copias de Ale lo confirman desde otro angulo: la carta de la
+    //      expansion original tiene cientos de copias y la de Deluxe unas decenas.
+    //
+    // De donde salio la expansion de cada una:
+    //   - Pokemon: de la ficha individual en pocket.pokemongohub.net, que lista en que otros
+    //     sets aparece la carta con la MISMA rareza.
+    //   - Entrenadores: de nuestros propios datos, sin consultar nada. La version full-art
+    //     (TR_20_) conserva el numero de especie y SI tiene bien su expansion original.
+    //     Verificado en vivo con Ale (captura de Cyrus): #150 y #190 en Space-Time Smackdown,
+    //     #326 y #327 en Deluxe -- y cardmap solo tiene el #190, o sea que el #150 es
+    //     justamente el que quedo pisado.
+    //
+    // OJO con los codigos, no siguen el orden que uno esperaria:
+    //   A3 = Celestial Guardians | A3a = Extradimensional Crisis | A3b = Eevee Grove
+    //   A2 = Space-Time Smackdown | A2a = Triumphant Light | A2b = Shining Revelry
+    //   A1a = Mythical Island | A4 = Wisdom of Sea and Sky
+
+    // Pokemon
+    'PK_10_007410_00': 'A3a', // Zeraora -> Extradimensional Crisis #21
+    'PK_10_007960_00': 'A3a', // Celesteela -> Extradimensional Crisis #62
+    'PK_10_007250_00': 'A3a', // Kartana -> Extradimensional Crisis #8
+    'PK_10_007790_00': 'A3a', // Nihilego -> Extradimensional Crisis #42
+    'PK_10_006670_00': 'A3',  // Cosmoem -> Celestial Guardians #86
+    'PK_10_006660_00': 'A3',  // Cosmog -> Celestial Guardians #85
+    'PK_10_007040_00': 'A3',  // Magearna -> Celestial Guardians #123
+    'PK_10_006470_00': 'A3',  // Oricorio -> Celestial Guardians #66
+    'PK_10_006130_00': 'A3',  // Torracat -> Celestial Guardians #32
+    'PK_10_006310_00': 'A3',  // Wishiwashi -> Celestial Guardians #50
+    'PK_10_007340_00': 'A3b', // Alcremie -> Eevee Grove #37
+    'PK_10_008300_00': 'A3b', // Milcery -> Eevee Grove #36
+    'PK_10_008060_00': 'A3b', // Torkoal -> Eevee Grove #10
+    'PK_10_008360_00': 'A3b', // Umbreon -> Eevee Grove #43
+    'PK_10_003080_00': 'A2',  // Chimchar -> Space-Time Smackdown #27
+    'PK_10_003310_00': 'A2',  // Manaphy -> Space-Time Smackdown #50
+    'PK_10_003090_00': 'A2',  // Monferno -> Space-Time Smackdown #28
+    'PK_10_003030_00': 'A2',  // Shaymin (Grass) -> Space-Time Smackdown #22
+    'PK_10_004700_00': 'A2a', // Gabite -> Triumphant Light #46
+    'PK_10_004930_00': 'A2a', // Shaymin (Colorless) -> Triumphant Light #69
+    'PK_10_004600_00': 'A2a', // Sudowoodo -> Triumphant Light #36
+    'PK_10_005260_00': 'A2b', // Meowscarada -> Shining Revelry #7
+    'PK_10_005060_00': 'A2b', // Pachirisu -> Shining Revelry #25
+    'PK_10_005680_00': 'A2b', // Tinkatuff -> Shining Revelry #53
+    'PK_10_002600_00': 'A1a', // Marshadow -> Mythical Island #47
+    'PK_10_009170_00': 'A4',  // Crawdaunt -> Wisdom of Sea and Sky #61
+    'PK_10_008710_00': 'A4',  // Jumpluff -> Wisdom of Sea and Sky #15
+
+    // Entrenadores (deducidos de la hermana full-art TR_20_, ver nota de arriba)
+    'TR_10_000320_00': 'A2',  // Cyrus -> Space-Time Smackdown #150
+    'TR_10_000360_00': 'A2',  // Dawn -> Space-Time Smackdown
+    'TR_10_000370_00': 'A2',  // Mars -> Space-Time Smackdown
+    'TR_10_000380_00': 'A2a', // Irida -> Triumphant Light
+    'TR_10_000440_00': 'A2b', // Red -> Shining Revelry
+    'TR_10_000230_00': 'A1a', // Leaf -> Mythical Island
+    'TR_10_000590_00': 'A3',  // Lillie -> Celestial Guardians
+    'TR_10_000660_00': 'A3a', // Lusamine -> Extradimensional Crisis
+    'TR_10_000670_00': 'A3b', // Eevee Bag -> Eevee Grove
+    'TR_10_000770_00': 'A4',  // Lyra -> Wisdom of Sea and Sky
+    'TR_10_000780_00': 'A4',  // Silver -> Wisdom of Sea and Sky
+
+    // PENDIENTES, a proposito sin resolver (2026-09-25). No se ponen a medias:
+    //   - Brionne (Deluxe #118) y Floragato (#51): aparecen en DOS expansiones con la misma
+    //     rareza, no hay con que elegir (Brionne: Eevee Grove #23 o Celestial Guardians #47;
+    //     Floragato: Shining Revelry #6 o Paldean Wonders #2).
+    //   - 7 objetos sin version full-art, asi que no aplica el truco del TR_20_ y su ficha en
+    //     la web no dice de que set vienen: Electrical Cord, Elemental Switch, Giant Cape,
+    //     Leaf Cape, Pokemon Communication, Rare Candy, Rocky Helmet.
+
+    // --- Segunda tanda (2026-09-25) ---
+    // La primera deteccion daba por cubiertas las cartas que tienen un homonimo en un
+    // sobre de la serie B. Pero Deluxe solo reimprime de la serie A (A1 a A4, confirmado
+    // en wikidex: "desde Genes Formidables hasta Saber Marino y Celeste"), asi que ese
+    // homonimo es OTRA carta. Ej: el Sprigatito de Deluxe es el de Shining Revelry, no el
+    // de Paldean Wonders, que es serie B.
+    // Estas salieron de un metodo puramente local, sin consultar nada: dentro de un mismo
+    // sobre los codigos de especie van en el mismo orden que los numeros de coleccion, asi
+    // que el HUECO en la secuencia delata a que sobre pertenece la carta perdida. Validado
+    // contra los 8 casos que ya se habian confirmado por la web: coinciden los 8.
+    'PK_10_002200_00': 'A1a',   // Serperior -> Mythical Island
+    'PK_10_002190_00': 'A1a',   // Servine -> Mythical Island
+    'PK_10_002180_00': 'A1a',   // Snivy -> Mythical Island
+    'TR_10_000290_00': 'A2',    // Giant Cape -> Space-Time Smackdown
+    'PK_10_003730_00': 'A2',    // Lucario -> Space-Time Smackdown
+    'TR_10_000280_00': 'A2',    // Pokemon Communication -> Space-Time Smackdown
+    'TR_10_000300_00': 'A2',    // Rocky Helmet -> Space-Time Smackdown
+    'PK_10_004740_00': 'A2a',   // Crobat -> Triumphant Light
+    'PK_10_005250_00': 'A2b',   // Floragato -> Shining Revelry
+    'PK_10_005620_00': 'A2b',   // Paldean Wooper -> Shining Revelry
+    'PK_10_005080_00': 'A2b',   // Sprigatito -> Shining Revelry
+    'PK_10_005670_00': 'A2b',   // Tinkatink -> Shining Revelry
+    'PK_10_005370_00': 'A2b',   // Wiglett -> Shining Revelry
+    'PK_10_006910_00': 'A3',    // Alolan Grimer -> Celestial Guardians
+    'PK_10_006780_00': 'A3',    // Crabrawler -> Celestial Guardians
+    'PK_10_007110_00': 'A3',    // Delcatty -> Celestial Guardians
+    'PK_10_006740_00': 'A3',    // Drilbur -> Celestial Guardians
+    'PK_10_007000_00': 'A3',    // Excadrill -> Celestial Guardians
+    'PK_10_007020_00': 'A3',    // Klefki -> Celestial Guardians
+    'TR_10_000510_00': 'A3',    // Leaf Cape -> Celestial Guardians
+    'TR_10_000480_00': 'A3',    // Rare Candy -> Celestial Guardians
+    'PK_10_007100_00': 'A3',    // Skitty -> Celestial Guardians
+    'TR_10_000620_00': 'A3a',   // Electrical Cord -> Extradimensional Crisis
+    'PK_10_007490_00': 'A3a',   // Pheromosa -> Extradimensional Crisis
+    'PK_10_008180_00': 'A3b',   // Brionne -> Eevee Grove
+    'PK_10_008260_00': 'A3b',   // Slurpuff -> Eevee Grove
+    'PK_10_009200_00': 'A4',    // Chinchou -> Wisdom of Sea and Sky
+    'PK_10_009160_00': 'A4',    // Corphish -> Wisdom of Sea and Sky
+    'TR_10_000710_00': 'A4',    // Elemental Switch -> Wisdom of Sea and Sky
+
+    // --- Tercera tanda (2026-09-26) ---
+    // Las tres que habian quedado ambiguas y se resolvieron mirando los HUECOS del sobre
+    // candidato, no solo los vecinos por codigo:
+    //   - Extradimensional Crisis tiene exactamente 3 huecos seguidos (#60, #61, #62) y los 3
+    //     codigos de Deluxe de esa zona son 007940, 007950 y 007960 en ese orden. Celesteela
+    //     (007960) ya estaba confirmada por la web como la #62, asi que sirve de ancla: hacia
+    //     atras quedan Silvally en la #61 y Type: Null en la #60.
+    //   - Iono va justo antes de Pokemon Center Lady (Shining Revelry #70) por codigo de
+    //     especie, y Shining Revelry tiene un hueco en el #69. Triumphant Light queda
+    //     descartada porque su #76 ya lo ocupa Houndoom.
+    // Cyclizar (PK_10_005090_00, Deluxe #306) CERRADA sin correccion: Ale confirmo que esa
+    // carta es de Deluxe y punto, no viene de ningun otro sobre. Los datos ya apuntaban ahi --
+    // no existe ninguna Cyclizar de 80 HP en ningun sobre de la serie A (las de Paldean
+    // Wonders y Ruler of the Skies tienen 90 HP, o sea que son otra carta, y ademas son serie
+    // B, que Deluxe no reimprime). No hay nada que corregir: NO volver a investigarla.
+    'PK_10_007940_00': 'A3a', // Type: Null -> Extradimensional Crisis #60
+    'PK_10_007950_00': 'A3a', // Silvally -> Extradimensional Crisis #61
+    'TR_10_000420_00': 'A2b', // Iono -> Shining Revelry #69
+    // Agregadas 2026-09-29 (pedido de Ale: "no solo pasa con Zeraora, sino en varios"): las
+    // cartas que cardmap.json solo marca como Deluxe Pack (A4b). Expansion original sacada de la
+    // tabla "Versions" de cada carta en pocket.limitlesstcg.com/cards/A4b/<numero>: la primera
+    // version con la MISMA rareza que no sea Deluxe ni promo. Ese mismo dia se corrigieron 8 de
+    // las de arriba que decian A1 y la lista oficial las da en otra expansion (Kakuna, etc.).
+    'PK_10_002170_00': 'A1a', // Celebi ex
+    'PK_10_002310_00': 'A1a', // Magikarp
+    'PK_10_002320_00': 'A1a', // Gyarados ex
+    'PK_10_002330_00': 'A1a', // Vaporeon
+    'PK_10_002450_00': 'A1a', // Mew ex
+    'PK_10_002590_00': 'A1a', // Aerodactyl ex
+    'PK_10_002700_00': 'A1a', // Pidgey
+    'PK_10_002710_00': 'A1a', // Pidgeotto
+    'PK_10_002720_00': 'A1a', // Pidgeot ex
+    'PK_10_002870_00': 'A2', // Yanma
+    'PK_10_002880_00': 'A2', // Yanmega ex
+    'PK_10_003100_00': 'A2', // Infernape ex
+    'PK_10_003300_00': 'A2', // Palkia ex
+    'PK_10_003340_00': 'A2', // Magnezone
+    'PK_10_003420_00': 'A2', // Pachirisu ex
+    'PK_10_003470_00': 'A2', // Misdreavus
+    'PK_10_003480_00': 'A2', // Mismagius ex
+    'PK_10_003490_00': 'A2', // Ralts
+    'PK_10_003590_00': 'A2', // Giratina
+    'PK_10_003760_00': 'A2', // Gallade ex
+    'PK_10_003790_00': 'A2', // Sneasel
+    'PK_10_003800_00': 'A2', // Weavile ex
+    'PK_10_003910_00': 'A2', // Darkrai ex
+    'PK_10_004000_00': 'A2', // Dialga ex
+    'PK_10_004060_00': 'A2', // Lickilicky ex
+    'PK_10_004340_00': 'A2a', // Leafeon ex
+    'PK_10_004370_00': 'A2a', // Heatran
+    'PK_10_004460_00': 'A2a', // Glaceon ex
+    'PK_10_004660_00': 'A2a', // Nosepass
+    'PK_10_004690_00': 'A2a', // Gible
+    'PK_10_004710_00': 'A2a', // Garchomp ex
+    'PK_10_004720_00': 'A2a', // Zubat
+    'PK_10_004810_00': 'A2a', // Probopass ex
+    'PK_10_004950_00': 'A2a', // Arceus ex
+    'PK_10_005040_00': 'A2b', // Bidoof
+    'PK_10_005070_00': 'A2b', // Riolu
+    'PK_10_005090_00': 'A2b', // Cyclizar
+    'PK_10_005210_00': 'A2b', // Weedle
+    'PK_10_005230_00': 'A2b', // Beedrill ex
+    'PK_10_005290_00': 'A2b', // Charizard ex
+    'PK_10_005380_00': 'A2b', // Wugtrio ex
+    'PK_10_005410_00': 'A2b', // Pikachu ex
+    'PK_10_005520_00': 'A2b', // Giratina ex
+    'PK_10_005580_00': 'A2b', // Lucario ex
+    'PK_10_005630_00': 'A2b', // Paldean Clodsire ex
+    'PK_10_005690_00': 'A2b', // Tinkaton ex
+    'PK_10_005790_00': 'A2b', // Bibarel ex
+    'PK_10_005910_00': 'A3', // Rowlet
+    'PK_10_005920_00': 'A3', // Dartrix
+    'PK_10_005930_00': 'A3', // Decidueye ex
+    'PK_10_006040_00': 'A3', // Dhelmise ex
+    'PK_10_006110_00': 'A3', // Litten
+    'PK_10_006140_00': 'A3', // Incineroar ex
+    'PK_10_006300_00': 'A3', // Crabominable ex
+    'PK_10_006320_00': 'A3', // Wishiwashi ex
+    'PK_10_006390_00': 'A3', // Alolan Raichu ex
+    'PK_10_006580_00': 'A3', // Oricorio
+    'PK_10_006680_00': 'A3', // Lunala ex
+    'PK_10_006850_00': 'A3', // Passimian ex
+    'PK_10_006920_00': 'A3', // Alolan Muk ex
+    'PK_10_007030_00': 'A3', // Solgaleo ex
+    'PK_10_007420_00': 'A3a', // Tapu Koko ex
+    'PK_10_007480_00': 'A3a', // Buzzwole ex
+    'PK_10_007690_00': 'A3a', // Rockruff
+    'PK_10_007700_00': 'A3a', // Lycanroc ex
+    'PK_10_007800_00': 'A3a', // Guzzlord ex
+    'PK_10_007820_00': 'A3a', // Alolan Diglett
+    'PK_10_007830_00': 'A3a', // Alolan Dugtrio ex
+    'PK_10_008040_00': 'A3b', // Flareon
+    'PK_10_008050_00': 'A3b', // Flareon ex
+    'PK_10_008170_00': 'A3b', // Popplio
+    'PK_10_008190_00': 'A3b', // Primarina ex
+    'PK_10_008250_00': 'A3b', // Swirlix
+    'PK_10_008280_00': 'A3b', // Sylveon ex
+    'PK_10_008430_00': 'A3b', // Dratini
+    'PK_10_008450_00': 'A3b', // Dragonite ex
+    'PK_10_008470_00': 'A3b', // Eevee
+    'PK_10_008480_00': 'A3b', // Eevee ex
+    'PK_10_008490_00': 'A3b', // Snorlax ex
+    'PK_10_008690_00': 'A4', // Hoppip
+    'PK_10_008700_00': 'A4', // Skiploom
+    'PK_10_008770_00': 'A4', // Shuckle ex
+    'PK_10_008790_00': 'A4', // Cherubi
+    'PK_10_008800_00': 'A4', // Cherrim
+    'PK_10_008900_00': 'A4', // Ho-Oh ex
+    'PK_10_008970_00': 'A4', // Horsea
+    'PK_10_008980_00': 'A4', // Seadra
+    'PK_10_008990_00': 'A4', // Kingdra ex
+    'PK_10_009210_00': 'A4', // Lanturn ex
+    'PK_10_009390_00': 'A4', // Espeon ex
+    'PK_10_009550_00': 'A4', // Phanpy
+    'PK_10_009560_00': 'A4', // Donphan ex
+    'PK_10_009650_00': 'A4', // Crobat ex
+    'PK_10_009680_00': 'A4', // Umbreon ex
+    'PK_10_009800_00': 'A4', // Skarmory ex
+    'PK_10_010050_00': 'A4', // Lugia ex
 };
 
 // Igual que leer cardMap[cartaId]?.ExpansionID pero aplicando las correcciones
 // de arriba -- usar esta funcion (no el acceso directo) en todo lo que decida
 // bajo que expansion se MUESTRA/BUSCA una carta.
 function expansionIdDeCarta(cartaId, cardMap) {
-    return OVERRIDES_EXPANSION_A1[cartaId] || cardMap?.[cartaId]?.ExpansionID;
+    return OVERRIDES_EXPANSION[cartaId] || cardMap?.[cartaId]?.ExpansionID;
 }
 
 // Código de "release"/categoría a partir de un ExpansionID (ej. "B3b" -> "B3",
@@ -2393,6 +3337,53 @@ async function componerCollageFasesMainTrade(fases) {
     }
 }
 
+// Collage de 2 paneles "antes/despues" (2026-09-16, a pedido explicito del usuario, mismo
+// mecanismo probado a mano en esta sesion antes de llevarlo al pipeline real): junta 2 fotos
+// de evidencia consecutivas de un mismo paso (ej. donante ofreciendo la carta + la pantalla
+// de "Waiting for a Response" que queda despues) en una sola imagen, una al lado de la otra.
+// Etiqueta en una franja SEPARADA arriba de cada imagen (canvas mas alto, nunca superpuesta
+// encima de la foto) -- a pedido explicito del usuario tras ver una version anterior con la
+// etiqueta superpuesta: "el marco de arriba de oferta y esperando tapa la imagen, que la
+// imagen de ambas se vean completas". Devuelve null si falta cualquiera de las 2 fotos --
+// el llamador debe caer a mandar la foto sola en ese caso, no cortar el aviso.
+async function componerCollageAntesDespues(rutaA, etiquetaA, rutaB, etiquetaB) {
+    if (!rutaA || !rutaB || !fs.existsSync(rutaA) || !fs.existsSync(rutaB)) return null;
+    const CELL_W = 270, ALTO_ETIQUETA = 40, GAP = 6, PADDING = 10;
+    try {
+        const metaA = await sharp(rutaA).metadata();
+        const cellH = Math.round(CELL_W * (metaA.height / metaA.width));
+
+        const armarPanel = async (ruta, etiqueta) => {
+            const imgBuffer = await sharp(ruta).resize(CELL_W, cellH, { fit: 'cover' }).png().toBuffer();
+            const svgEtiqueta = Buffer.from(
+                `<svg width="${CELL_W}" height="${ALTO_ETIQUETA}">` +
+                `<rect x="0" y="0" width="${CELL_W}" height="${ALTO_ETIQUETA}" fill="#1a1a1a"/>` +
+                `<text x="${CELL_W / 2}" y="${Math.round(ALTO_ETIQUETA * 0.65)}" font-size="16" font-family="Arial, sans-serif" font-weight="bold" fill="white" text-anchor="middle">${etiqueta}</text>` +
+                `</svg>`
+            );
+            return sharp({ create: { width: CELL_W, height: ALTO_ETIQUETA + cellH, channels: 4, background: { r: 26, g: 26, b: 26, alpha: 1 } } })
+                .composite([{ input: svgEtiqueta, top: 0, left: 0 }, { input: imgBuffer, top: ALTO_ETIQUETA, left: 0 }])
+                .png()
+                .toBuffer();
+        };
+
+        const [panelA, panelB] = await Promise.all([armarPanel(rutaA, etiquetaA), armarPanel(rutaB, etiquetaB)]);
+        const anchoTotal = PADDING * 2 + CELL_W * 2 + GAP;
+        const altoTotal = PADDING * 2 + ALTO_ETIQUETA + cellH;
+
+        return await sharp({ create: { width: anchoTotal, height: altoTotal, channels: 4, background: { r: 18, g: 18, b: 18, alpha: 1 } } })
+            .composite([
+                { input: panelA, top: PADDING, left: PADDING },
+                { input: panelB, top: PADDING, left: PADDING + CELL_W + GAP }
+            ])
+            .png()
+            .toBuffer();
+    } catch (e) {
+        console.error('DEBUG: error armando el collage antes/despues:', e?.message || e);
+        return null;
+    }
+}
+
 // Mismo criterio que componerLogoSobreImagen de s4t.js -- agranda el canvas
 // hacia arriba y pone el logo de la expansion centrado en esa franja nueva,
 // en vez de dejarlo como un thumbnail chico aparte (a pedido explicito del
@@ -2700,15 +3691,16 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     // Trade reactivado (2026-08-03) para probar si sigue funcionando tras la update --
     // Shinedust ya se reactivo antes (2026-08-01) y se confirmo funcionando.
     const filaAcciones = new ActionRowBuilder().addComponents(
-        // Deshabilitado para TODOS los usuarios (2026-08-30, a pedido explicito del usuario --
-        // "necesito que bloquees el acceso a todos los usuarios del boton de trade, porque
-        // estaremos trabajando tu y yo en esto"): el mecanismo de wishlist/Main Trade sigue en
-        // pruebas en vivo (ver project_pending_tasks #61), se bloquea por completo mientras
-        // dure esa sesion de trabajo para que nadie mas lo dispare por accidente. Reemplaza el
-        // deshabilitado anterior (solo en Gold Cards) -- reactivar cuando el usuario lo pida.
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(true),
+        // Ver tradeHabilitadoEnGuild() arriba del archivo -- deshabilitado en todo servidor
+        // que no sea el propio del usuario, reactivado ahi el 2026-09-02.
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!tradeHabilitadoEnGuild(guild?.id)),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
+        // Inject (2026-09-15, a pedido explicito del usuario): mismo patron que
+        // Trade/Shinedust (cuenta filtrada por esta carta + instancia), pero solo
+        // inyecta y deja la instancia PRENDIDA con la cuenta ya logueada -- no
+        // apaga la instancia ni corre OCR/trade, a diferencia de esos dos.
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_inject::${cartaId}` : `card_inject::${cartaId}`).setLabel('💉 Inject').setStyle(ButtonStyle.Secondary),
         // Marcar como wishlist (2026-08-11, a pedido explicito del usuario): desde un
         // boton de Discord en vez de la pagina web -- Discord ya sabe quien lo aprieta,
         // asi que a diferencia de un corazon en /account/:token (un link sin login que
@@ -2747,7 +3739,7 @@ function construirEmbedExtractXmlInicio(user, mapaEmojis = {}) {
             `Click the button and paste the XML file name (for example, \`134P_20260120113013_2(BXR).xml\`) so the bot can send it to you. It will also send you the .JSON file with all your account data in XML format!${tagPokeBall ? ' ' + tagPokeBall : ''}`
         )
         .setColor(0x3498DB)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
+        .setFooter({ text: "Monitor Pokémon" })
         .setTimestamp();
 }
 
@@ -2759,11 +3751,20 @@ function construirEmbedRunInstanceInicio(user) {
             `Trades now run automatically from the 🔄 Trade button on a card lookup (/card, /wishlist, Gold Cards) - no need to open instances or pick friends by hand here anymore.`
         )
         .setColor(0x2ECC71)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
+        .setFooter({ text: "Monitor Pokémon" })
         .setTimestamp();
 }
 
+// Elige entre VARIAS instalaciones de MuMu (2026-09-11, bug real reportado en vivo por
+// wR98): antes devolvia el PRIMER candidato que existiera en disco, sin importar si tenia
+// instancias configuradas de verdad -- un usuario con dos instalaciones (MuMuPlayer normal
+// sin uso + MuMuPlayerGlobal-12.0 con su farm real) siempre se conectaba a la vacia. Ahora
+// se consulta cada candidato y se elige el que reporte mas instancias reales configuradas.
+// Cacheado una vez resuelto (ver mismo criterio en heartbeat.js, duplicado a proposito).
+let _rutaMuMuManagerCacheada;
 function rutaMuMuManager() {
+    if (_rutaMuMuManagerCacheada !== undefined) return _rutaMuMuManagerCacheada;
+
     // Antes solo miraba el disco C: — un usuario real lo tenía instalado en
     // D: (instalador de MuMuPlayer deja elegir disco) y el bot decía "not
     // found" pese a estar instalado. Se prueban las mismas rutas conocidas en
@@ -2772,15 +3773,28 @@ function rutaMuMuManager() {
     const carpetas = ['MuMuPlayer', 'MuMuPlayerGlobal-12.0'];
     const subrutas = ['nx_main', 'shell'];
     const discos = 'CDEFGHIJ'.split('');
+    const candidatos = [];
     for (const disco of discos) {
         for (const carpeta of carpetas) {
             for (const sub of subrutas) {
                 const candidato = `${disco}:\\Program Files\\Netease\\${carpeta}\\${sub}\\MuMuManager.exe`;
-                if (fs.existsSync(candidato)) return candidato;
+                if (fs.existsSync(candidato)) candidatos.push(candidato);
             }
         }
     }
-    return null;
+    if (candidatos.length === 0) return (_rutaMuMuManagerCacheada = null);
+    if (candidatos.length === 1) return (_rutaMuMuManagerCacheada = candidatos[0]);
+
+    let mejorCandidato = candidatos[0];
+    let mejorConteo = -1;
+    for (const candidato of candidatos) {
+        try {
+            const info = JSON.parse(execFileSync(candidato, ['info', '-v', 'all'], { windowsHide: true, timeout: 15000 }).toString());
+            const conteo = Object.values(info).filter((i) => i && !i.is_main && i.name !== 'Android Device').length;
+            if (conteo > mejorConteo) { mejorConteo = conteo; mejorCandidato = candidato; }
+        } catch (e) { /* candidato no responde -- se sigue con el resto */ }
+    }
+    return (_rutaMuMuManagerCacheada = mejorCandidato);
 }
 
 function obtenerInstanciasMuMu() {
@@ -2853,7 +3867,11 @@ function lanzarInstanciaMuMu(index) {
 // esté prendida -- no la prende él. Los atajos de Trade/Shinedust (a diferencia del
 // panel manual de MuMu, que siempre pasa primero por "Turn On") saltan directo a
 // elegir instancia, así que hay que prenderla nosotros si hace falta antes de inyectar.
-async function asegurarInstanciaEncendida(index, timeoutMs = 90000) {
+// esperaAsentamientoMs (2026-09-23): margen despues de que MuMu reporta is_android_started,
+// antes de devolver el control. Por defecto 2s, como estaba historicamente. El pipeline de Main
+// Trade pasa 0 aca y hace UNA sola espera larga despues de prender las dos -- ver el comentario
+// en ese punto sobre waitAfterBulkLaunch de Kevin.
+async function asegurarInstanciaEncendida(index, timeoutMs = 90000, esperaAsentamientoMs = 2000) {
     const instancias = obtenerInstanciasMuMu();
     const info = instancias?.find(i => String(i.index) === String(index));
     if (info?.is_android_started) return true;
@@ -2865,7 +3883,7 @@ async function asegurarInstanciaEncendida(index, timeoutMs = 90000) {
         const actuales = obtenerInstanciasMuMu();
         const actual = actuales?.find(i => String(i.index) === String(index));
         if (actual?.is_android_started) {
-            await new Promise(r => setTimeout(r, 2000)); // margen para que la ventana termine de aparecer
+            if (esperaAsentamientoMs > 0) await new Promise(r => setTimeout(r, esperaAsentamientoMs));
             return true;
         }
     }
@@ -3205,8 +4223,17 @@ function derivarRutasDesdeRaiz(raiz) {
 // Include y todas las imagenes Needle de Kevin, no solo los 11 que ya usamos.
 // Mas simple y ya establecido: igual que la inyeccion (obtenerRutasInject), se
 // deriva de "Main Path" (ruta_raiz) que cada usuario configura por su cuenta.
-const RUTA_MAIN_AHK_DEFAULT = 'C:\\POKEMON\\PTCGPB-ALE\\Scripts\\Main.ahk';
+const RUTA_MAIN_AHK_DEFAULT = 'C:\\PTCGPB\\Scripts\\Main.ahk';
 
+// IMPORTANTE (bug real reportado en vivo 2026-09-14, "faltan_archivos" en TODO usuario nuevo
+// -- wR98 y otro amigo, ambos con Main Path bien configurado): el parametro de esta funcion
+// (y de obtenerRutasInject mas abajo) SIEMPRE tiene que ser interaction.guildId, nunca
+// interaction.user.id -- modal_ruta_raiz (el que guarda "Main Path") guarda estas filas
+// usando el guildId, igual que ruta_raiz/obtenerRutaRaiz. 16+ lugares del codigo las
+// consultaban con user.id por error, que nunca coincidia con nada para un usuario nuevo --
+// caian siempre al default hardcodeado de Ale (RUTA_INJECT_ACCOUNT_SCRIPT_DEFAULT), que
+// obviamente no existe en la PC de nadie mas. A Ale "le funcionaba" solo porque tenia,
+// ademas, una fila vieja guardada por su propio user.id de una version anterior del codigo.
 async function obtenerRutaMainAhk(discordId) {
     const fila = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_main_ahk' AND discord_id = ?`, [discordId]);
     return fila?.webhook_url || RUTA_MAIN_AHK_DEFAULT;
@@ -3218,8 +4245,8 @@ async function obtenerRutaMainAhk(discordId) {
 // Ahora se deriva de "Main Path" (ruta_raiz), que cada usuario ya configura por
 // su cuenta -- con respaldo a la ruta vieja de Ale si todavía no la configuró
 // con las claves nuevas (ruta_inject_ini/ruta_inject_script).
-const RUTA_INJECT_INI_DEFAULT = 'C:\\POKEMON\\PTCGPB-ALE\\Accounts\\InjectAccount.ini';
-const RUTA_INJECT_ACCOUNT_SCRIPT_DEFAULT = 'C:\\POKEMON\\PTCGPB-ALE\\Accounts\\_InjectAccount.ahk';
+const RUTA_INJECT_INI_DEFAULT = 'C:\\PTCGPB\\Accounts\\InjectAccount.ini';
+const RUTA_INJECT_ACCOUNT_SCRIPT_DEFAULT = 'C:\\PTCGPB\\Accounts\\_InjectAccount.ahk';
 
 async function obtenerRutasInject(discordId) {
     const filaIni = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_inject_ini' AND discord_id = ?`, [discordId]);
@@ -3241,29 +4268,41 @@ async function obtenerRutasInject(discordId) {
 let _rutaAutoHotkeyCacheada;
 function rutaAutoHotkey() {
     if (_rutaAutoHotkeyCacheada !== undefined) return _rutaAutoHotkeyCacheada;
-    const candidatosFijos = [
-        'C:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU64.exe',
-        'C:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU32.exe',
-        'C:\\Program Files\\AutoHotkey\\AutoHotkeyU64.exe',
-        'C:\\Program Files\\AutoHotkey\\AutoHotkeyU32.exe',
-        'C:\\Program Files\\AutoHotkey\\AutoHotkey.exe',
-        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU64.exe',
-        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU32.exe',
-        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkey.exe'
-    ];
+    // Extendido a varios discos (2026-09-12, bug real reportado en vivo -- "Poke Help",
+    // amigo con su farm entero en D:\TCGPocketBot): antes solo miraba el disco C:, mismo tipo
+    // de bug ya arreglado para MuMuManager (rutaMuMuManager, ver mas arriba) -- un usuario con
+    // AutoHotkey instalado en otro disco (nada raro si ya tiene todo lo demas ahi) siempre
+    // tiraba "faltan_archivos" sin ninguna pista real de la causa.
+    const discos = 'CDEFGHIJ'.split('');
+    const candidatosFijos = [];
+    for (const disco of discos) {
+        candidatosFijos.push(
+            `${disco}:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU64.exe`,
+            `${disco}:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU32.exe`,
+            `${disco}:\\Program Files\\AutoHotkey\\AutoHotkeyU64.exe`,
+            `${disco}:\\Program Files\\AutoHotkey\\AutoHotkeyU32.exe`,
+            `${disco}:\\Program Files\\AutoHotkey\\AutoHotkey.exe`,
+            `${disco}:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU64.exe`,
+            `${disco}:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU32.exe`,
+            `${disco}:\\Program Files (x86)\\AutoHotkey\\AutoHotkey.exe`
+        );
+    }
     let encontrado = candidatosFijos.find(p => fs.existsSync(p)) || null;
     if (!encontrado) {
-        for (const carpetaBase of ['C:\\Program Files\\AutoHotkey', 'C:\\Program Files (x86)\\AutoHotkey']) {
-            if (encontrado || !fs.existsSync(carpetaBase)) continue;
-            try {
-                const subcarpetas = fs.readdirSync(carpetaBase, { withFileTypes: true }).filter(d => d.isDirectory());
-                for (const sub of subcarpetas) {
-                    const posibles = ['AutoHotkeyU64.exe', 'AutoHotkeyU32.exe', 'AutoHotkey.exe']
-                        .map(nombre => path.join(carpetaBase, sub.name, nombre));
-                    encontrado = posibles.find(p => fs.existsSync(p));
-                    if (encontrado) break;
-                }
-            } catch (e) { /* sin permiso para listar -- se sigue con el siguiente candidato */ }
+        for (const disco of discos) {
+            if (encontrado) break;
+            for (const carpetaBase of [`${disco}:\\Program Files\\AutoHotkey`, `${disco}:\\Program Files (x86)\\AutoHotkey`]) {
+                if (encontrado || !fs.existsSync(carpetaBase)) continue;
+                try {
+                    const subcarpetas = fs.readdirSync(carpetaBase, { withFileTypes: true }).filter(d => d.isDirectory());
+                    for (const sub of subcarpetas) {
+                        const posibles = ['AutoHotkeyU64.exe', 'AutoHotkeyU32.exe', 'AutoHotkey.exe']
+                            .map(nombre => path.join(carpetaBase, sub.name, nombre));
+                        encontrado = posibles.find(p => fs.existsSync(p));
+                        if (encontrado) break;
+                    }
+                } catch (e) { /* sin permiso para listar -- se sigue con el siguiente candidato */ }
+            }
         }
     }
     _rutaAutoHotkeyCacheada = encontrado;
@@ -3401,10 +4440,10 @@ async function reenviarCartaATrading(interaction, cartaId, datosGold, componente
 // siempre (inyecta + manda solicitud, el usuario termina a mano) o el ciclo
 // automático completo (Main Trade). En modo 'main', el amigo elegido acá
 // representa a la propia cuenta Main (el usuario ya la tiene guardada como
-// un "amigo" más en su lista, ej. "Ale Cast") -- no hace falta ninguna
+// un "amigo" más en su lista, ej. "MiCuentaMain") -- no hace falta ninguna
 // configuración nueva para esto.
 async function actualizarConSeleccionFriendId(interaction, cartaId, origen, modo = 'friend') {
-    const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+    const { rutaIni } = await obtenerRutasInject(interaction.guildId);
     const friends = parsearListaFriends(rutaIni);
     if (!friends.length) {
         return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.', components: [] });
@@ -3667,7 +4706,13 @@ function ejecutarFixInstanceWindow(winTitle, callback) {
 function ejecutarInyeccionHeadless(callback, rutaScript = RUTA_INJECT_ACCOUNT_SCRIPT_DEFAULT) {
     const ahkExe = rutaAutoHotkey();
     if (!ahkExe || !fs.existsSync(rutaScript)) {
-        return callback(false, 'faltan_archivos');
+        // Detalle especifico agregado (2026-09-13, bug real en vivo -- "faltan_archivos" le
+        // salia a un usuario con su farm entero en D:, pero el mensaje generico no decia CUAL
+        // de los 2 archivos faltaba, forzando una vuelta larga de preguntas para descartar
+        // cada uno a mano): ahora dice explicitamente si es AutoHotkey o el script el que no
+        // se encontro, y en que ruta se busco.
+        const motivo = !ahkExe ? 'faltan_archivos: AutoHotkey no encontrado' : `faltan_archivos: no existe ${rutaScript}`;
+        return callback(false, motivo);
     }
     spawnAhkConProteccion(
         ahkExe,
@@ -3959,6 +5004,47 @@ async function ejecutarCicloTradeAutomatico({ indexMain, friendIdMain, indexDona
 // motor de reconocimiento de imagen de Kevin en vez de taps a coordenadas fijas.
 const RUTA_INJECT_XML_SCRIPT = path.join(__dirname, 'automation', '_InjectXml.ahk');
 const RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT = path.join(__dirname, 'automation', '_SendFriendRequest.ahk');
+
+const RUTA_LIKE_PUBLIC_CARDS_SCRIPT = path.join(__dirname, 'automation', '_LikePublicCards.ahk');
+
+// Corre _LikePublicCards.ahk en una instancia. Copia el patron de ejecutarWaitWelcomeScreens:
+// el script escribe "OK" o "ERROR: <motivo>" en un archivo temporal y este lo lee.
+// Timeout de 5 minutos: el script se da 240 segundos solo para llegar a Comunidad (incluye el
+// arranque del juego desde la pantalla de titulo), asi que el externo tiene que ser mayor o lo
+// mataria antes de que termine -- mismo cuidado que ya documenta ejecutarWaitWelcomeScreens.
+function ejecutarLikePublicCards(winTitle, friendId, callback) {
+    const ahkExe = rutaAutoHotkey();
+    const folderPath = carpetaBaseMuMu();
+    if (!ahkExe || !folderPath || !fs.existsSync(RUTA_LIKE_PUBLIC_CARDS_SCRIPT)) {
+        return callback(false, 'faltan_archivos');
+    }
+    const outputFile = path.join(os.tmpdir(), `like_${winTitle}_${Date.now()}.txt`);
+    // Una COPIA del script por instancia, igual que hace Kevin (2026-09-26, a pedido de Ale:
+    // "cuando cree mas instancias se copiaron y se nombraron segun la instancia"). En su
+    // PTCGPB.ahk el bloque es:
+    //     Loop, % botConfig.get("Mains")
+    //         FileCopy, "Scripts\Main.ahk", "Scripts\Main" . A_Index . ".ahk", 1
+    // Funcionalmente correr el mismo archivo N veces deberia bastar -- cada proceso recibe su
+    // instancia por argumento y es independiente -- pero se copia igual porque es lo que Ale
+    // tiene probado que funciona y quita una variable del medio mientras depuramos.
+    // La copia se rehace en cada corrida desde el original, asi que no puede quedarse vieja.
+    let rutaScript = RUTA_LIKE_PUBLIC_CARDS_SCRIPT;
+    try {
+        const copia = path.join(path.dirname(RUTA_LIKE_PUBLIC_CARDS_SCRIPT), `_LikePublicCards_${winTitle}.ahk`);
+        fs.copyFileSync(RUTA_LIKE_PUBLIC_CARDS_SCRIPT, copia);
+        rutaScript = copia;
+    } catch (e) { /* si no se puede copiar, se usa el original: funciona igual */ }
+    spawnAhkConProteccion(ahkExe, [rutaScript, winTitle, folderPath, friendId, outputFile], { windowsHide: false }, 5 * 60 * 1000, (ok, detalle) => {
+        let resultado;
+        try { resultado = fs.readFileSync(outputFile, 'utf8').trim(); } catch (e) { resultado = ''; }
+        try { fs.unlinkSync(outputFile); } catch (e) { /* nada que limpiar */ }
+        if (!ok || !resultado || resultado.startsWith('ERROR')) {
+            return callback(false, (resultado || detalle || 'sin_resultado').replace(/^ERROR:\s*/, ''));
+        }
+        callback(true, resultado);
+    });
+}
+
 // Reemplaza a _MainAcceptAndTrade.ahk (a pedido explicito del usuario
 // 2026-07-29): ya no busca la carta por nombre, ofrece la marcada Favorita en
 // la coleccion de Main (12 pasos con coordenadas dadas por el usuario).
@@ -4097,8 +5183,24 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // ahora arranca el ejecutable de MuMu directo (igual que la herramienta de Kevin) en vez
     // de "MuMuManager control launch" (RPC menos confiable). Con eso arreglado, se vuelve a
     // prender ambas instancias a la vez, como estaba antes de todo el debugging de hoy.
-    const prendidaMain = await asegurarInstanciaEncendida(infoMain.index);
-    const prendidaDonante = await asegurarInstanciaEncendida(index);
+    // Prendido en paralelo con 5s de desfasaje y UNA sola espera de asentamiento al final
+    // (2026-09-23, corregido el mismo dia: la primera version esperaba 40s por instancia, en
+    // secuencia, y eso sumaba mas de 80s de espera pura antes de que el pipeline hiciera nada --
+    // medido en vivo, Main quedo prendida 57s antes que la donante). Kevin lanza cada instancia
+    // con instanceLaunchDelay (5s) entre una y otra y recien despues espera waitAfterBulkLaunch
+    // UNA vez para todo el lote (Include\LaunchAllMumu.ahk); su espera es de 40s porque maneja
+    // hasta 10 instancias y porque su startPTCGPApp no reintenta si la app no llega al frente.
+    // Aca alcanza con bastante menos: son 2 instancias, y abrirJuegoVerificado ahora COMPRUEBA
+    // con juegoEnPrimerPlano y reintenta el "am start" hasta 3 veces si el juego quedo en
+    // segundo plano -- o sea que ya no dependemos de adivinar el tiempo justo.
+    const [prendidaMain, prendidaDonante] = await Promise.all([
+        asegurarInstanciaEncendida(infoMain.index, 90000, 0),
+        (async () => {
+            await new Promise(r => setTimeout(r, 5000));
+            return asegurarInstanciaEncendida(index, 90000, 0);
+        })()
+    ]);
+    if (prendidaMain && prendidaDonante) await new Promise(r => setTimeout(r, 10000));
     if (!prendidaMain || !prendidaDonante) {
         onProgreso({ paso: 'Turn on instances', estado: 'error', detalle: 'could not turn on one of the instances' });
         return await enviarErrorMainTrade(interaction, '❌ Could not turn on one of the instances.', [botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre)]);
@@ -4136,7 +5238,15 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // de mas abajo), asi que no hay nada que desactivar.
     async function ejecutarInjectDonante() {
         const outputFileInject = tmp();
-        return await ejecutarPasoAhk(rutaAutoHotkey(), RUTA_INJECT_ACCOUNT_FAST_SCRIPT, [nombre, folderPath, archivo], 30 * 1000, outputFileInject);
+        // 30s -> 90s (2026-09-22, bug real reproducido en vivo con Ale -- la instancia 1 se
+        // quedo sin juego abierto en el reintento de las 14:20 y su script de bienvenida nunca
+        // llego a arrancar). Medido ese mismo dia: en el caso bueno la inyeccion entera son
+        // ~12s (shell root 2.5s, ~20 comandos de shell, push, y abrir el juego 2.7s). Pero con
+        // la instancia recien prendida el "adb root" suele necesitar varias vueltas del bucle
+        // de 6, y cada vuelta fallida cuesta hasta ~15s -- dos vueltas malas y bot.js le hacia
+        // taskkill /F al script antes de que llegara siquiera al "am start". 90s es el mismo
+        // numero que usa Kevin como presupuesto de sus pantallas lentas (FSTime en 1.ahk:1219).
+        return await ejecutarPasoAhk(rutaAutoHotkey(), RUTA_INJECT_ACCOUNT_FAST_SCRIPT, [nombre, folderPath, archivo], 90 * 1000, outputFileInject);
     }
 
     // Reporte de fallo compartido (2026-08-19): mismo patron usado por el loop de pasos de
@@ -4147,7 +5257,19 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(`main_trade_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
         );
-        const mensaje = `❌ Main Trade failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.`;
+        // Pista de "Trade bloqueado" (2026-09-23, a pedido explicito de Ale tras diagnosticarlo
+        // el mismo en vivo): si la cuenta tiene un intercambio EN CURSO con otra cuenta, el
+        // juego deja el boton de Trade bloqueado y el script se queda esperando una pantalla que
+        // nunca va a abrir. Desde el log eso es indistinguible de "el needle no matcheo", asi
+        // que en vez de adivinarlo con un needle nuevo (la etiqueta de tradeo en curso lleva
+        // texto, y el texto en needles esta prohibido) se le cuelga la pista a los codigos de
+        // error que produce exactamente ese caso: los tres pasos que tocan Trade y se quedan
+        // esperando la pantalla siguiente.
+        const CODIGOS_TRADE_BLOQUEADO = ['no_aparecio_trade_landing_paso6', 'no_aparecio_intercambiar_button_paso3', 'no_aparecio_oferta_pendiente_paso1'];
+        const pistaBloqueado = CODIGOS_TRADE_BLOQUEADO.some(c => String(resultado || '').includes(c))
+            ? '\n\n⚠️ The **Trade** button may be locked because that account already has a trade in progress. Please check your pending trades, cancel them, and press **🔄 Retry**.'
+            : '';
+        const mensaje = `❌ Main Trade failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.${pistaBloqueado}`;
         try {
             const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
             if (canalRunInstance?.webhook_url) {
@@ -4165,27 +5287,88 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // Speed Mod (2026-08-25, a pedido explicito del usuario: "para todos, main trade, friend
     // trade" -- mismo mecanismo ya probado en vivo en Aggressive Trade, ver header de
     // _SpeedMod.ahk) -- corre en paralelo con cada welcome screens, no bloqueante.
+    // Misma escalera de recuperacion automatica que la donante de mas abajo (2026-09-22) --
+    // Main tuvo exactamente esta falla hoy a las 13:41 (TIMEOUT a los 130s rebotando en la
+    // pantalla de titulo). Main no tiene inyeccion, pero _WaitWelcomeScreensMain.ahk arranca
+    // con abrirJuegoVerificado, asi que reintentarlo despues de reiniciar la instancia si
+    // reabre el juego.
     const promesaEsperaMain = (async () => {
-        const promesaSpeedModMain = fs.existsSync(RUTA_SPEED_MOD_SCRIPT)
-            ? ejecutarPasoAhk(ahkExe, RUTA_SPEED_MOD_SCRIPT, [infoMain.name, folderPath], 35 * 1000, tmp())
-            : Promise.resolve({ ok: true });
-        const promesaEspera = new Promise((resolve) => ejecutarWaitWelcomeScreens(infoMain.name, (ok, detalle) => resolve({ ok, detalle }), RUTA_WAIT_WELCOME_SCREENS_MAIN_SCRIPT));
-        const [resSpeedModMain, espera] = await Promise.all([promesaSpeedModMain, promesaEspera]);
-        if (!resSpeedModMain.ok) onProgreso({ paso: 'Speed Mod (Main)', estado: 'warning', detalle: resSpeedModMain.resultado });
-        return espera;
+        let ultimo = null;
+        for (let intento = 1; intento <= 2; intento++) {
+            if (intento > 1) {
+                onProgreso({ paso: 'Reach Main menu', estado: 'warning', detalle: `${ultimo?.detalle || 'failed'} -- restarting instance ${infoMain.name} and retrying automatically` });
+                await asegurarInstanciaApagada(infoMain.index);
+                if (!(await asegurarInstanciaEncendida(infoMain.index)))
+                    return { ok: false, detalle: 'no_se_pudo_reencender_la_instancia' };
+            }
+            const promesaSpeedModMain = fs.existsSync(RUTA_SPEED_MOD_SCRIPT)
+                ? ejecutarPasoAhk(ahkExe, RUTA_SPEED_MOD_SCRIPT, [infoMain.name, folderPath], 35 * 1000, tmp())
+                : Promise.resolve({ ok: true });
+            const promesaEspera = new Promise((resolve) => ejecutarWaitWelcomeScreens(infoMain.name, (ok, detalle) => resolve({ ok, detalle }), RUTA_WAIT_WELCOME_SCREENS_MAIN_SCRIPT));
+            const [resSpeedModMain, espera] = await Promise.all([promesaSpeedModMain, promesaEspera]);
+            if (!resSpeedModMain.ok) onProgreso({ paso: 'Speed Mod (Main)', estado: 'warning', detalle: resSpeedModMain.resultado });
+            if (espera.ok) return espera;
+            ultimo = espera;
+        }
+        return ultimo || { ok: false, detalle: 'fallo_preparacion_main' };
     })();
+    // Recuperacion automatica estilo Kevin (2026-09-22, a pedido explicito de Ale: "el de
+    // Kevin... si pasa los 90 segundos y no ha abierto el juego... lo reinicia a la fuerza y
+    // el mismo lo enciende otra vez y se repite el bucle. Pero en nuestro caso nosotros
+    // tenemos que presionar Retry").
+    // Validado en su codigo antes de copiarlo (Scripts\1.ahk:1234 y restartGameInstance,
+    // linea 1399): presupuesto por pantalla (FSTime: 90s Country/Social/Points, 60s Missions,
+    // 45s por defecto) y, al agotarse, restartGameInstance -- que si la instancia esta caida
+    // la vuelve a lanzar y si no reinicia SOLO el juego por ADB (closePTCGPApp +
+    // startPTCGPApp), guarda captura de la pantalla colgada y sigue solo con SafeReload.
+    // Aca se replica esa escalera: si la preparacion de la donante falla, se apaga y se vuelve
+    // a prender la instancia y se reintenta UNA vez entera. En nuestro caso reintentar la
+    // inyeccion YA equivale a su closePTCGPApp+startPTCGPApp, porque _InjectAccountFast.ahk
+    // arranca con am force-stop y termina con abrirJuegoVerificado. El boton Retry queda como
+    // ultimo recurso: solo aparece si tambien falla el reintento automatico.
     const promesaPrepDonante = (async () => {
-        const resInject = await ejecutarInjectDonante();
-        if (!resInject.ok) return resInject;
-        const promesaSpeedMod = fs.existsSync(RUTA_SPEED_MOD_SCRIPT)
-            ? ejecutarPasoAhk(ahkExe, RUTA_SPEED_MOD_SCRIPT, [nombre, folderPath], 35 * 1000, tmp())
-            : Promise.resolve({ ok: true });
-        const promesaEspera = new Promise((resolve) => ejecutarWaitWelcomeScreens(nombre, (ok, detalle) => resolve({ ok, resultado: detalle })));
-        const [resSpeedMod, espera] = await Promise.all([promesaSpeedMod, promesaEspera]);
-        if (!resSpeedMod.ok) onProgreso({ paso: 'Speed Mod (donor)', estado: 'warning', detalle: resSpeedMod.resultado });
-        return espera;
+        let ultimo = null;
+        for (let intento = 1; intento <= 2; intento++) {
+            if (intento > 1) {
+                onProgreso({ paso: 'Inject donor account', estado: 'warning', detalle: `${ultimo?.resultado || 'failed'} -- restarting instance ${nombre} and retrying automatically` });
+                await asegurarInstanciaApagada(index);
+                if (!(await asegurarInstanciaEncendida(index)))
+                    return { ok: false, resultado: 'no_se_pudo_reencender_la_instancia' };
+            }
+            const resInject = await ejecutarInjectDonante();
+            if (!resInject.ok) {
+                ultimo = resInject;
+                continue;
+            }
+            // Sin pantallas de bienvenida para la donante (2026-09-27, pedido de Ale, igual que en el
+            // farmeo de likes): _SendFriendRequest.ahk de Kevin arranca tocando la pestana de
+            // Comunidad hasta 240s, y eso ya la lleva sola desde Tap to Start hasta Comunidad.
+            // _WaitWelcomeScreens.ahk era un paso de mas. Se mantiene el speed mod ANTES (no en
+            // paralelo con la solicitud), para que no toquen la pantalla los dos a la vez.
+            const resSpeedMod = fs.existsSync(RUTA_SPEED_MOD_SCRIPT)
+                ? await ejecutarPasoAhk(ahkExe, RUTA_SPEED_MOD_SCRIPT, [nombre, folderPath], 35 * 1000, tmp())
+                : { ok: true };
+            if (!resSpeedMod.ok) onProgreso({ paso: 'Speed Mod (donor)', estado: 'warning', detalle: resSpeedMod.resultado });
+            // La solicitud de Kevin corre ACA, en paralelo con el arranque de Main (2026-09-27,
+            // pedido de Ale: "tiene que correr junto con main"). Antes esperaba su turno despues
+            // del arranque de Main y del chequeo de oferta pendiente. Ademas es lo que arranca el
+            // juego de la donante: si quedara como paso posterior, cuando el chequeo de oferta
+            // pendiente saltea la solicitud nadie arrancaria la donante y quedaria en Tap to Start.
+            const resSolicitud = await ejecutarPasoAhk(ahkExe, RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, [nombre, folderPath, friendId], 5 * 60 * 1000, tmp());
+            if (resSolicitud.ok) return { ok: true, resultado: resSolicitud.resultado };
+            ultimo = resSolicitud;
+        }
+        return ultimo || { ok: false, resultado: 'fallo_preparacion_donante' };
     })();
-    const [esperaMain, prepDonante] = await Promise.all([promesaEsperaMain, promesaPrepDonante]);
+    // El chequeo de oferta pendiente corre en la cadena de MAIN, apenas termina su arranque
+    // (2026-09-27, pedido de Ale): antes esperaba a que terminara TAMBIEN la solicitud de la
+    // donante (que puede tardar minutos) y recien ahi revisaba, con Main parado sin hacer nada.
+    const promesaMainYChequeo = promesaEsperaMain.then(async (esperaMain) => {
+        if (!esperaMain.ok) return { esperaMain, resultadoCheck: { ok: false } };
+        const resultadoCheck = await ejecutarPasoAhk(ahkExe, RUTA_CHECK_PENDING_OFFER_SCRIPT, ['Main', folderPath], 45 * 1000, tmp());
+        return { esperaMain, resultadoCheck };
+    });
+    const [{ esperaMain, resultadoCheck }, prepDonante] = await Promise.all([promesaMainYChequeo, promesaPrepDonante]);
     if (!esperaMain.ok) {
         onProgreso({ paso: 'Reach Main menu', estado: 'error', detalle: esperaMain.detalle });
         return await enviarErrorMainTrade(interaction, `❌ Could not reach the main menu on instance **${infoMain.name}** (${esperaMain.detalle}).`, [botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre)]);
@@ -4196,23 +5379,37 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     }
     onProgreso({ paso: 'Inject donor account', estado: 'ok' });
     onProgreso({ paso: 'Reach Main menu', estado: 'ok' });
+    onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE['send_friend_request'] || 'send_friend_request', estado: 'ok' });
 
     // Orden confirmado por el usuario 2026-07-29: despues de mandar la
     // solicitud, la donante ofrece la carta de la wishlist de Main
     // (_SendTradeCard.ahk, igual que en Friend Trade) ANTES de que Main
     // proponga la suya -- son dos ofertas de trade separadas, no una sola.
+    // Timeouts subidos (2026-09-18, bug real reproducido en vivo con Ale varias veces seguidas
+    // -- "se cerro el hack, no reintenta como el de Kevin"): estos timeouts NO son un margen de
+    // espera, son un `taskkill /F` real (ver spawnAhkConProteccion) -- al cumplirse, matan el
+    // script AUNQUE este trabajando bien. Los valores viejos eran mas chicos que lo que el
+    // propio script puede tardar por diseño: main_accept_friend_request tenia 60s, pero adentro
+    // tiene esperarTileFriendsYTap (hasta 35s) + esperarAceptarOYaAmigos (hasta 30s) = 65s en el
+    // peor caso, o sea que estaba GARANTIZADO que bot.js lo matara antes de que pudiera
+    // terminar. Eso es exactamente el "main_accept_friend_request (timeout)" que se vio hoy.
+    // Los scripts por-instancia de Kevin no tienen este problema porque nadie los mata por reloj:
+    // corren hasta completar su trabajo. Acá se mantiene la red de seguridad (si algo se cuelga
+    // de verdad, igual corta) pero con margen suficiente para que los reintentos internos --
+    // que son los que hacen que el flujo sea robusto -- tengan lugar para funcionar.
     let pasos = [
-        { nombre: 'send_friend_request', script: RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, args: [nombre, folderPath, friendId], timeoutMs: 90 * 1000 },
+        // send_friend_request ya no va aca: corre en la preparacion de la donante, en paralelo con
+        // el arranque de Main (ver promesaPrepDonante, 2026-09-27).
         // Remapeados 2026-08-03/04 (coordenadas propias, ver header de cada script) --
         // reemplazan Main.ahk + _SendTradeCard.ahk + _MainProposeFavoriteCard.ahk +
         // _DonorRespondTrade.ahk + _MainFinalizeAndCleanup.ahk + _FinalizeTradeCard.ahk.
-        { nombre: 'main_accept_friend_request', script: RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, args: ['Main', folderPath], timeoutMs: 60 * 1000 },
-        { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath, rutaImagenReferencia], timeoutMs: 2 * 60 * 1000 },
-        { nombre: 'main_accept_trade_offer', script: RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, args: ['Main', folderPath], timeoutMs: 2 * 60 * 1000 },
-        { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath], timeoutMs: 2 * 60 * 1000 },
+        { nombre: 'main_accept_friend_request', script: RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, args: ['Main', folderPath], timeoutMs: 3 * 60 * 1000 },
+        { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath, rutaImagenReferencia], timeoutMs: 4 * 60 * 1000 },
+        { nombre: 'main_accept_trade_offer', script: RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, args: ['Main', folderPath], timeoutMs: 4 * 60 * 1000 },
+        { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath], timeoutMs: 4 * 60 * 1000 },
         // Descubierto en vivo 2026-08-19: sin este paso, la carta de Main nunca se termina
         // de mandar de verdad (se queda ofrecida pero sin el swipe final de su lado).
-        { nombre: 'main_finalize_own_card', script: RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT, args: ['Main', folderPath], timeoutMs: 60 * 1000 }
+        { nombre: 'main_finalize_own_card', script: RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT, args: ['Main', folderPath], timeoutMs: 3 * 60 * 1000 }
     ];
 
     // REACTIVADO con needle nueva (2026-08-19, a pedido explicito del usuario): el banner
@@ -4221,7 +5418,16 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // especifico a la oferta de ESTE intento (una oferta vieja ya vista durante el dia ya
     // no lo muestra). Ver _CheckPendingOffer.ahk para el detalle y la limitacion conocida.
     const outputFileCheck = tmp();
-    const resultadoCheck = await ejecutarPasoAhk(ahkExe, RUTA_CHECK_PENDING_OFFER_SCRIPT, ['Main', folderPath], 15 * 1000, outputFileCheck);
+    // 15s -> 45s (2026-09-24, bug real medido con Ale): este timeout era IGUAL al presupuesto
+    // interno del propio script, asi que era imposible que terminara. _CheckPendingOffer.ahk
+    // gasta ~9s solo en llegar (2 taps de navegacion con Sleep 4000 cada uno + 1000 de
+    // asentamiento) y recien ahi arranca su bucle, que tiene otros 15s propios -- hasta 24s en
+    // total. bot.js lo mataba a los 15, siempre antes de que escribiera su resultado: el log
+    // mostraba los intentos y se cortaba SIN la linea "FIN". Por eso este chequeo devolvia
+    // "no hay oferta pendiente" en el 100% de las corridas y el pipeline nunca se salteaba nada.
+    // Confirmado por contraste: corriendolo a mano con 60s de margen detecto la oferta en el
+    // intento 6, a los 14s.
+    // resultadoCheck ya viene de la cadena de Main (ver promesaMainYChequeo, mas arriba).
     if (resultadoCheck.ok) {
         onProgreso({ paso: 'Detected pending offer', estado: 'ok', detalle: 'saltando send_friend_request/main_accept_friend_request/donor_offer_card' });
         pasos = pasos.filter(p => p.nombre === 'main_accept_trade_offer' || p.nombre === 'donor_respond_finalize' || p.nombre === 'main_finalize_own_card');
@@ -4240,8 +5446,12 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // asi que en el paso de Main el texto del embed quedaba mostrando los datos de la carta
     // de la donante encima de la foto real de la carta de Main (ej. "Crawdaunt") -- informacion
     // cruzada y erronea. Con el flag, ese paso manda solo la foto, sin datos de carta inventados.
+    // rutaFoto acepta tanto una ruta de archivo (string) como un Buffer ya armado en memoria
+    // (2026-09-16, a pedido explicito del usuario -- necesario para mandar los collages de
+    // 2 paneles de componerCollageAntesDespues, que no se guardan a disco).
     const mandarFotoTradeAlCanal = async (rutaFoto, mensajeTexto, sinDatosCarta = false) => {
-        if (!fs.existsSync(rutaFoto)) return;
+        const esBuffer = Buffer.isBuffer(rutaFoto);
+        if (!esBuffer && !fs.existsSync(rutaFoto)) return;
         try {
             const canalTradePhoto = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
             if (!canalTradePhoto?.webhook_url) return;
@@ -4256,7 +5466,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
                 const archivoSymbol = (payloadCarta.files || []).find(f => f.name === 'symbol.png');
                 if (archivoSymbol) formFoto.append('files[1]', archivoSymbol.attachment, { filename: 'symbol.png' });
             }
-            formFoto.append('files[0]', fs.readFileSync(rutaFoto), { filename: 'trade_photo.png' });
+            formFoto.append('files[0]', esBuffer ? rutaFoto : fs.readFileSync(rutaFoto), { filename: 'trade_photo.png' });
             await axios.post(`${canalTradePhoto.webhook_url}?wait=true`, formFoto, { headers: formFoto.getHeaders(), timeout: 15000 });
         } catch (e) {
             console.error('DEBUG: error mandando la foto del trade al canal de Trading:', e?.response?.data || e?.message || e);
@@ -4270,12 +5480,82 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     let rutaFaseEnviaDonante = null, rutaFaseEnviaMain = null;
     let rutaFaseRecibeDonante = null, rutaFaseRecibeMain = null;
 
+    // Salteo de "aceptar solicitud" cuando ya eran amigos (2026-09-23, medido en vivo con Ale).
+    // _SendFriendRequest.ahk ya distinguia los dos casos por needle (Withdraw = solicitud
+    // pendiente, Accepted = ya son amigos) pero escribia "OK" en ambos, asi que el dato se
+    // perdia. Corrida de las 20:40 como evidencia: a las 20:40:14 confirmaba "ya son amigos" y
+    // el paso siguiente igual se quedaba 30s esperando una solicitud inexistente
+    // ("esperarAceptarOYaAmigos: TIMEOUT tras 30000ms"), 39s de reloj tirados. Ahora ese script
+    // escribe "OK_YA_AMIGOS" y aca se saltea el paso entero.
+    // La solicitud ahora corre en la preparacion de la donante: su resultado viene en prepDonante.
+    let saltearAceptarAmigo = String(prepDonante.resultado || '').includes('YA_AMIGOS');
+    let mainFinalAnticipado = null;
+    // Fotos a Discord en segundo plano (2026-09-28, medido con Ale: subirlas frenaba el paso
+    // siguiente varios segundos). Se encadenan para que salgan en el mismo orden de siempre.
+    let colaFotos = Promise.resolve();
+    const enColaFoto = (fn) => { colaFotos = colaFotos.then(fn).catch(e => console.error('DEBUG: error subiendo foto del trade:', e?.message || e)); };
     for (const paso of pasos) {
-        const outputFilePaso = tmp();
-        const { ok, resultado } = paso.promesa
-            ? await paso.promesa()
-            : await ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, outputFilePaso);
+        if (paso.nombre === 'main_accept_friend_request' && saltearAceptarAmigo) {
+            onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok', detalle: 'skipped -- the previous step confirmed they were already friends' });
+            continue;
+        }
+        // Main en paralelo con el swipe de la donante (2026-09-28, idea de Ale): apenas
+        // _DonorRespondAndFinalize.ahk confirma el trade escribe <outputFile>_Confirmado.txt y en
+        // ese momento se lanza main_finalize_own_card (Actualizar + swipe de Main), sin esperar a
+        // que la donante termine su swipe y su pantalla final (~30 s ganados).
+        if (paso.nombre === 'main_finalize_own_card' && mainFinalAnticipado) {
+            paso.outputAnticipado = mainFinalAnticipado.outputFile;
+        }
+        const outputFilePaso = paso.outputAnticipado || tmp();
+        let promesaPaso;
+        if (paso.outputAnticipado) {
+            promesaPaso = mainFinalAnticipado.promesa;
+        } else if (paso.promesa) {
+            promesaPaso = paso.promesa();
+        } else {
+            promesaPaso = ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, outputFilePaso);
+        }
+        if (paso.nombre === 'donor_respond_finalize') {
+            const pasoMainFinal = pasos.find(p => p.nombre === 'main_finalize_own_card');
+            const rutaConfirmado = outputFilePaso.replace(/\.txt$/, '_Confirmado.txt');
+            let donanteTermino = false;
+            promesaPaso.then(() => { donanteTermino = true; }, () => { donanteTermino = true; });
+            while (pasoMainFinal && !donanteTermino && !mainFinalAnticipado) {
+                if (fs.existsSync(rutaConfirmado)) {
+                    const outMain = tmp();
+                    mainFinalAnticipado = {
+                        outputFile: outMain,
+                        promesa: ejecutarPasoAhk(ahkExe, pasoMainFinal.script, pasoMainFinal.args, pasoMainFinal.timeoutMs, outMain)
+                    };
+                    break;
+                }
+                await new Promise(r => setTimeout(r, 300));
+            }
+            try { fs.unlinkSync(rutaConfirmado); } catch (e) { /* nada que limpiar */ }
+        }
+        let { ok, resultado } = await promesaPaso;
+        // Si la donante falla DESPUES de confirmar (p. ej. en la pantalla final), Main ya esta
+        // cerrando su lado: se espera a que termine antes de reportar el fallo.
+        if (!ok && paso.nombre === 'donor_respond_finalize' && mainFinalAnticipado) {
+            await mainFinalAnticipado.promesa;
+        }
+        if (paso.nombre === 'send_friend_request' && String(resultado || '').includes('YA_AMIGOS')) saltearAceptarAmigo = true;
+        // Aviso de "no matcheo en el wishlist" (2026-09-03, a pedido explicito del usuario):
+        // chequeado ANTES del "if (!ok) return" de abajo -- el marcador lo deja
+        // _DonorOfferCard.ahk apenas termina de revisar las 3 cartas del wishlist, mucho antes
+        // de que el script llegue a su propio final (paso7b en adelante); si el script falla
+        // en un paso POSTERIOR (bug real reproducido en vivo: fallo en no_aparecio_selectfriend_paso7b
+        // justo despues de esto), el aviso igual tiene que salir -- el wishlist ya se reviso de
+        // verdad, sin importar que el resto del paso haya fallado despues.
+        if (paso.nombre === 'donor_offer_card') {
+            const rutaMarcadorSinMatch = outputFilePaso.replace(/\.txt$/, '_WishlistNoMatch.txt');
+            if (fs.existsSync(rutaMarcadorSinMatch)) {
+                try { fs.unlinkSync(rutaMarcadorSinMatch); } catch (e) { /* nada que limpiar */ }
+                await mandarFotoTradeAlCanal(rutaImagenReferencia, `⚠️ <@${interaction.user.id}> The requested card was not found in the friend's profile. Please mark the following card as favorite:`, true);
+            }
+        }
         if (!ok) {
+            await colaFotos;
             return await reportarFalloPaso(paso.nombre, resultado);
         }
         onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok' });
@@ -4291,21 +5571,40 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             // generan). Sirve para confirmar a distancia si el bug pasa sin mirar la pantalla.
             const rutaFotoZoom = outputFilePaso.replace(/\.txt$/, '_ZoomRecoveryPhoto.png');
             if (fs.existsSync(rutaFotoZoom)) {
-                await mandarFotoTradeAlCanal(rutaFotoZoom, `⚠️ <@${interaction.user.id}> La donante quedó en vista ampliada al elegir la carta -- se recuperó sola y siguió.`, true);
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoZoom, `⚠️ <@${interaction.user.id}> The donor got stuck in the zoomed card view while choosing the card -- it recovered on its own and continued.`, true));
             }
-            // _DonorOfferCard.ahk guarda la captura de "You have offered the card..." justo
-            // antes de tocar para cerrar -- momento en que la donante ofrece la carta de verdad.
+            // _DonorOfferCard.ahk guarda 2 capturas de este paso, ambas confirmadas con needle
+            // propio sin texto (2026-09-16, ver comentario completo en paso14/paso15 de ese
+            // script): "You have offered the card..." (mascota del rincon superior izquierdo) y
+            // "Waiting for a Response" (icono de Refresh) justo despues. Se arma un collage de
+            // 2 paneles con ambas -- si la segunda no llego a tiempo (best-effort, no corta el
+            // trade), se cae a mandar la primera sola.
             const rutaFotoOferta = outputFilePaso.replace(/\.txt$/, '_OfferPhoto.png');
-            rutaFaseOfertaDonante = rutaFotoOferta;
-            await mandarFotoTradeAlCanal(rutaFotoOferta, `<@${interaction.user.id}> La donante ofreció la carta!\n\nCarta ofrecida: **${nombreCarta}** → Main`);
+            const rutaFotoEsperando = outputFilePaso.replace(/\.txt$/, '_WaitingResponsePhoto.png');
+            rutaFaseOfertaDonante = fs.existsSync(rutaFotoEsperando) ? rutaFotoEsperando : rutaFotoOferta;
+            const collageOferta = await componerCollageAntesDespues(rutaFotoOferta, 'Oferta enviada', rutaFotoEsperando, 'Esperando respuesta');
+            if (collageOferta) {
+                enColaFoto(() => mandarFotoTradeAlCanal(collageOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → Main`, true));
+            } else {
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → Main`));
+            }
         }
         if (paso.nombre === 'main_accept_trade_offer') {
             // _MainAcceptTradeOffer.ahk guarda la captura de "You have offered the card..."
             // del lado de Main (2026-08-22, a pedido explicito del usuario) -- misma logica
             // que la foto de oferta de la donante, pero del lado de Main.
+            // Collage de 2 paneles (2026-09-17, mismo mecanismo que donor_offer_card arriba):
+            // paso11 de _MainAcceptTradeOffer.ahk agrega una segunda foto de "Waiting for a
+            // Response" del lado de Main, confirmada con needle real (icono de Refresh).
             const rutaFotoMainOferta = outputFilePaso.replace(/\.txt$/, '_MainOfferPhoto.png');
-            rutaFaseOfertaMain = rutaFotoMainOferta;
-            await mandarFotoTradeAlCanal(rutaFotoMainOferta, `<@${interaction.user.id}> Main ofreció su carta!`, true);
+            const rutaFotoMainEsperando = outputFilePaso.replace(/\.txt$/, '_MainWaitingResponsePhoto.png');
+            rutaFaseOfertaMain = fs.existsSync(rutaFotoMainEsperando) ? rutaFotoMainEsperando : rutaFotoMainOferta;
+            const collageMainOferta = await componerCollageAntesDespues(rutaFotoMainOferta, 'Main ofreció su carta', rutaFotoMainEsperando, 'Esperando respuesta');
+            if (collageMainOferta) {
+                enColaFoto(() => mandarFotoTradeAlCanal(collageMainOferta, `<@${interaction.user.id}> Main offered its card!`, true));
+            } else {
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainOferta, `<@${interaction.user.id}> Main offered its card!`, true));
+            }
         }
         if (paso.nombre === 'donor_respond_finalize') {
             // _DonorRespondAndFinalize.ahk guarda 2 capturas: una en "Trade for This Card?"
@@ -4314,18 +5613,18 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             // panel web la muestre tambien.
             const rutaFotoTrade = outputFilePaso.replace(/\.txt$/, '_TradePhoto.png');
             if (fs.existsSync(rutaFotoTrade)) onProgreso({ paso: 'Trade photo', estado: 'ok', fotoPath: rutaFotoTrade });
-            await mandarFotoTradeAlCanal(rutaFotoTrade, `<@${interaction.user.id}> Tradeo en curso!\n\nCarta enviada: **${nombreCarta}** → Ale Cast`);
+            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoTrade, `<@${interaction.user.id}> Trade in progress!\n\nCard sent: **${nombreCarta}** → Main`));
 
             const rutaFotoSwipe = outputFilePaso.replace(/\.txt$/, '_SwipePhoto.png');
             rutaFaseEnviaDonante = rutaFotoSwipe;
-            await mandarFotoTradeAlCanal(rutaFotoSwipe, `Carta enviada exitosamente al usuario <@${interaction.user.id}> (${interaction.user.username})\n\n**${nombreCarta}**`);
+            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoSwipe, `Card sent successfully to user <@${interaction.user.id}> (${interaction.user.username})\n\n**${nombreCarta}**`));
 
             // Foto DESPUES del swipe (2026-08-22, a pedido explicito del usuario: las 2 fotos
             // de arriba son ambas de ANTES de mandar la carta -- faltaba una prueba real de
             // que el swipe se registro de verdad, no solo que se intento.
             const rutaFotoEnviada = outputFilePaso.replace(/\.txt$/, '_SentPhoto.png');
             rutaFaseRecibeDonante = rutaFotoEnviada;
-            await mandarFotoTradeAlCanal(rutaFotoEnviada, `Swipe registrado — carta enviada de verdad.\n\n**${nombreCarta}**`);
+            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoEnviada, `Swipe registered — card actually sent.\n\n**${nombreCarta}**`));
         }
         if (paso.nombre === 'main_finalize_own_card') {
             // Foto de la carta de Main justo antes de su propio swipe (2026-08-19, a pedido
@@ -4334,13 +5633,48 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             const rutaFotoMainSwipe = outputFilePaso.replace(/\.txt$/, '_MainSwipePhoto.png');
             rutaFaseEnviaMain = rutaFotoMainSwipe;
             if (fs.existsSync(rutaFotoMainSwipe)) onProgreso({ paso: 'Main swipe photo', estado: 'ok', fotoPath: rutaFotoMainSwipe });
-            await mandarFotoTradeAlCanal(rutaFotoMainSwipe, `<@${interaction.user.id}> Main mandó su carta — el trade está completo de los dos lados.`, true);
+            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainSwipe, `<@${interaction.user.id}> Main sent its card — the trade is complete on both sides.`, true));
 
             // Foto DESPUES del swipe de Main (2026-08-22, mismo motivo que la de la donante).
             const rutaFotoMainEnviada = outputFilePaso.replace(/\.txt$/, '_MainSentPhoto.png');
             rutaFaseRecibeMain = rutaFotoMainEnviada;
-            await mandarFotoTradeAlCanal(rutaFotoMainEnviada, `Swipe de Main registrado — carta enviada de verdad.`, true);
+            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainEnviada, `Main swipe registered — card actually sent.`, true));
         }
+    }
+
+    await colaFotos;  // todas las fotos del trade ya subidas, en orden, antes del resumen
+    // Historial de transferencias (2026-09-28, pedido de Ale): trade completo = la carta salio de
+    // esta cuenta. Se anota y se avisa con un embed chico: cuenta, carta y cantidad antes/despues.
+    try {
+        const antes = await auditarStockCarta(fileName, cartaId);
+        await registrarTransferenciaCarta(fileName, cartaId, 'main', interaction.user.id, friendId);
+        const canalHistorial = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
+        if (canalHistorial?.webhook_url) {
+            const despues = Math.max(0, antes.disponible - 1);
+            // Foto de la carta buscada por su codigo (2026-09-28, pedido de Ale): mismo embed de
+            // carta que /card y /transfers, con los datos de la transferencia agregados.
+            let embedHistorial, archivosHistorial = [];
+            try {
+                const payloadCartaHist = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild);
+                embedHistorial = payloadCartaHist.embeds[0];
+                archivosHistorial = payloadCartaHist.files || [];
+            } catch (e) {
+                embedHistorial = new EmbedBuilder();
+            }
+            embedHistorial
+                .setColor(0x2ECC71)
+                .setTitle('📦 Transfer completed')
+                .addFields(
+                    { name: 'Account (XML)', value: `\`${fileName}\``, inline: true },
+                    { name: 'Card transferred', value: `**${nombreCarta}**`, inline: true },
+                    { name: 'Quantity', value: `x${antes.disponible} − 1 → **x${despues}** left`, inline: true },
+                    { name: 'Sent to', value: `Main (\`${friendId}\`)`, inline: true },
+                    { name: 'Date', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true }
+                );
+            await new WebhookClient({ url: canalHistorial.webhook_url }).send({ embeds: [embedHistorial], files: archivosHistorial });
+        }
+    } catch (e) {
+        console.error('DEBUG: error guardando el historial de transferencia:', e?.response?.data || e?.message || e);
     }
 
     // Collage resumen final de las 3 fases (2026-08-22, a pedido explicito del usuario, ADEMAS
@@ -4361,8 +5695,8 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             if (canalCollage?.webhook_url) {
                 const embedCollage = new EmbedBuilder()
                     .setColor(0xE91E63)
-                    .setTitle('✅ Main Trade completado')
-                    .setDescription(`Intercambio confirmado. ¡Muchas gracias por el intercambio!\n\n**${nombreCarta}**`)
+                    .setTitle('✅ Main Trade completed')
+                    .setDescription(`Trade confirmed. Thank you very much for the trade!\n\n**${nombreCarta}**`)
                     .setImage('attachment://main_trade_resumen.png');
                 const formCollage = new FormData();
                 formCollage.append('payload_json', JSON.stringify({ embeds: [embedCollage.toJSON()] }));
@@ -4619,6 +5953,19 @@ async function ejecutarAggressiveTradeDesdeDiscord(interaction, { cartaId, frien
         for (const paso of pasos) {
             const outPaso = tmp(`${paso.nombre}_${asignacion.instancia.index}`);
             const { ok, resultado } = await ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, outPaso);
+            // Mismo aviso de "no matcheo en el wishlist" que Main Trade (2026-09-03, ver
+            // comentario completo ahi) -- chequeado ANTES del "if (!ok) return" de abajo, porque
+            // el marcador puede quedar escrito aunque el resto del paso falle despues (bug real
+            // reproducido en vivo: fallo en no_aparecio_selectfriend_paso7b, posterior al
+            // wishlist, y el aviso nunca salia). Adaptado a la funcion de mensaje propia de
+            // Aggressive Trade, que no tiene mandarFotoTradeAlCanal disponible en este scope.
+            if (paso.nombre === 'donor_offer_card') {
+                const rutaMarcadorSinMatch = outPaso.replace(/\.txt$/, '_WishlistNoMatch.txt');
+                if (fs.existsSync(rutaMarcadorSinMatch)) {
+                    try { fs.unlinkSync(rutaMarcadorSinMatch); } catch (e) { /* nada que limpiar */ }
+                    await mandarMensajeAggressiveAlCanal(`⚠️ The requested card was not found in **${nombre}**'s profile. Please mark the following card as favorite:`, rutaImagenReferenciaAggr);
+                }
+            }
             if (!ok) return { ok: false, paso: paso.nombre, detalle: resultado };
             // _DonorRespondAndFinalize.ahk guarda esta captura justo despues del swipe que manda
             // la carta de verdad (mismo archivo que ya usa Main Trade, ver _SentPhoto.png arriba).
@@ -4677,12 +6024,12 @@ async function ejecutarAggressiveTradeDesdeDiscord(interaction, { cartaId, frien
         apagarInstanciaMuMu(asignacion.instancia.index);
         if (!resultadoMain.ok) {
             onProgreso({ donante: nombre, paso: resultadoMain.paso, estado: 'error', detalle: resultadoMain.detalle });
-            await mandarMensajeAggressiveAlCanal(`❌ <@${interaction.user.id}> Aggressive Trade: la cuenta \`${asignacion.cuenta.fileName}\` (instancia **${nombre}**) falló en el paso **${resultadoMain.paso}**.`);
+            await mandarMensajeAggressiveAlCanal(`❌ <@${interaction.user.id}> Aggressive Trade: account \`${asignacion.cuenta.fileName}\` (instance **${nombre}**) failed at step **${resultadoMain.paso}**.`);
             return { ok: false, donante: nombre, cuenta: asignacion.cuenta.fileName, ...resultadoMain };
         }
         completados++;
         onProgreso({ donante: nombre, paso: 'trade_completed', estado: 'ok' });
-        await mandarMensajeAggressiveAlCanal(`✅ <@${interaction.user.id}> Carta ${completados} transferida exitosamente — cuenta \`${asignacion.cuenta.fileName}\` (instancia **${nombre}**).`, resultadoMain.rutaFotoEnvio);
+        await mandarMensajeAggressiveAlCanal(`✅ <@${interaction.user.id}> Card ${completados} transferred successfully — account \`${asignacion.cuenta.fileName}\` (instance **${nombre}**).`, resultadoMain.rutaFotoEnvio);
         return { ok: true, donante: nombre, cuenta: asignacion.cuenta.fileName };
     }
 
@@ -5033,14 +6380,21 @@ function camposInventarioEmbed(datos, mapaEmojis) {
 // antes) -- navega hasta Items y lee el shinedust y el resto del inventario con el OCR
 // nativo de Windows. callback(ok, datosOMotivo) -- datos es un objeto ({shinedust, ...}) si
 // ok, un string con el motivo si no.
-function ejecutarCountShinedust(winTitle, callback) {
+// soloShinedust (2026-09-16, a pedido explicito del usuario para "Track Shinedust": "que
+// haga un swipe en lugar de dos como Info Accounts... reducimos el tiempo, es lo mismo
+// pero uno muestra todo y otro solo la data de shinedust") -- salta el swipe + segunda
+// captura + OCR de Wonder/Rewind/Trade Hourglass dentro de _CountShinedust.ahk, ya que
+// esos 3 campos nunca se muestran en el flujo liviano. Info Accounts sigue llamando esto
+// SIN el 3er argumento (default false), leyendo el inventario completo como siempre.
+function ejecutarCountShinedust(winTitle, callback, soloShinedust = false) {
     const ahkExe = rutaAutoHotkey();
     const folderPath = carpetaBaseMuMu();
     if (!ahkExe || !folderPath || !fs.existsSync(RUTA_COUNT_SHINEDUST_SCRIPT)) {
         return callback(false, 'faltan_archivos');
     }
     const outputFile = path.join(os.tmpdir(), `shinedust_${winTitle}_${Date.now()}.txt`);
-    spawnAhkConProteccion(ahkExe, [RUTA_COUNT_SHINEDUST_SCRIPT, winTitle, folderPath, outputFile], { windowsHide: false }, 3 * 60 * 1000, (ok, detalle) => {
+    const argsScript = soloShinedust ? [RUTA_COUNT_SHINEDUST_SCRIPT, winTitle, folderPath, outputFile, '1'] : [RUTA_COUNT_SHINEDUST_SCRIPT, winTitle, folderPath, outputFile];
+    spawnAhkConProteccion(ahkExe, argsScript, { windowsHide: false }, 3 * 60 * 1000, (ok, detalle) => {
         // Bug real encontrado 2026-07-30: si el script terminaba con codigo != 0
         // (cualquier ExitConError), esto devolvia directo "codigo_N" sin siquiera
         // leer el archivo -- el motivo real ("puerto_no_encontrado", "ocr
@@ -5137,10 +6491,17 @@ async function generarInfoAccountsPDF(rutaMasterPath, archivoJson, escalaRender 
         const infoMaster = cardmaster?.[code];
         const nombreCarta = (infoMaster?.Name && en_US?.[infoMaster.Name]) || infoMaster?.Name || code;
         if (!porExpansion[nombreExpansion]) porExpansion[nombreExpansion] = [];
-        porExpansion[nombreExpansion].push({ nombre: nombreCarta, cantidad, illustrationId: infoMapa?.IllustrationID, code });
+        // tipoRareza/elemento agregados 2026-09-25: hacen falta para ordenar igual que el
+        // resto de las pantallas (rareza de mayor a menor, elementos agrupados). Antes este
+        // reporte solo se ordenaba por nombre.
+        porExpansion[nombreExpansion].push({
+            nombre: nombreCarta, cantidad, illustrationId: infoMapa?.IllustrationID, code,
+            tipoRareza: tipoRarezaDesdeInfo(infoMaster) || '',
+            elemento: elementoDesdeInfo(infoMaster, nombreCarta)
+        });
     }
     for (const lista of Object.values(porExpansion)) {
-        lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
+        lista.sort(compararCartasParaLista);
     }
     const expansionesOrdenadas = Object.keys(porExpansion).sort();
 
@@ -5342,6 +6703,160 @@ async function generarInfoAccountsPDF(rutaMasterPath, archivoJson, escalaRender 
     return finPromesa;
 }
 
+// PDF del catalogo de cartas (2026-09-25, a pedido explicito de Ale: "que te parece si le
+// podemos generar un pdf con todas las cartas y todo el orden"). No se parte de cero: reusa la
+// misma maquinaria que generarInfoAccountsPDF de arriba -- pdfkit, miniaturas via sharp con
+// esquinas redondeadas, estetica oscura y logo de la expansion -- pero sobre el catalogo que ya
+// esta en pantalla en vez de sobre el JSON de una cuenta.
+// Diferencias con aquel:
+//   - Respeta el filtro que el usuario tiene puesto (expansion + categoria + elemento), porque
+//     el boton aparece tanto en la pantalla de categorias como dentro de una categoria ya
+//     elegida (pedido de Ale: "ahi tiene que aparecer nomas, o si selecciona una categoria
+//     especial tambien deberia aparecer").
+//   - Va agrupado por rareza con un encabezado por bloque, en el MISMO orden que la lista de
+//     Discord (ordenarCartasParaLista: rareza de mayor a menor, elementos agrupados).
+//   - Escribe el nombre debajo de cada carta: en un catalogo hace falta para poder ubicarla,
+//     a diferencia del reporte de cuenta donde lo que importaba era la cantidad.
+// Sobre el peso: Discord corta los adjuntos de un bot en 10MB. Una expansion grande son 328
+// cartas, asi que la escala y la calidad JPEG bajan solas segun cuantas cartas entren, en vez
+// de generar un archivo que despues no se pueda mandar.
+async function generarPdfCatalogoCartas(cartas, expansion, opciones = {}) {
+    const rutaMasterPath = opciones.rutaMasterPath || null;
+    const filtroCategoria = opciones.categoria && opciones.categoria !== CATEGORIA_SIN_FILTRO ? opciones.categoria : null;
+    const filtroElemento = opciones.elemento && opciones.elemento !== ELEMENTO_SIN_FILTRO ? opciones.elemento : null;
+
+    const seleccion = ordenarCartasParaLista(
+        (cartas || []).filter(c => c.expansion === expansion
+            && (!filtroCategoria || c.categoria === filtroCategoria)
+            && (!filtroElemento || c.elemento === filtroElemento))
+    );
+    if (!seleccion.length) return null;
+
+    const cardMap = cargarCardMap(rutaMasterPath);
+
+    // Escala/calidad segun cuantas cartas hay, para no pasarse de los 10MB de Discord. Medido
+    // sobre cartas reales: a escala 3 y calidad 90 cada miniatura pesa ~50KB, asi que una
+    // expansion entera se iba arriba de 16MB.
+    const n = seleccion.length;
+    const escalaRender = n > 250 ? 1.6 : (n > 120 ? 2 : 3);
+    const calidadJpeg = n > 250 ? 62 : (n > 120 ? 72 : 88);
+
+    const CELL_W = 105, CELL_H = 147, GAP = 8, COLS = 4, TILE_PADDING = 8, ALTO_NOMBRE = 14;
+    const anchoUtil = 595 - 40 * 2;
+    const margenIzq = 40;
+    const anchoRenderCelda = Math.round(CELL_W * escalaRender);
+    const altoRenderCelda = Math.round(CELL_H * escalaRender);
+
+    function rutaHdCacheada(cartaId) {
+        const info = cardMap?.[cartaId];
+        if (!info?.ExpansionID || !info?.CollectionNumber) return null;
+        const localId = String(info.CollectionNumber).padStart(3, '0');
+        const rutaCache = path.join(DRIVE_CACHE_DIR_BOT, info.ExpansionID, `${localId}.png`);
+        return fs.existsSync(rutaCache) ? rutaCache : null;
+    }
+
+    const buffersPorId = new Map();
+    for (const carta of seleccion) {
+        const illustrationId = cardMap?.[carta.id]?.IllustrationID;
+        const rutaImg = rutaHdCacheada(carta.id)
+            || encontrarImagenPorIllustration(rutaMasterPath, illustrationId)
+            || (await obtenerImagenRepoCartasBot(rutaMasterPath, illustrationId));
+        if (!rutaImg) continue;
+        try {
+            const radioEsquina = Math.round(altoRenderCelda * 0.06);
+            const mascara = Buffer.from(
+                `<svg width="${anchoRenderCelda}" height="${altoRenderCelda}">` +
+                `<rect x="0" y="0" width="${anchoRenderCelda}" height="${altoRenderCelda}" rx="${radioEsquina}" ry="${radioEsquina}" fill="#ffffff"/>` +
+                `</svg>`
+            );
+            buffersPorId.set(carta.id, await sharp(rutaImg)
+                .resize(anchoRenderCelda, altoRenderCelda, { fit: 'cover' })
+                .composite([{ input: mascara, blend: 'dest-in' }])
+                .flatten({ background: '#121a2f' })
+                .jpeg({ quality: calidadJpeg })
+                .toBuffer());
+        } catch (e) { /* miniatura corrupta: queda el casillero vacio, no rompe el PDF */ }
+    }
+
+    const doc = new PDFDocument({ margin: 40 });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    const finPromesa = new Promise((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
+
+    const FONDO_OSCURO = '#0b1020';
+    const TEXTO_CLARO = '#edf2ff';
+    const TEXTO_MUTED = '#aeb9d4';
+    doc.on('pageAdded', () => { doc.rect(0, 0, doc.page.width, doc.page.height).fill(FONDO_OSCURO); });
+    doc.rect(0, 0, doc.page.width, doc.page.height).fill(FONDO_OSCURO);
+
+    const rutaLogo = buscarLogoExpansionBot(expansion);
+    if (rutaLogo) {
+        try {
+            const dims = await sharp(rutaLogo).metadata();
+            const altoLogo = 56;
+            const anchoLogo = Math.min(200, altoLogo * (dims.width / dims.height));
+            const logoChico = await sharp(rutaLogo)
+                .resize(Math.round(anchoLogo * 2), Math.round(altoLogo * 2), { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                .png().toBuffer();
+            doc.image(logoChico, margenIzq + (anchoUtil - anchoLogo) / 2, doc.y, { height: altoLogo });
+            doc.y += altoLogo + 8;
+        } catch (e) { /* sin logo, sigue solo con el titulo de texto */ }
+    }
+    doc.fontSize(18).fillColor(TEXTO_CLARO).text(expansion, { align: 'center' });
+    const subtitulo = [
+        filtroCategoria ? textoSinEmoji(filtroCategoria) : 'All categories',
+        filtroElemento || null,
+        `${seleccion.length} cards`
+    ].filter(Boolean).join('  -  ');
+    doc.fontSize(10).fillColor(TEXTO_MUTED).text(subtitulo, { align: 'center' });
+    doc.moveDown();
+
+    const TILE_W = CELL_W + TILE_PADDING * 2;
+    const TILE_H = CELL_H + TILE_PADDING * 2 + ALTO_NOMBRE;
+
+    // Un bloque por rareza, en el orden que ya trae la seleccion.
+    const bloques = [];
+    for (const carta of seleccion) {
+        const ultimo = bloques[bloques.length - 1];
+        if (ultimo && ultimo.categoria === carta.categoria) ultimo.cartas.push(carta);
+        else bloques.push({ categoria: carta.categoria, cartas: [carta] });
+    }
+
+    for (const bloque of bloques) {
+        if (doc.y + 24 + TILE_H > doc.page.height - doc.page.margins.bottom) doc.addPage();
+        doc.fontSize(13).fillColor(TEXTO_CLARO)
+            .text(`${textoSinEmoji(bloque.categoria)}  (${bloque.cartas.length})`, margenIzq, doc.y, { underline: true });
+        doc.moveDown(0.3);
+
+        let col = 0;
+        let filaTop = doc.y;
+        for (const carta of bloque.cartas) {
+            if (filaTop + TILE_H + GAP > doc.page.height - doc.page.margins.bottom) {
+                doc.addPage();
+                filaTop = doc.y;
+                col = 0;
+            }
+            const xTile = margenIzq + col * (TILE_W + GAP);
+            doc.roundedRect(xTile, filaTop, TILE_W, TILE_H, 10).fillAndStroke('#121a2f', '#2c385d');
+            const xImg = xTile + TILE_PADDING;
+            const yImg = filaTop + TILE_PADDING;
+            const buffer = buffersPorId.get(carta.id);
+            if (buffer) doc.image(buffer, xImg, yImg, { width: CELL_W, height: CELL_H });
+            else doc.roundedRect(xImg, yImg, CELL_W, CELL_H, Math.round(CELL_H * 0.06)).strokeColor('#2c385d').stroke();
+            doc.fontSize(6.5).fillColor(TEXTO_MUTED)
+                .text(String(carta.nombre || ''), xTile + 3, yImg + CELL_H + 3, { width: TILE_W - 6, align: 'center', lineBreak: false, ellipsis: true });
+
+            col++;
+            if (col >= COLS) { col = 0; filaTop += TILE_H + GAP; }
+        }
+        doc.y = filaTop + (col > 0 ? TILE_H + GAP : 0);
+        doc.moveDown(0.4);
+    }
+
+    doc.end();
+    return finPromesa;
+}
+
 // ============ Dashboard local "Info Accounts" (2026-07-31) ============
 // A pedido explicito del usuario, en reemplazo del PDF de arriba (pausado,
 // no borrado): mismo reporte (agrupado por expansion, cantidad por carta),
@@ -5379,7 +6894,12 @@ dashboardApp.use(express.json());
 // banner de AllCards, CARPETA_FUNDAS_ALLCARDS). Si esa carpeta no existe (cualquier PC que
 // no sea la de Ale), simplemente no se sirve nada -- la pagina cae de vuelta al estado
 // vacio de siempre, mismo criterio que ya usa elegirBannerAleatorio() en otros lados.
-dashboardApp.use('/wallpaper-img', express.static(CARPETA_FUNDAS_ALLCARDS));
+// Guard agregado junto con el fix de arriba: express.static('') resuelve a
+// process.cwd() -- montar la ruta sin chequear primero expondria archivos del
+// directorio de trabajo entero en cualquier instalacion sin la carpeta configurada.
+if (CARPETA_FUNDAS_ALLCARDS && fs.existsSync(CARPETA_FUNDAS_ALLCARDS)) {
+    dashboardApp.use('/wallpaper-img', express.static(CARPETA_FUNDAS_ALLCARDS));
+}
 
 // discordId y fileName agregados (2026-08-08, a pedido explicito del usuario): hacian falta
 // para el trade rapido desde la pagina de cartas (ver /account/:token/trade-data y
@@ -5543,6 +7063,10 @@ dashboardApp.get('/account/:token', async (req, res) => {
                     cantidad: conteoPorCodigo[carta.id] || 0,
                     code: carta.id,
                     tipoRareza: carta.tipoRareza,
+                    // elemento agregado 2026-09-25: hace falta para poder agrupar por tipo
+                    // (ver compararCartasParaLista) -- antes solo se ordenaba por nombre y los
+                    // elementos salian entreverados en el reporte.
+                    elemento: carta.elemento,
                     expansion: carta.expansion
                 });
             }
@@ -5558,11 +7082,12 @@ dashboardApp.get('/account/:token', async (req, res) => {
                 const infoMaster = cardmaster?.[code];
                 const nombreCarta = (infoMaster?.Name && en_US?.[infoMaster.Name]) || infoMaster?.Name || code;
                 const tipoRareza = tipoRarezaDesdeInfo(infoMaster) || '';
+                const elemento = elementoDesdeInfo(infoMaster, nombreCarta);
                 if (!porExpansion[nombreExpansion]) porExpansion[nombreExpansion] = [];
-                porExpansion[nombreExpansion].push({ nombre: nombreCarta, cantidad, code, tipoRareza, expansion: nombreExpansion });
+                porExpansion[nombreExpansion].push({ nombre: nombreCarta, cantidad, code, tipoRareza, elemento, expansion: nombreExpansion });
             }
         }
-        for (const lista of Object.values(porExpansion)) lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
+        for (const lista of Object.values(porExpansion)) lista.sort(compararCartasParaLista);
         const expansionesOrdenadas = Object.keys(porExpansion).sort();
 
         // Historial de sobres (2026-08-10, a pedido explicito del usuario): al lado de la
@@ -7323,6 +8848,11 @@ const XML_SELECT_POR_PAGINA = 25;
 // lista de nombres de XML -- usado por el flujo de Shinedust. Desde el fix
 // 2026-07-29 recibe la lista ya filtrada por carta (buscarXmlPorCarta), igual
 // que el dropdown de Trade.
+// "fileNames" acepta strings (fileName solo, comportamiento de siempre) o objetos
+// {fileName, cantidad} -- en ese caso el label muestra "archivo (xN)" igual que ya
+// hace el dropdown de Trade (2026-09-15, a pedido explicito del usuario: "no sale al
+// lado la cantidad como en trade" en el dropdown de Inject). El value en ambos casos
+// sigue siendo solo el fileName, para no romper ningun handler que ya lo consume.
 function construirSelectXmlPaginado(fileNames, cartaId, pagina, prefix) {
     const totalPaginas = Math.max(1, Math.ceil(fileNames.length / XML_SELECT_POR_PAGINA));
     const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
@@ -7332,7 +8862,11 @@ function construirSelectXmlPaginado(fileNames, cartaId, pagina, prefix) {
     const menu = new StringSelectMenuBuilder()
         .setCustomId(`${prefix}::${cartaId}::${paginaSegura}`.slice(0, 100))
         .setPlaceholder(totalPaginas > 1 ? `Select an account (page ${paginaSegura + 1}/${totalPaginas})` : 'Select an account')
-        .addOptions(items.map(f => ({ label: f.slice(0, 100), value: f.slice(0, 100) })));
+        .addOptions(items.map(f => {
+            const fileName = typeof f === 'string' ? f : f.fileName;
+            const label = typeof f === 'string' ? f : `${f.fileName} (x${f.cantidad})`;
+            return { label: label.slice(0, 100), value: fileName.slice(0, 100) };
+        }));
 
     const componentes = [new ActionRowBuilder().addComponents(menu)];
     if (totalPaginas > 1) {
@@ -7394,6 +8928,78 @@ function buscarXmlPorCarta(rutaJsonCuentas, cartaId) {
 
     resultados.sort((a, b) => b.cantidad - a.cantidad);
     return resultados;
+}
+
+// Reporte de Shinedust guardado por cuenta (2026-09-16, a pedido explicito del usuario:
+// "/shinedust" nuevo, exclusivo del canal Shinedust). A diferencia de ejecutarCountShinedust
+// (que inyecta la cuenta y lee el valor EN VIVO por OCR), esto es de solo lectura -- lee el
+// valor que la herramienta de Kevin ya guarda sola en cada JSON (metadata.shinedust.value,
+// actualizado cada vez que el usuario corre su propio "Track Shinedust"), sin inyectar ni
+// tocar ninguna instancia. El bot NUNCA escribe estos archivos -- son de la herramienta de
+// Kevin, no nuestros.
+function buscarShinedustTodasCuentas(rutaJsonCuentas) {
+    if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
+    const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
+    const resultados = [];
+
+    for (const archivo of archivos) {
+        const data = leerJsonSeguro(path.join(rutaJsonCuentas, archivo));
+        if (!data) continue;
+        const valor = data.metadata?.shinedust?.value;
+        if (typeof valor !== 'number') continue;
+        const fileNameXml = data.metadata?.fileName || archivo;
+        const nombreCuenta = data.metadata?.accountName || fileNameXml;
+        // archivoJson (2026-09-16, para el boton "Track Shinedust" de abajo): permite
+        // reabrir ESTE MISMO archivo despues para actualizar el valor, sin tener que
+        // volver a buscarlo por nombre.
+        resultados.push({ nombreCuenta, valor, fileNameXml, archivoJson: archivo });
+    }
+
+    resultados.sort((a, b) => b.valor - a.valor);
+    return resultados;
+}
+
+const SHINEDUST_POR_PAGINA = 25;
+
+function construirEmbedShinedust(resultados, pagina = 0) {
+    const embed = new EmbedBuilder()
+        .setTitle('🍬 Shinedust per account')
+        .setColor(0xE91E63);
+
+    if (resultados === null) {
+        embed.setDescription('❌ Could not find the configured **JSON Accounts Path** folder.');
+        return { embeds: [embed] };
+    }
+    if (!resultados.length) {
+        embed.setDescription('No account has a saved Shinedust value yet. Run **Track Shinedust** in Kevin\'s tool at least once per account.');
+        return { embeds: [embed] };
+    }
+
+    const totalGeneral = resultados.reduce((suma, r) => suma + r.valor, 0);
+    const totalPaginas = Math.max(1, Math.ceil(resultados.length / SHINEDUST_POR_PAGINA));
+    const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
+    const inicio = paginaSegura * SHINEDUST_POR_PAGINA;
+    const items = resultados.slice(inicio, inicio + SHINEDUST_POR_PAGINA);
+
+    // Bloque de codigo (2026-09-16, a pedido explicito del usuario): Discord dibuja
+    // automatico un boton de copiar en la esquina de un bloque ``` en la version de
+    // escritorio -- nada que el bot tenga que armar, solo envolver el texto en ```.
+    const anchoNombre = Math.max(...items.map(r => r.nombreCuenta.length), 10);
+    const lineas = items.map(r => `${r.nombreCuenta.padEnd(anchoNombre)}  ${r.valor.toLocaleString('en-US')}`);
+    embed.setDescription('```\n' + lineas.join('\n') + '\n```')
+        .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas} • ${resultados.length} account(s) • Total: ${totalGeneral.toLocaleString('en-US')}` });
+
+    // Boton "Track Shinedust" (2026-09-16, a pedido explicito del usuario): deja elegir
+    // una cuenta de ESTA pagina para leerla EN VIVO por OCR (mismo motor de
+    // ejecutarCountShinedust de siempre) y comparar contra el valor guardado de arriba --
+    // con foto de evidencia antes de ofrecer actualizar el JSON. Siempre visible (no solo
+    // con 2+ paginas), a diferencia de Previous/Next.
+    const filaBotones = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`shinedust_reporte::${paginaSegura - 1}`).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0 || totalPaginas <= 1),
+        new ButtonBuilder().setCustomId(`shinedust_reporte::${paginaSegura + 1}`).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1 || totalPaginas <= 1),
+        new ButtonBuilder().setCustomId(`shinedust_track_select::${paginaSegura}`).setLabel('🍬 Track Shinedust').setStyle(ButtonStyle.Primary)
+    );
+    return { embeds: [embed], components: [filaBotones] };
 }
 
 const XML_POR_PAGINA = 40;
@@ -7527,7 +9133,10 @@ function construirSlashCommands() {
             .setDescription('Runs Run MumuPlayer')
             .addSubcommand(subcommand => subcommand.setName('instance').setDescription('Open instance')),
         new SlashCommandBuilder().setName('feedback').setDescription('Send a suggestion or report a problem with the bot')
-            .addAttachmentOption(opt => opt.setName('image').setDescription('Optional screenshot/photo of the problem').setRequired(false))
+            .addAttachmentOption(opt => opt.setName('image').setDescription('Optional screenshot/photo of the problem').setRequired(false)),
+        new SlashCommandBuilder().setName('farmtickets').setDescription('Farm Shop Tickets by liking Community Showcases'),
+        new SlashCommandBuilder().setName('shinedust').setDescription('Shows the saved Shinedust total for every account, sorted highest first'),
+        new SlashCommandBuilder().setName('transfers').setDescription('Shows the card transfers you have made: accounts used, cards sent and where')
     ].map(cmd => cmd.toJSON());
 }
 
@@ -8645,7 +10254,7 @@ async function generarPanelControl(guildId) {
             `*Press the buttons to interact with the bot's ecosystem.*`
         )
         .setColor(0x9B59B6)
-        .setFooter({ text: " Bot By Ale Cast ୨♡୧" })
+        .setFooter({ text: "Monitor Pokémon" })
         .setTimestamp();
 
     const filaSistema = new ActionRowBuilder().addComponents(
@@ -8735,6 +10344,51 @@ const FUENTES_CARTAS = {
     }
 };
 
+// --- Busqueda de cartas por texto con TODOS los resultados (2026-09-29, pedido de Ale) ---
+const PREFIJO_BUSQUEDA_CARTA = '__buscar__:';
+const BUSQUEDA_CARTAS_POR_PAGINA = 25;
+
+function buscarCartasPorTexto(cartas, texto) {
+    const t = String(texto || '').trim().toLowerCase();
+    if (!t) return [];
+    const vistos = new Set();
+    return (cartas || [])
+        .filter(c => c.nombre && c.nombre.toLowerCase().includes(t))
+        .sort((a, b) => (a.extra ? 1 : 0) - (b.extra ? 1 : 0))  // la original antes que su copia de Deluxe
+        .filter(c => !vistos.has(c.id) && vistos.add(c.id))
+        .sort((a, b) => a.nombre.localeCompare(b.nombre) || String(a.expansion).localeCompare(String(b.expansion)));
+}
+
+function construirListaBusquedaCartas(resultados, texto, pagina) {
+    const paginas = Math.max(1, Math.ceil(resultados.length / BUSQUEDA_CARTAS_POR_PAGINA));
+    pagina = Math.min(Math.max(0, pagina), paginas - 1);
+    const inicio = pagina * BUSQUEDA_CARTAS_POR_PAGINA;
+    const items = resultados.slice(inicio, inicio + BUSQUEDA_CARTAS_POR_PAGINA);
+    // El texto viaja en el customId (maximo 100 caracteres en total).
+    const textoId = String(texto).slice(0, 60);
+    const embed = new EmbedBuilder()
+        .setColor(0x3498DB)
+        .setTitle(`🔎 Results for "${texto}"`)
+        .setDescription(items.map((c, i) => `**${inicio + i + 1}.** ${c.nombre} — ${c.expansion} (${textoSinEmoji(c.categoria)})`).join('\n').slice(0, 4000))
+        .setFooter({ text: `${resultados.length} card(s) · Page ${pagina + 1}/${paginas} · Pick one below` });
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId(`cardsearch_sel::${pagina}::${textoId}`.slice(0, 100))
+        .setPlaceholder('Select a card')
+        .addOptions(items.map((c, i) => ({
+            label: `${inicio + i + 1}. ${c.nombre}`.slice(0, 100),
+            description: `${c.expansion} (${textoSinEmoji(c.categoria)})`.slice(0, 100),
+            value: c.id
+        })));
+    const componentes = [new ActionRowBuilder().addComponents(menu)];
+    if (paginas > 1) {
+        componentes.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`cardsearch_pag::${pagina - 1}::${textoId}`.slice(0, 100)).setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(pagina === 0),
+            new ButtonBuilder().setCustomId(`cardsearch_pag::${pagina + 1}::${textoId}`.slice(0, 100)).setLabel('▶').setStyle(ButtonStyle.Secondary).setDisabled(pagina >= paginas - 1)
+        ));
+    }
+    return { content: '', embeds: [embed], components: componentes, files: [], attachments: [] };
+}
+
 function prefijoDeCartas(customId) {
     if (customId.startsWith('goldcards')) return 'goldcards';
     return customId.startsWith('allcards') ? 'allcards' : 'wishlist';
@@ -8782,9 +10436,31 @@ client.on('interactionCreate', async interaction => {
         // sugeria nombres de Pokemon comunes que no son Item para nada).
         const elementoElegido = interaction.options.getString('element');
         const porElemento = elementoElegido ? porExpansion.filter(c => c.elemento === elementoElegido) : porExpansion;
-        const coincidencias = (focused ? porElemento.filter(c => c.nombre.toLowerCase().includes(focused)) : porElemento)
-            .slice(0, 25)
+        // Sin repetir el mismo id (2026-09-26, bug real reportado en vivo por Ale: "me salieron
+        // dos nombres, selecciono uno y me muestra la misma foto"). Desde que una carta
+        // compartida entre Deluxe y su expansion original genera DOS entradas de catalogo
+        // -- mismo id, distinta expansion -- el desplegable mostraba dos opciones que parecian
+        // cartas distintas pero apuntaban al MISMO carton, asi que las dos abrian la misma
+        // imagen. Aca se deja una sola por id. Si ya hay una expansion elegida, el filtro de
+        // arriba ya dejo la entrada de ESA expansion, asi que se conserva la correcta.
+        // La version de fondo oscuro de Deluxe NO se pierde: es otro id (_01), entrada aparte.
+        // Preferir la entrada con la expansion ORIGINAL (2026-09-29, reportado por Ale con Zeraora:
+        // salian dos "Deluxe Pack" iguales y no aparecia la expansion original). Si ya se eligio
+        // Deluxe como expansion, la base no esta en la lista y la copia de Deluxe se conserva.
+        const idsConOriginal = new Set(porElemento.filter(c => !c.extra).map(c => c.id));
+        const sinCopiasDeluxe = porElemento.filter(c => !(c.extra && idsConOriginal.has(c.id)));
+        const vistosAutocomplete = new Set();
+        const todasCoincidencias = (focused ? sinCopiasDeluxe.filter(c => c.nombre.toLowerCase().includes(focused)) : sinCopiasDeluxe)
+            .filter(c => !vistosAutocomplete.has(c.id) && vistosAutocomplete.add(c.id));
+        // Discord solo deja mostrar 25 sugerencias (2026-09-29, reportado por Ale: "solo me
+        // aparecen unos cuantos"). Si hay mas, la primera opcion abre la lista COMPLETA paginada.
+        const hayMas = focused && todasCoincidencias.length > 25;
+        const coincidencias = todasCoincidencias
+            .slice(0, hayMas ? 24 : 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
+        if (hayMas) {
+            coincidencias.unshift({ name: `🔎 Show all ${todasCoincidencias.length} results for "${campoFocus.value.trim()}"`.slice(0, 100), value: `${PREFIJO_BUSQUEDA_CARTA}${campoFocus.value.trim()}`.slice(0, 100) });
+        }
         return interaction.respond(coincidencias).catch(() => {});
     }
 
@@ -8811,6 +10487,7 @@ client.on('interactionCreate', async interaction => {
             return await interaction.reply({ content: `❌ This command only works in <#${rowCardAllRelease.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply();
+        await avisarCargandoCartas(interaction);
         try {
             const releaseElegido = interaction.options.getString('release');
             const { cartas } = await FUENTES_CARTAS.allcards.obtenerCartas(interaction.user.id);
@@ -8839,6 +10516,7 @@ client.on('interactionCreate', async interaction => {
             return await interaction.reply({ content: `❌ This command only works in <#${rowCardAll.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply();
+        await avisarCargandoCartas(interaction);
         try {
             const expansionElegida = interaction.options.getString('expansion');
             const rarezaElegida = interaction.options.getString('rarity');
@@ -8891,8 +10569,19 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferReply();
         try {
             const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
-            const carta = (cartas || []).find(c => c.id === cartaId);
-            if (!carta) return await interaction.editReply({ content: '❌ Card not found.' });
+            // Busqueda por texto (2026-09-29): la opcion "Show all N results" del autocompletado, o
+            // un nombre escrito a mano sin elegir sugerencia -> lista COMPLETA paginada.
+            const esBusqueda = cartaId.startsWith(PREFIJO_BUSQUEDA_CARTA);
+            const cartaExacta = esBusqueda ? null : (cartas || []).find(c => c.id === cartaId);
+            if (!cartaExacta) {
+                const texto = esBusqueda ? cartaId.slice(PREFIJO_BUSQUEDA_CARTA.length) : cartaId;
+                const resultados = buscarCartasPorTexto(cartas, texto);
+                if (!resultados.length) return await interaction.editReply({ content: `❌ No card found for "${texto}".` });
+                if (resultados.length > 1) return await interaction.editReply(construirListaBusquedaCartas(resultados, texto, 0));
+                const unica = resultados[0];
+                return await interaction.editReply(await construirEmbedDetalleCarta(unica.id, unica.nombre, rutaMasterPath, null, interaction.guild));
+            }
+            const carta = cartaExacta;
             const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild);
             await interaction.editReply(payload);
         } catch (error) {
@@ -8909,6 +10598,27 @@ client.on('interactionCreate', async interaction => {
         // si ya pasó el intervalo de inactividad -- eso solo debe pasar al correr
         // el comando "pelado" (/card sin opciones, ver ejecutarComandoEnCanal).
         return;
+    }
+
+    // Paginas y seleccion de la lista completa de busqueda de /card (2026-09-29).
+    if (interaction.isButton() && interaction.customId.startsWith('cardsearch_pag::')) {
+        const [, paginaTxt, ...resto] = interaction.customId.split('::');
+        const texto = resto.join('::');
+        await interaction.deferUpdate();
+        const { cartas } = await obtenerTodasLasCartasCacheadas();
+        return await interaction.editReply(construirListaBusquedaCartas(buscarCartasPorTexto(cartas, texto), texto, parseInt(paginaTxt, 10) || 0));
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('cardsearch_sel::')) {
+        await interaction.deferUpdate();
+        try {
+            const cartaIdSel = interaction.values[0];
+            const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
+            const carta = (cartas || []).find(c => c.id === cartaIdSel);
+            return await interaction.editReply(await construirEmbedDetalleCarta(cartaIdSel, carta?.nombre || cartaIdSel, rutaMasterPath, null, interaction.guild));
+        } catch (error) {
+            console.error('DEBUG: error mostrando la carta elegida en la busqueda:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this card. Try again.', embeds: [], components: [] });
+        }
     }
 
     if (interaction.isAutocomplete() && interaction.commandName === 'goldcards') {
@@ -8949,7 +10659,22 @@ client.on('interactionCreate', async interaction => {
         // sugeria nombres de Pokemon comunes que no son Item para nada).
         const elementoElegido = interaction.options.getString('element');
         const porElemento = elementoElegido ? porExpansion.filter(c => c.elemento === elementoElegido) : porExpansion;
-        const coincidencias = (focused ? porElemento.filter(c => c.nombre.toLowerCase().includes(focused)) : porElemento)
+        // Sin repetir el mismo id (2026-09-26, bug real reportado en vivo por Ale: "me salieron
+        // dos nombres, selecciono uno y me muestra la misma foto"). Desde que una carta
+        // compartida entre Deluxe y su expansion original genera DOS entradas de catalogo
+        // -- mismo id, distinta expansion -- el desplegable mostraba dos opciones que parecian
+        // cartas distintas pero apuntaban al MISMO carton, asi que las dos abrian la misma
+        // imagen. Aca se deja una sola por id. Si ya hay una expansion elegida, el filtro de
+        // arriba ya dejo la entrada de ESA expansion, asi que se conserva la correcta.
+        // La version de fondo oscuro de Deluxe NO se pierde: es otro id (_01), entrada aparte.
+        // Preferir la entrada con la expansion ORIGINAL (2026-09-29, reportado por Ale con Zeraora:
+        // salian dos "Deluxe Pack" iguales y no aparecia la expansion original). Si ya se eligio
+        // Deluxe como expansion, la base no esta en la lista y la copia de Deluxe se conserva.
+        const idsConOriginal = new Set(porElemento.filter(c => !c.extra).map(c => c.id));
+        const sinCopiasDeluxe = porElemento.filter(c => !(c.extra && idsConOriginal.has(c.id)));
+        const vistosAutocomplete = new Set();
+        const coincidencias = (focused ? sinCopiasDeluxe.filter(c => c.nombre.toLowerCase().includes(focused)) : sinCopiasDeluxe)
+            .filter(c => !vistosAutocomplete.has(c.id) && vistosAutocomplete.add(c.id))
             .slice(0, 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
         return interaction.respond(coincidencias).catch(() => {});
@@ -9087,7 +10812,22 @@ client.on('interactionCreate', async interaction => {
         // sugeria nombres de Pokemon comunes que no son Item para nada).
         const elementoElegido = interaction.options.getString('element');
         const porElemento = elementoElegido ? porExpansion.filter(c => c.elemento === elementoElegido) : porExpansion;
-        const coincidencias = (focused ? porElemento.filter(c => c.nombre.toLowerCase().includes(focused)) : porElemento)
+        // Sin repetir el mismo id (2026-09-26, bug real reportado en vivo por Ale: "me salieron
+        // dos nombres, selecciono uno y me muestra la misma foto"). Desde que una carta
+        // compartida entre Deluxe y su expansion original genera DOS entradas de catalogo
+        // -- mismo id, distinta expansion -- el desplegable mostraba dos opciones que parecian
+        // cartas distintas pero apuntaban al MISMO carton, asi que las dos abrian la misma
+        // imagen. Aca se deja una sola por id. Si ya hay una expansion elegida, el filtro de
+        // arriba ya dejo la entrada de ESA expansion, asi que se conserva la correcta.
+        // La version de fondo oscuro de Deluxe NO se pierde: es otro id (_01), entrada aparte.
+        // Preferir la entrada con la expansion ORIGINAL (2026-09-29, reportado por Ale con Zeraora:
+        // salian dos "Deluxe Pack" iguales y no aparecia la expansion original). Si ya se eligio
+        // Deluxe como expansion, la base no esta en la lista y la copia de Deluxe se conserva.
+        const idsConOriginal = new Set(porElemento.filter(c => !c.extra).map(c => c.id));
+        const sinCopiasDeluxe = porElemento.filter(c => !(c.extra && idsConOriginal.has(c.id)));
+        const vistosAutocomplete = new Set();
+        const coincidencias = (focused ? sinCopiasDeluxe.filter(c => c.nombre.toLowerCase().includes(focused)) : sinCopiasDeluxe)
+            .filter(c => !vistosAutocomplete.has(c.id) && vistosAutocomplete.add(c.id))
             .slice(0, 25)
             .map(c => ({ name: `${c.nombre} — ${c.expansion} (${c.categoria})`.slice(0, 100), value: c.id }));
         return interaction.respond(coincidencias).catch(() => {});
@@ -9103,6 +10843,7 @@ client.on('interactionCreate', async interaction => {
             return await interaction.reply({ content: `❌ This command only works in <#${rowWishlistRelease.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply();
+        await avisarCargandoCartas(interaction);
         try {
             const releaseElegido = interaction.options.getString('release');
             const { cartas, rutaMasterPath, mapaCopias } = await FUENTES_CARTAS.wishlist.obtenerCartas();
@@ -9126,6 +10867,7 @@ client.on('interactionCreate', async interaction => {
             return await interaction.reply({ content: `❌ This command only works in <#${rowWishlist.canal_id}>.`, ephemeral: true });
         }
         await interaction.deferReply();
+        await avisarCargandoCartas(interaction);
         try {
             const expansionElegida = interaction.options.getString('expansion');
             const rarezaElegida = interaction.options.getString('rarity');
@@ -9164,6 +10906,7 @@ client.on('interactionCreate', async interaction => {
         // Pública (no ephemeral) por el mismo motivo que en /card: un ephemeral
         // no queda en el historial y no se ve en otro dispositivo.
         await interaction.deferReply();
+        await avisarCargandoCartas(interaction);
         try {
             const { cartas, rutaMasterPath } = await FUENTES_CARTAS.wishlist.obtenerCartas();
             const carta = (cartas || []).find(c => c.id === cartaId);
@@ -9201,7 +10944,7 @@ client.on('interactionCreate', async interaction => {
             // Cards/Wishlist/Extract XML/Auto Trade/etc. para no mezclarlos.
             const filaOtroComando = await db.get(
                 `SELECT tipo FROM configs_canales WHERE discord_id = ? AND canal_id = ? AND tipo LIKE 'cmd_%' AND tipo != 'cmd_setup'`,
-                [interaction.user.id, interaction.channelId]
+                [interaction.guildId, interaction.channelId]
             );
             if (filaOtroComando) {
                 return await interaction.reply({ content: `❌ This command only works in <#${rowSetup.canal_id}>, or in a channel without its own assigned command.`, ephemeral: true });
@@ -9319,7 +11062,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isAutocomplete() && interaction.commandName === 'webhook') {
         const focused = interaction.options.getFocused().trim().toLowerCase();
-        const webhooksReales = await obtenerWebhooksReales(interaction.user.id);
+        const webhooksReales = await obtenerWebhooksReales(interaction.guildId);
         const coincidencias = webhooksReales
             .filter(w => !focused || etiquetaTipoWebhook(w.tipo).toLowerCase().includes(focused))
             .slice(0, 25)
@@ -9374,7 +11117,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         await interaction.deferReply({ ephemeral: true });
-        const panel = await construirPanelListaWebhooks(interaction.user.id);
+        const panel = await construirPanelListaWebhooks(interaction.guildId);
 
         if (rowWebhook) {
             // Mismo criterio que /setup y /embed: panel público editado in
@@ -9423,10 +11166,479 @@ client.on('interactionCreate', async interaction => {
         return await interaction.showModal(modalFeedback);
     }
 
+    // Boton Start: corre el farmeo de verdad, tanda por tanda, hasta completar los tickets
+    // que queden del dia. Cada tanda abre N instancias EN PARALELO, inyecta N cuentas nuevas
+    // sorteadas, espera el arranque, da el like y cierra todo.
+    if (interaction.isButton() && interaction.customId.startsWith('farmtickets_start::')) {
+        await interaction.deferUpdate();
+        const [, friendIdRun, instanciasTxt] = interaction.customId.split('::');
+        const porTanda = Math.max(1, Math.min(parseInt(instanciasTxt, 10) || 1, FARM_TICKETS_MAX_INSTANCIAS));
+
+        const idsRun = await idsFarmRegistrados(interaction.guildId);
+        const aliasRun = (idsRun.find(f => f.friend_id === friendIdRun) || {}).alias || formatearFriendId(friendIdRun);
+
+        // Que instancias usar: las primeras N que no sean Main. Main se excluye siempre porque
+        // es la cuenta principal del usuario, no una cuenta desechable de farmeo.
+        const todasInst = (obtenerInstanciasMuMu() || []).filter(i => i.name !== 'Main');
+        if (todasInst.length < porTanda) {
+            const embedErr = new EmbedBuilder().setTitle('🎟️ Farm Shop Tickets').setColor(0xE74C3C)
+                .setDescription('❌ Only ' + todasInst.length + ' instance(s) available (Main excluded), but ' + porTanda + ' were requested.');
+            return await interaction.editReply({ embeds: [embedErr], components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary))] });
+        }
+        const indicesRun = todasInst.slice(0, porTanda).map(i => i.index);
+
+        const lineasProgreso = [];
+        const pintar = async (estado) => {
+            const embed = new EmbedBuilder().setTitle('🎟️ Farm Shop Tickets').setColor(0xF0A93A)
+                .setDescription('**' + aliasRun + '**\n\n' + lineasProgreso.join('\n') + (estado ? '\n\n' + estado : ''));
+            try { await interaction.editReply({ embeds: [embed], components: [] }); } catch (e) { /* mensaje ya editado por otra via */ }
+        };
+
+        try {
+            let conseguidos = 0;
+            let ronda = 0;
+            while (true) {
+                const hechos = await ticketsFarmeadosHoy(friendIdRun);
+                const restantes = FARM_TICKETS_MAX_DIARIO - hechos;
+                if (restantes <= 0) break;
+
+                const pool = await cuentasPoolFarmTickets();
+                const usadas = await cuentasYaUsadasParaId(friendIdRun);
+                const cuantas = Math.min(porTanda, restantes);
+                const cuentas = sortearCuentasFarm(pool, usadas, cuantas);
+                if (cuentas.length < cuantas) {
+                    lineasProgreso.push('⚠️ Ran out of unused accounts for this profile.');
+                    break;
+                }
+
+                ronda++;
+                lineasProgreso.push('**Round ' + ronda + '** — ' + cuentas.length + ' instance(s)');
+                await pintar('⏳ Starting...');
+
+                const res = await correrTandaFarmTickets(indicesRun.slice(0, cuentas.length), cuentas, friendIdRun,
+                    (txt) => { pintar('⏳ ' + txt); });
+
+                let okRonda = 0;
+                for (const r of res) {
+                    if (r.ok) {
+                        // Solo aca se quema la cuenta, y solo con el like YA confirmado.
+                        await registrarLikeDado(r.cuenta, friendIdRun);
+                        okRonda++;
+                    } else {
+                        lineasProgreso.push('   ❌ `' + r.cuenta + '` — ' + r.motivo);
+                    }
+                }
+                conseguidos += okRonda;
+                lineasProgreso.push('   ✅ ' + okRonda + '/' + res.length + ' ticket(s) claimed');
+                if (okRonda > 0) await guardarTandaFarm(friendIdRun, okRonda);
+                if (okRonda === 0) {
+                    lineasProgreso.push('⚠️ Stopped: no ticket was claimed this round.');
+                    break;
+                }
+            }
+
+            // Cierre al final de la run entera, no por tanda (pedido de Ale).
+            for (const idx of indicesRun) {
+                try { apagarInstanciaMuMu(idx); } catch (e) { /* una que no cierre no bloquea al resto */ }
+            }
+            lineasProgreso.push('');
+            lineasProgreso.push('🎟️ **' + conseguidos + '** ticket(s) claimed in total.');
+            await pintar(null);
+            const embedFin = new EmbedBuilder().setTitle('🎟️ Farm Shop Tickets')
+                .setColor(conseguidos > 0 ? 0x57F287 : 0xE74C3C)
+                .setDescription('**' + aliasRun + '**\n\n' + lineasProgreso.join('\n'));
+            return await interaction.editReply({ embeds: [embedFin], components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary))] });
+        } catch (error) {
+            console.error('DEBUG: error farmeando tickets:', error?.message || error);
+            const embedErr = new EmbedBuilder().setTitle('🎟️ Farm Shop Tickets').setColor(0xE74C3C)
+                .setDescription('❌ Something went wrong: ' + (error?.message || 'unknown error') + '\n\n' + lineasProgreso.join('\n'));
+            return await interaction.editReply({ embeds: [embedErr], components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary))] });
+        }
+    }
+
+    // ============ Farm Shop Tickets (2026-09-26) ============
+    // Panel para farmear tickets de tienda dando likes a las galerias publicas.
+    // El canal ya existia sincronizado con el tipo 'farm-shop-tickets' (no 'cmd_*' como los
+    // demas comandos), asi que se usa ese mismo tipo en vez de crear uno nuevo -- de lo
+    // contrario habria que pedirle al usuario que vuelva a sincronizar canales sin motivo.
+    if (interaction.isChatInputCommand() && interaction.commandName === 'farmtickets') {
+        const rowFarm = await obtenerCanalComando(interaction.guildId, 'farm-shop-tickets');
+        if (!rowFarm) {
+            return await interaction.reply({ content: '❌ No channel synced for **Farm Shop Tickets**. Use **Sync Channels** first.', ephemeral: true });
+        }
+        if (interaction.channelId !== rowFarm.canal_id) {
+            return await interaction.reply({ content: `❌ This command only works in <#${rowFarm.canal_id}>.`, ephemeral: true });
+        }
+        await interaction.deferReply();
+        try {
+            return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        } catch (error) {
+            console.error('DEBUG: error abriendo el panel de Farm Shop Tickets:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not open the panel. Try again.' });
+        }
+    }
+
+    // Agregar una cuenta: modal con el friend ID y un alias opcional.
+    if (interaction.isButton() && interaction.customId === 'farmtickets_agregar_id') {
+        const modal = new ModalBuilder().setCustomId('farmtickets_modal_agregar').setTitle('Add account');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('friend_id').setLabel('Friend ID').setPlaceholder('1234567812345678')
+                    .setStyle(TextInputStyle.Short).setRequired(true).setMinLength(10).setMaxLength(25)
+            ),
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('alias').setLabel('Name (optional)').setPlaceholder('Main account')
+                    .setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(40)
+            )
+        );
+        return await interaction.showModal(modal);
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === 'farmtickets_modal_agregar') {
+        // Se guarda solo con digitos: el juego muestra el ID con guiones pero lo PIDE sin
+        // ellos ("Enter numbers only without hyphens"), y ademas asi da igual como lo pegue
+        // el usuario.
+        const crudo = interaction.fields.getTextInputValue('friend_id') || '';
+        const friendId = crudo.replace(/\D/g, '');
+        const alias = (interaction.fields.getTextInputValue('alias') || '').trim();
+        if (friendId.length !== 16) {
+            return await interaction.reply({ content: `❌ A friend ID has 16 digits — you entered ${friendId.length}.`, ephemeral: true });
+        }
+        await interaction.deferUpdate();
+        await asegurarTablasFarmTickets();
+        await agregarIdFarm(interaction.guildId, friendId, alias);
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+    }
+
+    if (interaction.isButton() && interaction.customId === 'farmtickets_refrescar') {
+        await interaction.deferUpdate();
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+    }
+
+    if (interaction.isButton() && interaction.customId === 'farmtickets_volver') {
+        await interaction.deferUpdate();
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+    }
+
+    // Quitar una cuenta de la LISTA. El historial de likes no se toca a proposito: si el
+    // usuario la vuelve a agregar, el sistema sigue sabiendo que cuentas ya la trabajaron.
+    // Sin eso, reagregar un ID sortearia cuentas ya usadas y las quemaria sin dar ticket.
+    if (interaction.isButton() && interaction.customId === 'farmtickets_quitar_id') {
+        await interaction.deferUpdate();
+        const ids = await idsFarmRegistrados(interaction.guildId);
+        if (!ids.length) return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId('farmtickets_confirmar_quitar')
+            .setPlaceholder('Which account do you want to remove?')
+            .addOptions(ids.slice(0, 25).map(f => ({
+                label: (f.alias || formatearFriendId(f.friend_id)).slice(0, 100),
+                description: formatearFriendId(f.friend_id).slice(0, 100),
+                value: f.friend_id
+            })));
+        const embed = new EmbedBuilder()
+            .setTitle('🗑️ Remove account')
+            .setColor(0xF0A93A)
+            .setDescription('This only removes it from the list.\n\n**Its like history is kept**, so if you add it back later the bot still knows which accounts already liked it and won\'t waste them again.');
+        return await interaction.editReply({ embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary))
+        ] });
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === 'farmtickets_confirmar_quitar') {
+        await interaction.deferUpdate();
+        await quitarIdFarm(interaction.guildId, interaction.values[0]);
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+    }
+
+    // Elegido el perfil, se pasa a elegir cuantas instancias.
+    if (interaction.isStringSelectMenu() && interaction.customId === 'farmtickets_elegir_id') {
+        await interaction.deferUpdate();
+        const friendId = interaction.values[0];
+        const ids = await idsFarmRegistrados(interaction.guildId);
+        const alias = (ids.find(f => f.friend_id === friendId) || {}).alias;
+        return await interaction.editReply(await construirPanelInstanciasFarm(friendId, alias));
+    }
+
+    // Elegidas las instancias: confirmacion con el desglose de tandas antes de arrancar.
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('farmtickets_elegir_instancias::')) {
+        await interaction.deferUpdate();
+        try {
+            const friendId = interaction.customId.split('::')[1];
+            const instancias = parseInt(interaction.values[0], 10) || 1;
+            const ids = await idsFarmRegistrados(interaction.guildId);
+            const alias = (ids.find(f => f.friend_id === friendId) || {}).alias;
+            const hechos = await ticketsFarmeadosHoy(friendId);
+            const restantes = FARM_TICKETS_MAX_DIARIO - hechos;
+            const pool = await cuentasPoolFarmTickets();
+            const usadas = await cuentasYaUsadasParaId(friendId);
+            const libres = pool.filter(c => !usadas.has(c)).length;
+
+            if (libres < restantes) {
+                const embed = new EmbedBuilder().setTitle('🎟️ Farm Shop Tickets').setColor(0xE74C3C)
+                    .setDescription(`❌ Only **${libres}** account(s) left that never liked **${alias || formatearFriendId(friendId)}**, but **${restantes}** ticket(s) are still claimable.\n\nAdd more accounts, or farm a different profile.`);
+                return await interaction.editReply({ embeds: [embed], components: [new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary))] });
+            }
+
+            const tandas = planTandasFarm(instancias, restantes);
+            const embed = new EmbedBuilder().setTitle('🎟️ Farm Shop Tickets').setColor(0xF0A93A);
+            let desc = `**${alias || formatearFriendId(friendId)}**\n`
+                + `🎟️ ${restantes} ticket(s) to claim · 🖥️ ${instancias} instance(s) at a time\n\n`
+                + `**Plan:** ${tandas.map((n, i) => `round ${i + 1} → ${n}`).join(' · ')}\n`;
+            // Aviso pedido por Ale: que quede claro que con menos instancias NO se pierden
+            // tickets, solo se tarda mas -- el bot repite tandas hasta completarlos.
+            if (instancias < restantes) {
+                desc += `\n⚠️ With **${instancias}** instance(s) this takes **${tandas.length} rounds**. `
+                    + `You won't lose any ticket — the bot reopens the instances with new accounts until all **${restantes}** are claimed. It just takes longer.`;
+            }
+            desc += `\n\nEach round uses **new random accounts** that never liked this profile before.`;
+            embed.setDescription(desc);
+            return await interaction.editReply({ embeds: [embed], components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`farmtickets_start::${friendId}::${instancias}`).setLabel('▶️ Start').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary))] });
+        } catch (error) {
+            console.error('DEBUG: error en la confirmacion de Farm Shop Tickets:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Something went wrong. Try again.', embeds: [], components: [] });
+        }
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === 'transfers') {
+        const rowTrading = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
+        if (!rowTrading) {
+            return await interaction.reply({ content: '❌ No channel synced for **Trading**. Use **Sync Channels** first.', ephemeral: true });
+        }
+        if (interaction.channelId !== rowTrading.canal_id) {
+            return await interaction.reply({ content: `❌ This command only works in <#${rowTrading.canal_id}>.`, ephemeral: true });
+        }
+        await interaction.deferReply();
+        return await interaction.editReply(await construirEmbedTransferencias(interaction.user.id, 0, interaction.guild));
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('transfers_pag::')) {
+        const [, duenio, paginaTxt] = interaction.customId.split('::');
+        if (interaction.user.id !== duenio) {
+            return await interaction.reply({ content: '❌ Only the person who ran /transfers can change the page.', ephemeral: true });
+        }
+        await interaction.deferUpdate();
+        return await interaction.editReply(await construirEmbedTransferencias(duenio, parseInt(paginaTxt, 10) || 0, interaction.guild));
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === 'shinedust') {
+        const rowShinedust = await obtenerCanalComando(interaction.guildId, 'shinedust');
+        if (!rowShinedust) {
+            return await interaction.reply({ content: '❌ No channel synced for **Shinedust**. Use **Sync Channels** first.', ephemeral: true });
+        }
+        if (interaction.channelId !== rowShinedust.canal_id) {
+            return await interaction.reply({ content: `❌ This command only works in <#${rowShinedust.canal_id}>.`, ephemeral: true });
+        }
+        await interaction.deferReply();
+        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+        const resultados = buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url);
+        return await interaction.editReply(construirEmbedShinedust(resultados, 0));
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('shinedust_reporte::')) {
+        const pagina = parseInt(interaction.customId.split('::')[1], 10) || 0;
+        await interaction.deferUpdate();
+        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+        const resultados = buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url);
+        return await interaction.editReply(construirEmbedShinedust(resultados, pagina));
+    }
+
+    // "Track Shinedust" (2026-09-16, a pedido explicito del usuario): elegir una cuenta de
+    // la pagina actual del reporte de /shinedust para leerla EN VIVO por OCR (mismo motor
+    // de siempre, ejecutarCountShinedust) y comparar contra el valor guardado -- con foto
+    // de evidencia antes de ofrecer actualizar el JSON.
+    if (interaction.isButton() && interaction.customId.startsWith('shinedust_track_select::')) {
+        const pagina = parseInt(interaction.customId.split('::')[1], 10) || 0;
+        await interaction.deferReply({ ephemeral: true });
+        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+        const resultados = buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url);
+        if (!resultados || !resultados.length) {
+            return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.' });
+        }
+        const inicio = pagina * SHINEDUST_POR_PAGINA;
+        const items = resultados.slice(inicio, inicio + SHINEDUST_POR_PAGINA);
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`shinedust_track_cuenta::${pagina}`.slice(0, 100))
+            .setPlaceholder('Select an account')
+            .addOptions(items.slice(0, 25).map(r => ({
+                label: r.nombreCuenta.slice(0, 100),
+                description: `Saved: ${r.valor.toLocaleString('en-US')}`.slice(0, 100),
+                value: r.archivoJson.slice(0, 100)
+            })));
+        return await interaction.editReply({ content: 'Which account do you want to track live?', components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_track_cuenta::')) {
+        const archivoJson = interaction.values[0];
+        const instancias = obtenerInstanciasMuMu();
+        if (instancias === null) {
+            return await interaction.update({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+        }
+        if (!instancias.length) {
+            return await interaction.update({ content: '❌ No MuMuPlayer instances found.', components: [] });
+        }
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`shinedust_track_instancia::${archivoJson}`.slice(0, 100))
+            .setPlaceholder('Select an instance')
+            .addOptions(instancias.slice(0, 25).map(i => ({
+                label: `${i.index}. ${i.name}`.slice(0, 100),
+                description: i.is_android_started ? 'On' : 'Off',
+                value: `${i.index}::${i.name}`
+            })));
+        return await interaction.update({ content: 'Which instance do you want to run the check on?', components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
+    // Boton "Retry" del flujo de Track Shinedust, mismo patron que botonReintentarShinedust.
+    function botonReintentarTrackShinedust(archivoJson, index, nombre) {
+        return new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`shinedust_track_retry::${archivoJson}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+        );
+    }
+
+    // Version liviana de ejecutarFlujoShinedust: mismos pasos (prender, arreglar ventana,
+    // inyectar, esperar menu, leer OCR), pero al final solo reporta el numero de Shinedust
+    // + la foto de evidencia que _CountShinedust.ahk ya guarda sola (nunca se borra, ver
+    // shinedustScreenshotFile en el .ahk) -- sin PDF, sin el resto del inventario, y con
+    // botones para confirmar si se actualiza el valor guardado en el JSON o no.
+    async function ejecutarFlujoTrackShinedust(interaction, archivoJson, index, nombre) {
+        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+        const rutaJsonCuentas = rutaJsonCfg?.webhook_url;
+        const rutaArchivoJson = rutaJsonCuentas ? path.join(rutaJsonCuentas, archivoJson) : null;
+        const datosJsonActual = rutaArchivoJson ? leerJsonSeguro(rutaArchivoJson) : null;
+        if (!datosJsonActual) {
+            return await interaction.followUp({ content: `❌ Could not read \`${archivoJson}\` from the configured JSON Accounts Path.` });
+        }
+        const fileNameXml = datosJsonActual.metadata?.fileName || archivoJson;
+        const valorGuardado = datosJsonActual.metadata?.shinedust?.value;
+
+        const prendida = await asegurarInstanciaEncendida(index);
+        if (!prendida) {
+            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, components: [botonReintentarTrackShinedust(archivoJson, index, nombre)] });
+        }
+        try { await interaction.followUp({ content: `🛠️ Fixing instance **${nombre}**'s window before injecting...`, ephemeral: true }); } catch (e) { /* interaccion puede haber expirado */ }
+        await new Promise((resolve) => ejecutarFixInstanceWindow(nombre, () => resolve()));
+
+        try { await interaction.followUp({ content: `🔄 Injecting \`${fileNameXml}\` into instance **${nombre}**... this may take a couple of minutes.`, ephemeral: true }); } catch (e) { /* interaccion puede haber expirado */ }
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileNameXml);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileNameXml}\` not found. Check the configured **XML Accounts Path**.`, components: [botonReintentarTrackShinedust(archivoJson, index, nombre)] });
+        }
+
+        const { rutaIni, rutaScript } = await obtenerRutasInject(interaction.guildId);
+        try {
+            guardarXmlParaInyeccion(nombre, archivo, rutaIni);
+            actualizarIniInject({ sendFriendRequestAfterInject: '0' }, rutaIni);
+        } catch (e) {
+            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', components: [botonReintentarTrackShinedust(archivoJson, index, nombre)] });
+        }
+
+        ejecutarInyeccionHeadless(async (ok, detalle) => {
+            if (!ok) {
+                try { await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, components: [botonReintentarTrackShinedust(archivoJson, index, nombre)] }); } catch (e) { /* interaccion puede haber expirado */ }
+                return;
+            }
+            ejecutarWaitWelcomeScreens(nombre, async (okWelcome, motivoWelcome) => {
+                if (!okWelcome) {
+                    apagarInstanciaMuMu(index);
+                    try { await interaction.followUp({ content: `❌ Could not reach the main menu after injecting (${motivoWelcome}).`, components: [botonReintentarTrackShinedust(archivoJson, index, nombre)] }); } catch (e) { /* interaccion puede haber expirado */ }
+                    return;
+                }
+                try { await interaction.followUp({ content: `🔍 Reading Shinedust on instance **${nombre}**...`, ephemeral: true }); } catch (e) { /* interaccion puede haber expirado */ }
+
+                ejecutarCountShinedust(nombre, async (okOcr, datosOMotivo) => {
+                    // true = modo liviano (2026-09-16): salta el swipe/segunda captura de
+                    // _CountShinedust.ahk, ya que este flujo solo muestra el numero de
+                    // Shinedust -- ver comentario completo junto a ejecutarCountShinedust.
+                    apagarInstanciaMuMu(index);
+                    try {
+                        if (!okOcr) {
+                            return await interaction.followUp({ content: `❌ Could not read the Shinedust value (${datosOMotivo}).`, components: [botonReintentarTrackShinedust(archivoJson, index, nombre)] });
+                        }
+                        const valorVivoTexto = datosOMotivo.shinedust;
+                        const valorVivo = parseInt(String(valorVivoTexto).replace(/,/g, ''), 10);
+                        const rutaFoto = path.join(__dirname, 'automation', 'Logs', `${nombre}_Shinedust.png`);
+
+                        const nombreCuenta = datosJsonActual.metadata?.accountName || fileNameXml;
+                        const comparacion = (typeof valorGuardado === 'number')
+                            ? (valorGuardado === valorVivo ? '✅ Matches the saved value.' : `⚠️ Saved value was **${valorGuardado.toLocaleString('en-US')}**.`)
+                            : 'ℹ️ This account had no saved value yet.';
+                        const payload = {
+                            content: `**${nombreCuenta}** — Live Shinedust: **${Number.isFinite(valorVivo) ? valorVivo.toLocaleString('en-US') : valorVivoTexto}**\n${comparacion}`,
+                            components: (Number.isFinite(valorVivo) && valorVivo !== valorGuardado)
+                                ? [new ActionRowBuilder().addComponents(
+                                    new ButtonBuilder().setCustomId(`shinedust_track_confirmar::${archivoJson}::${valorVivo}`.slice(0, 100)).setLabel('✅ Update saved value').setStyle(ButtonStyle.Success),
+                                    new ButtonBuilder().setCustomId('shinedust_track_cancelar').setLabel('❌ Leave as is').setStyle(ButtonStyle.Secondary)
+                                )]
+                                : []
+                        };
+                        if (fs.existsSync(rutaFoto)) {
+                            payload.files = [new AttachmentBuilder(rutaFoto, { name: 'shinedust_evidence.png' })];
+                        }
+                        await interaction.followUp(payload);
+                    } catch (e) { /* interaccion puede haber expirado */ }
+                }, true);
+            });
+        }, rutaScript);
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_track_instancia::')) {
+        const archivoJson = interaction.customId.replace('shinedust_track_instancia::', '');
+        const [index, nombre] = interaction.values[0].split('::');
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+        await ejecutarFlujoTrackShinedust(interaction, archivoJson, index, nombre);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('shinedust_track_retry::')) {
+        const [, archivoJson, index, nombre] = interaction.customId.split('::');
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+        await ejecutarFlujoTrackShinedust(interaction, archivoJson, index, nombre);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('shinedust_track_confirmar::')) {
+        const [, archivoJson, valorNuevoTexto] = interaction.customId.split('::');
+        const valorNuevo = parseInt(valorNuevoTexto, 10);
+        await interaction.deferUpdate();
+        const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+        const rutaArchivoJson = rutaJsonCfg?.webhook_url ? path.join(rutaJsonCfg.webhook_url, archivoJson) : null;
+        const datosJson = rutaArchivoJson ? leerJsonSeguro(rutaArchivoJson) : null;
+        if (!datosJson || !rutaArchivoJson) {
+            return await interaction.editReply({ content: '❌ Could not find that account\'s JSON file anymore.', components: [] });
+        }
+        const valorAnterior = datosJson.metadata?.shinedust?.value;
+        try {
+            if (!datosJson.metadata) datosJson.metadata = {};
+            if (!datosJson.metadata.shinedust) datosJson.metadata.shinedust = {};
+            datosJson.metadata.shinedust.value = valorNuevo;
+            fs.writeFileSync(rutaArchivoJson, JSON.stringify(datosJson, null, 4));
+        } catch (e) {
+            console.error('DEBUG: error actualizando el JSON de Shinedust:', e?.message || e);
+            return await interaction.editReply({ content: `❌ Could not update the JSON file (${e?.message || e}).`, components: [] });
+        }
+        return await interaction.editReply({
+            content: `✅ Updated: ${typeof valorAnterior === 'number' ? valorAnterior.toLocaleString('en-US') : '?'} → ${valorNuevo.toLocaleString('en-US')}`,
+            components: []
+        });
+    }
+
+    if (interaction.isButton() && interaction.customId === 'shinedust_track_cancelar') {
+        await interaction.deferUpdate();
+        return await interaction.editReply({ content: '↩️ Left as is — the saved value was not changed.', components: [] });
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('webhook_seleccionar')) {
         await interaction.deferUpdate();
         const tipo = interaction.values[0];
-        const panel = await construirPanelDetalleWebhook(interaction.user.id, tipo);
+        const panel = await construirPanelDetalleWebhook(interaction.guildId, tipo);
         if (!panel) return await interaction.editReply({ content: '❌ Webhook not found.', embeds: [], components: [] });
         return await interaction.editReply(panel);
     }
@@ -9434,7 +11646,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isStringSelectMenu() && interaction.customId === 'setup_remove_friend_select') {
         await interaction.deferUpdate();
         const friendId = interaction.values[0];
-        const { rutaIni: rutaIniQuitarFriend } = await obtenerRutasInject(interaction.user.id);
+        const { rutaIni: rutaIniQuitarFriend } = await obtenerRutasInject(interaction.guildId);
         quitarFriend(friendId, rutaIniQuitarFriend);
         const friendsRestantes = parsearListaFriends(rutaIniQuitarFriend);
         return await interaction.editReply(construirPayloadStatusFriends(friendsRestantes));
@@ -9442,7 +11654,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isButton() && interaction.customId === 'webhook_volver') {
         await interaction.deferUpdate();
-        const panel = await construirPanelListaWebhooks(interaction.user.id);
+        const panel = await construirPanelListaWebhooks(interaction.guildId);
         return await interaction.editReply(panel);
     }
 
@@ -9566,7 +11778,7 @@ client.on('interactionCreate', async interaction => {
             await interaction.deferReply({ ephemeral: true });
             let resultado;
             try {
-                const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+                const { rutaIni } = await obtenerRutasInject(interaction.guildId);
                 resultado = agregarFriend(friendLabel, friendId, rutaIni);
             } catch (e) {
                 return await interaction.editReply({ content: '❌ Could not save the friend to InjectAccount.ini.' });
@@ -9596,7 +11808,7 @@ client.on('interactionCreate', async interaction => {
             await interaction.deferReply({ ephemeral: true });
             let resultado;
             try {
-                const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+                const { rutaIni } = await obtenerRutasInject(interaction.guildId);
                 resultado = agregarFriend(friendLabel, friendId, rutaIni);
             } catch (e) {
                 return await interaction.editReply({ content: '❌ Could not save the friend to InjectAccount.ini.' });
@@ -9627,7 +11839,7 @@ client.on('interactionCreate', async interaction => {
             }
 
             try {
-                const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+                const { rutaIni } = await obtenerRutasInject(interaction.guildId);
                 guardarXmlParaInyeccion(nombre, archivo, rutaIni);
             } catch (e) {
                 return await interaction.editReply({ content: '❌ Could not save the selection to InjectAccount.ini.' });
@@ -9696,7 +11908,7 @@ client.on('interactionCreate', async interaction => {
             if (!fila) return await interaction.editReply({ content: '❌ Webhook not found.', embeds: [], components: [] });
 
             if (!nuevoNombre && !nuevaAvatarUrl) {
-                return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'You didn\'t enter any changes.' }));
+                return await interaction.editReply(await construirPanelDetalleWebhook(interaction.guildId, tipo, { error: 'You didn\'t enter any changes.' }));
             }
 
             const payload = {};
@@ -9713,18 +11925,18 @@ client.on('interactionCreate', async interaction => {
                     });
                     const mime = img.headers['content-type'] || '';
                     if (!mime.startsWith('image/')) {
-                        return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'That URL isn\'t an image. Try another one.' }));
+                        return await interaction.editReply(await construirPanelDetalleWebhook(interaction.guildId, tipo, { error: 'That URL isn\'t an image. Try another one.' }));
                     }
                     payload.avatar = `data:${mime};base64,${Buffer.from(img.data).toString('base64')}`;
                 } catch (e) {
-                    return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Could not download that profile picture. Try another URL.' }));
+                    return await interaction.editReply(await construirPanelDetalleWebhook(interaction.guildId, tipo, { error: 'Could not download that profile picture. Try another URL.' }));
                 }
             }
 
             try {
                 await axios.patch(fila.webhook_url, payload);
             } catch (e) {
-                return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { error: 'Discord rejected the change. Try again.' }));
+                return await interaction.editReply(await construirPanelDetalleWebhook(interaction.guildId, tipo, { error: 'Discord rejected the change. Try again.' }));
             }
 
             // Guardado aparte para poder reaplicar este mismo nombre/foto si el
@@ -9734,7 +11946,7 @@ client.on('interactionCreate', async interaction => {
             if (nuevaAvatarUrl) cambiosGuardar.avatarUrl = nuevaAvatarUrl;
             await guardarPersonalizacionWebhook(interaction.user.id, tipo, cambiosGuardar);
 
-            return await interaction.editReply(await construirPanelDetalleWebhook(interaction.user.id, tipo, { guardado: true }));
+            return await interaction.editReply(await construirPanelDetalleWebhook(interaction.guildId, tipo, { guardado: true }));
         }
 
         if (interaction.customId === 'modal_ruta_raiz') {
@@ -9801,6 +12013,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_expansion_seleccion' || interaction.customId === 'allcards_expansion_seleccion' || interaction.customId === 'goldcards_expansion_seleccion')) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -9835,6 +12048,7 @@ client.on('interactionCreate', async interaction => {
     // directo al collage+dropdown de cartas, nunca llega a este paso.
     if (interaction.isButton() && interaction.customId.match(/^(allcards|goldcards)_grupo_serie_seleccion::([AB])$/)) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const grupoElegido = interaction.customId.split('::')[1];
@@ -9853,6 +12067,7 @@ client.on('interactionCreate', async interaction => {
     // (a diferencia de _grupo_serie_seleccion, que si avanza de paso).
     if (interaction.isButton() && interaction.customId.match(/^(allcards|goldcards)_grupo_serie_ver::([AB])$/)) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const grupoAVer = interaction.customId.split('::')[1];
@@ -9873,6 +12088,7 @@ client.on('interactionCreate', async interaction => {
     // listado plano de expansiones cuando hay 2+ releases distintos.
     if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_grupo_expansion_seleccion' || interaction.customId === 'allcards_grupo_expansion_seleccion' || interaction.customId === 'goldcards_grupo_expansion_seleccion')) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -9891,6 +12107,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isButton() && (interaction.customId === 'wishlist_expansion_ver_todas' || interaction.customId === 'allcards_expansion_ver_todas' || interaction.customId === 'goldcards_expansion_ver_todas')) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -9908,6 +12125,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isButton() && (interaction.customId === 'wishlist_grupo_expansion_volver' || interaction.customId === 'allcards_grupo_expansion_volver' || interaction.customId === 'goldcards_grupo_expansion_volver')) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -9923,8 +12141,89 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
+    // Refresh de la pantalla de categorias de Gold Cards (2026-09-01, a pedido explicito del
+    // usuario): fuerza releer los JSON de cuentas de una en vez de esperar hasta 90s a que el
+    // cache normal (construirMapaCopiasPorCartaCacheado) se refresque solo -- util justo
+    // despues de una corrida nueva, cuando se quiere ver el conteo de Gold actualizado ya.
+    if (interaction.isButton() && interaction.customId.startsWith('goldcards_categorias_refresh::')) {
+        await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
+        try {
+            const expansion = interaction.customId.replace('goldcards_categorias_refresh::', '');
+            _mapaCopiasCacheBot = null;
+            _cartasGoldCacheBot = null;
+            const fuente = FUENTES_CARTAS.goldcards;
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = await construirEmbedCategoriasPorExpansion(cartas || [], expansion, { prefijo: 'goldcards', contexto: fuente.contexto, mapaEmojis });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error refrescando categorias de Gold Cards:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not refresh. Try again.', embeds: [], components: [] });
+        }
+    }
+
+    // Boton "📄 PDF" (2026-09-25, a pedido explicito de Ale). Esta en las dos pantallas -- la
+    // de categorias y la de la lista de cartas -- y respeta los filtros que trae el customId.
+    // El PDF se manda como respuesta EFIMERA aparte (followUp) en vez de reemplazar el mensaje:
+    // asi el usuario no pierde la pantalla en la que estaba navegando.
+    if (interaction.isButton() && /^(wishlist|allcards|goldcards)_pdf::/.test(interaction.customId)) {
+        await interaction.deferReply({ ephemeral: true });
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const partes = interaction.customId.slice(interaction.customId.indexOf('::') + 2).split('::');
+            const expansion = partes[0];
+            const categoria = partes[1] || CATEGORIA_SIN_FILTRO;
+            const elemento = partes[2] || ELEMENTO_SIN_FILTRO;
+            const { cartas, rutaMasterPath } = await fuente.obtenerCartas(interaction.user.id);
+            if (!rutaMasterPath) {
+                return await interaction.editReply({ content: '❌ Data Master Path is not configured, so the card images are not available.' });
+            }
+            const buffer = await generarPdfCatalogoCartas(cartas || [], expansion, { categoria, elemento, rutaMasterPath });
+            if (!buffer) {
+                return await interaction.editReply({ content: '❌ No cards match this filter, so there is nothing to export.' });
+            }
+            // Limite real de Discord para un bot sin boost: 10MB. Si aun asi se pasa, se avisa
+            // en vez de dejar que la API lo rechace con un error generico.
+            if (buffer.length > 9.5 * 1024 * 1024) {
+                return await interaction.editReply({ content: `❌ The PDF came out too large for Discord (${(buffer.length / 1024 / 1024).toFixed(1)}MB). Pick a single category and export it in parts.` });
+            }
+            const nombreArchivo = `${expansion} - ${categoria !== CATEGORIA_SIN_FILTRO ? textoSinEmoji(categoria) : 'All categories'}.pdf`.replace(/[\\/:*?"<>|]/g, '');
+            return await interaction.editReply({
+                content: `📄 **${expansion}** — ${(buffer.length / 1024 / 1024).toFixed(1)}MB`,
+                files: [new AttachmentBuilder(buffer, { name: nombreArchivo })]
+            });
+        } catch (error) {
+            console.error('DEBUG: error generando el PDF del catalogo:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not generate the PDF. Try again.' });
+        }
+    }
+
+    // "View All" de la pantalla de categorias (2026-09-25, a pedido explicito de Ale): muestra
+    // todas las cartas de la expansion sin filtrar por rareza. Mismo destino que el menu de
+    // categorias pero con CATEGORIA_SIN_FILTRO y sin el paso intermedio de elemento -- el
+    // punto del boton es justamente ver todo junto, ya ordenado por rareza de mayor a menor.
+    if (interaction.isButton() && /^(wishlist|allcards|goldcards)_categoria_todas::/.test(interaction.customId)) {
+        await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
+        try {
+            const prefijo = prefijoDeCartas(interaction.customId);
+            const fuente = FUENTES_CARTAS[prefijo];
+            const expansion = interaction.customId.slice(interaction.customId.indexOf('::') + 2);
+            const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const payload = await construirEmbedCartasPorExpansion(cartas || [], expansion, CATEGORIA_SIN_FILTRO, ELEMENTO_SIN_FILTRO, 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias });
+            return await interaction.editReply(payload);
+        } catch (error) {
+            console.error('DEBUG: error en View All de categorias:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not load the cards. Try again.', embeds: [], components: [] });
+        }
+    }
+
     if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_categoria_seleccion' || interaction.customId === 'allcards_categoria_seleccion' || interaction.customId === 'goldcards_categoria_seleccion')) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -9952,6 +12251,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_elemento_seleccion' || interaction.customId === 'allcards_elemento_seleccion' || interaction.customId === 'goldcards_elemento_seleccion')) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -9968,6 +12268,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isButton() && (interaction.customId.startsWith('wishlist_volver_elementos::') || interaction.customId.startsWith('allcards_volver_elementos::') || interaction.customId.startsWith('goldcards_volver_elementos::'))) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -9984,6 +12285,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isButton() && (interaction.customId.startsWith('wishlist_elemento_ver_todas::') || interaction.customId.startsWith('allcards_elemento_ver_todas::') || interaction.customId.startsWith('goldcards_elemento_ver_todas::'))) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -10000,6 +12302,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isStringSelectMenu() && (interaction.customId.startsWith('wishlist_carta_seleccion::') || interaction.customId.startsWith('allcards_carta_seleccion::') || interaction.customId.startsWith('goldcards_carta_seleccion::'))) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -10022,6 +12325,7 @@ client.on('interactionCreate', async interaction => {
     // autocompletado de /card, que tampoco tiene pantalla anterior a la que volver.
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('wishlist_carta_directa_seleccion::')) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const { cartas, rutaMasterPath } = await FUENTES_CARTAS.wishlist.obtenerCartas();
             const cartaId = interaction.values[0];
@@ -10036,6 +12340,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isButton() && (interaction.customId.startsWith('wishlist_volver_carta_lista::') || interaction.customId.startsWith('allcards_volver_carta_lista::') || interaction.customId.startsWith('goldcards_volver_carta_lista::'))) {
         await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
         try {
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
@@ -10081,11 +12386,14 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply({ content: '❌ No account has this card.', components: [] });
         }
 
+        // Cantidad disponible real (JSON - transferencias del historial), 2026-09-28.
+        let transferidasMenu = {};
+        try { transferidasMenu = await transferenciasPorCuenta(cartaId); } catch (e) { /* sin historial, se muestra el JSON */ }
         const menu = new StringSelectMenuBuilder()
             .setCustomId(`card_trade_cuenta::${cartaId}::${friendId}::${modo}`.slice(0, 100))
             .setPlaceholder('Select an account')
             .addOptions(resultados.slice(0, 25).map(r => ({
-                label: `${r.fileName} (x${r.cantidad})`.slice(0, 100),
+                label: `${r.fileName} (x${Math.max(0, r.cantidad - (transferidasMenu[normalizarCuentaTransferencia(r.fileName)] || 0))})`.slice(0, 100),
                 value: r.fileName.replace(/\.xml$/i, '').slice(0, 100)
             })));
         return await interaction.editReply({ content: 'Which account do you want to trade this card from?', components: [new ActionRowBuilder().addComponents(menu)] });
@@ -10213,6 +12521,29 @@ client.on('interactionCreate', async interaction => {
         return await interaction.update({ content: `Which instance do you want to run the check on for \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_inject_cuenta::')) {
+        const [, cartaId] = interaction.customId.split('::');
+        const fileName = interaction.values[0];
+
+        const instancias = obtenerInstanciasMuMu();
+        if (instancias === null) {
+            return await interaction.update({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+        }
+        if (!instancias.length) {
+            return await interaction.update({ content: '❌ No MuMuPlayer instances found.', components: [] });
+        }
+
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`inject_instancia::${cartaId}::${fileName}`.slice(0, 100))
+            .setPlaceholder('Select an instance')
+            .addOptions(instancias.slice(0, 25).map(i => ({
+                label: `${i.index}. ${i.name}`.slice(0, 100),
+                description: i.is_android_started ? 'On' : 'Off',
+                value: `${i.index}::${i.name}`
+            })));
+        return await interaction.update({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_extract_cuenta::')) {
         // No necesita instancia (a diferencia de Trade/Shinedust): Extract XML
         // solo lee los archivos ya guardados en disco y los manda al canal.
@@ -10294,7 +12625,7 @@ client.on('interactionCreate', async interaction => {
         // (misma WiFi), y el tunel publico de Cloudflare si logro levantar
         // (cualquier red -- "no estoy en el mismo wifi", pedido explicito).
         const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson, null, interaction.user.id, fileName);
+        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson, null, interaction.guildId, fileName);
         const puertoActual = DASHBOARD_PORT_ACTUAL || DASHBOARD_PORT_BASE;
         const ipLan = obtenerIpLan();
         let texto = `📋 **Info Accounts — \`${fileName}\`**\n`;
@@ -10345,7 +12676,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
-        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson, datosInventario, interaction.user.id, fileName);
+        const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJson, datosInventario, interaction.guildId, fileName);
         const puertoActual = DASHBOARD_PORT_ACTUAL || DASHBOARD_PORT_BASE;
         const ipLan = obtenerIpLan();
         const paginas = [];
@@ -10478,7 +12809,7 @@ client.on('interactionCreate', async interaction => {
             return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, components: [botonReintentarInfoAccounts(fileName, index, nombre)] });
         }
 
-        const { rutaIni, rutaScript } = await obtenerRutasInject(interaction.user.id);
+        const { rutaIni, rutaScript } = await obtenerRutasInject(interaction.guildId);
         try {
             guardarXmlParaInyeccion(nombre, archivo, rutaIni);
             actualizarIniInject({ sendFriendRequestAfterInject: '0' }, rutaIni);
@@ -10610,6 +12941,25 @@ client.on('interactionCreate', async interaction => {
                 { name: 'Friend ID', value: `\`${friendId}\``, inline: true },
                 { name: 'Account file', value: `\`${fileName}\``, inline: true }
             );
+        // Auditoria de stock (2026-09-28, pedido de Ale): antes de dejar arrancar se revisa el
+        // historial de transferencias de ESTA cuenta con ESTA carta. Si ya no le quedan copias
+        // (las del JSON ya se transfirieron), no hay boton Start y se recomiendan otras cuentas.
+        let auditoria = null;
+        try { auditoria = await auditarStockCarta(fileName, cartaId); } catch (e) { console.error('DEBUG: auditoria de stock fallo:', e?.message || e); }
+        if (auditoria) {
+            const textoAuditoria = auditoria.transferidas === 0
+                ? `✅ No previous transfers of this card from this account.\nAvailable: **x${auditoria.disponible}**`
+                : `This account already transferred this card **${auditoria.transferidas}** time(s).\nIn account: x${auditoria.enJson} − ${auditoria.transferidas} transferred = **x${auditoria.disponible}** available`;
+            embedConfirmacion.addFields({ name: '🔎 Transfer audit', value: textoAuditoria.slice(0, 1024) });
+            if (auditoria.disponible <= 0) {
+                const sugeridas = auditoria.otras.slice(0, 5).map(r => `\`${r.fileName}\` — x${r.disponible}`).join('\n');
+                embedConfirmacion.setColor(0xE74C3C).addFields({
+                    name: '⛔ No copies left in this account',
+                    value: (sugeridas ? `We recommend using another account:\n${sugeridas}` : 'No other account has copies of this card available.').slice(0, 1024)
+                });
+                return await interaction.followUp({ embeds: [embedConfirmacion], files: payloadCartaConfirm.files || [], components: [], ephemeral: true });
+            }
+        }
         const filaStart = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`card_trade_confirmado::${cartaId}::${friendId}::${fileName}::${index}::${nombre}::${modo}`.slice(0, 100)).setLabel('▶️ Start').setStyle(ButtonStyle.Success)
         );
@@ -10648,7 +12998,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.customId.startsWith('mumu_stop_trade::')) {
         const [, index, nombre] = interaction.customId.split('::');
         await interaction.deferUpdate();
-        const { rutaScript } = await obtenerRutasInject(interaction.user.id);
+        const { rutaScript } = await obtenerRutasInject(interaction.guildId);
         // Mata cualquier proceso propio en curso: la inyección Y los pasos de
         // trade (Next Trade/Finalize Trade), que son scripts de AHK separados y
         // podían quedar corriendo/abiertos aunque el usuario ya haya apretado
@@ -10669,7 +13019,7 @@ client.on('interactionCreate', async interaction => {
         matarInstanciasAhkPrevias(RUTA_MAIN_ACCEPT_TRADE_SCRIPT);
         matarInstanciasAhkPrevias(RUTA_DONOR_RESPOND_SCRIPT);
         matarInstanciasAhkPrevias(RUTA_MAIN_FINALIZE_SCRIPT);
-        const rutaMainAhkUsuario = await obtenerRutaMainAhk(interaction.user.id);
+        const rutaMainAhkUsuario = await obtenerRutaMainAhk(interaction.guildId);
         matarInstanciasAhkPrevias(rutaMainAhkUsuario);
         const instanciasStop = obtenerInstanciasMuMu();
         const infoMainStop = (instanciasStop || []).find(i => i.name === 'Main');
@@ -10708,7 +13058,7 @@ client.on('interactionCreate', async interaction => {
             return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, components: [botonReintentarShinedust(cartaId, fileName, index, nombre)] });
         }
 
-        const { rutaIni: rutaIniShinedust, rutaScript: rutaScriptShinedust } = await obtenerRutasInject(interaction.user.id);
+        const { rutaIni: rutaIniShinedust, rutaScript: rutaScriptShinedust } = await obtenerRutasInject(interaction.guildId);
         try {
             guardarXmlParaInyeccion(nombre, archivo, rutaIniShinedust);
             // Shinedust no manda solicitud de amistad -- pero el ini es compartido con
@@ -10783,9 +13133,9 @@ client.on('interactionCreate', async interaction => {
                         // flujo normal de /card (probado, funciona) -- vuelve a preguntar la
                         // cuenta (redundante ya que Shinedust la conoce) pero es confiable.
                         payload.components = [new ActionRowBuilder().addComponents(
-                            // Deshabilitado (2026-08-30, ver comentario completo en el boton
-                            // Trade de construirEmbedDetalleCarta) -- mismo bloqueo total.
-                            new ButtonBuilder().setCustomId(`card_trade::${cartaId}`.slice(0, 100)).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(true),
+                            // Ver tradeHabilitadoEnGuild() -- mismo criterio que el boton
+                            // Trade de construirEmbedDetalleCarta.
+                            new ButtonBuilder().setCustomId(`card_trade::${cartaId}`.slice(0, 100)).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!tradeHabilitadoEnGuild(interaction.guildId)),
                             new ButtonBuilder().setCustomId(`shinedust_result_extract::${cartaId}::${fileName}::${valorOMotivo}`.slice(0, 100)).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
                             new ButtonBuilder().setCustomId(`shinedust_result_info_accounts::${fileName}`.slice(0, 100)).setLabel('📋 Info Accounts').setStyle(ButtonStyle.Secondary)
                         )];
@@ -10880,6 +13230,127 @@ client.on('interactionCreate', async interaction => {
         return;
     }
 
+    // Boton "Retry" para el flujo de Inject (2026-09-15), mismo patron que
+    // botonReintentarShinedust.
+    function botonReintentarInject(cartaId, fileName, index, nombre) {
+        return new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`inject_instancia_retry::${cartaId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+        );
+    }
+
+    // Flujo de Inject (2026-09-15, a pedido explicito del usuario): identico a
+    // ejecutarFlujoShinedust hasta llegar al menu principal despues de inyectar, pero
+    // a diferencia de Shinedust/Trade NO corre OCR/trade despues y NO apaga la
+    // instancia al terminar -- el objetivo es justamente dejarla prendida con la
+    // cuenta ya logueada, lista para que el usuario la abra y la use a mano.
+    async function ejecutarFlujoInject(interaction, cartaId, fileName, index, nombre, marcarProgreso = () => {}) {
+        marcarProgreso();
+        const prendida = await asegurarInstanciaEncendida(index);
+        if (!prendida) {
+            return await interaction.followUp({ content: `❌ Could not turn on instance **${nombre}**.`, components: [botonReintentarInject(cartaId, fileName, index, nombre)] });
+        }
+        marcarProgreso();
+
+        try { await interaction.followUp({ content: `🛠️ Fixing instance **${nombre}**'s window before injecting...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+        await new Promise((resolve) => ejecutarFixInstanceWindow(nombre, () => resolve()));
+        marcarProgreso();
+
+        try { await interaction.followUp({ content: `🔄 Injecting \`${fileName}\` into instance **${nombre}**... this may take a couple of minutes.`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, components: [botonReintentarInject(cartaId, fileName, index, nombre)] });
+        }
+
+        const { rutaIni: rutaIniInject, rutaScript: rutaScriptInject } = await obtenerRutasInject(interaction.guildId);
+        try {
+            guardarXmlParaInyeccion(nombre, archivo, rutaIniInject);
+            // Ini compartido con Trade/Shinedust -- si quedo una solicitud de amistad
+            // activada de un uso anterior, hay que apagarla antes de inyectar.
+            actualizarIniInject({ sendFriendRequestAfterInject: '0' }, rutaIniInject);
+        } catch (e) {
+            return await interaction.followUp({ content: '❌ Could not save the selection to InjectAccount.ini.', components: [botonReintentarInject(cartaId, fileName, index, nombre)] });
+        }
+
+        ejecutarInyeccionHeadless(async (ok, detalle) => {
+            if (!ok) {
+                try { await interaction.followUp({ content: `❌ The injection failed (${detalle}).`, components: [botonReintentarInject(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
+                return;
+            }
+            marcarProgreso();
+
+            ejecutarWaitWelcomeScreens(nombre, async (okWelcome, motivoWelcome) => {
+                marcarProgreso();
+                if (!okWelcome) {
+                    // A diferencia de Shinedust, no se apaga la instancia en el error --
+                    // si la inyeccion en si funciono y solo fallo detectar la pantalla de
+                    // bienvenida, el usuario puede querer revisarla a mano tal cual quedo.
+                    try { await interaction.followUp({ content: `⚠️ Injected \`${fileName}\` into instance **${nombre}**, but could not confirm it reached the main menu (${motivoWelcome}). Check it manually.`, components: [botonReintentarInject(cartaId, fileName, index, nombre)] }); } catch (e) { /* interacción puede haber expirado */ }
+                    return;
+                }
+
+                try {
+                    await interaction.followUp({ content: `✅ \`${fileName}\` injected into instance **${nombre}**. It's ready — open it and the account will already be logged in.`, ephemeral: true });
+                } catch (e) { /* interacción puede haber expirado */ }
+            });
+        }, rutaScriptInject);
+    }
+
+    // Mismo watchdog anti-freeze que ejecutarFlujoShinedustConSupervisor (ver comentario
+    // ahi para el detalle de ambos bugs que motivaron el umbral de 200s).
+    const UMBRAL_WATCHDOG_INJECT_MS = 200000;
+    async function ejecutarFlujoInjectConSupervisor(interaction, cartaId, fileName, index, nombre, intento = 1) {
+        let ultimoProgreso = Date.now();
+        let activo = true;
+        const marcarProgreso = () => { ultimoProgreso = Date.now(); };
+
+        const watchdog = setInterval(async () => {
+            if (!activo || Date.now() - ultimoProgreso < UMBRAL_WATCHDOG_INJECT_MS) return;
+            activo = false;
+            clearInterval(watchdog);
+
+            apagarInstanciaMuMu(index);
+            if (intento >= 3) {
+                const contenido = `⏱️ Instance **${nombre}** got stuck (no progress for ${Math.round(UMBRAL_WATCHDOG_INJECT_MS / 1000)}s) and already auto-retried ${intento - 1} time(s). Try again manually.`;
+                const components = [botonReintentarInject(cartaId, fileName, index, nombre)];
+                try {
+                    await interaction.followUp({ content: contenido, components });
+                } catch (e) {
+                    try {
+                        const usuario = await client.users.fetch(interaction.user.id);
+                        await usuario.send({ content: contenido, components });
+                    } catch (e2) { console.error('DEBUG: no se pudo avisar el freeze de Inject ni por followUp ni por DM:', e2?.message || e2); }
+                }
+                return;
+            }
+            try { await interaction.followUp({ content: `⏱️ Instance **${nombre}** got stuck (no progress for ${Math.round(UMBRAL_WATCHDOG_INJECT_MS / 1000)}s) -- retrying automatically...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+            await ejecutarFlujoInjectConSupervisor(interaction, cartaId, fileName, index, nombre, intento + 1);
+        }, 5000);
+
+        try {
+            await ejecutarFlujoInject(interaction, cartaId, fileName, index, nombre, marcarProgreso);
+        } finally {
+            activo = false;
+            clearInterval(watchdog);
+        }
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('inject_instancia::')) {
+        const [, cartaId, fileName] = interaction.customId.split('::');
+        const [index, nombre] = interaction.values[0].split('::');
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+        await ejecutarFlujoInjectConSupervisor(interaction, cartaId, fileName, index, nombre);
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('inject_instancia_retry::')) {
+        const [, cartaId, fileName, index, nombre] = interaction.customId.split('::');
+        await interaction.update({ content: `🟢 Turning on instance **${nombre}**...`, components: [] });
+        await ejecutarFlujoInjectConSupervisor(interaction, cartaId, fileName, index, nombre);
+        return;
+    }
+
     if (interaction.isChannelSelectMenu() || (interaction.isStringSelectMenu() && interaction.customId === 'select_reset_modulo')) {
         if (!tienePermisosGestion(interaction)) {
             return await interaction.reply({ content: "❌ You don't have permission to change the bot's settings.", ephemeral: true });
@@ -10916,6 +13387,7 @@ client.on('interactionCreate', async interaction => {
             // ephemeral, se queda ephemeral para siempre y solo se ve en el
             // dispositivo que estaba conectado en el momento del click.
             await interaction.deferReply();
+            await avisarCargandoCartas(interaction);
             const { cartas } = await FUENTES_CARTAS.allcards.obtenerCartas();
             if (cartas === null) {
                 return await interaction.editReply({ content: FUENTES_CARTAS.allcards.errorSinDatos });
@@ -10927,6 +13399,7 @@ client.on('interactionCreate', async interaction => {
         if (interaction.customId === 'goldcards_ver_expansiones') {
             // Misma logica que allcards_ver_expansiones -- publica por el mismo motivo.
             await interaction.deferReply();
+            await avisarCargandoCartas(interaction);
             if (!GOOGLE_DRIVE_API_KEY_BOT) {
                 return await interaction.editReply(advertenciaGoldSinApi());
             }
@@ -10958,6 +13431,7 @@ client.on('interactionCreate', async interaction => {
             } else {
                 await interaction.deferUpdate();
             }
+            await avisarCargandoCartas(interaction);
 
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
 
@@ -10981,6 +13455,7 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId.startsWith('wishlist_expansion_pagina_') || interaction.customId.startsWith('allcards_expansion_pagina_') || interaction.customId.startsWith('goldcards_expansion_pagina_')) {
             await interaction.deferUpdate();
+            await avisarCargandoCartas(interaction);
             try {
                 const prefijo = prefijoDeCartas(interaction.customId);
                 const fuente = FUENTES_CARTAS[prefijo];
@@ -11000,6 +13475,7 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId.startsWith('wishlist_volver_categorias::') || interaction.customId.startsWith('allcards_volver_categorias::') || interaction.customId.startsWith('goldcards_volver_categorias::')) {
             await interaction.deferUpdate();
+            await avisarCargandoCartas(interaction);
             try {
                 const prefijo = prefijoDeCartas(interaction.customId);
                 const fuente = FUENTES_CARTAS[prefijo];
@@ -11016,6 +13492,7 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId === 'wishlist_volver_expansiones' || interaction.customId === 'allcards_volver_expansiones' || interaction.customId === 'goldcards_volver_expansiones') {
             await interaction.deferUpdate();
+            await avisarCargandoCartas(interaction);
             const prefijo = prefijoDeCartas(interaction.customId);
             const fuente = FUENTES_CARTAS[prefijo];
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
@@ -11295,7 +13772,7 @@ client.on('interactionCreate', async interaction => {
             const [index, nombre] = interaction.customId.replace('mumu_ejecutar_', '').split('::');
             await interaction.deferReply({ ephemeral: true });
 
-            const { rutaIni: rutaIniEjecutar, rutaScript: rutaScriptEjecutar } = await obtenerRutasInject(interaction.user.id);
+            const { rutaIni: rutaIniEjecutar, rutaScript: rutaScriptEjecutar } = await obtenerRutasInject(interaction.guildId);
             const datosIni = leerIniInject(rutaIniEjecutar);
             if ((datosIni.winTitle || '').trim() !== nombre || !(datosIni.selectedFilePath || '').trim()) {
                 return await interaction.editReply({ content: `❌ First select the XML with the 💠 XML button for instance **${nombre}**.` });
@@ -11409,7 +13886,7 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId.startsWith('mumu_status_')) {
             const [index, nombre] = interaction.customId.replace('mumu_status_', '').split('::');
-            const { rutaIni: rutaIniStatus } = await obtenerRutasInject(interaction.user.id);
+            const { rutaIni: rutaIniStatus } = await obtenerRutasInject(interaction.guildId);
             const payload = construirEmbedStatusInstancia(index, nombre, rutaIniStatus);
             return await interaction.reply({ ...payload, ephemeral: true });
         }
@@ -11440,18 +13917,16 @@ client.on('interactionCreate', async interaction => {
             // deshabilitado, para testear"). En cualquier OTRO servidor (otros usuarios,
             // ej. Naja) se mantiene el default de release de siempre: Friend Trade activo,
             // Main/Aggressive deshabilitados.
-            // Los 3 modos deshabilitados para TODOS los usuarios (2026-08-30, a pedido
-            // explicito del usuario -- "bloquea el acceso de todos los usuarios al boton de
-            // trade... friend trade, main trade, aggressive y gold trade, todito"): el
-            // mecanismo de wishlist/Main Trade sigue en pruebas en vivo (ver
-            // project_pending_tasks #61) -- se bloquea de punta a punta hasta que el usuario
-            // pida reactivarlo para el proximo release.
+            // Ver tradeHabilitadoEnGuild() -- Friend/Main Trade reactivados 2026-09-02 en el
+            // servidor propio del usuario, siguen bloqueados en cualquier otro. Aggressive
+            // se mantiene deshabilitado en todos lados (a pedido explicito del usuario
+            // 2026-07-29: todavia no se probo de punta a punta ni siquiera en el servidor
+            // propio).
+            const tradeHabilitadoAca = tradeHabilitadoEnGuild(interaction.guildId);
             const fila = new ActionRowBuilder().addComponents(
+                // Friend Trade deshabilitado en todos lados (2026-09-29, pedido de Ale); Main Trade activo.
                 new ButtonBuilder().setCustomId(`card_trade_friend::${cartaId}`).setLabel('🤝 Friend Trade').setStyle(ButtonStyle.Secondary).setDisabled(true),
-                new ButtonBuilder().setCustomId(`card_trade_main::${cartaId}`).setLabel('🏠 Main Trade').setStyle(ButtonStyle.Secondary).setDisabled(true),
-                // Deshabilitado a pedido explicito del usuario 2026-07-29: todavia no
-                // esta implementado, se libera en un release futuro. Sigue deshabilitado
-                // incluso en el servidor propio -- no corrio de punta a punta todavia.
+                new ButtonBuilder().setCustomId(`card_trade_main::${cartaId}`).setLabel('🏠 Main Trade').setStyle(ButtonStyle.Secondary).setDisabled(!tradeHabilitadoAca),
                 new ButtonBuilder().setCustomId(`card_trade_agresivo::${cartaId}`).setLabel('⚡ Aggressive Trade').setStyle(ButtonStyle.Secondary).setDisabled(true)
             );
             return await reenviarCartaATrading(interaction, cartaId, null, [fila]);
@@ -11461,6 +13936,8 @@ client.on('interactionCreate', async interaction => {
         // el que reenviarCartaATrading acaba de mandar) -- edita ese mismo
         // mensaje para pedir el amigo, no crea nada nuevo en otro canal.
         if (interaction.customId.startsWith('card_trade_friend::')) {
+            // Friend Trade deshabilitado (2026-09-29): cubre botones viejos que quedaron activos.
+            return await interaction.reply({ content: '❌ Friend Trade is disabled. Use **🏠 Main Trade** instead.', ephemeral: true });
             const cartaId = interaction.customId.replace('card_trade_friend::', '');
             await interaction.deferUpdate();
             return await actualizarConSeleccionFriendId(interaction, cartaId, 'normal', 'friend');
@@ -11479,7 +13956,7 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId.startsWith('card_trade_agresivo::')) {
             const cartaId = interaction.customId.replace('card_trade_agresivo::', '');
-            const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+            const { rutaIni } = await obtenerRutasInject(interaction.guildId);
             const friends = parsearListaFriends(rutaIni);
             if (!friends.length) {
                 return await interaction.update({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup (add Main\'s own friend ID).', components: [] });
@@ -11542,7 +14019,7 @@ client.on('interactionCreate', async interaction => {
             // carta al canal de Trading ya directo con el selector de amigo.
             const cartaId = interaction.customId.replace('goldcards_trade::', '');
             await interaction.deferReply({ ephemeral: true }); // obtenerCartasGoldCacheadas + armar la carta pueden tardar más de 3s
-            const { rutaIni } = await obtenerRutasInject(interaction.user.id);
+            const { rutaIni } = await obtenerRutasInject(interaction.guildId);
             const friends = parsearListaFriends(rutaIni);
             if (!friends.length) {
                 return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.' });
@@ -11550,8 +14027,9 @@ client.on('interactionCreate', async interaction => {
             const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
             const datosGold = mapaCopias ? { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral } : null;
             const menu = new StringSelectMenuBuilder()
-                .setCustomId(`card_trade_friendid::gold::friend::${cartaId}`.slice(0, 100))
-                .setPlaceholder('Select which friend to send the request to')
+                // Modo Main Trade (2026-09-29): Friend Trade quedo deshabilitado.
+                .setCustomId(`card_trade_friendid::gold::main::${cartaId}`.slice(0, 100))
+                .setPlaceholder('Select your Main account')
                 .addOptions(friends.slice(0, 25).map(f => ({
                     label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
                     value: f.id
@@ -11616,6 +14094,52 @@ client.on('interactionCreate', async interaction => {
             const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId) || [];
             const fileNames = resultados.map(r => r.fileName.replace(/\.xml$/i, ''));
             return await interaction.update(construirSelectXmlPaginado(fileNames, cartaId, parseInt(paginaTexto, 10) || 0, 'card_shinedust_cuenta'));
+        }
+
+        if (interaction.customId.startsWith('goldcards_inject::')) {
+            // Misma idea que goldcards_shinedust:: -- entrada separada, comparte el
+            // customId de seleccion (card_inject_cuenta::) con el flujo normal.
+            const cartaId = interaction.customId.replace('goldcards_inject::', '');
+            await interaction.deferReply({ ephemeral: true });
+
+            const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
+            const resultados = mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral) : null;
+            if (resultados === null) {
+                return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.' });
+            }
+            if (!resultados.length) {
+                return await interaction.editReply({ content: `❌ No account has ${umbral}+ copies of this card.` });
+            }
+
+            const items = resultados.map(r => ({ fileName: r.fileName.replace(/\.xml$/i, ''), cantidad: r.cantidad }));
+            return await interaction.editReply(construirSelectXmlPaginado(items, cartaId, 0, 'card_inject_cuenta'));
+        }
+
+        if (interaction.customId.startsWith('card_inject::')) {
+            // Mismo patron que card_shinedust:: (fix 2026-07-29): la lista de
+            // cuentas sale filtrada por buscarXmlPorCarta, solo las que tienen esta carta.
+            const cartaId = interaction.customId.replace('card_inject::', '');
+            await interaction.deferReply({ ephemeral: true });
+
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId);
+            if (resultados === null) {
+                return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.' });
+            }
+            if (!resultados.length) {
+                return await interaction.editReply({ content: '❌ No account has this card.' });
+            }
+
+            const items = resultados.map(r => ({ fileName: r.fileName.replace(/\.xml$/i, ''), cantidad: r.cantidad }));
+            return await interaction.editReply(construirSelectXmlPaginado(items, cartaId, 0, 'card_inject_cuenta'));
+        }
+
+        if (interaction.customId.startsWith('card_inject_cuenta_pag::')) {
+            const [, cartaId, paginaTexto] = interaction.customId.split('::');
+            const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
+            const resultados = buscarXmlPorCarta(rutaJsonCfg?.webhook_url, cartaId) || [];
+            const items = resultados.map(r => ({ fileName: r.fileName.replace(/\.xml$/i, ''), cantidad: r.cantidad }));
+            return await interaction.update(construirSelectXmlPaginado(items, cartaId, parseInt(paginaTexto, 10) || 0, 'card_inject_cuenta'));
         }
 
         if (interaction.customId.startsWith('goldcards_extract::')) {
@@ -11857,8 +14381,16 @@ client.on('interactionCreate', async interaction => {
                 // misma logica en cada lugar nuevo que dispare una descarga.
                 setTimeout(() => process.exit(0), 1500);
             } catch (e) {
-                console.error('DEBUG: error descargando actualización:', e?.message || e);
-                await interaction.editReply({ content: '❌ Could not download the update. Try again later.' });
+                const detalle = describirError(e);
+                console.error('DEBUG: error descargando actualización:', detalle);
+                // Antes esto solo mostraba un mensaje generico sin razon ni salida -- reporte
+                // real 2026-09-02 (usuario "OMO"): fallo dos veces seguidas por Discord sin
+                // dar ninguna pista de por que ni que hacer despues, a diferencia del Panel
+                // (ControlPanel.cs) que ya tiene un boton "Download Manually" para este mismo
+                // caso. Se agrega el detalle real (misma causa tipica: ISP bloqueando el host
+                // de descarga, ver VERSION_URL_RESPALDO mas arriba) y el link de descarga
+                // manual como salida que no depende de la red del bot.
+                await interaction.editReply({ content: `❌ Could not download the update (${detalle}). Try again later, or download it by hand from https://github.com/AleCast09/Pokemon-Monitor-TCGP/releases/latest and replace MonitorPokemon.exe.` });
             }
             return;
         }
@@ -11943,7 +14475,7 @@ client.on('interactionCreate', async interaction => {
 
             case 'setup_status_friends': {
                 await interaction.deferReply({ ephemeral: true });
-                const { rutaIni: rutaIniStatusFriends } = await obtenerRutasInject(interaction.user.id);
+                const { rutaIni: rutaIniStatusFriends } = await obtenerRutasInject(interaction.guildId);
                 const friendsGuardados = parsearListaFriends(rutaIniStatusFriends);
                 await interaction.editReply(construirPayloadStatusFriends(friendsGuardados));
                 break;
@@ -11951,7 +14483,7 @@ client.on('interactionCreate', async interaction => {
 
             case 'setup_remove_friend': {
                 await interaction.deferUpdate();
-                const { rutaIni: rutaIniRemoveFriend } = await obtenerRutasInject(interaction.user.id);
+                const { rutaIni: rutaIniRemoveFriend } = await obtenerRutasInject(interaction.guildId);
                 const friendsParaBorrar = parsearListaFriends(rutaIniRemoveFriend);
                 if (friendsParaBorrar.length === 0) {
                     return await interaction.editReply(construirPayloadStatusFriends(friendsParaBorrar));
@@ -12192,6 +14724,16 @@ client.on('interactionCreate', async interaction => {
                             }
                         }
 
+                        // REVERTIDO (2026-09-07, bug real reproducido en vivo: "se me desactivo el
+                        // heartbeat, y cuando lo activo no deja" -- toggle/panel tiraba "First
+                        // configure the Heartbeat Webhook" pese a estar configurado): el intento de
+                        // 2026-09-05 de guardar aca el USER ID en vez del guildId para 'heartbeat'
+                        // rompia tieneConfiguracion(guildId, 'heartbeat') y el toggle On/Off del
+                        // panel, que buscan esta fila por guildId igual que TODOS los demas tipos --
+                        // discord_id tiene que seguir siendo guildId siempre, sin excepcion, para que
+                        // el panel funcione. El DM de heartbeat.js ahora resuelve al dueño real del
+                        // servidor por su cuenta (ver avisarInstanciaCongeladaSiHaceFalta), sin
+                        // depender de este valor.
                         const filaExistente = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
                         if (filaExistente && filaExistente.canal_id === canal.id && filaExistente.webhook_url && filaExistente.webhook_url !== 'N/A' && (await webhookEstaVivo(filaExistente.webhook_url))) {
                             return canal;
@@ -12355,7 +14897,7 @@ client.on('interactionCreate', async interaction => {
             
             case 'btn_ruta_raiz':
                 const modalRaiz = new ModalBuilder().setCustomId('modal_ruta_raiz').setTitle('Main Path')
-                    .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('input_ruta').setLabel('Main folder path:').setStyle(TextInputStyle.Short).setPlaceholder('C:\\POKEMON\\PTCGPB-ALE')));
+                    .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('input_ruta').setLabel('Main folder path:').setStyle(TextInputStyle.Short).setPlaceholder('C:\\PTCGPB')));
                 await interaction.showModal(modalRaiz);
                 break;
         }

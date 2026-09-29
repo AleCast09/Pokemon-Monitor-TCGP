@@ -32,6 +32,36 @@ assets/wallpapers_cache/
 drive_hd_errores.txt
 update_fallo.txt
 automation/Logs/
+# Capturas de trabajo que se acumulan en automation/ mientras se depuran needles. Son fotos
+# de las pantallas reales de las instancias (nombres de cuenta, niveles, lista de amigos), asi
+# que no deben terminar en un repo publico. Se quedan en el disco local a proposito: son el
+# banco de pruebas con el que se valida que un needle nuevo no de falsos positivos.
+# Regla general en vez de una lista de prefijos: NADA de imagenes ni volcados de texto
+# sueltos en la raiz de automation/. Ahi solo van los .ahk. Los needles de verdad viven en
+# automation/Needles/ y esta regla no los toca (verificado 2026-09-25: 0 archivos .png/.txt
+# rastreados en la raiz, asi que la regla no esconde nada que hoy este versionado).
+automation/*.png
+automation/*.jpg
+automation/*.jpeg
+automation/*.bmp
+automation/*.txt
+automation/_needles_retirados*/
+# Herramientas de depuracion locales (2026-09-29, auditoria antes de la release publica):
+# scripts _Diag*, copias por instancia que genera Farm Tickets, borradores y configs sueltas.
+automation/_Diag*.ahk
+automation/_LikePublicCards_[0-9]*.ahk
+automation/_scratch*
+automation/*.py
+automation/*.ini
+automation/*.html
+# Scripts de depuracion con rutas y archivos de cuentas propias -- no van al repo publico.
+scripts/check_pull_images.js
+scripts/debug_wishlist_issue.js
+scripts/find_account_by_partial_id.js
+scripts/inspect_xml_pull.js
+scripts/post_s4t_sim.js
+automation/Needles/captura*.png
+*.png.bak
 logs/
 .pending_update.json
 .pending_restart.json

@@ -20,6 +20,7 @@ global g_folderPath := A_Args[2]
 global g_outputFile := A_Args[3]
 
 #Include %A_ScriptDir%\_AdbUtils.ahk
+#Include %A_ScriptDir%\_ZonasNeedles.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Imagesearch.ahk
 
@@ -54,6 +55,11 @@ AdbConectar(adbPath, puerto)
 
 global g_hwndFast := WinExist(g_winTitle . " ahk_class Qt5156QWindowIcon")
 
+; Log de depuracion (2026-09-24): ultimo script del pipeline que no tenia ninguno.
+logDebugRefresh(msg) {
+    FileAppend, % A_Hour ":" A_Min ":" A_Sec "." A_MSec " -- " msg "`n", % A_ScriptDir . "\Logs\_mainrefresh_debug.log"
+}
+
 tap(x, y, esperaMs := 0) {
     static convX := 540/283, convY := 960/488, offset := 40
     global adbPath, puerto
@@ -77,7 +83,7 @@ chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
     pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedleNativo . ".png")
     if (pNeedle) {
         vPos := ""
-        encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variationNativo) = 1)
+        encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variationNativo, nombreNeedleNativo) = 1)
         Gdip_DisposeImage(pNeedle)
     }
     Gdip_DisposeImage(pBitmap)
@@ -121,7 +127,7 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedl
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
                 }
                 Gdip_DisposeImage(pBitmap)
             }
@@ -159,7 +165,38 @@ esperarAgreementConRefresh(timeoutMs := 45000) {
         ; (badge rojo "!" del boton Trade), validada en vivo -- coincide con el mismo badge que
         ; usa _DonorRespondAndFinalize.ahk para otro paso, pero corren en instancias distintas
         ; (nunca compiten contra la misma captura), asi que es seguro con variation 30 estandar.
+        ; Chequeo por ADB PRIMERO para el acuerdo (2026-09-24, medido con Ale): el needle de
+        ; escala ADB (own_maintrade_agreement_reached) reconoce la pantalla "Acuerdo alcanzado"
+        ; desde variation 0, mientras que su variante _native recien matchea desde 130 y el codigo
+        ; la llamaba con 30 -- o sea que el chequeo rapido NUNCA podia detectarlo.
+        ; Peor: los dos chequeos nativos de mas abajo terminan en "continue", asi que si alguno da
+        ; un falso positivo (no se pueden validar contra capturas de ADB, son de otra escala, y hoy
+        ; ya aparecieron tres nativos mal calibrados) el bucle gira para siempre sin llegar nunca a
+        ; la via lenta, que es la unica que funciona. Por eso la deteccion del acuerdo se hace
+        ; ahora al principio de cada vuelta, sin depender de ningun nativo.
+        tempAcuerdo := A_ScriptDir . "\Logs\_agreement_check_" . g_winTitle . ".png"
+        AdbScreenshot(adbPath, puerto, tempAcuerdo)
+        if (FileExist(tempAcuerdo)) {
+            pAcu := Gdip_CreateBitmapFromFile(tempAcuerdo)
+            FileDelete, %tempAcuerdo%
+            if (pAcu) {
+                pNeedleAcu := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_maintrade_agreement_reached.png")
+                if (pNeedleAcu) {
+                    vPosAcu := ""
+                    if (buscarNeedleZonal(pAcu, pNeedleAcu, vPosAcu, 30, "own_maintrade_agreement_reached") = 1) {
+                        logDebugRefresh("acuerdo detectado por ADB en " . vPosAcu . ", tocando Intercambiar")
+                        Gdip_DisposeImage(pNeedleAcu)
+                        Gdip_DisposeImage(pAcu)
+                        tap(141, 416)
+                        return true
+                    }
+                    Gdip_DisposeImage(pNeedleAcu)
+                }
+                Gdip_DisposeImage(pAcu)
+            }
+        }
         if (chequeoRapidoNeedle("own_maintrade_agreement_reached_native", 30)) {
+            logDebugRefresh("acuerdo detectado por needle NATIVO, tocando Intercambiar")
             tap(141, 416)
             return true
         }
@@ -168,12 +205,14 @@ esperarAgreementConRefresh(timeoutMs := 45000) {
         ; comprobo que falsea contra otros botones celestes del juego). Validada en vivo --
         ; limpio hasta variation 20 contra 36 capturas de otras pantallas.
         if (chequeoRapidoNeedle("own_maintrade_already_agreed_ok_native", 20)) {
+            logDebugRefresh("popup de ya-acordado detectado, cerrandolo")
             tap(113, 364, 1500)
             if (A_TickCount - inicio > timeoutMs)
                 return false
             continue
         }
         if (chequeoRapidoNeedle("own_maintrade_refresh_button_native", 30)) {
+            logDebugRefresh("boton Actualizar visible, tocandolo")
             tap(227, 373, 2000)
             if (A_TickCount - inicio > timeoutMs)
                 return false
@@ -191,35 +230,44 @@ esperarAgreementConRefresh(timeoutMs := 45000) {
                 pNeedleA := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_maintrade_agreement_reached.png")
                 if (pNeedleA) {
                     vPos := ""
-                    encontradoAgreement := (Gdip_ImageSearch(pBitmap, pNeedleA, vPos, 0, 0, 0, 0, 30) = 1)
+                    encontradoAgreement := (buscarNeedleZonal(pBitmap, pNeedleA, vPos, 30, "own_maintrade_agreement_reached") = 1)
                 }
                 if (!encontradoAgreement) {
                     pNeedleP := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_maintrade_already_agreed_ok.png")
                     if (pNeedleP) {
                         vPos := ""
-                        encontradoPopup := (Gdip_ImageSearch(pBitmap, pNeedleP, vPos, 0, 0, 0, 0, 30) = 1)
+                        encontradoPopup := (buscarNeedleZonal(pBitmap, pNeedleP, vPos, 45, "own_maintrade_already_agreed_ok") = 1)
                     }
                 }
                 if (!encontradoAgreement && !encontradoPopup) {
                     pNeedleR := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_maintrade_refresh_button.png")
                     if (pNeedleR) {
                         vPos := ""
-                        encontradoRefresh := (Gdip_ImageSearch(pBitmap, pNeedleR, vPos, 0, 0, 0, 0, 30) = 1)
+                        encontradoRefresh := (buscarNeedleZonal(pBitmap, pNeedleR, vPos, 30, "own_maintrade_refresh_button") = 1)
                     }
                 }
                 Gdip_DisposeImage(pBitmap)
             }
         }
         if (encontradoAgreement) {
+            logDebugRefresh("acuerdo detectado por la via lenta (ADB), tocando Intercambiar")
             tap(141, 416)
             return true
         }
-        if (encontradoPopup)
+        if (encontradoPopup) {
+            logDebugRefresh("via lenta: popup de ya-acordado, cerrandolo")
             tap(113, 364, 1500)
-        else if (encontradoRefresh)
+        }
+        else if (encontradoRefresh) {
+            logDebugRefresh("via lenta: boton Actualizar visible, tocandolo")
             tap(227, 373, 2000)
-        if (A_TickCount - inicio > timeoutMs)
+        }
+        else
+            logDebugRefresh("via lenta: no se reconocio NINGUNA de las 3 pantallas esperadas")
+        if (A_TickCount - inicio > timeoutMs) {
+            logDebugRefresh("TIMEOUT de " . timeoutMs . "ms sin ver el acuerdo")
             return false
+        }
         Sleep, 500
     }
 }
@@ -247,7 +295,7 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
                 pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\" . nombreNeedle . ".png")
                 if (pNeedle) {
                     vPos := ""
-                    encontrado := (Gdip_ImageSearch(pBitmap, pNeedle, vPos, 0, 0, 0, 0, variation) = 1)
+                    encontrado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, variation, nombreNeedle) = 1)
                 }
                 Gdip_DisposeImage(pBitmap)
             }
@@ -264,6 +312,18 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
 ; que Main comparte este mismo needle con la donante para este paso).
 if (!esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 15000, "own_donorfinalize_swipe_instruction_native", 30))
     ExitConError("no_aparecio_instruccion_swipe_main")
+; Asentamiento antes de la foto (2026-09-25, mismo bug que en _DonorRespondAndFinalize.ahk,
+; reportado por Ale con la captura al lado: la foto salia con la carta a medio aparecer porque
+; el needle matchea durante la animacion de transicion). Se exige verlo dos veces seguidas.
+Loop, 8 {
+    Sleep, 1200
+    if (esperarNeedleSinAccion("own_donorfinalize_swipe_instruction", 30, 1500, "own_donorfinalize_swipe_instruction_native", 30)) {
+        logDebugRefresh("foto swipe: pantalla confirmada por segunda vez (intento " . A_Index . ")")
+        break
+    }
+    logDebugRefresh("foto swipe: la pantalla todavia no se asienta (intento " . A_Index . ")")
+}
+Sleep, 800
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainSwipePhoto.png"))
 bajarSpeedModA1xSiEstaActivo()
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
@@ -276,8 +336,28 @@ Sleep, 3000
 ; espera la pantalla de verdad en vez de un Sleep fijo, para no sacar la foto de un cuadro
 ; intermedio todavia en transicion. No hace falta tocar "Tap to Proceed" aca -- Main se
 ; apaga solo enseguida (ver apagarInstanciaMuMu en bot.js), no necesita seguir navegando.
-if (esperarNeedleSinAccion("own_donorfinalize_tap_to_proceed", 30, 15000, "own_donorfinalize_tap_to_proceed_native", 30))
+; Needle cambiado a own_donorfinalize_gotit_bg (2026-09-29, bug real con Ale: faltaba la foto
+; "Main -- Received" en el resumen). El viejo own_donorfinalize_tap_to_proceed era la esquina de la
+; letra G de "Got it!", y el icono flotante del speed mod queda justo encima: nunca coincidia y la
+; foto no se sacaba. Mismo arreglo que en _DonorRespondAndFinalize.ahk (parche del fondo lila, sin
+; letras). Si aun asi no se confirma, se saca la foto igual para que el resumen no quede vacio.
+if (!esperarNeedleSinAccion("own_donorfinalize_gotit_bg", 20, 15000, "own_donorfinalize_gotit_bg_native", 20)) {
+    logDebugRefresh("foto final: no se confirmo la pantalla Got it! en 15 s, se saca la foto igual")
     AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainSentPhoto.png"))
+} else
+    {
+        ; Mismo asentamiento que antes: se confirma 2 veces para que la carta termine de aparecer.
+        Loop, 8 {
+            Sleep, 1200
+            if (esperarNeedleSinAccion("own_donorfinalize_gotit_bg", 20, 1500, "own_donorfinalize_gotit_bg_native", 20)) {
+                logDebugRefresh("foto final: pantalla confirmada por segunda vez (intento " . A_Index . ")")
+                break
+            }
+            logDebugRefresh("foto final: la pantalla todavia no se asienta (intento " . A_Index . ")")
+        }
+        Sleep, 1200
+        AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainSentPhoto.png"))
+    }
 
 WriteResult("OK")
 Gdip_Shutdown(pToken)

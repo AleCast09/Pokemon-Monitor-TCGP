@@ -75,9 +75,6 @@ device := "127.0.0.1:" . puerto
 ; script fallaba consistente en el primer "rm" (root_permission activado en MuMu, pero el
 ; shell seguia reportando uid=2000(shell) hasta este comando).
 comandoRoot := """" . adbPath . """ -s " . device . " root"
-RunWait, %ComSpec% /c "%comandoRoot%", , Hide
-Sleep, 1500
-AdbConectar(adbPath, puerto)
 
 ; Conexion adb shell PERSISTENTE -- una sola, reusada para todos los comandos de esta
 ; corrida (ver comentario del header). Cada comando se envuelve en "(comando) && echo OK_N
@@ -86,7 +83,50 @@ AdbConectar(adbPath, puerto)
 ; que hacia el RunWait de antes (pero sin pagar el costo de un proceso nuevo por comando).
 comandoShell := """" . adbPath . """ -s " . device . " shell"
 wshShell := ComObjCreate("WScript.Shell")
-procShell := wshShell.Exec(comandoShell)
+
+; Apertura VERIFICADA de la shell root (2026-09-19, estilo initializeAdbShell de Kevin en
+; include\ADB.ahk). Bug real reproducido en vivo con Ale: con la instancia recien prendida, el
+; "adb root" + 1.5s fijos no alcanzaba -- la shell quedaba muerta o como usuario comun, TODOS los
+; comandos fallaban, el juego nunca se abria (logcat de Android sin una sola linea del juego) y
+; la instancia quedaba en el escritorio de Android. Kevin, en cambio, verifica que la shell este
+; viva y si no desconecta, reconecta y reintenta. Aca ademas se confirma que sea root de verdad
+; (uid=0), porque los comandos de abajo sobre /data/data lo necesitan.
+;
+; 2026-09-22 (a pedido explicito de Ale, "hagamoslo como el de Kevin"): dos cambios mas aca.
+; 1) Solo se abre una shell nueva si no hay una viva, igual que el guard de initializeAdbShell
+;    de Kevin (include\ADB.ahk:229 -- "if (!session.get("adbShell") || Status != 0)"). Antes
+;    este Loop abria una shell nueva en CADA vuelta, hasta 6 por inyeccion.
+; 2) Se oculta la consola de adb.exe que crea el Exec (ver consolasVisiblesActuales /
+;    ocultarConsolaNueva en _AdbUtils.ahk) -- era la ventana negra que Ale fotografio saltando
+;    al frente a mitad del trade.
+shellOk := false
+Loop, 6 {
+    RunWait, %ComSpec% /c "%comandoRoot%", , Hide
+    Sleep, 1500
+    AdbConectar(adbPath, puerto)
+    shellViva := false
+    try {
+        shellViva := (IsObject(procShell) && procShell.Status = 0)
+    } catch e {
+        shellViva := false
+    }
+    if (!shellViva) {
+        consolasPrevias := consolasVisiblesActuales()
+        procShell := wshShell.Exec(comandoShell)
+        ocultarConsolaNueva(consolasPrevias)
+    }
+    Sleep, 500
+    if (procShell.Status = 0 && AdbShellComando("id | grep -q uid=0", 8000)) {
+        shellOk := true
+        break
+    }
+    try procShell.Terminate()
+    RunWait, %ComSpec% /c ""%adbPath%" disconnect %device%", , Hide
+    Sleep, 2000
+    AdbConectar(adbPath, puerto)
+}
+if (!shellOk)
+    ExitConError("shell_adb_root_no_disponible")
 
 AdbShellComando(comando, timeoutMs := 15000) {
     global procShell, g_contadorComandos
@@ -116,6 +156,22 @@ AdbShellComando(comando, timeoutMs := 15000) {
     }
 }
 
+; Reintento generico (2026-09-03, bug real reproducido en vivo con Ale -- "Could not prepare
+; the donor instance 1 (ERROR: am_force_stop)"): AdbShellComando no reintentaba nada, un solo
+; hipo momentaneo de la conexion adb (visto pasar varias veces hoy con distintos scripts,
+; "device offline" y similares) cortaba el force-stop -- el primer comando de toda la
+; secuencia -- sin darle ninguna chance de recuperarse solo. 3 intentos con una pausa corta
+; entre cada uno, igual de rapido que antes en el caso normal (sin reintento real).
+AdbShellComandoConReintento(comando, intentos := 3, timeoutMs := 15000) {
+    Loop, %intentos% {
+        if (AdbShellComando(comando, timeoutMs))
+            return true
+        if (A_Index < intentos)
+            Sleep, 1000
+    }
+    return false
+}
+
 ; Mismos ~20 pasos que loadAccount() en _InjectAccount.ahk de Kevin, en el mismo orden
 ; (force-stop, borrar cuenta vieja + preferencias de usuario, subir XML nuevo, aplicarlo
 ; con permisos correctos, reabrir el juego) -- solo cambia COMO se manda cada comando.
@@ -124,14 +180,14 @@ UserPreferences := ["BattleUserPrefs", "FeedUserPrefs", "FilterConditionUserPref
     , "MissionUserPrefs", "NotificationUserPrefs", "PackUserPrefs", "PvPBattleResumeUserPrefs"
     , "RankMatchPvEResumeUserPrefs", "RankMatchUserPrefs", "SoloBattleResumeUserPrefs", "SortConditionUserPrefs"]
 
-if (!AdbShellComando("am force-stop jp.pokemon.pokemontcgp"))
+if (!AdbShellComandoConReintento("am force-stop jp.pokemon.pokemontcgp"))
     ExitConError("am_force_stop")
 
-if (!AdbShellComando("rm -f /data/data/jp.pokemon.pokemontcgp/shared_prefs/deviceAccount:.xml"))
+if (!AdbShellComandoConReintento("rm -f /data/data/jp.pokemon.pokemontcgp/shared_prefs/deviceAccount:.xml"))
     ExitConError("rm_deviceaccount_viejo")
 
 Loop, % UserPreferences.MaxIndex() {
-    if (!AdbShellComando("rm -f " . UserPreferencesPath . UserPreferences[A_Index]))
+    if (!AdbShellComandoConReintento("rm -f " . UserPreferencesPath . UserPreferences[A_Index]))
         ExitConError("rm_userprefs_" . A_Index)
 }
 
@@ -143,26 +199,28 @@ RunWait, %ComSpec% /c "%comandoPush%", , Hide
 if (ErrorLevel != 0)
     ExitConError("push_xml")
 
-if (!AdbShellComando("mkdir -p /data/data/jp.pokemon.pokemontcgp/shared_prefs"))
+if (!AdbShellComandoConReintento("mkdir -p /data/data/jp.pokemon.pokemontcgp/shared_prefs"))
     ExitConError("mkdir_shared_prefs")
 
-if (!AdbShellComando("cp /sdcard/deviceAccount.xml /data/data/jp.pokemon.pokemontcgp/shared_prefs/deviceAccount:.xml"))
+if (!AdbShellComandoConReintento("cp /sdcard/deviceAccount.xml /data/data/jp.pokemon.pokemontcgp/shared_prefs/deviceAccount:.xml"))
     ExitConError("copiar_deviceaccount")
 
-if (!AdbShellComando("chmod 664 /data/data/jp.pokemon.pokemontcgp/shared_prefs/deviceAccount:.xml && chown system:system /data/data/jp.pokemon.pokemontcgp/shared_prefs/deviceAccount:.xml"))
+if (!AdbShellComandoConReintento("chmod 664 /data/data/jp.pokemon.pokemontcgp/shared_prefs/deviceAccount:.xml && chown system:system /data/data/jp.pokemon.pokemontcgp/shared_prefs/deviceAccount:.xml"))
     ExitConError("chmod_chown")
 
-if (!AdbShellComando("rm -f /sdcard/deviceAccount.xml"))
+if (!AdbShellComandoConReintento("rm -f /sdcard/deviceAccount.xml"))
     ExitConError("limpiar_xml_temporal")
 
 ; No bloquea si falla -- mismo criterio que _InjectAccount.ahk (esta linea no chequea su
 ; propio resultado ahi tampoco).
 AdbShellComando("rm -f /data/data/jp.pokemon.pokemontcgp/files/UserPreferences/v1/MissionUserPrefs")
 
-if (!AdbShellComando("am start -W -n jp.pokemon.pokemontcgp/com.unity3d.player.UnityPlayerActivity -f 0x10018000")) {
-    if (!AdbShellComando("am start -n jp.pokemon.pokemontcgp/com.unity3d.player.UnityPlayerActivity -f 0x20000000"))
-        ExitConError("abrir_juego")
-}
+; Apertura verificada (2026-09-19, estilo startPTCGPApp de Kevin -- ver abrirJuegoVerificado en
+; _AdbUtils.ahk): antes se mandaba "am start" y se daba por abierto sin comprobarlo. Si el juego
+; crasheaba al arrancar, la instancia quedaba en el escritorio de Android y el paso siguiente
+; fallaba mucho despues por timeout (visto varias veces en vivo con Ale).
+if (!abrirJuegoVerificado(adbPath, puerto))
+    ExitConError("abrir_juego")
 
 try {
     Process, Close, % procShell.ProcessID

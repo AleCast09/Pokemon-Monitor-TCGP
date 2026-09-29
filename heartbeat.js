@@ -9,22 +9,73 @@ const path = require('path');
 const os = require('os');
 const RUTA_HEARTBEAT_THUMBNAIL = path.join(__dirname, 'assets', 'heartbeat.png');
 
+// Reintento generico ante rate-limit de Discord (2026-09-11, bug real reproducido en vivo:
+// varias instancias quedandose sin cuentas en el mismo ciclo de heartbeat disparan varios
+// POSTs seguidos -- canal + DM por cada una -- y Discord devolvio 429 "You are being rate
+// limited" para alguno de ellos, perdiendo ese aviso sin ningun reintento). Discord ya manda
+// el tiempo de espera exacto en retry_after (segundos) -- se usa ese valor en vez de uno fijo.
+async function axiosPostConReintento(url, data, config, intentos = 2) {
+    for (let i = 0; i < intentos; i++) {
+        try {
+            return await axios.post(url, data, config);
+        } catch (e) {
+            if (e?.response?.status === 429 && i < intentos - 1) {
+                const esperaMs = Math.ceil((e.response.data?.retry_after || 1) * 1000);
+                await new Promise((resolve) => setTimeout(resolve, esperaMs));
+                continue;
+            }
+            throw e;
+        }
+    }
+}
+
 // Mismo criterio que rutaMuMuManager() de bot.js (duplicado a proposito -- heartbeat.js corre
 // como proceso PM2 separado, sin importar nada de bot.js). Usado para el apagado/encendido
 // automatico de una instancia congelada (ver recuperarInstanciaCongelada mas abajo).
+//
+// Elige entre VARIAS instalaciones de MuMu (2026-09-11, bug real reportado en vivo por
+// wR98 -- primera vez que esto corrio en una PC que no fuera la de Ale): antes devolvia el
+// PRIMER candidato que existiera en disco, sin importar si tenia instancias configuradas de
+// verdad. wR98 tiene DOS instalaciones (MuMuPlayer normal en C:, sin instancias reales, y
+// MuMuPlayerGlobal-12.0 con su farm de verdad) -- como 'MuMuPlayer' esta primero en la
+// lista, siempre se conectaba a la instalacion vacia y nunca veia sus instancias reales, sin
+// ningun error visible. Ahora se consulta cada candidato encontrado y se elige el que
+// reporte mas instancias reales configuradas (cualquier slot que no sea el template
+// is_main/"Android Device", corriendo o no -- la sola existencia del slot ya indica cual
+// instalacion es la que el usuario usa). Cacheado una vez resuelto para no pagar el costo de
+// consultar cada candidato en cada ciclo.
+let _rutaMuMuManagerCacheadaHb;
 function rutaMuMuManagerHb() {
+    if (_rutaMuMuManagerCacheadaHb !== undefined) return _rutaMuMuManagerCacheadaHb;
+
     const carpetas = ['MuMuPlayer', 'MuMuPlayerGlobal-12.0'];
     const subrutas = ['nx_main', 'shell'];
     const discos = 'CDEFGHIJ'.split('');
+    const candidatos = [];
     for (const disco of discos) {
         for (const carpeta of carpetas) {
             for (const sub of subrutas) {
                 const candidato = `${disco}:\\Program Files\\Netease\\${carpeta}\\${sub}\\MuMuManager.exe`;
-                if (fs.existsSync(candidato)) return candidato;
+                if (fs.existsSync(candidato)) candidatos.push(candidato);
             }
         }
     }
-    return null;
+    if (candidatos.length === 0) return (_rutaMuMuManagerCacheadaHb = null);
+    if (candidatos.length === 1) return (_rutaMuMuManagerCacheadaHb = candidatos[0]);
+
+    let mejorCandidato = candidatos[0];
+    let mejorConteo = -1;
+    for (const candidato of candidatos) {
+        try {
+            const info = JSON.parse(execFileSync(candidato, ['info', '-v', 'all'], { windowsHide: true, timeout: 15000 }).toString());
+            const conteo = Object.values(info).filter((i) => i && !i.is_main && i.name !== 'Android Device').length;
+            console.error(`[HB] MuMuManager candidato ${candidato}: ${conteo} instancia(s) configurada(s).`);
+            if (conteo > mejorConteo) { mejorConteo = conteo; mejorCandidato = candidato; }
+        } catch (e) {
+            console.error(`[HB] Error consultando candidato MuMuManager ${candidato}:`, e?.message || e);
+        }
+    }
+    return (_rutaMuMuManagerCacheadaHb = mejorCandidato);
 }
 
 // Mismo criterio que rutaAutoHotkey() de bot.js (duplicado a proposito, ver nota de
@@ -34,16 +85,22 @@ function rutaMuMuManagerHb() {
 let _rutaAutoHotkeyCacheadaHb;
 function rutaAutoHotkeyHb() {
     if (_rutaAutoHotkeyCacheadaHb !== undefined) return _rutaAutoHotkeyCacheadaHb;
-    const candidatosFijos = [
-        'C:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU64.exe',
-        'C:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU32.exe',
-        'C:\\Program Files\\AutoHotkey\\AutoHotkeyU64.exe',
-        'C:\\Program Files\\AutoHotkey\\AutoHotkeyU32.exe',
-        'C:\\Program Files\\AutoHotkey\\AutoHotkey.exe',
-        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU64.exe',
-        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU32.exe',
-        'C:\\Program Files (x86)\\AutoHotkey\\AutoHotkey.exe'
-    ];
+    // Extendido a varios discos (2026-09-12, mismo fix que rutaAutoHotkey() de bot.js --
+    // bug real reportado en vivo, usuario con AutoHotkey instalado fuera de C:).
+    const discos = 'CDEFGHIJ'.split('');
+    const candidatosFijos = [];
+    for (const disco of discos) {
+        candidatosFijos.push(
+            `${disco}:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU64.exe`,
+            `${disco}:\\Program Files\\AutoHotkey\\v1.1.37.02\\AutoHotkeyU32.exe`,
+            `${disco}:\\Program Files\\AutoHotkey\\AutoHotkeyU64.exe`,
+            `${disco}:\\Program Files\\AutoHotkey\\AutoHotkeyU32.exe`,
+            `${disco}:\\Program Files\\AutoHotkey\\AutoHotkey.exe`,
+            `${disco}:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU64.exe`,
+            `${disco}:\\Program Files (x86)\\AutoHotkey\\AutoHotkeyU32.exe`,
+            `${disco}:\\Program Files (x86)\\AutoHotkey\\AutoHotkey.exe`
+        );
+    }
     _rutaAutoHotkeyCacheadaHb = candidatosFijos.find(p => fs.existsSync(p)) || null;
     return _rutaAutoHotkeyCacheadaHb;
 }
@@ -340,6 +397,32 @@ function forzarCierreAhkInstanciaHb(index) {
     }
 }
 
+// Cierra el popup nativo de MuMu "El dispositivo Android esta apagado -- se apago de manera
+// anormal, reinicie el dispositivo Android" (2026-09-10, bug real reportado en vivo -- una
+// instancia crasheo, y aunque la instancia en si se recupero sola via el shutdown/relaunch
+// normal de mas abajo (confirmado en vivo: ADB volvio a conectar bien), este popup especifico
+// quedo huerfano en pantalla -- es un proceso SEPARADO (MuMuNxCrashReporter.exe), no parte del
+// proceso de la instancia, asi que apagar/reiniciar la instancia no lo toca ni lo cierra solo.
+// Se mata por nombre de imagen (no hace falta saber el PID ni de que instancia vino -- este
+// reporter no identifica la instancia en su propio proceso) en CADA ciclo de heartbeat, para
+// no depender de que primero se cumplan los 10 min de instancia congelada -- confirmado en
+// vivo con el usuario que cerrarlo asi es seguro (la instancia de abajo sigue andando bien).
+function cerrarCrashReporterMuMuSiExisteHb() {
+    try {
+        // stdio 'ignore' (2026-09-10, ruido real visto en vivo en heartbeat-error.log): sin
+        // esto, el "ERROR: no se encontro el proceso..." que taskkill imprime el en caso
+        // normal (sin ningun popup abierto, la gran mayoria de los ciclos) se hereda directo
+        // al stderr de este proceso pese al catch de abajo -- taskkill lo imprime el SOLO, no
+        // es este codigo el que lo logueaba. Enterraba cualquier error real de otro lado bajo
+        // un muro de este mensaje esperado repetido en cada ciclo.
+        execFileSync('taskkill', ['/IM', 'MuMuNxCrashReporter.exe', '/F'], { windowsHide: true, timeout: 8000, stdio: 'ignore' });
+        console.error('[HB] Popup huerfano de MuMuNxCrashReporter detectado y cerrado.');
+    } catch (e) {
+        // Exit code no-cero cuando no hay ningun proceso con ese nombre -- caso normal en
+        // casi todos los ciclos, no es un error real.
+    }
+}
+
 // Mismo flujo y mismo orden que el boton "Close Instance" de bot.js (ver heartbeat_cerrar:: ahi
 // -- señal 0x500 primero con MuMu todavia vivo, wait, apagar MuMu, y de respaldo un ciclo
 // prender/apagar + force-kill por si el AHK quedo colgado de verdad por dentro). Se usa cuando
@@ -562,6 +645,14 @@ function guardarCache() {
     fs.writeFileSync(RUTA_CACHE, JSON.stringify(statsCache, null, 2));
 }
 
+// Cache en memoria de dueño-de-servidor por canal (2026-09-07): el DM de instancia
+// congelada resuelve el destinatario real via API (canal -> guild -> owner_id) en vez de
+// confiar en discord_id de configs_canales, que para 'heartbeat' es siempre el guildId (ver
+// comentario completo en avisarInstanciaCongeladaSiHaceFalta) -- esto evita pagar esas 2
+// llamadas de API en cada ciclo que dispare un aviso, ya que el dueño de un servidor casi
+// nunca cambia. Se limpia una entrada puntual si la llamada con ese owner falla (ver catch).
+const cacheDuenioServidorPorCanal = new Map();
+
 // Aviso de instancia congelada (pedido explícito del usuario 2026-07-23):
 // packs estancados durante `tiempoMaximoMs` sin importar si se reporta
 // offline/sleeping o no (el usuario aclaró que también usa ese estado para
@@ -570,7 +661,7 @@ function guardarCache() {
 // a avanzar. Además del mensaje en el canal, manda un DM directo — a pedido
 // del usuario, porque las notificaciones de servidores de Discord suelen
 // quedar silenciadas y un DM sí le llega.
-async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, tiempoMaximoMs, canalId, discordUserId, rutaLogsInstancias, cuentasRestantes) {
+async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, tiempoMaximoMs, canalId, discordUserId, rutaLogsInstancias, cuentasRestantes, sinCuentasYaConfirmado = false) {
     if (!webhookUrl) return;
     if (statsCache[instId].avisado) return;
     statsCache[instId].avisado = true;
@@ -579,20 +670,59 @@ async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, ti
 
     // Señal precisa por instancia (leída del log local de la herramienta de
     // Kevin, ver instanciaSinCuentasElegibles) — con respaldo al pool global
-    // de cuentas si por algo no hay ruta_raiz configurada.
-    const sinCuentas = instanciaSinCuentasElegibles(rutaLogsInstancias, instId) || cuentasRestantes === 0;
+    // de cuentas si por algo no hay ruta_raiz configurada. sinCuentasYaConfirmado
+    // (2026-09-06, a pedido explicito del usuario): el llamador ya la calculo este
+    // mismo ciclo para decidir si llamar a esta funcion de entrada -- se reusa en vez
+    // de volver a leer el log, para no arriesgar una lectura ligeramente distinta
+    // entre el chequeo de arriba y este.
+    const sinCuentas = sinCuentasYaConfirmado || instanciaSinCuentasElegibles(rutaLogsInstancias, instId) || cuentasRestantes === 0;
 
-    // Opt-in (2026-08-21, a pedido explicito del usuario): si esta prendido, se salta el aviso
-    // por completo y cierra la instancia/AHK sola -- ver cerrarInstanciaAutoSinCuentasHb arriba.
+    // Opt-in (2026-08-21, a pedido explicito del usuario): si esta prendido, cierra la
+    // instancia/AHK sola -- ver cerrarInstanciaAutoSinCuentasHb arriba.
     if (sinCuentas && await autoApagadoSinCuentasHabilitadoHb()) {
         cerrarInstanciaAutoSinCuentasHb(instId).catch((e) => console.error(`[HB] Error en auto-close de instancia ${instId}:`, e?.message || e));
+        // Aviso agregado (2026-09-06, bug real reportado en vivo -- "pero deberia mandar un
+        // mensaje, no mando nada"): antes esta rama cortaba en silencio total, sin mandar
+        // NADA a Discord -- una instancia se cerraba sola y desaparecia de la tabla sin
+        // ningun rastro de por que.
+        // Autoborrado: SACADO el 2026-09-10 y REPUESTO el 2026-09-25, las dos veces a pedido
+        // explicito de Ale. Vale la pena dejar la historia porque es la misma discusion:
+        //  - 2026-09-10 se saco porque con 30s, si no estabas mirando el canal en ese instante,
+        //    nunca te enterabas de por que una instancia habia desaparecido de la tabla.
+        //  - 2026-09-25 se repone porque cambio el contexto: desde el 2026-09-11 este mismo
+        //    aviso tambien sale por DM al dueño del servidor (ver mandarDmDuenioServidorHb mas
+        //    abajo), asi que el registro YA NO se pierde al borrar el del canal. Y en la practica
+        //    se acumulan: con 11 instancias quedandose sin cuentas el mismo dia, once avisos
+        //    seguidos empujan fuera de pantalla el resumen de sobres/cuentas, que es lo que Ale
+        //    realmente mira ("no tape la opcion de donde sale toda la data").
+        // El plazo es 10 minutos, no 30 segundos como los de "auto-recovered": esos no
+        // requieren nada de nadie, este si conviene alcanzar a verlo en el canal.
+        // Los avisos CON boton (los que piden una accion) siguen sin borrarse nunca.
+        const MS_BORRAR_AVISO_AUTOCLOSE = 10 * 60 * 1000;
+        try {
+            const respuestaAutoClose = await axiosPostConReintento(`${webhookUrl}?wait=true`, {
+                embeds: [{ title: '🔒 Instance auto-closed — out of 24h accounts', description: `**Instance ${instId}** ran out of eligible 24h accounts (stuck at **${packs}** packs) and was closed automatically to save resources.`, color: 0xF0A93A }]
+            });
+            if (respuestaAutoClose?.data?.id) {
+                setTimeout(() => {
+                    axios.delete(`${webhookUrl}/messages/${respuestaAutoClose.data.id}`).catch(() => {});
+                }, MS_BORRAR_AVISO_AUTOCLOSE);
+            }
+        } catch (e) {
+            console.error(`[HB] Error mandando aviso de auto-close de instancia (${instId}):`, e?.message || e);
+        }
+        await mandarDmDuenioServidorHb(canalId, `🔒 Instance auto-closed — out of 24h accounts — **Instance ${instId}**, stuck at ${packs} packs.`);
         return;
     }
 
     let titulo, cuerpo, boton;
     if (sinCuentas) {
+        // Texto ya no asume los 10 minutos completos (2026-09-06, mismo pedido de arriba):
+        // este aviso ahora puede dispararse de inmediato, apenas el log de la instancia dice
+        // "sin cuentas elegibles" -- decir "hasn't opened packs in the last 10 minutes" seria
+        // enganoso si en realidad se quedo sin cuentas hace unos segundos.
         titulo = '⚠️ Instance stalled — out of 24h accounts';
-        cuerpo = `**Instance ${instId}** hasn't opened any new packs in the last ${minutos} minute(s) (stuck at **${packs}** packs) — it's out of eligible 24h accounts, not actually frozen. Closing it saves resources since there's nothing left for it to do today.`;
+        cuerpo = `**Instance ${instId}** is out of eligible 24h accounts (stuck at **${packs}** packs) — not actually frozen, just nothing left for it to do today. Closing it saves resources.`;
         boton = { type: 2, style: 4, custom_id: `heartbeat_cerrar::${instId}`, label: '🔒 Close Instance' };
     } else {
         // Recuperacion automatica (2026-08-14, a pedido explicito del usuario): antes esto
@@ -638,7 +768,7 @@ async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, ti
     try {
         const payload = { embeds: [{ title: titulo, description: cuerpo, color: sinCuentas ? 0xF0A93A : (boton ? 0xE74C3C : 0x57F287) }] };
         if (boton) payload.components = [{ type: 1, components: [boton] }];
-        const respuesta = await axios.post(`${webhookUrl}?wait=true`, payload);
+        const respuesta = await axiosPostConReintento(`${webhookUrl}?wait=true`, payload);
         // Auto-borrado (2026-08-14, a pedido explicito del usuario): estos avisos de
         // "auto-recovered" no requieren ninguna accion suya, pero se van acumulando y empujan
         // hacia arriba el mensaje de heartbeat con el resumen (cuentas/sobres) que es lo que
@@ -653,18 +783,89 @@ async function avisarInstanciaCongeladaSiHaceFalta(webhookUrl, instId, packs, ti
         console.error(`[HB] Error mandando aviso de instancia congelada (${instId}):`, e?.message || e);
     }
 
-    const destinoDm = discordUserId || DISCORD_USER_ID;
-    if (DISCORD_TOKEN && destinoDm) {
-        try {
-            const headers = { Authorization: `Bot ${DISCORD_TOKEN}` };
-            const dm = await axios.post('https://discord.com/api/v10/users/@me/channels', { recipient_id: destinoDm }, { headers });
-            const mensajeCanal = canalId ? ` Check <#${canalId}>.` : '';
-            await axios.post(`https://discord.com/api/v10/channels/${dm.data.id}/messages`, {
-                content: `${titulo} — **Instance ${instId}**, stuck at ${packs} packs for ${minutos}+ min.${mensajeCanal}`
-            }, { headers });
-        } catch (e) {
-            console.error(`[HB] Error mandando DM de instancia congelada (${instId}):`, e?.response?.data || e?.message || e);
+    await mandarDmDuenioServidorHb(canalId, `${titulo} — **Instance ${instId}**, stuck at ${packs} packs for ${minutos}+ min.`);
+}
+
+// Extraido a funcion propia (2026-09-11, bug real reportado en vivo -- "estos mensajes lo
+// enviaba por privado el bot!!!"): la rama de auto-close de arriba corta con `return` ANTES
+// de llegar a este envio de DM (estaba mas abajo en la funcion, solo alcanzable por el
+// camino normal de "stalled" con boton) -- una instancia que se cierra sola por falta de
+// cuentas nunca mandaba el DM que el usuario esperaba, solo el mensaje del canal. Ahora
+// ambas ramas llaman a esta misma funcion.
+//
+// Resolucion del destinatario del DM (reescrito 2026-09-07, bug real reproducido en vivo:
+// el intento anterior -- 2026-09-05 -- de guardar el USER ID en discord_id para poder
+// mandar el DM rompio tieneConfiguracion(guildId, 'heartbeat') y el toggle On/Off del
+// panel ("se me desactivo el heartbeat, y cuando lo activo no deja"), porque esa MISMA
+// columna se usa en TODOS los demas tipos de configs_canales como el guildId -- no hay
+// forma de guardar ahi un user id sin romper el panel. discord_id/discordUserId (el
+// parametro de avisarInstanciaCongeladaSiHaceFalta) es siempre el guildId ahora, nunca un
+// usuario real -- no sirve como destino de DM. En cambio, se resuelve el dueño real del
+// servidor por API en el momento (2 llamadas: canal -> guild_id -> owner_id), con cache en
+// memoria por canal (el dueño de un servidor no cambia seguido) para no pagar esas 2
+// llamadas en cada ciclo de heartbeat que dispare un aviso.
+// Restauradas 2026-09-23 (bug real en produccion, reportado por Ale: "el heartbeat esta
+// malogrado, no enciende, no me daba los resultados"). Las dos se usan mas abajo pero sus
+// DEFINICIONES se habian perdido en algun refactor -- probablemente al renombrarlas con el
+// sufijo Hb se actualizaron los llamados y no se copiaron los cuerpos. Efecto real: el monitor
+// se caia en CADA ciclo con "ReferenceError: obtenerBalanceDesdeArchivoHb is not defined"
+// (heartbeat.js:1118), antes de llegar a reportar nada -- por eso el heartbeat nunca daba
+// resultados aunque el proceso figurara "online" en PM2.
+// Recuperadas del primer commit del repo (5bf304e), donde existian sin el sufijo, con el mismo
+// cuerpo. contarXMLsHb tambien estaba sin definir (se usa en la linea siguiente, 1282), asi que
+// arreglar solo la primera habria movido el mismo crash dos lineas mas abajo.
+function obtenerBalanceDesdeArchivoHb(rutaBalance) {
+    try {
+        if (fs.existsSync(rutaBalance)) {
+            const contenido = fs.readFileSync(rutaBalance, 'utf8').trim();
+            const match = contenido.match(/(\d+)/);
+            return match ? parseInt(match[1], 10) : 0;
         }
+    } catch (e) { /* si no se puede leer, se reporta balance 0 -- nunca debe tirar el ciclo */ }
+    return 0;
+}
+
+function contarXMLsHb(directorio) {
+    let resultado = { totales: 0 };
+    try {
+        if (!fs.existsSync(directorio)) return resultado;
+        const elementos = fs.readdirSync(directorio, { withFileTypes: true });
+        for (const elemento of elementos) {
+            const rutaCompleta = path.join(directorio, elemento.name);
+            if (elemento.isDirectory()) {
+                resultado.totales += contarXMLsHb(rutaCompleta).totales;
+            } else if (elemento.isFile() && elemento.name.toLowerCase().endsWith('.xml')) {
+                resultado.totales++;
+            }
+        }
+    } catch (error) { return { totales: 0 }; }
+    return resultado;
+}
+
+async function mandarDmDuenioServidorHb(canalId, mensaje) {
+    if (!DISCORD_TOKEN || !canalId) return;
+    try {
+        const headers = { Authorization: `Bot ${DISCORD_TOKEN}` };
+        let ownerId = cacheDuenioServidorPorCanal.get(canalId);
+        if (!ownerId) {
+            const infoCanal = await axios.get(`https://discord.com/api/v10/channels/${canalId}`, { headers });
+            const infoGuild = await axios.get(`https://discord.com/api/v10/guilds/${infoCanal.data.guild_id}`, { headers });
+            ownerId = infoGuild.data.owner_id;
+            if (ownerId) cacheDuenioServidorPorCanal.set(canalId, ownerId);
+        }
+        if (ownerId) {
+            const dm = await axiosPostConReintento('https://discord.com/api/v10/users/@me/channels', { recipient_id: ownerId }, { headers });
+            await axiosPostConReintento(`https://discord.com/api/v10/channels/${dm.data.id}/messages`, {
+                content: `${mensaje} Check <#${canalId}>.`
+            }, { headers });
+        }
+    } catch (e) {
+        // Si el dueño del servidor tiene los DMs cerrados a bots, esto va a fallar con
+        // "Invalid Recipient(s)" igual -- caso legitimo (nada que autocorregir), a
+        // diferencia del bug de 2026-09-05 (ahi el ID en si estaba mal). El aviso en el
+        // canal ya salio de todas formas, asi que no queda en silencio total.
+        console.error(`[HB] Error mandando DM (canal ${canalId}):`, e?.response?.data || e?.message || e);
+        cacheDuenioServidorPorCanal.delete(canalId);
     }
 }
 
@@ -797,34 +998,6 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
     // instancia, asi que 5 minutos empezaba a confundir un ciclo lento y legitimo con un freeze real.
     const TIEMPO_MAXIMO_INACTIVO_MS = 10 * 60 * 1000;
 
-    function obtenerBalanceDesdeArchivo(rutaBalance) {
-        try {
-            if (fs.existsSync(rutaBalance)) {
-                const contenido = fs.readFileSync(rutaBalance, 'utf8').trim();
-                const match = contenido.match(/(\d+)/);
-                return match ? parseInt(match[1], 10) : 0;
-            }
-        } catch (e) { console.log("Balance error:", e); }
-        return 0;
-    }
-
-    function contarXMLs(directorio) {
-        let resultado = { totales: 0 };
-        try {
-            if (!fs.existsSync(directorio)) return resultado;
-            const elementos = fs.readdirSync(directorio, { withFileTypes: true });
-            for (const elemento of elementos) {
-                const rutaCompleta = path.join(directorio, elemento.name);
-                if (elemento.isDirectory()) {
-                    resultado.totales += contarXMLs(rutaCompleta).totales;
-                } else if (elemento.isFile() && elemento.name.toLowerCase().endsWith('.xml')) {
-                    resultado.totales++; 
-                }
-            }
-        } catch (error) { return { totales: 0 }; }
-        return resultado;
-    }
-
     app.post('/', async (req, res) => {
         if (!validarIngestToken(req)) {
             return res.status(401).send('UNAUTHORIZED');
@@ -834,6 +1007,8 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
         if (estado && estado.status !== 'online') {
             return res.status(200).send('OFFLINE');
         }
+
+        cerrarCrashReporterMuMuSiExisteHb();
 
         try {
             let hbConfig = null;
@@ -990,7 +1165,7 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                     const m = lineaPre.match(/Packs:\s*([0-9]+)/i);
                     if (m) totalPacksPrevio += parseInt(m[1], 10);
                 }
-                const balanceKevinPrevio = obtenerBalanceDesdeArchivo(RUTA_BALANCE_RESULT);
+                const balanceKevinPrevio = obtenerBalanceDesdeArchivoHb(RUTA_BALANCE_RESULT);
                 const cuentasAbiertasPrevio = Math.floor(totalPacksPrevio / 2);
                 const cuentasRestantesPrevio = balanceKevinPrevio > 0 ? Math.max(0, balanceKevinPrevio - cuentasAbiertasPrevio) : 0;
 
@@ -1061,19 +1236,42 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                         // porque su propia linea de estado sigue diciendo "friend" para
                         // siempre. estaCongelado solo ya es confiable, no hace falta este
                         // chequeo extra.
-                        if (estaCongelado && !esModoSinPool24h) {
-                            // Ver estaAhkCorriendoHb y estaInstanciaMuMuCorriendoHb arriba: si el
-                            // usuario ya detuvo el AHK a proposito, O si el proceso de MuMu
-                            // directamente ya no existe (cierre limpio, no un freeze real), no
-                            // tiene sentido reiniciar ni avisar -- eso solo generaba loops de
-                            // reinicio para instancias que el usuario dejo apagadas adrede.
-                            if (estaAhkCorriendoHb(instId) && estaInstanciaMuMuCorriendoHb(instId)) {
-                                avisarInstanciaCongeladaSiHaceFalta(DISCORD_WEBHOOK, instId, packs, TIEMPO_MAXIMO_INACTIVO_MS, hbConfig.canal_id, hbConfig.discord_id, RUTA_LOGS_INSTANCIAS, cuentasRestantesPrevio).catch(() => {});
-                            } else if (statsCache[instId].avisado) {
-                                statsCache[instId].avisado = false;
-                                guardarCache();
+                        // "|| sinCuentasInstancia" agregado (2026-09-06, a pedido explicito del
+                        // usuario -- "si dice que ya no hay mas cuentas disponibles deberia
+                        // mandar directamente"): antes el aviso de "sin cuentas" (dentro de
+                        // avisarInstanciaCongeladaSiHaceFalta) solo se disparaba si TAMBIEN se
+                        // cumplian los 10 minutos de estaCongelado, aunque el log de la propia
+                        // instancia ya dice "sin cuentas elegibles" en tiempo real -- una
+                        // instancia legitimamente sin cuentas se quedaba sin avisar hasta 10
+                        // minutos despues de haberse quedado sin nada que hacer. Un freeze de
+                        // verdad (con cuentas disponibles) sigue esperando los 10 min como
+                        // siempre -- esta condicion no lo cambia, solo agrega el caso "sin
+                        // cuentas" como disparador aparte e inmediato.
+                        // Chequeo de AHK/MuMu "corriendo" SALTEADO para el caso sin-cuentas
+                        // (2026-09-10, causa real confirmada en vivo: MuMuManager.exe reporto
+                        // "is_process_started: false" para VARIAS instancias que en ese mismo
+                        // instante seguian escribiendo lineas frescas en su propio log cada
+                        // minuto -- un dato directamente falso de la API de MuMu, probablemente
+                        // por la carga del sistema con 10+ instancias simultaneas. Ese chequeo
+                        // esta pensado para no avisar de instancias que el usuario cerro a
+                        // proposito -- pero sinCuentasInstancia YA es, en si mismo, una prueba
+                        // directa de que la instancia esta viva de verdad (la linea "no eligible
+                        // accounts" se acaba de escribir recien en su log real): no hace falta
+                        // ademas confirmarlo con una API que en ese momento estaba mintiendo.
+                        // Confirmado en vivo: bloqueaba el aviso por completo para 6-7 instancias
+                        // a la vez, todas realmente corriendo.
+                        if ((estaCongelado && estaAhkCorriendoHb(instId) && estaInstanciaMuMuCorriendoHb(instId)) || sinCuentasInstancia) {
+                            if (!esModoSinPool24h) {
+                                avisarInstanciaCongeladaSiHaceFalta(DISCORD_WEBHOOK, instId, packs, TIEMPO_MAXIMO_INACTIVO_MS, hbConfig.canal_id, hbConfig.discord_id, RUTA_LOGS_INSTANCIAS, cuentasRestantesPrevio, sinCuentasInstancia).catch(() => {});
                             }
-                        } else if (statsCache[instId].avisado) {
+                        // Bug real reportado en vivo 2026-09-12 (wR98 -- "las instancias estan
+                        // como locas se reinician a cada rato"): el reset de "avisado" no puede
+                        // depender de estaAhkCorriendoHb/estaInstanciaMuMuCorriendoHb (flaky bajo
+                        // carga, ver mas arriba) -- una lectura falsa resetea el flag y el ciclo
+                        // siguiente vuelve a disparar un power-cycle completo de la nada, aunque
+                        // la instancia siga genuinamente congelada. Ahora depende solo de que
+                        // haya avanzado de verdad.
+                        } else if (!estaCongelado && statsCache[instId].avisado) {
                             statsCache[instId].avisado = false;
                             guardarCache();
                         }
@@ -1129,9 +1327,9 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
                 }
             }
 
-            let balanceKevin = obtenerBalanceDesdeArchivo(RUTA_BALANCE_RESULT);
+            let balanceKevin = obtenerBalanceDesdeArchivoHb(RUTA_BALANCE_RESULT);
             let cuentasAbiertas = Math.floor(totalPacksGlobal / 2);
-            let totalFisico = contarXMLs(RUTA_CARPETA_XML).totales;
+            let totalFisico = contarXMLsHb(RUTA_CARPETA_XML).totales;
 
             let cuentasRestantes = balanceKevin > 0 ? (balanceKevin - cuentasAbiertas) : 0;
             if (cuentasRestantes < 0) cuentasRestantes = 0;
