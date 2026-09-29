@@ -14,7 +14,7 @@ const axios = require('axios');
 const express = require('express');
 const crypto = require('crypto');
 const FormData = require('form-data');
-const { exec, execSync, execFileSync, spawn } = require('child_process');
+const { exec, execSync, execFile, execFileSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -983,16 +983,20 @@ async function correrTandaFarmTickets(indices, cuentas, friendId, onPaso) {
     // paralelo es lo caro -- encender las instancias y esperar a que arranque el juego.
     avisar('Injecting accounts...');
     const cfgXml = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
-    const resultados = [];
-    for (const idx of vivas) {
+    // 2026-09-29 (Ale: "demora mucho en abrir el juego"): antes TODA la inyeccion iba en serie,
+    // asi que la 5a instancia abria el juego mucho despues que la 1a. Lo unico que no se puede
+    // pisar entre instancias es el `adb root` (reinicia la conexion). Ahora: primero el root de
+    // todas, en serie (rapido); despues las inyecciones A LA VEZ, sin root adentro.
+    for (const idx of vivas) await prepararAdbRoot(idx);
+    const resultados = await Promise.all(vivas.map(async (idx) => {
         const cuenta = cuentas[indices.indexOf(idx)];
         const rutaXml = buscarArchivoXmlPorNombre(cfgXml?.webhook_url, cuenta);
-        if (!rutaXml) { resultados.push({ index: idx, cuenta, ok: false, motivo: 'xml_no_encontrado' }); continue; }
-        const iny = await inyectarCuentaPorAdb(idx, rutaXml);
-        resultados.push(iny.ok
+        if (!rutaXml) return { index: idx, cuenta, ok: false, motivo: 'xml_no_encontrado' };
+        const iny = await inyectarCuentaPorAdb(idx, rutaXml, true);
+        return iny.ok
             ? { index: idx, cuenta, ok: true, motivo: '' }
-            : { index: idx, cuenta, ok: false, motivo: `inyeccion_${iny.motivo}` });
-    }
+            : { index: idx, cuenta, ok: false, motivo: `inyeccion_${iny.motivo}` };
+    }));
 
     // 3. (paso ELIMINADO 2026-09-26) Aca se llamaba a _WaitWelcomeScreens.ahk y era un error
     //    de diseño mio, señalado por Ale: "solamente te he dicho que agarres el hack de Kevin
@@ -4787,7 +4791,37 @@ function ejecutarAdbShellConFallback(adbExe, puerto, comando, timeoutMs = 15000)
     return ejecutarAdbComando(adbExe, ['-s', device, 'shell', comando], timeoutMs);
 }
 
-async function inyectarCuentaPorAdb(index, xmlPath) {
+// Versiones ASINCRONAS (2026-09-29): las de arriba usan execFileSync y congelan el bot entero
+// mientras corre cada comando, asi que varias inyecciones "a la vez" en realidad iban una
+// detras de otra. Estas dejan que las instancias avancen en paralelo de verdad.
+function ejecutarAdbComandoAsync(adbExe, args, timeoutMs = 15000) {
+    return new Promise(resolve => {
+        execFile(adbExe, args, { windowsHide: true, timeout: timeoutMs }, (err) => resolve(!err));
+    });
+}
+
+async function ejecutarAdbShellConFallbackAsync(adbExe, puerto, comando, timeoutMs = 15000) {
+    const device = `127.0.0.1:${puerto}`;
+    if (await ejecutarAdbComandoAsync(adbExe, ['-s', device, 'shell', comando], timeoutMs)) return true;
+    if (await ejecutarAdbComandoAsync(adbExe, ['-s', device, 'shell', 'su', '-c', comando], timeoutMs)) return true;
+    return ejecutarAdbComandoAsync(adbExe, ['-s', device, 'shell', comando], timeoutMs);
+}
+
+// Conecta y pone en modo root el adbd de una instancia. Separado de la inyeccion (2026-09-29)
+// para que Farm Tickets pueda hacer el root de TODAS primero (en serie, rapido) y despues
+// inyectar todas A LA VEZ sin que un `adb root` le corte la conexion a otra a mitad de camino.
+async function prepararAdbRoot(index) {
+    const adbExe = rutaAdbExe();
+    const puerto = obtenerPuertoAdbInstancia(index);
+    if (!adbExe || !puerto) return false;
+    const device = `127.0.0.1:${puerto}`;
+    if (!ejecutarAdbComando(adbExe, ['connect', device], 10000)) return false;
+    ejecutarAdbComando(adbExe, ['-s', device, 'root'], 10000);
+    await new Promise(r => setTimeout(r, 500)); // margen para que el daemon reinicie en modo root
+    return true;
+}
+
+async function inyectarCuentaPorAdb(index, xmlPath, rootYaHecho = false) {
     const adbExe = rutaAdbExe();
     if (!adbExe) return { ok: false, motivo: 'adb_no_encontrado' };
     const puerto = obtenerPuertoAdbInstancia(index);
@@ -4795,41 +4829,43 @@ async function inyectarCuentaPorAdb(index, xmlPath) {
     if (!fs.existsSync(xmlPath)) return { ok: false, motivo: 'xml_no_encontrado' };
 
     const device = `127.0.0.1:${puerto}`;
-    if (!ejecutarAdbComando(adbExe, ['connect', device], 10000)) return { ok: false, motivo: 'conexion_fallida' };
-    ejecutarAdbComando(adbExe, ['-s', device, 'root'], 10000);
-    await new Promise(r => setTimeout(r, 500)); // margen para que el daemon reinicie en modo root
+    if (!(await ejecutarAdbComandoAsync(adbExe, ['connect', device], 10000))) return { ok: false, motivo: 'conexion_fallida' };
+    if (!rootYaHecho) {
+        await ejecutarAdbComandoAsync(adbExe, ['-s', device, 'root'], 10000);
+        await new Promise(r => setTimeout(r, 500)); // margen para que el daemon reinicie en modo root
+    }
 
     const esperar = (ms) => new Promise(r => setTimeout(r, ms));
-    const shell = (cmd) => ejecutarAdbShellConFallback(adbExe, puerto, cmd);
+    const shell = (cmd) => ejecutarAdbShellConFallbackAsync(adbExe, puerto, cmd);
 
-    if (!shell(`am force-stop ${APP_ID_PTCGP}`)) return { ok: false, motivo: 'force_stop' };
+    if (!await shell(`am force-stop ${APP_ID_PTCGP}`)) return { ok: false, motivo: 'force_stop' };
     await esperar(200);
 
-    if (!shell(`rm -f /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml`)) return { ok: false, motivo: 'borrar_cuenta_previa' };
+    if (!await shell(`rm -f /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml`)) return { ok: false, motivo: 'borrar_cuenta_previa' };
     await esperar(200);
 
     for (const pref of USER_PREFS_A_LIMPIAR_INJECT) {
-        if (!shell(`rm -f /data/data/${APP_ID_PTCGP}/files/UserPreferences/v1/${pref}`)) return { ok: false, motivo: 'borrar_preferencias' };
+        if (!await shell(`rm -f /data/data/${APP_ID_PTCGP}/files/UserPreferences/v1/${pref}`)) return { ok: false, motivo: 'borrar_preferencias' };
         await esperar(150);
     }
 
-    if (!ejecutarAdbComando(adbExe, ['-s', device, 'push', xmlPath, '/sdcard/deviceAccount.xml'], 20000)) return { ok: false, motivo: 'push_xml' };
+    if (!(await ejecutarAdbComandoAsync(adbExe, ['-s', device, 'push', xmlPath, '/sdcard/deviceAccount.xml'], 20000))) return { ok: false, motivo: 'push_xml' };
     await esperar(150);
 
-    if (!shell(`mkdir -p /data/data/${APP_ID_PTCGP}/shared_prefs`)) return { ok: false, motivo: 'crear_carpeta' };
+    if (!await shell(`mkdir -p /data/data/${APP_ID_PTCGP}/shared_prefs`)) return { ok: false, motivo: 'crear_carpeta' };
     await esperar(100);
 
-    if (!shell(`cp /sdcard/deviceAccount.xml /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml`)) return { ok: false, motivo: 'copiar_xml' };
+    if (!await shell(`cp /sdcard/deviceAccount.xml /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml`)) return { ok: false, motivo: 'copiar_xml' };
     await esperar(100);
 
-    if (!shell(`chmod 664 /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml && chown system:system /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml`)) return { ok: false, motivo: 'permisos' };
+    if (!await shell(`chmod 664 /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml && chown system:system /data/data/${APP_ID_PTCGP}/shared_prefs/deviceAccount:.xml`)) return { ok: false, motivo: 'permisos' };
     await esperar(200);
 
-    shell(`rm -f /sdcard/deviceAccount.xml`);
-    shell(`rm -f /data/data/${APP_ID_PTCGP}/files/UserPreferences/v1/MissionUserPrefs`);
+    await shell(`rm -f /sdcard/deviceAccount.xml`);
+    await shell(`rm -f /data/data/${APP_ID_PTCGP}/files/UserPreferences/v1/MissionUserPrefs`);
 
-    const lanzado = shell(`am start -W -n ${APP_ID_PTCGP}/com.unity3d.player.UnityPlayerActivity -f 0x10018000`)
-        || shell(`am start -n ${APP_ID_PTCGP}/com.unity3d.player.UnityPlayerActivity -f 0x20000000`);
+    const lanzado = await shell(`am start -W -n ${APP_ID_PTCGP}/com.unity3d.player.UnityPlayerActivity -f 0x10018000`)
+        || await shell(`am start -n ${APP_ID_PTCGP}/com.unity3d.player.UnityPlayerActivity -f 0x20000000`);
     if (!lanzado) return { ok: false, motivo: 'lanzar_juego' };
 
     return { ok: true };
@@ -14756,7 +14792,16 @@ client.on('interactionCreate', async interaction => {
                         }
 
                         const webhooks = await canal.fetchWebhooks();
-                        const existingHooks = webhooks.filter(w => w.name === `Bot ${tipo}` || w.name === nombreDefaultWebhook(tipo));
+                        // Borrar TODOS los webhooks que creo este bot en el canal, no solo los que
+                        // conservan el nombre por defecto (2026-09-30, bug real de un usuario:
+                        // "30007 - Maximum number of webhooks reached (15)"). Los renombrados con
+                        // /webhook no se reconocian por nombre, quedaban, y cada sincronizacion
+                        // sumaba uno nuevo hasta el tope de 15 por canal. Los webhooks de otros
+                        // bots o creados a mano (ej. los del bot de Kevin) no se tocan.
+                        const idBot = interaction.client.user.id;
+                        const existingHooks = webhooks.filter(w =>
+                            w.owner?.id === idBot || w.applicationId === idBot
+                            || w.name === `Bot ${tipo}` || w.name === nombreDefaultWebhook(tipo));
                         for (const oldWebhook of existingHooks.values()) {
                             await oldWebhook.delete('Recreating invalid webhook').catch(console.error);
                         }

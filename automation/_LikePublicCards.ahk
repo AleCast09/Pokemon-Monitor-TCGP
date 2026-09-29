@@ -392,6 +392,7 @@ DarLikeAlPerfil(fid) {
         LogWarn("FALLO -- no_llego_a_comunidad")
         return "no_llego_a_comunidad"
     }
+    LogInfo("paso1: en Comunidad")
     if (!velocidadSubida)
         SubirVelocidad(5000)
 
@@ -412,12 +413,14 @@ DarLikeAlPerfil(fid) {
         LogWarn("FALLO -- no_entro_a_showcases")
         return "no_entro_a_showcases"
     }
+    LogInfo("paso2: en Community Showcases")
 
     ; Paso 3: tocar la LUPA para abrir el dialogo de busqueda por ID.
     if (!clickUntilNeedle("Friend_FriendIDSearchWindow", 224, 467, 30, 1500)) {
         LogWarn("FALLO -- no_abrio_el_dialogo_de_id")
         return "no_abrio_el_dialogo_de_id"
     }
+    LogInfo("paso3: dialogo de busqueda por ID abierto")
 
     ; Paso 4: enfocar el campo de texto. NO corta la corrida si el needle no matchea
     ; (2026-09-26, bug real: las dos instancias fallaban aqui con "no_enfoco_el_campo_de_id"

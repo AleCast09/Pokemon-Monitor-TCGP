@@ -1,7 +1,9 @@
 {
-  "version": "1.6.0",
+  "version": "1.6.1",
   "notesCount": 2,
   "notes": [
+    "Fixed: \"Sync Channels\" failing with \"Maximum number of webhooks reached (15)\" - old bot webhooks are now cleaned up.",
+    "Improved: Farm Tickets opens the game on all instances at the same time.",
     "Changed: Trade from Gold Cards disabled.",
     "Improved: \"Sync Channels\" errors now show the real cause instead of \"check the bot's permissions\".",
     "Added: /transfers - your card transfer history with card photo, date, account and friend ID.",
