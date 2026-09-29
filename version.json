@@ -1,7 +1,9 @@
 {
-  "version": "1.5.99",
-  "notesCount": 31,
+  "version": "1.6.0",
+  "notesCount": 2,
   "notes": [
+    "Changed: Trade from Gold Cards disabled.",
+    "Improved: \"Sync Channels\" errors now show the real cause instead of \"check the bot's permissions\".",
     "Added: /transfers - your card transfer history with card photo, date, account and friend ID.",
     "Added: transfer audit before Start - blocks accounts with no copies left and suggests others.",
     "Added: \"Transfer completed\" summary after every successful Main Trade.",

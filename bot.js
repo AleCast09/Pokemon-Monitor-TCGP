@@ -3693,7 +3693,8 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const filaAcciones = new ActionRowBuilder().addComponents(
         // Ver tradeHabilitadoEnGuild() arriba del archivo -- deshabilitado en todo servidor
         // que no sea el propio del usuario, reactivado ahi el 2026-09-02.
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!tradeHabilitadoEnGuild(guild?.id)),
+        // Trade de Gold Cards deshabilitado (2026-09-30, pedido de Ale).
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold || !tradeHabilitadoEnGuild(guild?.id)),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
         // Inject (2026-09-15, a pedido explicito del usuario): mismo patron que
@@ -14017,6 +14018,8 @@ client.on('interactionCreate', async interaction => {
             // "cualquier cuenta con al menos 1 copia". Gold Cards no tiene los 3
             // modos todavía (solo el equivalente a Friend Trade) -- reenvía la
             // carta al canal de Trading ya directo con el selector de amigo.
+            // Deshabilitado (2026-09-30, pedido de Ale): cubre botones viejos que quedaron activos.
+            return await interaction.reply({ content: '❌ Trade from Gold Cards is disabled.', ephemeral: true });
             const cartaId = interaction.customId.replace('goldcards_trade::', '');
             await interaction.deferReply({ ephemeral: true }); // obtenerCartasGoldCacheadas + armar la carta pueden tardar más de 3s
             const { rutaIni } = await obtenerRutasInject(interaction.guildId);
@@ -14837,7 +14840,10 @@ client.on('interactionCreate', async interaction => {
                     await interaction.editReply({ content: `✅ **Channels synced successfully!**\n\n${reportePartes.join('\n')}` });
                 } catch (e) {
                     console.error(e);
-                    await interaction.editReply({ content: "❌ Error syncing channels. Check the bot's permissions." });
+                    // Mostrar la causa real (2026-09-30, reporte de un usuario con Administrador que
+                    // igual veia "revisa los permisos"): cualquier fallo caia en ese texto generico.
+                    const causa = [e?.code, e?.rawError?.message || e?.message].filter(Boolean).join(' - ').slice(0, 300);
+                    await interaction.editReply({ content: `❌ Error syncing channels${causa ? `: \`${causa}\`` : '.'}\nIf the bot already has Administrator, send this message to the developer.` });
                 }
                 break;
 
