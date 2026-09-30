@@ -1000,18 +1000,31 @@ chequeoCorazonPorAdb(ByRef outX, ByRef outY) {
     encontrado := false
     try {
         pBitmap := Gdip_CreateBitmapFromFile(tempFile)
-        pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_donoroffer_wishlist_heart_adb.png")
-        if (pBitmap && pNeedle) {
-            vPos := ""
-            if (buscarNeedleZonal(pBitmap, pNeedle, vPos, 40, "own_donoroffer_wishlist_heart_adb") = 1) {
-                partes := StrSplit(vPos, ",")
-                outX := partes[1] + 12
-                outY := partes[2] + 11
-                encontrado := true
+        ; 3 versiones del corazon (2026-09-29, bug real en vivo con Ale: el corazon estaba a la
+        ; vista y no se reconocio). Aun en la captura ADB, el juego dibuja el trazo del corazon
+        ; corrido menos de 1 px segun donde quede el scroll, y los bordes cambian hasta 100 de
+        ; tono. Con una sola version y tolerancia 40, en algunas posiciones no coincidia nunca.
+        ; A = la de siempre, B = la otra "fase" (recortada de la foto del fallo), C = intermedia.
+        ; Tolerancia 55: medido, B da 0 y C da 50 sobre el corazon; fuera del corazon, lo mas
+        ; parecido de toda la pantalla da 78 o mas con cualquiera de las tres.
+        if (pBitmap) {
+            for _, sufijo in ["", "_b", "_c"] {
+                pNeedle := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_donoroffer_wishlist_heart_adb" . sufijo . ".png")
+                if (!pNeedle)
+                    continue
+                vPos := ""
+                ; misma zona para las 3 (se busca por el nombre base)
+                hallado := (buscarNeedleZonal(pBitmap, pNeedle, vPos, 55, "own_donoroffer_wishlist_heart_adb") = 1)
+                Gdip_DisposeImage(pNeedle)
+                if (hallado) {
+                    partes := StrSplit(vPos, ",")
+                    outX := partes[1] + 12
+                    outY := partes[2] + 11
+                    encontrado := true
+                    break
+                }
             }
         }
-        if (pNeedle)
-            Gdip_DisposeImage(pNeedle)
         if (pBitmap)
             Gdip_DisposeImage(pBitmap)
     } catch e {
@@ -1229,9 +1242,23 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
         matchea := false
         diffCarta := -1
         if (pBitmapVivo) {
-            rectVivo := {x: 30, y: 140, w: 215, h: 122}
-            rectReferencia := {x: 12, y: 58, w: 250, h: 137}
-            matchea := compararArteCartas(pBitmapVivo, rectVivo, pBitmapReferencia, rectReferencia, 8, 45, diffCarta)
+            ; Recuadro "celeste" (2026-09-29, medido con Ale sobre 24 cartas de TODOS los tipos:
+            ; 1-4 diamantes, ex, Mega ex, 1 y 2 estrellas, shiny 1 y 2, inmersivas, corona,
+            ; entrenadores). Antes era la ventana del dibujo entera, que tocaba texto (la linea de
+            ; datos del Pokemon, "Evoluciona de...", la etiqueta Mega y, en los entrenadores, la
+            ; barra con el NOMBRE) y ese texto cambia con el idioma. Ahora es el centro del dibujo:
+            ; fracciones (0.20, 0.16, 0.60, 0.22) de la carta, sin ningun texto.
+            ; Carta abierta desde la wishlist, en la ventana nativa: esquina (22,90), 231x322.
+            rectVivo := {x: 68, y: 142, w: 139, h: 71}
+            ; La referencia se mide EN PROPORCION a su tamano real: ~10% de las imagenes de la
+            ; carpeta de Kevin miden 367x512 en vez de 275x384, y con el recuadro fijo en pixeles
+            ; se comparaba otra zona de la carta -- esas cartas no coincidian NUNCA.
+            Gdip_GetImageDimensions(pBitmapReferencia, anchoRef, altoRef)
+            rectReferencia := {x: Round(anchoRef * 0.20), y: Round(altoRef * 0.16), w: Round(anchoRef * 0.60), h: Round(altoRef * 0.22)}
+            ; Limite 45 -> 9: la carta correcta dio entre 1,4 y 6,9 en las 24 medidas; la version
+            ; mas parecida de otra carta (el mismo Mew en otro color) dio 13,5. Con 45 se podian
+            ; aceptar cartas equivocadas (una distinta llego a dar 35).
+            matchea := compararArteCartas(pBitmapVivo, rectVivo, pBitmapReferencia, rectReferencia, 8, 9, diffCarta)
             Gdip_DisposeImage(pBitmapVivo)
         }
 
@@ -1315,7 +1342,7 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
         if (matchea)
             encontroMatch := true
 
-        logDebugWishlist("carta " . A_Index . "/3: matchea=" . matchea . " diff=" . Round(diffCarta, 2) . " (umbral 45) quieta=" . (quedoQuieta ? 1 : 0) . " estabaMarcada=" . estaMarcada)
+        logDebugWishlist("carta " . A_Index . "/3: matchea=" . matchea . " diff=" . Round(diffCarta, 2) . " (umbral 9) quieta=" . (quedoQuieta ? 1 : 0) . " estabaMarcada=" . estaMarcada)
 
         ; Paso 8 (2026-08-30, CORREGIDO tras prueba real en vivo -- ver comentario completo en
         ; swipeCardHorizontal): el swipe horizontal pasa a la carta siguiente DENTRO del mismo

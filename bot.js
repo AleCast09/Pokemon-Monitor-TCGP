@@ -933,7 +933,7 @@ function planTandasFarm(instancias, restantes) {
 // levante cinco maquinas virtuales en el mismo instante.
 //
 // Devuelve por cada instancia que paso: { index, cuenta, ok, motivo }.
-async function correrTandaFarmTickets(indices, cuentas, friendId, onPaso) {
+async function correrTandaFarmTickets(indices, cuentas, friendId, onPaso, guildId = null) {
     const avisar = (txt) => { try { onPaso && onPaso(txt); } catch (e) { /* el aviso nunca debe romper la tanda */ } };
 
     // 1. Encender todas a la vez, escalonadas 5s
@@ -949,14 +949,17 @@ async function correrTandaFarmTickets(indices, cuentas, friendId, onPaso) {
     if (!vivas.length) return indices.map((idx, i) => ({ index: idx, cuenta: cuentas[i], ok: false, motivo: 'no_encendio' }));
     // Ordenar las ventanas en grilla, igual que Kevin y que el Main Trade (2026-09-29, pedido
     // de Ale). Best-effort: no bloquea la tanda si falla.
+    // Corregido 2026-09-29 (bug real con Ale: "mira como estan todos juntos"): antes se pasaban
+    // todos los nombres ("1","2","3"...) de una vez, pero _ArrangeWindows.ahk trata un primer
+    // argumento NUMERICO como "acomodar UNA sola instancia" -- ordenaba la 1 y salia, y el resto
+    // quedaba encimado. Ahora, igual que el heartbeat: una llamada por instancia, a su propio
+    // lugar en la grilla de Kevin (Columns / RowGap / runMain de su Settings.ini).
     try {
-        const ahkExeArrange = rutaAutoHotkey();
         const listaInst = obtenerInstanciasMuMu() || [];
-        const nombresVivas = vivas
-            .map(idx => listaInst.find(x => String(x.index) === String(idx))?.name)
-            .filter(Boolean);
-        if (ahkExeArrange && nombresVivas.length && fs.existsSync(RUTA_ARRANGE_WINDOWS_SCRIPT)) {
-            spawn(ahkExeArrange, [RUTA_ARRANGE_WINDOWS_SCRIPT, ...nombresVivas], { windowsHide: false, detached: true, stdio: 'ignore' }).unref();
+        const { columnas, rowGap, incluyeMain } = await leerGrillaDesdeSettingsIni(guildId);
+        for (const idx of vivas) {
+            const nombreInst = listaInst.find(x => String(x.index) === String(idx))?.name;
+            if (nombreInst && /^\d+$/.test(nombreInst)) reacomodarVentanaInstancia(nombreInst, columnas, rowGap, incluyeMain);
         }
     } catch (e) {
         console.error('DEBUG: no se pudo acomodar las ventanas de Farm Tickets:', e?.message || e);
@@ -11254,7 +11257,7 @@ client.on('interactionCreate', async interaction => {
                 await pintar('⏳ Starting...');
 
                 const res = await correrTandaFarmTickets(indicesRun.slice(0, cuentas.length), cuentas, friendIdRun,
-                    (txt) => { pintar('⏳ ' + txt); });
+                    (txt) => { pintar('⏳ ' + txt); }, interaction.guildId);
 
                 let okRonda = 0;
                 for (const r of res) {

@@ -1,7 +1,13 @@
 {
-  "version": "1.6.1",
-  "notesCount": 2,
+  "version": "1.6.2",
+  "notesCount": 6,
   "notes": [
+    "Fixed: Farm Tickets getting stuck on the News popup - it now closes it automatically.",
+    "Fixed: Farm Tickets instances piling up on top of each other - they are now arranged like Kevin's grid.",
+    "Fixed: Main Trade not recognizing some wishlist cards (star rarities, larger card images, other languages).",
+    "Fixed: donor sometimes missing the \"View Wishlist\" heart while scrolling the profile.",
+    "Improved: wishlist card matching is stricter - no more picking a similar but wrong card.",
+    "Added: Deluxe Pack: Mega logo and booster pack image.",
     "Fixed: \"Sync Channels\" failing with \"Maximum number of webhooks reached (15)\" - old bot webhooks are now cleaned up.",
     "Improved: Farm Tickets opens the game on all instances at the same time.",
     "Changed: Trade from Gold Cards disabled.",

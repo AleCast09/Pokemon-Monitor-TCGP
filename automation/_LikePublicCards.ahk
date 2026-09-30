@@ -216,12 +216,39 @@ tap(X, Y) {
     adbClick(X, Y)
 }
 
-clickUntilNeedle(needleName, clickX, clickY, timeoutSec := 30, retryMs := 800) {
+; Popup de Noticias al abrir el juego (2026-09-29, pedido de Ale: "que cuando aparece le de X").
+; Mismo criterio que el arranque del Main Trade (own_news_x en _WaitWelcomeScreens*.ahk): la X
+; de cerrar, sin letras, en su lugar fijo abajo al centro. Version nativa (13x13) del needle
+; ADB, buscada solo en esa zona. Se toca (141,478), igual que en el Main Trade.
+cerrarNoticiasSiAparece() {
+    global g_mumuHwnd
+    static pX := 0
+    if (!pX)
+        pX := Gdip_CreateBitmapFromFile(A_ScriptDir . "\Needles\own_news_x_native.png")
+    if (!pX)
+        return false
+    pBitmap := from_window(g_mumuHwnd)
+    if (!pBitmap)
+        return false
+    vPos := ""
+    visto := (Gdip_ImageSearch(pBitmap, pX, vPos, 110, 450, 170, 500, 40) = 1)
+    Gdip_DisposeImage(pBitmap)
+    if (visto) {
+        LogInfo("popup de Noticias abierto, tocando X")
+        tap(141, 478)
+        Sleep, 800
+    }
+    return visto
+}
+
+clickUntilNeedle(needleName, clickX, clickY, timeoutSec := 30, retryMs := 800, cerrarNoticias := false) {
     start := A_TickCount
     lastClick := 0
     Loop {
         if (findNeedle(needleName))
             return true
+        if (cerrarNoticias && cerrarNoticiasSiAparece())
+            continue
         if ((A_TickCount - lastClick) >= retryMs) {
             tap(clickX, clickY)
             lastClick := A_TickCount
@@ -388,7 +415,7 @@ DarLikeAlPerfil(fid) {
     ; Paso 1: llegar a Comunidad. Mismo llamado que Kevin -- 240s tocando la pestaña hasta que
     ; el icono se enciende. Esto YA cubre el arranque del juego desde la pantalla de titulo,
     ; por eso este script no necesita ningun script previo de pantallas de bienvenida.
-    if (!clickUntilNeedle("Common_ActivatedSocialInMainMenu", 143, 518, 240, 1500)) {
+    if (!clickUntilNeedle("Common_ActivatedSocialInMainMenu", 143, 518, 240, 1500, true)) {
         LogWarn("FALLO -- no_llego_a_comunidad")
         return "no_llego_a_comunidad"
     }
