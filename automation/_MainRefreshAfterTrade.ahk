@@ -70,7 +70,7 @@ tap(x, y, esperaMs := 0) {
 ; Navega a Social Hub -> Trade (seguro sin importar en que pantalla haya quedado Main --
 ; mismo patron ya usado en _CheckPendingOffer.ahk/_DonorRespondAndFinalize.ahk).
 tap(141, 511)
-tap(207, 402)
+tap(207, 421)
 
 chequeoRapidoNeedle(nombreNeedleNativo, variationNativo) {
     global g_hwndFast
@@ -327,6 +327,9 @@ Sleep, 800
 AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainSwipePhoto.png"))
 bajarSpeedModA1xSiEstaActivo()
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
+; Los 3 s NO sobran (2026-10-04, probado en vivo con Ale): dejan terminar la animacion de la
+; carta volando. Sin ellos el needle del "Got it!" (fondo) coincidia en plena animacion y la foto
+; salia con la carta en el aire.
 Sleep, 3000
 
 ; Segunda foto de evidencia (2026-08-22, a pedido explicito del usuario, mostrando una

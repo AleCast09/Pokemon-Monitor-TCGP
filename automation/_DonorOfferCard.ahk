@@ -20,7 +20,15 @@ global g_folderPath := A_Args[2]
 ; outputFile de siempre) -- en ese caso g_rutaImagenReferencia queda vacio y la funcion nueva
 ; devuelve false altiro, cayendo al metodo de siempre (a ciegas) sin ningun cambio de
 ; comportamiento.
-if (A_Args.Length() >= 4) {
+; 5to arg opcional (2026-10-04, Friend Trade): modo extra antes del outputFile -- "AMIGO" = esperar
+; a que el amigo acepte la solicitud (puntito rojo en Friends) antes de ofrecer; "AMIGO_YA" = ya
+; eran amigos, no hay nada que esperar. Uso: ... "<imagen>" "AMIGO" "<outputFile>"
+global g_modoExtra := ""
+if (A_Args.Length() >= 5) {
+    global g_rutaImagenReferencia := A_Args[3]
+    g_modoExtra := A_Args[4]
+    global g_outputFile := A_Args[5]
+} else if (A_Args.Length() >= 4) {
     global g_rutaImagenReferencia := A_Args[3]
     global g_outputFile := A_Args[4]
 } else {
@@ -473,7 +481,7 @@ esperarTradeIconOBadgeRechazo(timeoutMs := 15000) {
         ; pipeline hoy).
         if (chequeoRapidoNeedle("own_donoroffer_trade_icon_native", 30) || chequeoRapidoNeedle("own_donoroffer_notradeagreement_badge_native", 30)) {
             Sleep, 900
-            tap(207, 402)
+            tap(207, 421)
             return true
         }
         tempFile := A_ScriptDir . "\Logs\_step_check_" . g_winTitle . ".png"
@@ -493,7 +501,7 @@ esperarTradeIconOBadgeRechazo(timeoutMs := 15000) {
         }
         if (encontrado) {
             Sleep, 900
-            tap(207, 402)
+            tap(207, 421)
             return true
         }
         if (A_TickCount - inicio > timeoutMs)
@@ -733,7 +741,9 @@ esperarAperturaCartaConfirmada(timeoutMs) {
 ; que de verdad volvimos a "Select a Friend" antes de devolver el control -- si por algun
 ; motivo no alcanza, cae al metodo viejo (buscar+tocar el boton X) como respaldo.
 cerrarPerfilSiEstaAbierto() {
-    global adbPath, puerto
+    global adbPath, puerto, g_modoDesmarcar
+    if (g_modoDesmarcar)   ; tras desmarcar se apaga la instancia, no hay que volver a ningun lado
+        return
     ; Reescrito con mas margen de asentamiento (2026-09-03, bug real reproducido en vivo con
     ; Ale: "le dio doble click al X y no entro en trade del perfil del usuario" -- el chequeo
     ; anterior esperaba solo 700ms fijos antes de decidir si hacia falta un SEGUNDO Atras,
@@ -1051,20 +1061,329 @@ buscarCorazonWishlist(ByRef outX, ByRef outY) {
     return (outY >= 230)
 }
 
-intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
-    global g_hwndFast, adbPath, puerto
+; --- Esperar a que el AMIGO acepte la solicitud (2026-10-04, diseño de Ale del 30/09) ---
+; Para Friend Trade / Share to Friend: la donante manda la solicitud, vuelve a Comunidad y toca la
+; pestaña de abajo (tres personas) cada pocos segundos para que se actualice. Cuando el amigo acepta,
+; el boton "Friends" (abajo a la izquierda) muestra un puntito rojo. Tope 15 minutos.
+; El puntito se detecta por COLOR, sin needle ni texto: los puntos del juego son rosado-rojo (medidos
+; 230,94,137 y 251,82,204). En la zona del boton Friends, sin punto, hay 0 pixeles de ese color en
+; Social Hub (ingles) y Comunidad (español). Zona nativa (0,426)-(77,488) = ADB (0,760)-(150,880).
+puntoRojoEnAmigos(ByRef cantidadOut := "") {
+    global g_hwndFast
+    cantidadOut := 0
+    asegurarHwndFast()
+    pBitmap := capturarVentana(g_hwndFast)
+    if (!pBitmap)
+        return false
+    Gdip_GetImageDimensions(pBitmap, ancho, alto)
+    sx := ancho / 275, sy := alto / 528
+    ; Zona ajustada con una captura REAL con punto (2026-10-04): el punto cae en nativo (49-52,450-451),
+    ; arriba a la derecha del boton Friends, y a esta escala mide ~6 px.
+    y := Round(436 * sy), yFin := Round(466 * sy), xFin := Round(70 * sx)
+    while (y <= yFin) {
+        x := Round(30 * sx)
+        while (x <= xFin) {
+            c := Gdip_GetPixel(pBitmap, x, y)
+            r := (c >> 16) & 0xFF, g := (c >> 8) & 0xFF, b := c & 0xFF
+            if (r > 180 && g < 120 && r - b > 30)
+                cantidadOut++
+            x++
+        }
+        y++
+    }
+    Gdip_DisposeImage(pBitmap)
+    return (cantidadOut >= 3)
+}
 
-    logDebugWishlist("INICIO -- rutaImagenReferencia=" . rutaImagenReferencia)
+esperarAmigoAcepte(timeoutMs) {
+    global adbPath, puerto, g_winTitle
+    inicio := A_TickCount
+    ultimoTapComunidad := 0
+    ultimoLog := A_TickCount
+    vistoSeguido := 0
+    logDebugWishlist("AMIGO: esperando que el amigo acepte la solicitud (tope " . Round(timeoutMs / 60000) . " min)")
+    Loop {
+        if (puntoRojoEnAmigos(cantidad)) {
+            vistoSeguido++
+            if (vistoSeguido >= 2) {   ; dos capturas seguidas, para no confundirse con un destello
+                logDebugWishlist("AMIGO: puntito rojo en Friends (" . cantidad . " px) -- el amigo acepto")
+                AdbScreenshot(adbPath, puerto, A_ScriptDir . "\Logs\_amigo_acepto_" . g_winTitle . ".png")
+                return true
+            }
+        } else {
+            vistoSeguido := 0
+        }
+        if (A_TickCount - inicio > timeoutMs) {
+            logDebugWishlist("AMIGO: FALLO -- " . Round(timeoutMs / 60000) . " min sin que el amigo acepte")
+            AdbScreenshot(adbPath, puerto, A_ScriptDir . "\Logs\_amigo_no_acepto_" . g_winTitle . ".png")
+            return false
+        }
+        if (A_TickCount - ultimoTapComunidad >= 4000) {
+            tap(141, 511)   ; pestaña de abajo (tres personas): recarga Comunidad
+            ultimoTapComunidad := A_TickCount
+        }
+        if (A_TickCount - ultimoLog >= 60000) {
+            logDebugWishlist("AMIGO: sigue esperando (" . Round((A_TickCount - inicio) / 60000) . " min)")
+            ultimoLog := A_TickCount
+        }
+        Sleep, 700
+    }
+}
 
-    if (rutaImagenReferencia = "" || !FileExist(rutaImagenReferencia)) {
-        logDebugWishlist("SALIDA: sin imagen de referencia o archivo no existe")
+; --- Share (2026-10-04) ---
+; Vista previa "Share Partner": misma carta grande que la de Trade pero 22 px mas arriba (medido en
+; la captura real: borde superior en y=186 ADB contra 229 en Trade). Mismo recuadro proporcional del
+; dibujo que la wishlist (0.20, 0.16, 0.60, 0.22) y misma tolerancia 9: la correcta da 2-3 y la
+; incorrecta mas parecida 22+ (medido en Trade con estas mismas proporciones).
+cartaSharePreviewEsLaPedida(ByRef diffOut) {
+    global g_hwndFast, g_rutaImagenReferencia
+    diffOut := -1
+    asegurarHwndFast()
+    esperarPantallaQuieta(3000)
+    pRef := Gdip_CreateBitmapFromFile(g_rutaImagenReferencia)
+    if (!pRef)
+        return false
+    pVivo := capturarVentana(g_hwndFast)
+    matchea := false
+    if (pVivo) {
+        rectVivo := {x: 88, y: 171, w: 99, h: 51}
+        Gdip_GetImageDimensions(pRef, anchoRef, altoRef)
+        rectRef := {x: Round(anchoRef * 0.20), y: Round(altoRef * 0.16), w: Round(anchoRef * 0.60), h: Round(altoRef * 0.22)}
+        matchea := compararArteCartas(pVivo, rectVivo, pRef, rectRef, 8, 9, diffOut)
+        Gdip_DisposeImage(pVivo)
+    }
+    Gdip_DisposeImage(pRef)
+    return matchea
+}
+
+flujoShare() {
+    global adbPath, puerto, g_outputFile, g_rutaImagenReferencia, g_modoDesmarcar, g_bajarVelocidadEnPerfil, g_favoritoMarcado
+    ; S1: tile Share de Comunidad -> pantalla Share (needle: icono verde de dos personas, sin texto)
+    logDebugWishlist("share1: tocando el tile Share")
+    if (!tocarHastaVerNeedle(73, 410, "own_share_landing_native", 40, 2500, 20000))
+        ExitConError("no_aparecio_pantalla_share")
+    ; S2: boton azul Share -> "Select a Friend" (needle: lupita del avatar, la misma de Trade)
+    logDebugWishlist("share2: tocando el boton Share")
+    if (!tocarHastaVerNeedle(141, 421, "own_donoroffer_selectfriend_trade_native", 30, 2500, 15000))
+        ExitConError("no_aparecio_selectfriend_share")
+    ; S3: wishlist de Main -> estrella dorada en la carta pedida (misma funcion que Main Trade)
+    g_favoritoMarcado := intentarMarcarFavoritoPorWishlist(g_rutaImagenReferencia)
+    if (!g_favoritoMarcado) {
+        logDebugWishlist("share3: CORTE -- no se marco la carta pedida, no se comparte nada")
+        cerrarPerfilSiEstaAbierto()
+        ExitConError("wishlist_no_se_marco_carta")
+    }
+    ; S4: boton Share del amigo -> lista de cartas -> lupa -> Favorites -> OK
+    if (!esperarNeedleSinAccion("own_donoroffer_selectfriend_trade", 30, 15000, "own_donoroffer_selectfriend_trade_native", 30))
+        ExitConError("no_volvio_a_selectfriend_share")
+    logDebugWishlist("share4: tocando Share del amigo")
+    Sleep, 900
+    tap(213, 179)
+    Sleep, 2500
+    if (!seleccionarCartaPorFavoritos()) {
+        logDebugWishlist("share4: CORTE -- el filtro de favoritos fallo, no se comparte nada")
+        ExitConError("filtro_favoritos_fallo")
+    }
+    ; S5: tocar la carta (unica tras el filtro), cerrar el zoom si se abrio, OK
+    tap(48, 357)
+    Sleep, 600
+    Loop, 2 {
+        tap(150, 60)
+        Sleep, 500
+    }
+    Sleep, 900
+    tap(145, 458)
+    ; S6: vista previa "Share Partner": comprobar que es la carta pedida ANTES de compartir (Share no
+    ; tiene vuelta atras ni respuesta del otro lado como Trade)
+    Sleep, 2500
+    diffShare := -1
+    if (!cartaSharePreviewEsLaPedida(diffShare)) {
+        logDebugWishlist("share6: CORTE -- la carta de la vista previa NO es la pedida (diff=" . Round(diffShare, 1) . ", umbral 9)")
+        AdbScreenshot(adbPath, puerto, A_ScriptDir . "\Logs\_share_carta_distinta.png")
+        ExitConError("share_carta_no_coincide")
+    }
+    logDebugWishlist("share6: carta confirmada (diff=" . Round(diffShare, 1) . "), foto y Share")
+    AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_SharePhoto.png"))
+    Sleep, 600
+    tap(141, 458)
+    ; S7: popup "Are you sure...?" -> OK, reintentando hasta que salga la pantalla del swipe
+    Sleep, 1500
+    inicioOk := A_TickCount
+    ultimoOk := 0
+    Loop {
+        if (chequeoRapidoNeedle("own_donorfinalize_swipe_instruction_native", 30))
+            break
+        if (A_TickCount - inicioOk > 15000)
+            ExitConError("no_aparecio_swipe_share")
+        if (A_TickCount - ultimoOk >= 2500) {
+            tap(203, 364)
+            ultimoOk := A_TickCount
+        }
+        Sleep, 300
+    }
+    ; S8: bajar a 1x (despues de la wishlist la donante volvio a 3x) y swipe, igual que en Trade
+    deslizarSpeedMod("min")
+    Sleep, 800
+    AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_ShareSwipePhoto.png"))
+    Loop, 3 {
+        AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
+        Sleep, 3000
+        if (!chequeoRapidoNeedle("own_donorfinalize_swipe_instruction_native", 30))
+            break
+        logDebugWishlist("share8: el swipe no entro, reintento " . A_Index)
+    }
+    inicioVuelta := A_TickCount
+    while (A_TickCount - inicioVuelta < 15000 && !chequeoRapidoNeedle("own_share_landing_native", 40))
+        Sleep, 300
+    Sleep, 1200
+    AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_ShareSentPhoto.png"))
+    logDebugWishlist("share8: carta compartida")
+    ; S9: desmarcar por Friends (Share no tiene "Send a thanks?"). Ya esta en 1x. Si falla, la carta
+    ; igual quedo compartida: no se corta el resultado.
+    g_modoDesmarcar := true
+    g_bajarVelocidadEnPerfil := false
+    if (llegarAlPerfilDespuesDelTradeo())
+        intentarMarcarFavoritoPorWishlist("")
+    else
+        logDebugWishlist("share9: no se llego al perfil para desmarcar")
+}
+
+; Del "Got it!" al perfil de Main (2026-10-01, mapeado en vivo con Ale en la instancia 1). Estilo
+; Kevin: en cada vuelta se mira que pantalla hay y se toca lo que toca, cada 2 s como minimo.
+; Pantallas, en orden (las del medio solo salen a veces):
+;   "Got it!"                -> Tap to Proceed (152,486)
+;   registrar en el dex      -> >| (254,500)        [needle Skip de Kevin]
+;   dex de la expansion      -> Next (141,478)      [needle Next de Kevin, la pokebola]
+;   "Items acquired"         -> OK (141,420)        [needle de Kevin, borde izquierdo del dialogo]
+;   "Send a thanks?"         -> portada del perfil (141,203) -> abre el perfil de Main
+; "Grand total cards acquired" pasa sola. Cualquier pantalla sin needle propio recibe el toque
+; de la portada: en "Send a thanks?" abre el perfil y en las demas cae en un lugar vacio.
+llegarAlPerfilDespuesDelTradeo() {
+    global adbPath, puerto, g_bajarVelocidadEnPerfil
+    asegurarHwndFast()
+    inicio := A_TickCount
+    ultimoTap := 0
+    ; El "Got it!" YA NO se busca (2026-10-04, segunda vez en vivo con Ale): su needle (el fondo lila)
+    ; coincide con "Send a thanks?" y su toque (152,486) cae justo sobre la X de ese popup -- lo
+    ; cerraba. _DonorRespondAndFinalize ya toco "Tap to Proceed"; si quedara, la portada tambien avanza.
+    vacias := 0
+    Loop {
+        if (chequeoRapidoNeedle("own_donoroffer_userprofile_battlerecord_native", 60)) {
+            logDebugWishlist("DESMARCAR: perfil de Main abierto")
+            return true
+        }
+        if (A_TickCount - inicio > 45000) {
+            logDebugWishlist("DESMARCAR: FALLO -- 45 s sin llegar al perfil de Main")
+            AdbScreenshot(adbPath, puerto, A_ScriptDir . "\Logs\_desmarcar_sin_perfil_" . g_winTitle . ".png")
+            return false
+        }
+        if (A_TickCount - ultimoTap < 2000) {
+            Sleep, 250
+            continue
+        }
+        ; Estilo Kevin (1.ahk:4918, pantallas despues de abrir sobre) + espera a que la pantalla
+        ; CAMBIE (2026-10-04, bug real en vivo con Ale): el >| se tocaba, a los 2 s el needle todavia
+        ; coincidia en plena transicion y el segundo toque caia sobre una carta del dex y la abria.
+        ; Ahora se exige ver la pantalla en DOS capturas seguidas antes de tocar, y despues de tocar
+        ; se espera (hasta 3 s) a que ese boton desaparezca antes de mirar de nuevo.
+        if (pantallaEstable("kevin_pack_skip_native", 40)) {
+            logDebugWishlist("DESMARCAR: registrar en el dex, tocando >|")
+            Sleep, 700   ; que el boton termine de aparecer y se pueda apretar
+            tap(247, 500)
+            esperarQueDesaparezca("kevin_pack_skip_native", 40, 3000)
+            vacias := 0
+        } else if (pantallaEstable("kevin_pack_next_native", 50)) {
+            logDebugWishlist("DESMARCAR: dex, tocando Next")
+            Sleep, 700
+            tap(146, 489)
+            esperarQueDesaparezca("kevin_pack_next_native", 50, 3000)
+            vacias := 0
+        } else if (pantallaEstable("kevin_getitem_dialog_native", 20)) {
+            logDebugWishlist("DESMARCAR: 'Items acquired', tocando OK")
+            Sleep, 700
+            tap(141, 420)
+            esperarQueDesaparezca("kevin_getitem_dialog_native", 20, 3000)
+            vacias := 0
+        } else if (pantallaEstable("own_share_landing_native", 40)) {
+            ; Pantalla de Share (despues del swipe de Share, 2026-10-04): a Comunidad por la pestaña
+            ; de abajo (tres personas) y de ahi a Friends.
+            logDebugWishlist("DESMARCAR: en Share, tocando la pestaña de Comunidad")
+            Sleep, 500
+            tap(141, 511)
+            esperarQueDesaparezca("own_share_landing_native", 40, 3000)
+            vacias := 0
+        } else if (pantallaEstable("own_friends_lista_native", 40)) {
+            ; Camino por Friends (2026-10-04, Ale): Share no tiene "Send a thanks?", y en Trade sirve
+            ; de plan B si ese popup se fue. Lista de amigos -> avatar del primero (la donante
+            ; normalmente tiene un solo amigo: el que recibe la carta).
+            logDebugWishlist("DESMARCAR: lista de Friends, tocando el avatar del amigo")
+            g_bajarVelocidadEnPerfil := true   ; por Friends la donante puede venir en 3x
+            Sleep, 500
+            tap(54, 182)
+            esperarQueDesaparezca("own_friends_lista_native", 40, 3000)
+            vacias := 0
+        } else if (pantallaEstable("own_mainaccept_friends_icon_native", 30)) {
+            logDebugWishlist("DESMARCAR: en Comunidad, tocando Friends")
+            Sleep, 500
+            tap(34, 462)
+            esperarQueDesaparezca("own_mainaccept_friends_icon_native", 30, 3000)
+            vacias := 0
+        } else {
+            ; Ninguna pantalla conocida: la portada solo se toca si eso se repite 2 vueltas (no en
+            ; medio de una transicion, donde podria caer sobre una carta del dex).
+            vacias++
+            if (vacias >= 2) {
+                logDebugWishlist("DESMARCAR: tocando la portada (141,203)")
+                tap(141, 203)
+                vacias := 0
+            }
+        }
+        ultimoTap := A_TickCount
+    }
+}
+
+pantallaEstable(needle, variation) {
+    if (!chequeoRapidoNeedle(needle, variation))
+        return false
+    Sleep, 300
+    return chequeoRapidoNeedle(needle, variation)
+}
+
+esperarQueDesaparezca(needle, variation, timeoutMs) {
+    inicio := A_TickCount
+    while (A_TickCount - inicio < timeoutMs && chequeoRapidoNeedle(needle, variation))
+        Sleep, 200
+    if (chequeoRapidoNeedle(needle, variation)) {
+        ; El toque llego pero el juego no apreto el boton (Ale, 2026-10-04): la vuelta siguiente lo
+        ; ve todavia ahi y lo vuelve a tocar, en vez de seguir de largo.
+        logDebugWishlist("DESMARCAR: el boton sigue ahi, el toque no entro -- se reintenta")
         return false
     }
+    Sleep, 600   ; deja aparecer la pantalla siguiente
+    return true
+}
 
-    pBitmapReferencia := Gdip_CreateBitmapFromFile(rutaImagenReferencia)
-    if (!pBitmapReferencia) {
-        logDebugWishlist("SALIDA: Gdip_CreateBitmapFromFile devolvio 0")
-        return false
+intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
+    global g_hwndFast, adbPath, puerto, g_modoDesmarcar, g_bajarVelocidadEnPerfil
+
+    logDebugWishlist("INICIO -- rutaImagenReferencia=" . rutaImagenReferencia . " modoDesmarcar=" . (g_modoDesmarcar ? 1 : 0))
+
+    ; Modo desmarcar (2026-10-01, idea de Ale): despues del tradeo se vuelve a la wishlist de Main
+    ; y se apaga TODA estrella dorada, para que la proxima vez el filtro de favoritos solo muestre
+    ; la carta nueva. No hay carta que comparar: cada carta cuenta como "no coincide", y la regla
+    ; de siempre (no coincide + dorada -> desmarcar) hace el resto.
+    pBitmapReferencia := 0
+    if (!g_modoDesmarcar) {
+        if (rutaImagenReferencia = "" || !FileExist(rutaImagenReferencia)) {
+            logDebugWishlist("SALIDA: sin imagen de referencia o archivo no existe")
+            return false
+        }
+
+        pBitmapReferencia := Gdip_CreateBitmapFromFile(rutaImagenReferencia)
+        if (!pBitmapReferencia) {
+            logDebugWishlist("SALIDA: Gdip_CreateBitmapFromFile devolvio 0")
+            return false
+        }
     }
 
     ; Paso 0: bajar Speed Mod a 1x ANTES de tocar el avatar (2026-08-29, RESTAURADO tras 8
@@ -1072,15 +1391,24 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     ; matchear en 5 intentos Y encima abrio el popup de Emblem por accidente; en las 7
     ; pruebas hechas a 1x el popup jamas aparecio). Se habia sacado antes por pedido del
     ; usuario, pero la evidencia en vivo confirma que hace falta para este mecanismo puntual.
-    logDebugWishlist("paso0: bajando speed mod a min")
-    deslizarSpeedMod("min")
-    logDebugWishlist("paso0: listo")
+    ; En modo desmarcar no hace falta (2026-10-04, Ale): _DonorRespondAndFinalize ya bajo la
+    ; velocidad a 1x antes del swipe final, asi que la donante llega en 1x. Ahorra ~3 s.
+    ; Excepcion (2026-10-04, probado en vivo): si se llego al perfil por Friends (Share o plan B),
+    ; la donante puede venir en 3x y los swipes se pasaban hasta los trofeos -- ahi si se baja.
+    if (!g_modoDesmarcar || g_bajarVelocidadEnPerfil) {
+        logDebugWishlist("paso0: bajando speed mod a min")
+        deslizarSpeedMod("min")
+        logDebugWishlist("paso0: listo")
+    }
 
     ; Paso 1: tocar avatar del amigo -- abre su perfil completo. NUNCA usar su foto/nombre
     ; real como needle de confirmacion (dato personal).
-    logDebugWishlist("paso1: tocando avatar (54,151)")
-    tap(54, 151, 500)
-    cerrarEmblemPopupSiAparece()
+    ; En modo desmarcar el perfil ya viene abierto (se entra desde "Send a thanks?").
+    if (!g_modoDesmarcar) {
+        logDebugWishlist("paso1: tocando avatar (54,151)")
+        tap(54, 151, 500)
+        cerrarEmblemPopupSiAparece()
+    }
 
     ; Paso 1b: esperar a que el perfil cargue de verdad (needle Battle Record) antes de
     ; swipear -- si arranca antes, un swipe puede leerse como toque y abrir un Emblem por
@@ -1173,7 +1501,7 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     ; posicion que la formula vieja ((Ynativo - 7 + 40) - 67, validada en muchas corridas):
     ; la carta queda 80 px ADB arriba del centro del corazon.
     yCarta := Round(foundY * 488 / 960)
-    logDebugWishlist("paso3: yCarta calculado=" . yCarta . " (tap en 137," . yCarta . ")")
+    logDebugWishlist("paso3: yCarta calculado=" . yCarta . " (tap en 122," . yCarta . ")")
 
     ; Paso 3b: abrir la primera carta -- da igual cual sea, el swipe interno cicla las 3
     ; (carrusel lineal, no circular, confirmado con 600ms). CONFIRMAR que de verdad se abrio
@@ -1189,9 +1517,12 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     ; Subido bastante mas -- la diferencia real parece ser el tiempo que pasa entre acciones,
     ; que a mano es mucho mayor de forma natural (varios comandos separados) que en el script
     ; corriendo todo seguido.
+    ; x=122 y no 137 (2026-10-04, pregunta de Ale): con 2 cartas en la wishlist quedan centradas como
+    ; par y el centro (137) cae en el hueco. 122 cae sobre una carta con 1 (la centrada), 2 (la de la
+    ; izquierda) o 3 (la del medio).
     Sleep, 1800
-    logDebugWishlist("paso3b: toque 1 en (137," . yCarta . ")")
-    tap(137, yCarta, 1500)
+    logDebugWishlist("paso3b: toque 1 en (122," . yCarta . ")")
+    tap(122, yCarta, 1500)
     cerrarEmblemPopupSiAparece()
     ; Timeout subido de 6000 a 12000 (2026-09-02, bug real reproducido en vivo con Ale: la
     ; carta SI se abria (confirmado con captura real comparada a mano contra la carta pedida,
@@ -1204,8 +1535,8 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     logDebugWishlist("paso3b: confirmacion toque 1 = " . confirmoApertura)
     if (!confirmoApertura) {
         Sleep, 1500
-        logDebugWishlist("paso3b: toque 2 (reintento) en (137," . yCarta . ")")
-        tap(137, yCarta, 1500)
+        logDebugWishlist("paso3b: toque 2 (reintento) en (122," . yCarta . ")")
+        tap(122, yCarta, 1500)
         cerrarEmblemPopupSiAparece()
         confirmoApertura := esperarAperturaCartaConfirmada(12000)
         logDebugWishlist("paso3b: confirmacion toque 2 = " . confirmoApertura)
@@ -1238,7 +1569,8 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
             logDebugWishlist("carta " . A_Index . "/3: OJO -- la pantalla nunca se quedo quieta en 3s, se mide igual")
         ; Paso 6: comparar el arte de la carta actual contra la referencia.
         asegurarHwndFast()
-        pBitmapVivo := capturarVentana(g_hwndFast)
+        ; En modo desmarcar no se compara nada (sin referencia): matchea queda en 0.
+        pBitmapVivo := g_modoDesmarcar ? 0 : capturarVentana(g_hwndFast)
         matchea := false
         diffCarta := -1
         if (pBitmapVivo) {
@@ -1309,21 +1641,26 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
             ; (2026-09-26, mismo corte en ambas): el toque sigue cayendo en el centro.
             starAdbX := Round((starX + 10) * (540/283))
             starAdbY := Round(((starY + 6) - 40) * (960/488))
+            ; Estado buscado segun el caso (2026-10-01, bug real): antes solo se aceptaba "quedo
+            ; dorada", asi que al DESMARCAR el primer toque si la apagaba, el chequeo lo tomaba como
+            ; fallo y el reintento la volvia a prender -- las favoritas viejas nunca se apagaban.
+            quiereMarcada := matchea ? true : false
+            accion := quiereMarcada ? "marcada" : "desmarcada"
             Loop, 4 {
                 if (A_Index < 4)
                     RunWait, %ComSpec% /c ""%adbPath%" -s 127.0.0.1:%puerto% shell input swipe %starAdbX% %starAdbY% %starAdbX% %starAdbY% 120", , Hide
                 else
                     clickMouseReal(starX + 10, starY + 6)
                 Sleep, 900
-                if (chequeoRapidoNeedle("own_donoroffer_userprofile_favoritestar_marked_native", 60)) {
-                    logDebugWishlist("carta " . idxCarta . "/3: estrella marcada OK (intento " . A_Index . ", " . ((A_Index < 4) ? "ADB" : "mouse real") . ")")
+                if (chequeoRapidoNeedle("own_donoroffer_userprofile_favoritestar_marked_native", 60) = quiereMarcada) {
+                    logDebugWishlist("carta " . idxCarta . "/3: estrella " . accion . " OK (intento " . A_Index . ", " . ((A_Index < 4) ? "ADB" : "mouse real") . ")")
                     marcadaOk := true
                     break
                 }
-                logDebugWishlist("carta " . idxCarta . "/3: la estrella no se marco con " . ((A_Index < 4) ? "ADB" : "mouse real") . ", reintento " . A_Index)
+                logDebugWishlist("carta " . idxCarta . "/3: la estrella no quedo " . accion . " con " . ((A_Index < 4) ? "ADB" : "mouse real") . ", reintento " . A_Index)
             }
             if (!marcadaOk)
-                logDebugWishlist("carta " . idxCarta . "/3: OJO -- 4 clicks y la estrella sigue sin marcar")
+                logDebugWishlist("carta " . idxCarta . "/3: OJO -- 4 clicks y la estrella no quedo " . accion)
             Sleep, 600
 
             ; Chequeo de seguridad: si por algun motivo SI aparecio la vista sin controles
@@ -1396,6 +1733,12 @@ intentarMarcarFavoritoPorWishlist(rutaImagenReferencia) {
     ; donante nunca volvia a Social Hub, asi que ni siquiera llegaba a intentar el wishlist de
     ; nuevo). Se usa la misma funcion robusta de los early-return de arriba (sube con swipes
     ; si hace falta antes de buscar el boton).
+    ; En modo desmarcar no se cierra el perfil: despues se apaga la instancia (Ale, 2026-10-01).
+    ; cerrarPerfilSiEstaAbierto espera volver a "Select a Friend", que aca no existe, y perdia ~50 s.
+    if (g_modoDesmarcar) {
+        logDebugWishlist("DESMARCAR: FIN -- se revisaron las 3 cartas de la wishlist")
+        return true
+    }
     cerrarPerfilSiEstaAbierto()
 
     ; Subir la velocidad al salir del perfil (2026-09-28, pedido de Ale: "es obligatorio que
@@ -1512,6 +1855,21 @@ seleccionarCartaPorFavoritos() {
 ; trababa antes de eso -- estos pasos 1-6 nunca escribian nada en _donoroffer_wishlist_debug.log,
 ; a diferencia del resto del script. Mismo archivo de log de siempre (logDebugWishlist),
 ; solo para no crear un log nuevo separado.
+; Modo desmarcar (2026-10-01, idea de Ale, recorrido mapeado en vivo en la instancia 1): lo
+; lanza _DonorRespondAndFinalize.ahk despues de la foto del "Got it!". En vez de apagarse, la
+; donante sigue hasta el perfil de Main y apaga las estrellas doradas de su wishlist.
+; Uso: _DonorOfferCard.ahk "<winTitle>" "<folderPath>" "DESMARCAR" "<outputFile>"
+global g_modoDesmarcar := (g_rutaImagenReferencia = "DESMARCAR")
+global g_bajarVelocidadEnPerfil := false
+if (g_modoDesmarcar) {
+    if (!llegarAlPerfilDespuesDelTradeo())
+        ExitConError("desmarcar_no_llego_al_perfil")
+    intentarMarcarFavoritoPorWishlist("")
+    WriteResult("OK")
+    Gdip_Shutdown(pToken)
+    ExitApp, 0
+}
+
 logDebugWishlist("paso1: esperando Search Results")
 if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 141, 499)) {
     logDebugWishlist("paso1: FALLO -- nunca aparecio Search Results")
@@ -1535,6 +1893,34 @@ if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 146, 504)) {
     logDebugWishlist("paso4: FALLO -- nunca volvio a Comunidad")
     ExitConError("no_aparecio_comunidad_paso4")
 }
+; Modo ESPERAR_AMIGO (2026-10-04, Friend Trade / Share to Friend, diseño de Ale): ya se cerraron
+; las ventanas de la solicitud de Kevin y la donante esta en Comunidad. Espera hasta 15 min a que
+; el amigo acepte (puntito rojo en Friends) y termina; el siguiente paso lo lanza el bot.
+; Uso: _DonorOfferCard.ahk "<winTitle>" "<folderPath>" "ESPERAR_AMIGO" "<outputFile>"
+; Friend Trade (2026-10-04): mismo flujo que Main Trade, pero antes de ir a Trade espera a que el
+; AMIGO acepte la solicitud (Main la aceptaba sola con su propio script).
+if (g_modoExtra = "AMIGO") {
+    if (!esperarAmigoAcepte(15 * 60 * 1000))
+        ExitConError("amigo_no_acepto_15min")
+}
+if (g_rutaImagenReferencia = "ESPERAR_AMIGO") {
+    if (!esperarAmigoAcepte(15 * 60 * 1000))
+        ExitConError("amigo_no_acepto_15min")
+    WriteResult("OK")
+    Gdip_Shutdown(pToken)
+    ExitApp, 0
+}
+
+; Modo SHARE (2026-10-04, trayecto mapeado en vivo con Ale): el MISMO camino de Main Trade, pero por
+; el tile Share. Despues del swipe vuelve a la pantalla de Share y desmarca la estrella entrando por
+; Friends. Uso: _DonorOfferCard.ahk "<winTitle>" "<folderPath>" "<imagen>" "SHARE" "<outputFile>"
+if (g_modoExtra = "SHARE") {
+    flujoShare()
+    WriteResult("OK")
+    Gdip_Shutdown(pToken)
+    ExitApp, 0
+}
+
 logDebugWishlist("paso5: esperando tile Trade en Social Hub")
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_trade_icon_native (el
 ; tile "Trade" de Social Hub), validada en vivo en _FriendTradeCheckPendingOffer.ahk (misma
@@ -1748,10 +2134,12 @@ tap(48, 357)
 ; cierra; se toca 2 veces el titulo "Choose a Card to Trade" (150,60): el primero cierra el zoom,
 ; el segundo ya cae en la pantalla normal, donde el titulo es texto y no hace nada. Un punto en el
 ; medio no sirve porque la carta agrandada lo tapa. Recien despues se toca OK (paso 10).
-Sleep, 1000
+; Esperas acortadas 2026-10-03 (Ale: "demora al darle OK despues de escoger la carta"):
+; 1000/700/1500 ms -> 600/500/900 ms, ~1,4 s menos por tradeo.
+Sleep, 600
 Loop, 2 {
     tap(150, 60)
-    Sleep, 700
+    Sleep, 500
 }
 ; Ya NO se vuelve a subir a "max" aca (2026-09-04, a pedido explicito del usuario, visto en
 ; vivo repetidas veces): con el Speed Mod devuelta a 3x, el resto del flujo (paso10 en
@@ -1787,7 +2175,7 @@ Loop, 2 {
 ; siempre. Se saca del todo y se deja el mismo criterio de "toque a ciegas" que ya se usaba
 ; para el boton OK en si (ver comentario de paso10 arriba).
 logDebugWishlist("paso10: tocando OK a ciegas (sin needle de confirmacion, ver comentario)")
-Sleep, 1500
+Sleep, 900
 tap(145, 458)
 ; Reintento del OK RETIRADO 2026-09-28 (bug real en vivo con Ale): volvia a tocar OK si 1,5 s
 ; despues la lupa seguia a la vista, pero a veces la pantalla todavia no habia terminado de
@@ -1845,7 +2233,7 @@ Loop {
     }
     if (esperarNeedleSinAccion("own_donoroffer_remainingcopy_popup", 50, 1)) {
         logDebugWishlist("aviso de ultima copia visible, tocando OK")
-        Sleep, 2000
+        Sleep, 1000   ; antes 2000 (2026-10-03); si el toque no entra, la vuelta siguiente retoca
         tap(204, 383)
         Sleep, 1000
         continue
@@ -1881,7 +2269,7 @@ AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_OfferPhoto.png
 ; Sleep antes del toque ciego (2026-08-27, bug real reproducido en vivo en _MainAcceptTradeOffer.ahk,
 ; mismo patron aca por prevencion): el chequeo rapido nuevo confirma la pantalla casi al
 ; instante -- mas rapido que lo que el boton OK puede tardar en habilitarse del todo.
-Sleep, 1200
+Sleep, 700   ; antes 1200 (2026-10-03, Ale: "aqui igual demora"); el bucle de abajo retoca si no entro
 tap(136, 438)
 
 ; Reintento del OK estilo Kevin (2026-09-23, bug real fotografiado en vivo por Ale: la donante
@@ -1959,9 +2347,11 @@ esperarElegirCartaOAviso() {
         }
         if (esperarNeedleSinAccion("own_donoroffer_willsend_popup", 50, 1)) {
             lupaDesde := 0
-            Sleep, 2000   ; el aviso entra deslizandose; se deja asentar antes de tocar
+            ; Antes 2 s fijos + 1 s (2026-10-03, Ale: "demora en hacer click"). Ahora 0,8 s de
+            ; asentamiento y, si el toque no entro, la vuelta siguiente lo ve otra vez y retoca.
+            Sleep, 800   ; el aviso entra deslizandose; se deja asentar antes de tocar
             tap(141, 436)
-            Sleep, 1000
+            Sleep, 600
             continue
         }
         if (A_TickCount - inicio > 15000)

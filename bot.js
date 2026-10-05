@@ -644,7 +644,7 @@ async function construirEmbedTransferencias(discordId, pagina, guild = null) {
             { name: 'Date', value: `<t:${segundos}:f> (<t:${segundos}:R>)`, inline: false },
             { name: 'Card', value: `**${nombre}**`, inline: true },
             { name: 'From account (XML)', value: `\`${f.cuenta}\``, inline: true },
-            { name: 'Sent to', value: f.modo === 'main' ? 'Main' : 'Friend', inline: true },
+            { name: 'Sent to', value: f.modo === 'share' ? 'Main (Share)' : f.modo === 'main' ? 'Main' : 'Friend', inline: true },
             { name: 'Friend ID', value: f.destino ? `\`${f.destino}\`` : '—', inline: true }
         )
         .setFooter({ text: `${total} transfer(s) · ${cuentas} account(s) used · ${pagina + 1}/${total}` });
@@ -666,8 +666,11 @@ async function construirEmbedTransferencias(discordId, pagina, guild = null) {
 async function idsFarmRegistrados(discordId) {
     const rutaIniCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_inject_ini'`);
     const friends = parsearListaFriends(rutaIniCfg?.webhook_url || undefined);
+    // Sin repetidos (2026-10-03, bug real de un usuario: "Could not open the panel" siempre): el
+    // mismo ID guardado dos veces deja dos opciones iguales en el menu y Discord rechaza el panel.
+    const vistos = new Set();
     return (friends || []).map(f => ({ friend_id: String(f.id || '').replace(/\D/g, ''), alias: f.label || '' }))
-                          .filter(f => f.friend_id.length >= 10);
+                          .filter(f => f.friend_id.length >= 10 && !vistos.has(f.friend_id) && vistos.add(f.friend_id));
 }
 
 async function agregarIdFarm(discordId, friendId, alias) {
@@ -819,11 +822,16 @@ async function construirPanelFarmTickets(discordId) {
             const nombre = fila.alias ? `**${fila.alias}**` : `**${formatearFriendId(fila.friend_id)}**`;
             lineas.push(`${nombre} — ${estado} · 📦 ${libres} accounts left`);
         }
-        embed.setDescription(
-            lineas.join('\n') +
-            `\n\nDaily allowance resets at **06:00 UTC**.\n` +
-            `An account that already liked a profile can never like it again — but it stays available for your other profiles.`
-        );
+        // Tope de largo (Discord corta la descripcion en 4096 caracteres y rechaza el panel entero).
+        const pie = `\n\nDaily allowance resets at **06:00 UTC**.\n` +
+            `An account that already liked a profile can never like it again — but it stays available for your other profiles.`;
+        let cuerpo = '';
+        for (let i = 0; i < lineas.length; i++) {
+            const resto = `\n…and ${lineas.length - i} more`;
+            if ((cuerpo + '\n' + lineas[i]).length + resto.length + pie.length > 4000) { cuerpo += resto; break; }
+            cuerpo += (cuerpo ? '\n' : '') + lineas[i];
+        }
+        embed.setDescription(cuerpo + pie);
     }
 
     const componentes = [];
@@ -2689,6 +2697,247 @@ const OVERRIDES_EXPANSION = {
     'PK_10_009680_00': 'A4', // Umbreon ex
     'PK_10_009800_00': 'A4', // Skarmory ex
     'PK_10_010050_00': 'A4', // Lugia ex
+    // Deluxe Pack: Mega (B4b), agregadas 2026-10-03 (pedido de Ale: "Training Area solo sale
+    // en Deluxe Pack: Mega"). Mismo caso que A4b: el update del set marco como B4b tambien el
+    // print ORIGINAL (_00) de cada reimpresion. Expansion original sacada de la tabla "Versions"
+    // de pocket.limitlesstcg.com/cards/B4b/<numero> (misma rareza, sin Deluxe ni promos). Solo
+    // las _00 cuyo original no existe ya en otro set con otro codigo; el print _01 queda en Deluxe.
+    'PK_10_010840_00': 'B1', // Mega Pinsir ex
+    'PK_10_010970_00': 'B1', // Cottonee
+    'PK_10_010980_00': 'B1', // Whimsicott ex
+    'PK_10_010990_00': 'B1', // Petilil
+    'PK_10_011000_00': 'B1', // Lilligant
+    'PK_10_011130_00': 'B1', // Rapidash ex
+    'PK_10_011150_00': 'B1', // Torchic
+    'PK_10_011160_00': 'B1', // Combusken
+    'PK_10_011180_00': 'B1', // Mega Blaziken ex
+    'PK_10_011320_00': 'B1', // Magikarp
+    'PK_10_011340_00': 'B1', // Mega Gyarados ex
+    'PK_10_011530_00': 'B1', // Froakie
+    'PK_10_011540_00': 'B1', // Frogadier
+    'PK_10_011550_00': 'B1', // Greninja ex
+    'PK_10_011630_00': 'B1', // Jolteon ex
+    'PK_10_011640_00': 'B1', // Mareep
+    'PK_10_011650_00': 'B1', // Flaaffy
+    'PK_10_011670_00': 'B1', // Mega Ampharos ex
+    'PK_10_011840_00': 'B1', // Mega Altaria ex
+    'PK_10_011910_00': 'B1', // Chingling
+    'PK_10_012020_00': 'B1', // Klefki
+    'PK_10_012030_00': 'B1', // Indeedee ex
+    'PK_10_012060_00': 'B1', // Hitmonchan ex
+    'PK_10_012330_00': 'B1', // Mega Absol ex
+    'PK_10_012410_00': 'B1', // Skrelp
+    'PK_10_012420_00': 'B1', // Dragalge ex
+    'PK_10_012520_00': 'B1', // Honedge
+    'PK_10_012530_00': 'B1', // Doublade
+    'PK_10_012540_00': 'B1', // Aegislash
+    'PK_10_012550_00': 'B1', // Meltan
+    'PK_10_012560_00': 'B1', // Melmetal ex
+    'PK_10_012650_00': 'B1', // Tauros ex
+    'PK_10_012660_00': 'B1', // Eevee
+    'PK_10_012750_00': 'B1', // Skitty
+    'PK_10_012760_00': 'B1', // Delcatty
+    'PK_10_012780_00': 'B1', // Swablu
+    'PK_10_013040_00': 'B1a', // Buneary
+    'PK_10_013070_00': 'B1a', // Bulbasaur
+    'PK_10_013080_00': 'B1a', // Ivysaur
+    'PK_10_013100_00': 'B1a', // Mega Venusaur ex
+    'PK_10_013190_00': 'B1a', // Mega Charizard Y ex
+    'PK_10_013220_00': 'B1a', // Squirtle
+    'PK_10_013230_00': 'B1a', // Wartortle
+    'PK_10_013250_00': 'B1a', // Mega Blastoise ex
+    'PK_10_013290_00': 'B1a', // Magnemite
+    'PK_10_013300_00': 'B1a', // Magneton
+    'PK_10_013420_00': 'B1a', // Onix
+    'PK_10_013460_00': 'B1a', // Mega Lopunny ex
+    'PK_10_013560_00': 'B1a', // Mega Steelix ex
+    'PK_10_013830_00': 'B2', // Teal Mask Ogerpon ex
+    'PK_10_013890_00': 'B2', // Blacephalon ex
+    'PK_10_013930_00': 'B2', // Hearthflame Mask Ogerpon
+    'PK_10_013940_00': 'B2', // Alolan Vulpix
+    'PK_10_013950_00': 'B2', // Alolan Ninetales ex
+    'PK_10_013990_00': 'B2', // Mudkip
+    'PK_10_014000_00': 'B2', // Marshtomp
+    'PK_10_014020_00': 'B2', // Mega Swampert ex
+    'PK_10_014200_00': 'B2', // Toxel
+    'PK_10_014210_00': 'B2', // Toxtricity ex
+    'PK_10_014220_00': 'B2', // Tadbulb
+    'PK_10_014320_00': 'B2', // Mega Gardevoir ex
+    'PK_10_014360_00': 'B2', // Meloetta
+    'PK_10_014390_00': 'B2', // Mimikyu ex
+    'PK_10_014510_00': 'B2', // Roggenrola
+    'PK_10_014520_00': 'B2', // Boldore
+    'PK_10_014530_00': 'B2', // Gigalith ex
+    'PK_10_014580_00': 'B2', // Falinks
+    'PK_10_014620_00': 'B2', // Alolan Grimer
+    'PK_10_014630_00': 'B2', // Alolan Muk
+    'PK_10_014760_00': 'B2', // Galarian Meowth
+    'PK_10_014770_00': 'B2', // Galarian Perrserker
+    'PK_10_014790_00': 'B2', // Mega Mawile ex
+    'PK_10_014860_00': 'B2', // Aegislash
+    'PK_10_014900_00': 'B2', // Meowth
+    'PK_10_014930_00': 'B2', // Mega Kangaskhan ex
+    'PK_10_015100_00': 'B2a', // Sprigatito
+    'PK_10_015110_00': 'B2a', // Floragato
+    'PK_10_015120_00': 'B2a', // Meowscarada ex
+    'PK_10_015160_00': 'B2a', // Smoliv
+    'PK_10_015170_00': 'B2a', // Dolliv
+    'PK_10_015180_00': 'B2a', // Arboliva
+    'PK_10_015250_00': 'B2a', // Fuecoco
+    'PK_10_015260_00': 'B2a', // Crocalor
+    'PK_10_015270_00': 'B2a', // Skeledirge
+    'PK_10_015280_00': 'B2a', // Charcadet
+    'PK_10_015290_00': 'B2a', // Armarouge ex
+    'PK_10_015430_00': 'B2a', // Frigibax
+    'PK_10_015440_00': 'B2a', // Arctibax
+    'PK_10_015450_00': 'B2a', // Baxcalibur
+    'PK_10_015460_00': 'B2a', // Chien-Pao ex
+    'PK_10_015510_00': 'B2a', // Bellibolt ex
+    'PK_10_015630_00': 'B2a', // Gimmighoul
+    'PK_10_015870_00': 'B2a', // Gholdengo ex
+    'PK_10_016000_00': 'B2b', // Slowpoke
+    'PK_10_016030_00': 'B2b', // Haxorus
+    'PK_10_016050_00': 'B2b', // Gastly
+    'PK_10_016070_00': 'B2b', // Scyther
+    'PK_10_016130_00': 'B2b', // Charmander
+    'PK_10_016140_00': 'B2b', // Charmeleon
+    'PK_10_016150_00': 'B2b', // Mega Charizard X ex
+    'PK_10_016210_00': 'B2b', // Mega Slowbro ex
+    'PK_10_016310_00': 'B2b', // Electrike
+    'PK_10_016320_00': 'B2b', // Mega Manectric ex
+    'PK_10_016420_00': 'B2b', // Haunter
+    'PK_10_016430_00': 'B2b', // Mega Gengar ex
+    'PK_10_016440_00': 'B2b', // Darkrai
+    'PK_10_016510_00': 'B2b', // Mega Scizor ex
+    'PK_10_016580_00': 'B2b', // Axew
+    'PK_10_016590_00': 'B2b', // Fraxure
+    'PK_10_016690_00': 'B3', // Celebi
+    'PK_10_016700_00': 'B3', // Treecko
+    'PK_10_016710_00': 'B3', // Grovyle
+    'PK_10_016730_00': 'B3', // Mega Sceptile ex
+    'PK_10_016780_00': 'B3', // Budew
+    'PK_10_016830_00': 'B3', // Durant
+    'PK_10_016860_00': 'B3', // Numel
+    'PK_10_016880_00': 'B3', // Mega Camerupt ex
+    'PK_10_016900_00': 'B3', // Victini
+    'PK_10_017020_00': 'B3', // Vaporeon ex
+    'PK_10_017130_00': 'B3', // Sobble
+    'PK_10_017140_00': 'B3', // Drizzile
+    'PK_10_017150_00': 'B3', // Inteleon
+    'PK_10_017190_00': 'B3', // Magnezone ex
+    'PK_10_017370_00': 'B3', // Bramblin
+    'PK_10_017380_00': 'B3', // Brambleghast
+    'PK_10_017410_00': 'B3', // Trapinch
+    'PK_10_017440_00': 'B3', // Riolu
+    'PK_10_017460_00': 'B3', // Mega Lucario ex
+    'PK_10_017520_00': 'B3', // Dwebble
+    'PK_10_017530_00': 'B3', // Crustle ex
+    'PK_10_017700_00': 'B3', // Zorua
+    'PK_10_017710_00': 'B3', // Zoroark ex
+    'PK_10_017790_00': 'B3', // Zarude
+    'PK_10_017800_00': 'B3', // Bombirdier
+    'PK_10_017890_00': 'B3', // Corviknight ex
+    'PK_10_017900_00': 'B3', // Vibrava
+    'PK_10_017910_00': 'B3', // Flygon ex
+    'PK_10_018020_00': 'B3', // Lillipup
+    'PK_10_018060_00': 'B3', // Mega Audino ex
+    'PK_10_018100_00': 'B3', // Rookidee
+    'PK_10_018110_00': 'B3', // Corvisquire
+    'PK_10_018280_00': 'B3a', // Iron Bundle ex
+    'PK_10_018330_00': 'B3a', // Iron Thorns
+    'PK_10_018340_00': 'B3a', // Miraidon ex
+    'PK_10_018410_00': 'B3a', // Flutter Mane ex
+    'PK_10_018510_00': 'B3a', // Koraidon ex
+    'PK_10_018620_00': 'B3a', // Roaring Moon
+    'PK_10_018830_00': 'B3a', // Terapagos ex
+    'PK_10_019000_00': 'B3b', // Hisuian Zorua
+    'PK_10_019010_00': 'B3b', // Growlithe
+    'PK_10_019040_00': 'B3b', // Caterpie
+    'PK_10_019050_00': 'B3b', // Metapod
+    'PK_10_019060_00': 'B3b', // Butterfree
+    'PK_10_019150_00': 'B3b', // Feebas
+    'PK_10_019160_00': 'B3b', // Milotic ex
+    'PK_10_019220_00': 'B3b', // Dedenne ex
+    'PK_10_019230_00': 'B3b', // Yamper
+    'PK_10_019280_00': 'B3b', // Sylveon
+    'PK_10_019300_00': 'B3b', // Mega Diancie ex
+    'PK_10_019320_00': 'B3b', // Fidough
+    'PK_10_019360_00': 'B3b', // Rockruff
+    'PK_10_019390_00': 'B3b', // Mega Sableye ex
+    'PK_10_019520_00': 'B3b', // Munchlax
+    'PK_10_019570_00': 'B3b', // Hisuian Zoroark ex
+    'PK_10_019710_00': 'B4', // Combee
+    'PK_10_019720_00': 'B4', // Vespiquen ex
+    'PK_10_019800_00': 'B4', // Teal Mask Ogerpon
+    'PK_10_019810_00': 'B4', // Ponyta
+    'PK_10_019850_00': 'B4', // Cyndaquil
+    'PK_10_019860_00': 'B4', // Quilava
+    'PK_10_019870_00': 'B4', // Typhlosion ex
+    'PK_10_019950_00': 'B4', // Carvanha
+    'PK_10_019960_00': 'B4', // Mega Sharpedo ex
+    'PK_10_019970_00': 'B4', // Wailmer
+    'PK_10_019980_00': 'B4', // Wailord ex
+    'PK_10_020100_00': 'B4', // Pikachu
+    'PK_10_020110_00': 'B4', // Raichu
+    'PK_10_020160_00': 'B4', // Rotom ex
+    'PK_10_020210_00': 'B4', // Helioptile
+    'PK_10_020220_00': 'B4', // Heliolisk
+    'PK_10_020290_00': 'B4', // Mime Jr.
+    'PK_10_020320_00': 'B4', // Ralts
+    'PK_10_020330_00': 'B4', // Kirlia
+    'PK_10_020350_00': 'B4', // Wynaut
+    'PK_10_020450_00': 'B4', // Mega Gallade ex
+    'PK_10_020640_00': 'B4', // Hoopa ex
+    'PK_10_020670_00': 'B4', // Beldum
+    'PK_10_020680_00': 'B4', // Metang
+    'PK_10_020700_00': 'B4', // Mega Metagross ex
+    'PK_10_020770_00': 'B4', // Dratini
+    'PK_10_020780_00': 'B4', // Dragonair
+    'PK_10_020810_00': 'B4', // Mega Rayquaza ex
+    'PK_10_020850_00': 'B4', // Drampa
+    'PK_10_020900_00': 'B4', // Rattata
+    'PK_10_020910_00': 'B4', // Raticate
+    'PK_10_021010_00': 'B4', // Ducklett
+    'PK_10_021020_00': 'B4', // Swanna ex
+    'TR_10_000910_00': 'B1', // Flame Patch
+    'TR_10_000970_00': 'B1', // May
+    'TR_10_000990_00': 'B1', // Copycat
+    'TR_10_001000_00': 'B1', // Lisia
+    'TR_10_001020_00': 'B1a', // Quick-Grow Extract
+    'TR_10_001030_00': 'B1a', // Clemont
+    'TR_10_001040_00': 'B1a', // Serena
+    'TR_10_001060_00': 'B2', // Lucky Ice Pop
+    'TR_10_001080_00': 'B2', // Protective Poncho
+    'TR_10_001090_00': 'B2', // Metal Core Barrier
+    'TR_10_001100_00': 'B2', // Diantha
+    'TR_10_001140_00': 'B2', // Training Area
+    'TR_10_001150_00': 'B2', // Starting Plains
+    'TR_10_001160_00': 'B2', // Peculiar Plaza
+    'TR_10_001170_00': 'B2a', // Electric Generator
+    'TR_10_001210_00': 'B2a', // Arven
+    'TR_10_001220_00': 'B2a', // Mesagoza
+    'TR_10_001250_00': 'B2b', // Iris
+    'TR_10_001260_00': 'B2b', // Calem
+    'TR_10_001270_00': 'B2b', // Hiking Trail
+    'TR_10_001280_00': 'B3', // Field Blower
+    'TR_10_001290_00': 'B3', // Lucky Egg
+    'TR_10_001300_00': 'B3', // Korrina
+    'TR_10_001340_00': 'B3', // Fragrant Forest
+    'TR_10_001350_00': 'B3', // Arena of Antiquity
+    'TR_10_001360_00': 'B3', // Bounded Field
+    'TR_10_001370_00': 'B3a', // Ancient Booster Energy Capsule
+    'TR_10_001380_00': 'B3a', // Future Booster Energy Capsule
+    'TR_10_001390_00': 'B3a', // Juliana
+    'TR_10_001430_00': 'B3b', // Small Balloon
+    'TR_10_001440_00': 'B3b', // Elegant Cape
+    'TR_10_001460_00': 'B3b', // Puppy-Loving Girl
+    'TR_10_001470_00': 'B3b', // Wallace
+    'TR_10_001490_00': 'B4', // Order Pad
+    'TR_10_001520_00': 'B4', // Deceptive Needle
+    'TR_10_001560_00': 'B4', // Skyla
+    'TR_10_001570_00': 'B4', // Wally
+    'TR_10_001580_00': 'B4', // Soothing Shore
+    'TR_10_001590_00': 'B4', // Rainbow Cave
 };
 
 // Igual que leer cardMap[cartaId]?.ExpansionID pero aplicando las correcciones
@@ -3487,6 +3736,11 @@ function tipoRarezaDesdeInfo(info) {
     return mapa[info.Rarity] || null;
 }
 
+// Share (2026-09-30, pedido de Ale): el juego solo deja REGALAR cartas de 1 a 4 diamantes.
+// Modos: 'sharemain' (a la cuenta Main, que acepta la solicitud sola) y 'sharefriend' (a un amigo).
+const RAREZAS_COMPARTIBLES_SHARE = ['1-diamond', '2-diamond', '3-diamond', '4-diamond'];
+function esModoShare(modo) { return modo === 'sharemain' || modo === 'sharefriend'; }
+
 const RAREZA_ICONOS_CARTAS = {
     '1-diamond': { emoji: 'rareza_diamante', cantidad: 1, etiqueta: '1 Diamond', pipe: true },
     '2-diamond': { emoji: 'rareza_diamante', cantidad: 2, etiqueta: '2 Diamonds', pipe: true },
@@ -3688,7 +3942,16 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
             .setLabel('📋 Info Accounts')
             .setStyle(ButtonStyle.Secondary)
     );
+    // Wishlist movido a esta fila (2026-09-30): la fila de abajo ya tenia el maximo de 5 botones
+    // de Discord y hacia falta lugar para Share.
+    botones.push(new ButtonBuilder().setCustomId(`card_wishlist_add::${cartaId}`.slice(0, 100)).setLabel('💖 Wishlist').setStyle(ButtonStyle.Secondary));
     const filaXml = new ActionRowBuilder().addComponents(...botones);
+
+    // Share (2026-09-30, pedido de Ale): regalar la carta a un amigo, sin intercambio. El juego
+    // solo deja compartir cartas de 1 a 4 diamantes; en las demas el boton sale deshabilitado.
+    const cardmasterShare = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json')) : null;
+    const tipoRarezaShare = cardmasterShare?.[cartaId] ? tipoRarezaDesdeInfo(cardmasterShare[cartaId]) : null;
+    const compartible = RAREZAS_COMPARTIBLES_SHARE.includes(tipoRarezaShare);
 
     // En Gold Cards, Trade/Shinedust tienen su propio boton de entrada
     // (goldcards_trade::/goldcards_shinedust::) que solo lista las cuentas ya
@@ -3702,18 +3965,16 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         // que no sea el propio del usuario, reactivado ahi el 2026-09-02.
         // Trade de Gold Cards deshabilitado (2026-09-30, pedido de Ale).
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold || !tradeHabilitadoEnGuild(guild?.id)),
+        new ButtonBuilder().setCustomId(`card_share::${cartaId}`.slice(0, 100)).setLabel('🎁 Share').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold || !compartible || !tradeHabilitadoEnGuild(guild?.id)),  // bloqueado en Gold Cards (2026-10-04, Ale)
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
         // Inject (2026-09-15, a pedido explicito del usuario): mismo patron que
         // Trade/Shinedust (cuenta filtrada por esta carta + instancia), pero solo
         // inyecta y deja la instancia PRENDIDA con la cuenta ya logueada -- no
         // apaga la instancia ni corre OCR/trade, a diferencia de esos dos.
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_inject::${cartaId}` : `card_inject::${cartaId}`).setLabel('💉 Inject').setStyle(ButtonStyle.Secondary),
-        // Marcar como wishlist (2026-08-11, a pedido explicito del usuario): desde un
-        // boton de Discord en vez de la pagina web -- Discord ya sabe quien lo aprieta,
-        // asi que a diferencia de un corazon en /account/:token (un link sin login que
-        // cualquiera podria tocar) esto es seguro sin necesitar ningun codigo/PIN.
-        new ButtonBuilder().setCustomId(`card_wishlist_add::${cartaId}`.slice(0, 100)).setLabel('💖 Wishlist').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_inject::${cartaId}` : `card_inject::${cartaId}`).setLabel('💉 Inject').setStyle(ButtonStyle.Secondary)
+        // El boton de Wishlist (2026-08-11) se movio a la fila de arriba el 2026-09-30 para
+        // hacerle lugar a Share: Discord admite 5 botones por fila.
     );
 
     const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
@@ -4397,7 +4658,13 @@ function parsearListaFriends(rutaIni = RUTA_INJECT_INI_DEFAULT) {
     const datos = leerIniInject(rutaIni);
     const ids = (datos.favoriteFriendIDs || '').split(',').map(s => s.trim()).filter(Boolean);
     const labels = (datos.favoriteFriendLabels || '').split('|').map(s => s.trim());
-    return ids.map((id, i) => ({ id, label: labels[i] || '' }));
+    // Sin IDs repetidos (2026-10-03, bug real de un usuario: el mismo ID guardado dos veces con
+    // nombres distintos). Todos los menus de amigos usan esta lista, y Discord rechaza un menu con
+    // dos opciones iguales: no abria Farm Tickets ni el menu de Remove Friend. Se queda el primero;
+    // al borrar o agregar un amigo, el INI se reescribe ya sin el repetido.
+    const vistos = new Set();
+    return ids.map((id, i) => ({ id, label: labels[i] || '' }))
+              .filter(f => !vistos.has(f.id) && vistos.add(f.id));
 }
 
 // A pedido explicito del usuario 2026-07-28: al presionar 🔄 Trade en
@@ -4412,7 +4679,7 @@ function parsearListaFriends(rutaIni = RUTA_INJECT_INI_DEFAULT) {
 // responder, lo que puede tardar más de los 3 segundos que da Discord para el
 // primer ack -- por eso el LLAMADOR tiene que hacer interaction.deferReply()
 // ANTES de invocar esta función (acá se usa editReply, nunca reply directo).
-async function reenviarCartaATrading(interaction, cartaId, datosGold, componentes) {
+async function reenviarCartaATrading(interaction, cartaId, datosGold, componentes, tipoCanal = 'cmd_run_instance', nombreCanal = 'Trading') {
     let payload;
     try {
         const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
@@ -4424,17 +4691,17 @@ async function reenviarCartaATrading(interaction, cartaId, datosGold, componente
         return await interaction.editReply({ content: '❌ Could not build this card. Try again.' });
     }
 
-    const canalTrading = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
+    const canalTrading = await obtenerCanalComando(interaction.guildId, tipoCanal);
     if (!canalTrading?.webhook_url) {
-        return await interaction.editReply({ content: '❌ Your **Trading** channel isn\'t set up yet. Run **Sync Channels** first.' });
+        return await interaction.editReply({ content: `❌ Your **${nombreCanal}** channel isn't set up yet. Run **Sync Channels** first.` });
     }
     try {
         const webhookTrading = new WebhookClient({ url: canalTrading.webhook_url });
         await webhookTrading.send({ content: `<@${interaction.user.id}>`, embeds: payload.embeds, files: payload.files, components: payload.components });
-        return await interaction.editReply({ content: '✅ Sent to your Trading channel.' });
+        return await interaction.editReply({ content: `✅ Sent to your ${nombreCanal} channel.` });
     } catch (e) {
         console.error('DEBUG: error mandando la carta al canal de trading:', e?.message || e);
-        return await interaction.editReply({ content: '❌ Could not send to your Trading channel.' });
+        return await interaction.editReply({ content: `❌ Could not send to your ${nombreCanal} channel.` });
     }
 }
 
@@ -4464,7 +4731,10 @@ async function actualizarConSeleccionFriendId(interaction, cartaId, origen, modo
             label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
             value: f.id
         })));
-    return await interaction.editReply({ content: 'Which friend do you want to send the trade request to?', components: [new ActionRowBuilder().addComponents(menu)] });
+    const textoAmigo = modo === 'sharemain' ? 'Which saved friend is your **Main** account? (it receives the card)'
+        : modo === 'sharefriend' ? 'Which friend do you want to share this card with?'
+        : 'Which friend do you want to send the trade request to?';
+    return await interaction.editReply({ content: textoAmigo, components: [new ActionRowBuilder().addComponents(menu)] });
 }
 
 function construirEmbedStatusInstancia(index, name, rutaIni = RUTA_INJECT_INI_DEFAULT) {
@@ -5201,18 +5471,31 @@ const ETIQUETAS_PASOS_MAIN_TRADE = {
 // onProgreso (2026-08-08, a pedido explicito del usuario: log en vivo con check/cruz por
 // paso en el panel de trade de la pagina web) -- opcional, default no-op para no cambiar en
 // nada el comportamiento ya probado cuando se dispara desde Discord (que nunca lo pasa).
-async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre }, onProgreso = () => {}) {
+async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, amigo = false, share = false }, onProgreso = () => {}) {
+    // Share a Main (2026-10-04, trayecto de Ale): mismo arranque que Main Trade (Main acepta la
+    // solicitud sola) y Main se APAGA apenas acepta -- despues no hace nada. La donante comparte por el
+    // tile Share y desmarca la estrella entrando por Friends (todo en _DonorOfferCard.ahk modo SHARE).
+    // Friend Trade (2026-10-04, diseño de Ale): MISMO flujo que Main Trade, pero del otro lado esta
+    // un AMIGO (persona) en vez de la instancia Main. No se prende Main ni corren sus pasos; la
+    // donante espera a que el amigo acepte la solicitud (puntito rojo en Friends) y despues a que
+    // responda la oferta (X + tres personas), 15 min cada espera. El resumen muestra solo la donante.
+    const etiquetaModo = share ? 'Share' : amigo ? 'Friend Trade' : 'Main Trade';
+    const botonRetry = () => share
+        ? new ButtonBuilder().setCustomId(`share_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+        : amigo
+        ? new ButtonBuilder().setCustomId(`friend_trade_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+        : botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre);
     const ahkExe = rutaAutoHotkey();
     const folderPath = carpetaBaseMuMu();
     const scripts = [RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, RUTA_DONOR_OFFER_CARD_SCRIPT, RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, RUTA_DONOR_RESPOND_FINALIZE_SCRIPT];
     if (!ahkExe || !folderPath || scripts.some(s => !fs.existsSync(s))) {
         onProgreso({ paso: 'Check scripts', estado: 'error', detalle: 'scripts not found' });
-        return await interaction.followUp({ content: '❌ Main Trade scripts not found.', ephemeral: true });
+        return await interaction.followUp({ content: `❌ ${etiquetaModo} scripts not found.`, ephemeral: true });
     }
 
     const instancias = obtenerInstanciasMuMu();
-    const infoMain = (instancias || []).find(i => i.name === 'Main');
-    if (!infoMain) {
+    const infoMain = amigo ? null : (instancias || []).find(i => i.name === 'Main');
+    if (!amigo && !infoMain) {
         onProgreso({ paso: 'Find Main instance', estado: 'error', detalle: 'no instance named "Main"' });
         return await interaction.followUp({ content: '❌ Could not find an instance named exactly "Main". Main Trade needs your main account\'s MuMu instance to be named "Main".', ephemeral: true });
     }
@@ -5234,7 +5517,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // con juegoEnPrimerPlano y reintenta el "am start" hasta 3 veces si el juego quedo en
     // segundo plano -- o sea que ya no dependemos de adivinar el tiempo justo.
     const [prendidaMain, prendidaDonante] = await Promise.all([
-        asegurarInstanciaEncendida(infoMain.index, 90000, 0),
+        amigo ? Promise.resolve(true) : asegurarInstanciaEncendida(infoMain.index, 90000, 0),
         (async () => {
             await new Promise(r => setTimeout(r, 5000));
             return asegurarInstanciaEncendida(index, 90000, 0);
@@ -5243,7 +5526,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     if (prendidaMain && prendidaDonante) await new Promise(r => setTimeout(r, 10000));
     if (!prendidaMain || !prendidaDonante) {
         onProgreso({ paso: 'Turn on instances', estado: 'error', detalle: 'could not turn on one of the instances' });
-        return await enviarErrorMainTrade(interaction, '❌ Could not turn on one of the instances.', [botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre)]);
+        return await enviarErrorMainTrade(interaction, '❌ Could not turn on one of the instances.', [botonRetry()]);
     }
     onProgreso({ paso: 'Turn on instances', estado: 'ok' });
 
@@ -5254,13 +5537,13 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     try {
         const ahkExeArrange = rutaAutoHotkey();
         if (ahkExeArrange) {
-            spawn(ahkExeArrange, [RUTA_ARRANGE_WINDOWS_SCRIPT, 'Main', nombre], { windowsHide: false, detached: true, stdio: 'ignore' }).unref();
+            spawn(ahkExeArrange, amigo ? [RUTA_ARRANGE_WINDOWS_SCRIPT, nombre] : [RUTA_ARRANGE_WINDOWS_SCRIPT, 'Main', nombre], { windowsHide: false, detached: true, stdio: 'ignore' }).unref();
         }
     } catch (e) {
         console.error('DEBUG: no se pudo acomodar las ventanas de las instancias:', e?.message || e);
     }
 
-    try { await interaction.followUp({ content: `🔄 Running Main Trade (\`${fileName}\` → Main)... this may take several minutes and will close the current sessions on both instances.${avisoRamBajaMainTrade()}`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+    try { await interaction.followUp({ content: amigo ? `🔄 Running Friend Trade (\`${fileName}\` → your friend)... the donor will wait up to 15 min for your friend to accept the request, and up to 15 min for their trade response.` : `🔄 Running Main Trade (\`${fileName}\` → Main)... this may take several minutes and will close the current sessions on both instances.${avisoRamBajaMainTrade()}`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
     const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
     const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
@@ -5295,7 +5578,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[nombrePaso] || nombrePaso, estado: 'error', detalle: resultado });
         const filaStop = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId(`main_trade_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+            botonRetry()
         );
         // Pista de "Trade bloqueado" (2026-09-23, a pedido explicito de Ale tras diagnosticarlo
         // el mismo en vivo): si la cuenta tiene un intercambio EN CURSO con otra cuenta, el
@@ -5309,7 +5592,9 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         const pistaBloqueado = CODIGOS_TRADE_BLOQUEADO.some(c => String(resultado || '').includes(c))
             ? '\n\n⚠️ The **Trade** button may be locked because that account already has a trade in progress. Please check your pending trades, cancel them, and press **🔄 Retry**.'
             : '';
-        const mensaje = `❌ Main Trade failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.${pistaBloqueado}`;
+        const pistaAmigo = String(resultado || '').includes('amigo_no_acepto') ? '\n\n⏳ Your friend did not accept the friend request within 15 minutes.'
+            : String(resultado || '').includes('amigo_no_respondio') ? '\n\n⏳ Your friend did not respond to the trade offer within 15 minutes.' : '';
+        const mensaje = `❌ ${etiquetaModo} failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.${pistaBloqueado}${pistaAmigo}`;
         try {
             const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
             if (canalRunInstance?.webhook_url) {
@@ -5332,7 +5617,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // pantalla de titulo). Main no tiene inyeccion, pero _WaitWelcomeScreensMain.ahk arranca
     // con abrirJuegoVerificado, asi que reintentarlo despues de reiniciar la instancia si
     // reabre el juego.
-    const promesaEsperaMain = (async () => {
+    const promesaEsperaMain = amigo ? Promise.resolve({ ok: true }) : (async () => {
         let ultimo = null;
         for (let intento = 1; intento <= 2; intento++) {
             if (intento > 1) {
@@ -5404,21 +5689,21 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // (2026-09-27, pedido de Ale): antes esperaba a que terminara TAMBIEN la solicitud de la
     // donante (que puede tardar minutos) y recien ahi revisaba, con Main parado sin hacer nada.
     const promesaMainYChequeo = promesaEsperaMain.then(async (esperaMain) => {
-        if (!esperaMain.ok) return { esperaMain, resultadoCheck: { ok: false } };
+        if (!esperaMain.ok || amigo || share) return { esperaMain, resultadoCheck: { ok: false } };
         const resultadoCheck = await ejecutarPasoAhk(ahkExe, RUTA_CHECK_PENDING_OFFER_SCRIPT, ['Main', folderPath], 45 * 1000, tmp());
         return { esperaMain, resultadoCheck };
     });
     const [{ esperaMain, resultadoCheck }, prepDonante] = await Promise.all([promesaMainYChequeo, promesaPrepDonante]);
     if (!esperaMain.ok) {
         onProgreso({ paso: 'Reach Main menu', estado: 'error', detalle: esperaMain.detalle });
-        return await enviarErrorMainTrade(interaction, `❌ Could not reach the main menu on instance **${infoMain.name}** (${esperaMain.detalle}).`, [botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre)]);
+        return await enviarErrorMainTrade(interaction, `❌ Could not reach the main menu on instance **${infoMain?.name || 'Main'}** (${esperaMain.detalle}).`, [botonRetry()]);
     }
     if (!prepDonante.ok) {
         onProgreso({ paso: 'Inject donor account', estado: 'error', detalle: prepDonante.resultado });
-        return await enviarErrorMainTrade(interaction, `❌ Could not prepare the donor instance **${nombre}** (${prepDonante.resultado}).`, [botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre)]);
+        return await enviarErrorMainTrade(interaction, `❌ Could not prepare the donor instance **${nombre}** (${prepDonante.resultado}).`, [botonRetry()]);
     }
     onProgreso({ paso: 'Inject donor account', estado: 'ok' });
-    onProgreso({ paso: 'Reach Main menu', estado: 'ok' });
+    if (!amigo) onProgreso({ paso: 'Reach Main menu', estado: 'ok' });
     onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE['send_friend_request'] || 'send_friend_request', estado: 'ok' });
 
     // Orden confirmado por el usuario 2026-07-29: despues de mandar la
@@ -5451,6 +5736,22 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         // de mandar de verdad (se queda ofrecida pero sin el swipe final de su lado).
         { nombre: 'main_finalize_own_card', script: RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT, args: ['Main', folderPath], timeoutMs: 3 * 60 * 1000 }
     ];
+    // Friend Trade: solo los pasos de la donante, con el modo AMIGO (espera al amigo dos veces).
+    // Timeouts: los 4 min de siempre + los 15 min de cada espera.
+    // Share: Main solo acepta la solicitud; la donante hace todo lo demas (incluido desmarcar).
+    if (share) {
+        pasos = [
+            { nombre: 'main_accept_friend_request', script: RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, args: ['Main', folderPath], timeoutMs: 3 * 60 * 1000 },
+            { nombre: 'donor_share_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath, rutaImagenReferencia, 'SHARE'], timeoutMs: 8 * 60 * 1000 }
+        ];
+    }
+    if (amigo) {
+        const yaAmigos = String(prepDonante.resultado || '').includes('YA_AMIGOS');
+        pasos = [
+            { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath, rutaImagenReferencia, yaAmigos ? 'AMIGO_YA' : 'AMIGO'], timeoutMs: 20 * 60 * 1000 },
+            { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath, 'AMIGO'], timeoutMs: 20 * 60 * 1000 }
+        ];
+    }
 
     // REACTIVADO con needle nueva (2026-08-19, a pedido explicito del usuario): el banner
     // verde matcheaba CUALQUIER oferta pendiente vieja sin relacion (bug real reproducido
@@ -5530,11 +5831,16 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // La solicitud ahora corre en la preparacion de la donante: su resultado viene en prepDonante.
     let saltearAceptarAmigo = String(prepDonante.resultado || '').includes('YA_AMIGOS');
     let mainFinalAnticipado = null;
+    // Desmarcar favoritas AL INSTANTE (2026-10-04, Ale: "debe correr al instante, sino desaparece"):
+    // el popup "Send a thanks?" -- la puerta al perfil de Main -- se va solo si nadie lo toca. Arranca
+    // apenas la donante termina su "Got it!", en paralelo con lo que le queda a Main.
+    let promesaDesmarcar = null;
     // Fotos a Discord en segundo plano (2026-09-28, medido con Ale: subirlas frenaba el paso
     // siguiente varios segundos). Se encadenan para que salgan en el mismo orden de siempre.
     let colaFotos = Promise.resolve();
     const enColaFoto = (fn) => { colaFotos = colaFotos.then(fn).catch(e => console.error('DEBUG: error subiendo foto del trade:', e?.message || e)); };
     for (const paso of pasos) {
+        if (share && paso.nombre === 'donor_share_card' && infoMain) apagarInstanciaMuMu(infoMain.index);  // Main ya acepto (o ya eran amigos)
         if (paso.nombre === 'main_accept_friend_request' && saltearAceptarAmigo) {
             onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok', detalle: 'skipped -- the previous step confirmed they were already friends' });
             continue;
@@ -5587,7 +5893,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         // en un paso POSTERIOR (bug real reproducido en vivo: fallo en no_aparecio_selectfriend_paso7b
         // justo despues de esto), el aviso igual tiene que salir -- el wishlist ya se reviso de
         // verdad, sin importar que el resto del paso haya fallado despues.
-        if (paso.nombre === 'donor_offer_card') {
+        if (paso.nombre === 'donor_offer_card' || paso.nombre === 'donor_share_card') {
             const rutaMarcadorSinMatch = outputFilePaso.replace(/\.txt$/, '_WishlistNoMatch.txt');
             if (fs.existsSync(rutaMarcadorSinMatch)) {
                 try { fs.unlinkSync(rutaMarcadorSinMatch); } catch (e) { /* nada que limpiar */ }
@@ -5597,6 +5903,10 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         if (!ok) {
             await colaFotos;
             return await reportarFalloPaso(paso.nombre, resultado);
+        }
+        if (paso.nombre === 'donor_respond_finalize' && !promesaDesmarcar) {
+            promesaDesmarcar = ejecutarPasoAhk(ahkExe, RUTA_DONOR_OFFER_CARD_SCRIPT, [nombre, folderPath, 'DESMARCAR'], 2 * 60 * 1000, tmp())
+                .catch(e => ({ ok: false, resultado: e?.message || String(e) }));
         }
         onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok' });
         // Fotos reales del trade en distintos puntos del pipeline (2026-08-09/18, a pedido
@@ -5624,9 +5934,9 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             rutaFaseOfertaDonante = fs.existsSync(rutaFotoEsperando) ? rutaFotoEsperando : rutaFotoOferta;
             const collageOferta = await componerCollageAntesDespues(rutaFotoOferta, 'Oferta enviada', rutaFotoEsperando, 'Esperando respuesta');
             if (collageOferta) {
-                enColaFoto(() => mandarFotoTradeAlCanal(collageOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → Main`, true));
+                enColaFoto(() => mandarFotoTradeAlCanal(collageOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → ${amigo ? 'your friend' : 'Main'}`, true));
             } else {
-                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → Main`));
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → ${amigo ? 'your friend' : 'Main'}`));
             }
         }
         if (paso.nombre === 'main_accept_trade_offer') {
@@ -5666,6 +5976,14 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             rutaFaseRecibeDonante = rutaFotoEnviada;
             enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoEnviada, `Swipe registered — card actually sent.\n\n**${nombreCarta}**`));
         }
+        if (paso.nombre === 'donor_share_card') {
+            // Fotos de Share (2026-10-04): vista previa, pantalla del swipe y vuelta a Share.
+            rutaFaseOfertaDonante = outputFilePaso.replace(/\.txt$/, '_SharePhoto.png');
+            rutaFaseEnviaDonante = outputFilePaso.replace(/\.txt$/, '_ShareSwipePhoto.png');
+            rutaFaseRecibeDonante = outputFilePaso.replace(/\.txt$/, '_ShareSentPhoto.png');
+            enColaFoto(() => mandarFotoTradeAlCanal(rutaFaseOfertaDonante, `<@${interaction.user.id}> The donor is sharing the card with Main!\n\nCard shared: **${nombreCarta}**`));
+            enColaFoto(() => mandarFotoTradeAlCanal(rutaFaseRecibeDonante, `Swipe registered — card actually shared.\n\n**${nombreCarta}**`));
+        }
         if (paso.nombre === 'main_finalize_own_card') {
             // Foto de la carta de Main justo antes de su propio swipe (2026-08-19, a pedido
             // explicito del usuario) -- no se conoce el nombre de esta carta (se elige a
@@ -5687,7 +6005,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // esta cuenta. Se anota y se avisa con un embed chico: cuenta, carta y cantidad antes/despues.
     try {
         const antes = await auditarStockCarta(fileName, cartaId);
-        await registrarTransferenciaCarta(fileName, cartaId, 'main', interaction.user.id, friendId);
+        await registrarTransferenciaCarta(fileName, cartaId, share ? 'share' : amigo ? 'friend' : 'main', interaction.user.id, friendId);
         const canalHistorial = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
         if (canalHistorial?.webhook_url) {
             const despues = Math.max(0, antes.disponible - 1);
@@ -5708,7 +6026,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
                     { name: 'Account (XML)', value: `\`${fileName}\``, inline: true },
                     { name: 'Card transferred', value: `**${nombreCarta}**`, inline: true },
                     { name: 'Quantity', value: `x${antes.disponible} − 1 → **x${despues}** left`, inline: true },
-                    { name: 'Sent to', value: `Main (\`${friendId}\`)`, inline: true },
+                    { name: share ? 'Shared to' : 'Sent to', value: `${amigo ? 'Friend' : 'Main'} (\`${friendId}\`)`, inline: true },
                     { name: 'Date', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true }
                 );
             await new WebhookClient({ url: canalHistorial.webhook_url }).send({ embeds: [embedHistorial], files: archivosHistorial });
@@ -5722,7 +6040,16 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // fotos juntas (Ofrece/Envía/Recibe x donante/Main) + agradecimiento, para tener de un
     // vistazo la prueba completa del intercambio de los dos lados.
     try {
-        const collageFases = await componerCollageFasesMainTrade([
+        // Friend Trade: solo las 3 fotos de la donante (del otro lado esta el amigo, no Main).
+        const collageFases = await componerCollageFasesMainTrade(share ? [
+            { etiqueta: 'Donor — Shares', ruta: rutaFaseOfertaDonante },
+            { etiqueta: 'Donor — Sends', ruta: rutaFaseEnviaDonante },
+            { etiqueta: 'Donor — Done', ruta: rutaFaseRecibeDonante }
+        ] : amigo ? [
+            { etiqueta: 'Donor — Offers', ruta: rutaFaseOfertaDonante },
+            { etiqueta: 'Donor — Sends', ruta: rutaFaseEnviaDonante },
+            { etiqueta: 'Donor — Received', ruta: rutaFaseRecibeDonante }
+        ] : [
             { etiqueta: 'Donor — Offers', ruta: rutaFaseOfertaDonante },
             { etiqueta: 'Main — Offers', ruta: rutaFaseOfertaMain },
             { etiqueta: 'Donor — Sends', ruta: rutaFaseEnviaDonante },
@@ -5735,8 +6062,12 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             if (canalCollage?.webhook_url) {
                 const embedCollage = new EmbedBuilder()
                     .setColor(0xE91E63)
-                    .setTitle('✅ Main Trade completed')
-                    .setDescription(`Trade confirmed. Thank you very much for the trade!\n\n**${nombreCarta}**`)
+                    .setTitle(`✅ ${etiquetaModo} completed`)
+                    .setDescription(share
+                        ? `Card shared. Thank you!\n\n**${nombreCarta}**\n\n🏠 **You can now log into your Main account — the card was shared!**`
+                        : amigo
+                        ? `Trade confirmed. Thank you very much for the trade!\n\n**${nombreCarta}**\n\n🤝 **Your friend can now check their trades — the card was sent!**\n⏳ Please wait a few minutes while we remove the traded card from Favorites to avoid future errors.`
+                        : `Trade confirmed. Thank you very much for the trade!\n\n**${nombreCarta}**\n\n🏠 **You can now log into your Main account!**\n⏳ Please wait a few minutes while we remove the traded card from Favorites to avoid future errors.`)
                     .setImage('attachment://main_trade_resumen.png');
                 const formCollage = new FormData();
                 formCollage.append('payload_json', JSON.stringify({ embeds: [embedCollage.toJSON()] }));
@@ -5753,11 +6084,39 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // ya apaga a la donante sola, pero Main se quedaba prendida. Sin setTimeout
     // (reporte del usuario: quedaron prendidas igual) -- un reinicio del bot en
     // esa ventana de 5s mataba el timer pendiente sin avisar. Apaga de una.
-    apagarInstanciaMuMu(index);
-    apagarInstanciaMuMu(infoMain.index);
+    // Desmarcar favoritas (2026-10-01, idea de Ale): Main se apaga ya (el usuario puede entrar a su
+    // cuenta), y la donante sigue: vuelve a la wishlist de Main y apaga las estrellas doradas, para
+    // que el filtro de favoritos del proximo tradeo solo muestre la carta nueva. Corre en segundo
+    // plano; al terminar se apaga la donante y se avisa en Trading que todo quedo completo.
+    if (share) {
+        apagarInstanciaMuMu(index);
+    }
+    if (!amigo && !share) apagarInstanciaMuMu(infoMain.index);
+    if (!share) (async () => {
+        let okDesmarcar = false;
+        try {
+            const r = await (promesaDesmarcar || ejecutarPasoAhk(ahkExe, RUTA_DONOR_OFFER_CARD_SCRIPT, [nombre, folderPath, 'DESMARCAR'], 2 * 60 * 1000, tmp()));
+            okDesmarcar = !!r?.ok;
+            if (!okDesmarcar) console.error('DEBUG: desmarcar favoritas fallo:', r?.resultado);
+        } catch (e) {
+            console.error('DEBUG: error desmarcando favoritas:', e?.message || e);
+        }
+        apagarInstanciaMuMu(index);
+        try {
+            const canalFin = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
+            if (canalFin?.webhook_url) {
+                const textoFin = okDesmarcar
+                    ? `🎉 <@${interaction.user.id}> All done! The traded card was removed from Favorites and ${amigo ? 'the donor instance is' : 'both instances are'} closed.`
+                    : `⚠️ <@${interaction.user.id}> Trade is complete, but the Favorites could not be cleared automatically. ${amigo ? 'The donor instance is' : 'Both instances are'} closed.`;
+                await axios.post(`${canalFin.webhook_url}?wait=true`, { content: textoFin }, { timeout: 10000 });
+            }
+        } catch (e) {
+            console.error('DEBUG: error mandando el aviso final de Main Trade:', e?.response?.data || e?.message || e);
+        }
+    })();
 
     onProgreso({ paso: 'Trade completed', estado: 'ok', terminado: true });
-    const mensaje = `✅ Main Trade completed: **${nombreCarta}** (\`${fileName}\`) sent to Main.`;
+    const mensaje = `✅ ${etiquetaModo} completed: **${nombreCarta}** (\`${fileName}\`) ${share ? 'shared with' : 'sent to'} ${amigo ? 'your friend' : 'Main'}.`;
     try {
         const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
         if (canalRunInstance?.webhook_url) {
@@ -10995,13 +11354,16 @@ client.on('interactionCreate', async interaction => {
         // lo necesita como argumento aparte, y si quedara mezclado en el mismo
         // objeto terminaría colándose como un campo extra dentro del payload_json
         // real que se manda a Discord.
+        // Se difiere ANTES de armar el panel (2026-10-01, bug real: /setup no respondia --
+        // "Unknown interaction"): generarPanelControl consulta pm2 dos veces y puede pasar
+        // de los 3 s que Discord da para confirmar la interacción.
+        await interaction.deferReply({ ephemeral: !!rowSetup });
         const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.guildId);
         if (enCanalSetup) {
             // Un solo panel parado en el canal (se edita in situ), en vez de uno
             // nuevo cada vez que alguien corre /setup de nuevo — pero correrlo a
             // mano sí lo manda al final del historial, sin esperar el chequeo
             // automático de 5 minutos.
-            await interaction.deferReply({ ephemeral: true });
             try {
                 await enviarOEditarInterfaz(interaction.user.id, 'setup', rowSetup.webhook_url, panel, archivosPanel || [], true);
                 return await interaction.editReply({ content: '✅ Panel updated.' });
@@ -11036,11 +11398,9 @@ client.on('interactionCreate', async interaction => {
             // Corrido fuera del canal de Settings (para reparar, ver arriba) —
             // se responde acá mismo, en privado, sin tocar el webhook del canal
             // real de Settings (que puede estar roto).
-            await interaction.deferReply({ ephemeral: true });
             return await interaction.editReply({ ...panel, files: filesPanel });
         }
 
-        await interaction.deferReply();
         return await interaction.editReply({ ...panel, files: filesPanel });
     }
 
@@ -11317,7 +11677,8 @@ client.on('interactionCreate', async interaction => {
             return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
         } catch (error) {
             console.error('DEBUG: error abriendo el panel de Farm Shop Tickets:', error?.message || error);
-            return await interaction.editReply({ content: '❌ Could not open the panel. Try again.' });
+            const causa = String(error?.rawError?.message || error?.message || 'unknown error').slice(0, 300);
+            return await interaction.editReply({ content: `❌ Could not open the panel: ${causa}` });
         }
     }
 
@@ -12436,7 +12797,7 @@ client.on('interactionCreate', async interaction => {
                 label: `${r.fileName} (x${Math.max(0, r.cantidad - (transferidasMenu[normalizarCuentaTransferencia(r.fileName)] || 0))})`.slice(0, 100),
                 value: r.fileName.replace(/\.xml$/i, '').slice(0, 100)
             })));
-        return await interaction.editReply({ content: 'Which account do you want to trade this card from?', components: [new ActionRowBuilder().addComponents(menu)] });
+        return await interaction.editReply({ content: `Which account do you want to ${esModoShare(modo) ? 'share' : 'trade'} this card from?`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_cuenta::')) {
@@ -12939,6 +13300,35 @@ client.on('interactionCreate', async interaction => {
         return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre });
     }
 
+    // Boton "Retry" de Share (2026-10-04): igual que el de Main Trade (Share tambien usa Main).
+    if (interaction.isButton() && interaction.customId.startsWith('share_retry::')) {
+        const [, cartaId, friendId, fileName, index, nombre] = interaction.customId.split('::');
+        await interaction.deferUpdate();
+        try { await interaction.followUp({ content: `🔄 Retrying Share: restarting **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+        }
+        const infoMain = (obtenerInstanciasMuMu() || []).find(i => i.name === 'Main');
+        await Promise.all([infoMain ? asegurarInstanciaApagada(infoMain.index) : Promise.resolve(), asegurarInstanciaApagada(index)]);
+        return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, share: true });
+    }
+
+    // Boton "Retry" de Friend Trade (2026-10-04): igual que el de Main Trade, sin la instancia Main.
+    if (interaction.isButton() && interaction.customId.startsWith('friend_trade_retry::')) {
+        const [, cartaId, friendId, fileName, index, nombre] = interaction.customId.split('::');
+        await interaction.deferUpdate();
+        try { await interaction.followUp({ content: `🔄 Retrying Friend Trade: restarting **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+        const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
+        if (!archivo) {
+            return await interaction.followUp({ content: `❌ File \`${fileName}\` not found. Check the configured **XML Accounts Path**.`, ephemeral: true });
+        }
+        await asegurarInstanciaApagada(index);
+        return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, amigo: true });
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_trade_instancia::')) {
         const [, cartaId, friendId, fileName, modo] = interaction.customId.split('::');
         const [index, nombre] = interaction.values[0].split('::');
@@ -12975,7 +13365,7 @@ client.on('interactionCreate', async interaction => {
         const nombreCartaConfirm = resolverNombreCarta(cartaId, rutaMasterCfgConfirm?.webhook_url);
         const payloadCartaConfirm = await construirEmbedDetalleCarta(cartaId, nombreCartaConfirm, rutaMasterCfgConfirm?.webhook_url, null, interaction.guild);
         const embedConfirmacion = payloadCartaConfirm.embeds[0]
-            .setTitle(`📋 Confirm ${modo === 'main' ? 'Main Trade' : 'Friend Trade'}`)
+            .setTitle(`📋 Confirm ${modo === 'main' ? 'Main Trade' : modo === 'sharemain' ? 'Share to Main' : modo === 'sharefriend' ? 'Share to Friend' : 'Friend Trade'}`)
             .addFields(
                 { name: 'Instance', value: `**${nombre}**`, inline: true },
                 { name: 'Friend ID', value: `\`${friendId}\``, inline: true },
@@ -13023,11 +13413,22 @@ client.on('interactionCreate', async interaction => {
         // el flujo manual de siempre. A pedido explicito del usuario 2026-07-29: no
         // hace falta ninguna configuración nueva -- el amigo elegido (friendId) ES
         // la propia cuenta Main, y la instancia "Main" se prende sola por nombre fijo.
+        if (esModoShare(modo)) {
+            // Share a Main automatizado (2026-10-04). Share a amigo se quito: solo Main.
+            if (modo !== 'sharemain') return await interaction.followUp({ content: '❌ Share is only available to your Main account.', ephemeral: true });
+            try { await interaction.followUp({ content: `🎁 Running Share: turning on **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+            return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, share: true });
+        }
         if (modo === 'main') {
             try { await interaction.followUp({ content: `🏠 Running Main Trade: turning on **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
             return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre });
         }
 
+        // Friend Trade (2026-10-04): mismo flujo que Main Trade en modo amigo (ver ejecutarMainTradeDesdeDiscord).
+        if (modo === 'friend') {
+            try { await interaction.followUp({ content: `🤝 Running Friend Trade: turning on **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+            return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, amigo: true });
+        }
         return await ejecutarFreeTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre });
     }
 
@@ -13948,6 +14349,38 @@ client.on('interactionCreate', async interaction => {
         // canal donde se buscó la carta -- reenvía la carta completa (misma
         // imagen/embed) al canal de Trading con los 3 botones de modo, y todo
         // lo que sigue pasa ahí (ver reenviarCartaATrading).
+        // Share (2026-09-30): manda la carta al canal de Share con los dos modos, igual que Trade
+        // la manda al canal de Trading con los suyos.
+        if (interaction.customId.startsWith('card_share::')) {
+            const cartaId = interaction.customId.replace('card_share::', '');
+            await interaction.deferReply({ ephemeral: true });
+            // Share solo a Main (2026-10-04, pedido de Ale): va directo a elegir cual amigo guardado es
+            // Main, sin preguntar Main o amigo (antes habia "Share to Main" / "Share to Friend").
+            const { rutaIni } = await obtenerRutasInject(interaction.guildId);
+            const friends = parsearListaFriends(rutaIni);
+            if (!friends.length) {
+                return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add your Main account first from **🆔 Add Friend** in /setup.' });
+            }
+            const menuShare = new StringSelectMenuBuilder()
+                .setCustomId(`card_trade_friendid::normal::sharemain::${cartaId}`.slice(0, 100))
+                .setPlaceholder('Which saved friend is your Main account?')
+                .addOptions(friends.slice(0, 25).map(f => ({
+                    label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
+                    value: f.id
+                })));
+            return await reenviarCartaATrading(interaction, cartaId, null, [new ActionRowBuilder().addComponents(menuShare)], 'share-cards', 'Share Cards');
+        }
+        if (interaction.customId.startsWith('card_share_main::') || interaction.customId.startsWith('card_share_friend::')) {
+            // Share to Friend quitado (2026-10-04): solo Main. Cubre botones viejos de mensajes anteriores.
+            if (interaction.customId.startsWith('card_share_friend::')) {
+                return await interaction.reply({ content: '❌ Share is only available to your Main account now. Press **🎁 Share** on the card again.', ephemeral: true });
+            }
+            const aMain = interaction.customId.startsWith('card_share_main::');
+            const cartaId = interaction.customId.replace(aMain ? 'card_share_main::' : 'card_share_friend::', '');
+            await interaction.deferUpdate();
+            return await actualizarConSeleccionFriendId(interaction, cartaId, 'normal', aMain ? 'sharemain' : 'sharefriend');
+        }
+
         if (interaction.customId.startsWith('card_trade::')) {
             const cartaId = interaction.customId.replace('card_trade::', '');
             await interaction.deferReply({ ephemeral: true }); // armar la carta puede tardar más de 3s
@@ -13964,10 +14397,12 @@ client.on('interactionCreate', async interaction => {
             // propio).
             const tradeHabilitadoAca = tradeHabilitadoEnGuild(interaction.guildId);
             const fila = new ActionRowBuilder().addComponents(
-                // Friend Trade deshabilitado en todos lados (2026-09-29, pedido de Ale); Main Trade activo.
-                new ButtonBuilder().setCustomId(`card_trade_friend::${cartaId}`).setLabel('🤝 Friend Trade').setStyle(ButtonStyle.Secondary).setDisabled(true),
-                new ButtonBuilder().setCustomId(`card_trade_main::${cartaId}`).setLabel('🏠 Main Trade').setStyle(ButtonStyle.Secondary).setDisabled(!tradeHabilitadoAca),
-                new ButtonBuilder().setCustomId(`card_trade_agresivo::${cartaId}`).setLabel('⚡ Aggressive Trade').setStyle(ButtonStyle.Secondary).setDisabled(true)
+                // Friend Trade reactivado 2026-10-04 con el flujo nuevo (mismo que Main Trade + espera al
+                // amigo), con la misma regla de habilitacion que Main Trade.
+                new ButtonBuilder().setCustomId(`card_trade_friend::${cartaId}`).setLabel('🤝 Friend Trade').setStyle(ButtonStyle.Secondary).setDisabled(!tradeHabilitadoAca),
+                new ButtonBuilder().setCustomId(`card_trade_main::${cartaId}`).setLabel('🏠 Main Trade').setStyle(ButtonStyle.Secondary).setDisabled(!tradeHabilitadoAca)
+                // Aggressive Trade quitado (2026-10-04, pedido de Ale): varias copias a la vez se hacen
+                // desde Gold Cards.
             );
             return await reenviarCartaATrading(interaction, cartaId, null, [fila]);
         }
@@ -13976,8 +14411,9 @@ client.on('interactionCreate', async interaction => {
         // el que reenviarCartaATrading acaba de mandar) -- edita ese mismo
         // mensaje para pedir el amigo, no crea nada nuevo en otro canal.
         if (interaction.customId.startsWith('card_trade_friend::')) {
-            // Friend Trade deshabilitado (2026-09-29): cubre botones viejos que quedaron activos.
-            return await interaction.reply({ content: '❌ Friend Trade is disabled. Use **🏠 Main Trade** instead.', ephemeral: true });
+            if (!tradeHabilitadoEnGuild(interaction.guildId)) {
+                return await interaction.reply({ content: '❌ Friend Trade is not available here yet.', ephemeral: true });
+            }
             const cartaId = interaction.customId.replace('card_trade_friend::', '');
             await interaction.deferUpdate();
             return await actualizarConSeleccionFriendId(interaction, cartaId, 'normal', 'friend');
@@ -13995,6 +14431,8 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.customId.startsWith('card_trade_agresivo::')) {
+            // Botones viejos que hayan quedado en mensajes anteriores (2026-10-04).
+            return await interaction.reply({ content: '❌ Aggressive Trade was removed. Use **Gold Cards** to send several copies.', ephemeral: true });
             const cartaId = interaction.customId.replace('card_trade_agresivo::', '');
             const { rutaIni } = await obtenerRutasInject(interaction.guildId);
             const friends = parsearListaFriends(rutaIni);

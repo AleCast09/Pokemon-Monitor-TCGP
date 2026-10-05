@@ -1687,7 +1687,24 @@ app.post('/', upload.any(), async (req, res) => {
             }
         }
 
-        const rutaLogoExpansion = buscarLogoExpansion(sobre);
+        let rutaLogoExpansion = buscarLogoExpansion(sobre);
+        // Respaldo por la expansion de la CARTA (2026-09-30, bug real con Ale: el aviso de una
+        // Mega Diancie EX salia sin logo). El bot que abre los sobres reporta el sobre como
+        // "Latest" ("el mas reciente") en vez del nombre de la expansion, y no hay ninguna carpeta
+        // de logo con ese nombre. La carta si se conoce por su codigo exacto, asi que se usa su
+        // ExpansionID de cardmap para encontrar el logo.
+        if (!rutaLogoExpansion) {
+            try {
+                const mapaExpLogo = construirMapaExpansiones(masterData.en_US);
+                for (const c of cartas) {
+                    const expIdLogo = c?.code ? cardMap?.[c.code]?.ExpansionID : null;
+                    const rutaPorCarta = expIdLogo && mapaExpLogo[expIdLogo] ? buscarLogoExpansion(mapaExpLogo[expIdLogo]) : null;
+                    if (rutaPorCarta) { rutaLogoExpansion = rutaPorCarta; break; }
+                }
+            } catch (e) {
+                console.log('DEBUG: error resolviendo el logo por la expansion de la carta:', e.message);
+            }
+        }
 
         for (const data of envios) {
           // Try/catch por cada envio individual (2026-08-21, bug real reportado en vivo: una

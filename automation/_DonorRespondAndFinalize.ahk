@@ -14,7 +14,14 @@ if (A_Args.Length() < 3) {
 
 global g_winTitle   := A_Args[1]
 global g_folderPath := A_Args[2]
-global g_outputFile := A_Args[3]
+; 4to arg opcional (2026-10-04, Friend Trade): "AMIGO" antes del outputFile. Uso: ... "AMIGO" "<outputFile>"
+global g_modoExtra := ""
+if (A_Args.Length() >= 4) {
+    g_modoExtra := A_Args[3]
+    global g_outputFile := A_Args[4]
+} else {
+    global g_outputFile := A_Args[3]
+}
 
 #Include %A_ScriptDir%\_AdbUtils.ahk
 #Include %A_ScriptDir%\_ZonasNeedles.ahk
@@ -274,7 +281,7 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
 if (!esperarNeedleSinAccion("own_donorfinalize_waiting_title", 30, 2500)
     && !esperarNeedleSinAccion("own_donorfinalize_tradeforcard_title", 30, 2500)) {
     tap(141, 511)
-    tap(207, 402)
+    tap(207, 421)
 }
 
 ; Needle y coordenada recalculadas 2026-08-19 (bug real en vivo, cuenta real): la needle
@@ -317,6 +324,43 @@ if (esperarNeedleSinAccion("own_donoroffer_cancel_ok", 30, 2500, "own_donorfinal
             logDebugFinalize("arranque: popup previo cerrado (intento " . A_Index . ")")
             break
         }
+    }
+}
+
+; Friend Trade (2026-10-04, diseño de Ale): Main tocaba Refresh apenas terminaba su parte; el AMIGO
+; responde a mano, cuando quiera. La donante sale de "Waiting for a Response" con la X y recarga
+; con la pestaña de abajo (tres personas) + el tile Intercambio hasta que aparece la pantalla de
+; Trade con "!" y View (respuesta recibida). Tope 15 min. Despues sigue el bucle de siempre.
+if (g_modoExtra = "AMIGO") {
+    logDebugFinalize("amigo: esperando que el amigo responda la oferta (tope 15 min)")
+    inicioAmigo := A_TickCount
+    ultimaRecarga := 0
+    ultimoLogAmigo := A_TickCount
+    Loop {
+        if (chequeoRapidoNeedle("own_donorfinalize_waiting_title_native", 30)) {
+            logDebugFinalize("amigo: respuesta recibida (View con '!')")
+            break
+        }
+        if (A_TickCount - inicioAmigo > 15 * 60 * 1000) {
+            logDebugFinalize("amigo: FALLO -- 15 min sin respuesta del amigo")
+            AdbScreenshot(adbPath, puerto, A_ScriptDir . "\Logs\_amigo_no_respondio_" . g_winTitle . ".png")
+            ExitConError("amigo_no_respondio_15min")
+        }
+        if (A_TickCount - ultimaRecarga >= 6000) {
+            if (chequeoRapidoNeedle("own_maintrade_refresh_button_native", 30)) {
+                tap(141, 500)          ; X de "Waiting for a Response"
+                Sleep, 1500
+            }
+            tap(141, 511)              ; pestaña de abajo (tres personas): recarga Comunidad
+            Sleep, 1500
+            tap(207, 421)              ; tile Intercambio (abajo del cartel, ver _MainAcceptTradeOffer)
+            ultimaRecarga := A_TickCount
+        }
+        if (A_TickCount - ultimoLogAmigo >= 60000) {
+            logDebugFinalize("amigo: sigue esperando (" . Round((A_TickCount - inicioAmigo) / 60000) . " min)")
+            ultimoLogAmigo := A_TickCount
+        }
+        Sleep, 500
     }
 }
 
@@ -364,6 +408,11 @@ Loop {
         ultimoTapRefresh := A_TickCount
     }
     if (A_TickCount - inicioView > 45000)
+        break
+    ; 8 s despues de tocar View sin reconocer "Trade for This Card?" -> a la revision por ADB
+    ; (2026-10-04, en vivo con Ale: tardo 45 s). El needle rapido es la esquina del boton azul
+    ; "Trade", que tiene un brillo animado: a veces no coincide nunca; el de ADB si lo agarra.
+    if (vioWaiting && ultimoTapView && A_TickCount - ultimoTapView > 8000)
         break
     Sleep, 250
 }
@@ -427,7 +476,11 @@ AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_TradePhoto.png
 ; Se reintenta hasta que aparece el popup de confirmar, que es la pantalla SIGUIENTE.
 Loop, 10 {
     tap(206, 459)
-    Sleep, 1800
+    ; Sin espera fija (2026-10-03, Ale: "al presionar Trade demora"): antes 1,8 s parado antes
+    ; de mirar. Ahora mira la confirmacion seguido (captura nativa) y sigue apenas sale.
+    tTrade := A_TickCount
+    while (A_TickCount - tTrade < 2500 && !chequeoRapidoNeedle("own_donorfinalize_confirm_native", 30))
+        Sleep, 150
     if (esperarNeedleSinAccion("own_donoroffer_cancel_ok", 30, 1500, "own_donorfinalize_confirm_native", 30)) {
         logDebugFinalize("paso2: Trade registrado, confirmacion visible (intento " . A_Index . ")")
         break
@@ -458,7 +511,12 @@ logDebugFinalize("paso3: popup de finalizar visible, tocando OK hasta que se cie
 cerradoPopupFinal := false
 Loop, 12 {
     tap(199, 365)
-    Sleep, 2000
+    ; Antes 2 s fijos: ahora espera a que el "?" atenuado de detras del popup deje de verse
+    ; (popup cerrado) y recien confirma por ADB como siempre.
+    Sleep, 600
+    tOk := A_TickCount
+    while (A_TickCount - tOk < 2500 && chequeoRapidoNeedle("own_donorfinalize_confirm_native", 30))
+        Sleep, 150
     if (!esperarNeedleSinAccion("own_donoroffer_cancel_ok", 30, 1500)) {
         logDebugFinalize("paso3: OK registrado, popup cerrado (intento " . A_Index . ")")
         cerradoPopupFinal := true
@@ -532,6 +590,9 @@ AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_SwipePhoto.png
 bajarSpeedModA1xSiEstaActivo()
 
 AdbSwipePropio(adbPath, puerto, 274, 702, 230, 150)
+; Los 3 s NO sobran (2026-10-04, probado en vivo con Ale): dejan terminar la animacion de la
+; carta volando. Sin ellos el needle del "Got it!" (fondo) coincidia en plena animacion y la foto
+; salia con la carta en el aire.
 Sleep, 3000
 
 ; Tercera foto de evidencia (2026-08-22, a pedido explicito del usuario, mostrando una

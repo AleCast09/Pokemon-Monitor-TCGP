@@ -159,6 +159,13 @@ zonaDeNeedle(clave) {
         ; tap_to_proceed era la esquina de la letra G, y el icono flotante del speed mod quedo
         ; justo encima -- nunca coincidio. Parche de color liso a la derecha de la carta, sin
         ; letras; la pantalla del swipe ahi es verde, asi que no se confunden.
+        ; Pantallas despues del "Got it!" (2026-10-01, desmarcar favoritas): needles de Kevin
+        ; (Coords.ahk) con su misma zona y un margen de 6 px.
+        zonas["own_share_landing_native@275x528"] := "28,341,62,375"   ; pantalla Share: icono verde de dos personas, match en (36,349)
+        zonas["own_friends_lista_native@275x528"] := "227,97,261,131"   ; lista de Friends: icono "agregar amigo", match en (235,105)
+        zonas["kevin_pack_skip_native@275x528"] := "239,489,262,513"     ; registrar en el dex (>|)
+        zonas["kevin_pack_next_native@275x528"] := "125,68,146,90"       ; dex (pokebola del libro)
+        zonas["kevin_getitem_dialog_native@275x528"] := "0,329,26,356"   ; "Items acquired"
         zonas["own_donorfinalize_gotit_bg@540x960"] := "500,590,540,640"
         zonas["own_donorfinalize_gotit_bg_native@275x528"] := "254,340,275,366"
         zonas["own_donorfinalize_tap_to_proceed@540x960"] := "10,139,80,209"        ; match en (34,163)

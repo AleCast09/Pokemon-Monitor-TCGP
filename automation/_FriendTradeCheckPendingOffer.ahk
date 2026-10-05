@@ -171,7 +171,7 @@ esperarNeedleYTap(nombreNeedle, variation, x, y, timeoutMs := 15000, nombreNeedl
 ; ningun falso positivo cruzado (los 2 "matches" extra fueron la misma pantalla real
 ; duplicada por error de nombrado, no una pantalla distinta).
 if (buscarNeedle("own_friendtrade_socialhub_pending_badge", 30)) {
-    tap(207, 402)
+    tap(207, 421)
 } else if (!esperarNeedleYTap("own_donoroffer_trade_icon", 30, 207, 402, 15000, "own_donoroffer_trade_icon_native", 30)) {
     ExitConError("no_aparecio_socialhub")
 }

@@ -228,7 +228,7 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
 ; en _DonorRespondAndFinalize.ahk): sacarlo rompia el caso real donde la donante todavia
 ; esta en Social Hub, no dentro de Trade.
 tap(141, 511)
-tap(207, 402)
+tap(207, 421)
 
 ; Needle y coordenada recalculadas 2026-08-19 (bug real en vivo, cuenta real): la needle
 ; vieja (icono "?") ya no matcheaba esta pantalla, y su coordenada de tap tampoco caia

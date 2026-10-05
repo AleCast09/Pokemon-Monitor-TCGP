@@ -245,7 +245,10 @@ esperarNeedleSinAccion(nombreNeedle, variation, timeoutMs := 15000, nombreNeedle
 ; si, solo confirmar que estamos en la pantalla correcta.
 esperarViewButtonYTap(timeoutMs := 35000) {
     global adbPath, puerto, g_winTitle
-    tap(207, 402)  ; entra al tile de Trade sin condicion
+    ; (207,421) y no (207,402) (2026-10-04, bug real en vivo con Ale): con una oferta recibida, el
+    ; juego pone el cartel verde "Oferta de intercambio recibida" en la mitad del tile y ese cartel
+    ; se come el toque. Se toca abajo, sobre el nombre del tile. Mismo cambio en todos los scripts.
+    tap(207, 421)  ; entra al tile de Trade sin condicion
     inicio := A_TickCount
     matchesSeguidos := 0
     ultimoRefresco := A_TickCount
@@ -257,7 +260,7 @@ esperarViewButtonYTap(timeoutMs := 35000) {
         if (A_TickCount - ultimoRefresco > 8000) {
             logDebugMain("paso1: 8 s sin ver la oferta, saliendo a Comunidad y volviendo a entrar para recargar")
             tap(141, 511, 1500)   ; pestana Comunidad
-            tap(207, 402, 1500)   ; tile Intercambio
+            tap(207, 421, 1500)   ; tile Intercambio
             ultimoRefresco := A_TickCount
             matchesSeguidos := 0
             continue
