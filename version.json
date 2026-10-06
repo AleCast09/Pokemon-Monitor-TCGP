@@ -1,7 +1,9 @@
 {
-  "version": "1.6.3",
-  "notesCount": 10,
+  "version": "1.6.4",
+  "notesCount": 2,
   "notes": [
+    "Fixed: Share now finds the card in the \"Cards You Can Share\" section and checks it before sharing.",
+    "Known issue: Main Trade and Friend Trade can fail at some steps - we are working on it.",
     "Added: Share - send a 1-4 diamond card to your Main account (🎁 Share button).",
     "Added: Friend Trade is back - waits for your friend to accept the request and to answer the trade (15 min each).",
     "Added: the traded card is removed from Favorites after every trade, so the next trade picks the right card.",

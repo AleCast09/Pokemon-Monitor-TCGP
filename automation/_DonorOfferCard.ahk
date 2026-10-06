@@ -1157,7 +1157,7 @@ cartaSharePreviewEsLaPedida(ByRef diffOut) {
 }
 
 flujoShare() {
-    global adbPath, puerto, g_outputFile, g_rutaImagenReferencia, g_modoDesmarcar, g_bajarVelocidadEnPerfil, g_favoritoMarcado
+    global adbPath, puerto, g_outputFile, g_rutaImagenReferencia, g_modoDesmarcar, g_bajarVelocidadEnPerfil, g_favoritoMarcado, g_hwndFast
     ; S1: tile Share de Comunidad -> pantalla Share (needle: icono verde de dos personas, sin texto)
     logDebugWishlist("share1: tocando el tile Share")
     if (!tocarHastaVerNeedle(73, 410, "own_share_landing_native", 40, 2500, 20000))
@@ -1184,21 +1184,45 @@ flujoShare() {
         logDebugWishlist("share4: CORTE -- el filtro de favoritos fallo, no se comparte nada")
         ExitConError("filtro_favoritos_fallo")
     }
-    ; S5: tocar la carta (unica tras el filtro), cerrar el zoom si se abrio, OK
-    tap(48, 357)
-    Sleep, 600
-    Loop, 2 {
-        tap(150, 60)
-        Sleep, 500
+    ; S5/S6: tocar la carta y comprobarla en la vista previa (2026-10-06, en vivo con Ale). La lista
+    ; de Share tiene DOS secciones: arriba "Cards Not Registered in Share Partner's Card Dex" (solo las
+    ; que Main no tiene, del sobre que se este mostrando) y abajo "Cards You Can Share", donde aparece
+    ; la favorita filtrada. Se prueba primero abajo (54,472) y despues arriba (52,309). En Share NO hay
+    ; OK: tocar la carta abre directo la vista previa.
+    ; Para saber si el toque abrio algo, se compara la pantalla antes y despues: si no cambio, no se
+    ; abrio nada y se prueba la siguiente; si se abrio OTRA carta, se vuelve con la flecha (141,500).
+    posiciones := [[54, 472], [52, 309]]
+    rectPantalla := {x: 30, y: 140, w: 215, h: 300}
+    cartaOk := false
+    for _, pos in posiciones {
+        asegurarHwndFast()
+        pAntes := capturarVentana(g_hwndFast)
+        logDebugWishlist("share5: tocando la carta en (" . pos[1] . "," . pos[2] . ")")
+        tap(pos[1], pos[2])
+        Sleep, 2500
+        pDespues := capturarVentana(g_hwndFast)
+        cambio := true
+        if (pAntes && pDespues)
+            cambio := !compararArteCartas(pDespues, rectPantalla, pAntes, rectPantalla, 8, 15)
+        if (pAntes)
+            Gdip_DisposeImage(pAntes)
+        if (pDespues)
+            Gdip_DisposeImage(pDespues)
+        if (!cambio) {
+            logDebugWishlist("share5: el toque no abrio nada, se prueba la siguiente posicion")
+            continue
+        }
+        diffShare := -1
+        if (cartaSharePreviewEsLaPedida(diffShare)) {
+            cartaOk := true
+            break
+        }
+        logDebugWishlist("share6: se abrio otra carta (diff=" . Round(diffShare, 1) . "), volviendo a la lista")
+        tap(141, 500)
+        Sleep, 2000
     }
-    Sleep, 900
-    tap(145, 458)
-    ; S6: vista previa "Share Partner": comprobar que es la carta pedida ANTES de compartir (Share no
-    ; tiene vuelta atras ni respuesta del otro lado como Trade)
-    Sleep, 2500
-    diffShare := -1
-    if (!cartaSharePreviewEsLaPedida(diffShare)) {
-        logDebugWishlist("share6: CORTE -- la carta de la vista previa NO es la pedida (diff=" . Round(diffShare, 1) . ", umbral 9)")
+    if (!cartaOk) {
+        logDebugWishlist("share6: CORTE -- la carta pedida no se encontro en la lista de Share, no se comparte nada")
         AdbScreenshot(adbPath, puerto, A_ScriptDir . "\Logs\_share_carta_distinta.png")
         ExitConError("share_carta_no_coincide")
     }
