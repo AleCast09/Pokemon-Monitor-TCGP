@@ -32,7 +32,7 @@ async function bundlear() {
     vaciarCarpeta(DIST);
     fs.mkdirSync(DIST, { recursive: true });
 
-    // __BUILD_VERSION__ (2026-08-23, bug real reportado por un usuario -- wR98): grabada
+    // __BUILD_VERSION__ (2026-08-23, bug real reportado por un usuario): grabada
     // literal en el bundle en el momento de compilar, asi launcher.js puede comparar "con que
     // version fui compilado" contra lo que version.json dice en disco -- si un update anterior
     // reemplazo el version.json pero el swap del .exe en si nunca se completo (antivirus

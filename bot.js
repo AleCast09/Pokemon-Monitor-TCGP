@@ -1417,7 +1417,7 @@ async function elegirBannerConRespaldoRepo(carpetaLocal, carpetaRepo, rutaDefaul
 }
 // Movidas a variables de entorno (2026-09-11, bug real encontrado en vivo: la ruta
 // hardcodeada quedaba embebida tal cual dentro del bundle/.exe distribuido a otros
-// usuarios -- ej. wR98 -- exponiendo el nombre de usuario de Windows del autor en
+// usuarios -- ej. un amigo -- exponiendo el nombre de usuario de Windows del autor en
 // el binario compartido, aunque la carpeta en si nunca exista en su PC). Sin la variable de
 // entorno seteada (cualquier instalacion que no sea la de Ale), quedan vacias y el resto del
 // codigo ya cae de vuelta al estado sin wallpapers de siempre.
@@ -3739,6 +3739,9 @@ function tipoRarezaDesdeInfo(info) {
 // Share (2026-09-30, pedido de Ale): el juego solo deja REGALAR cartas de 1 a 4 diamantes.
 // Modos: 'sharemain' (a la cuenta Main, que acepta la solicitud sola) y 'sharefriend' (a un amigo).
 const RAREZAS_COMPARTIBLES_SHARE = ['1-diamond', '2-diamond', '3-diamond', '4-diamond'];
+// Trade (2026-10-06, caso real de un usuario: intento tradear un Mantyke Crown y Main nunca pudo responder):
+// el juego no deja tradear Inmersivas ni Crown. 2 estrellas y shiny 1/2 si, desde octubre 2025.
+const RAREZAS_TRADEABLES = ['1-diamond', '2-diamond', '3-diamond', '4-diamond', '1-star', '2-star-trainer', '2-star-full-art', '2-star-rainbow', '1-star-shiny', '2-star-shiny'];
 function esModoShare(modo) { return modo === 'sharemain' || modo === 'sharefriend'; }
 
 const RAREZA_ICONOS_CARTAS = {
@@ -3952,6 +3955,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const cardmasterShare = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json')) : null;
     const tipoRarezaShare = cardmasterShare?.[cartaId] ? tipoRarezaDesdeInfo(cardmasterShare[cartaId]) : null;
     const compartible = RAREZAS_COMPARTIBLES_SHARE.includes(tipoRarezaShare);
+    const tradeable = RAREZAS_TRADEABLES.includes(tipoRarezaShare);
 
     // En Gold Cards, Trade/Shinedust tienen su propio boton de entrada
     // (goldcards_trade::/goldcards_shinedust::) que solo lista las cuentas ya
@@ -3964,7 +3968,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         // Ver tradeHabilitadoEnGuild() arriba del archivo -- deshabilitado en todo servidor
         // que no sea el propio del usuario, reactivado ahi el 2026-09-02.
         // Trade de Gold Cards deshabilitado (2026-09-30, pedido de Ale).
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold || !tradeHabilitadoEnGuild(guild?.id)),
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold || !tradeable || !tradeHabilitadoEnGuild(guild?.id)),
         new ButtonBuilder().setCustomId(`card_share::${cartaId}`.slice(0, 100)).setLabel('🎁 Share').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold || !compartible || !tradeHabilitadoEnGuild(guild?.id)),  // bloqueado en Gold Cards (2026-10-04, Ale)
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
@@ -4025,7 +4029,7 @@ function construirEmbedRunInstanceInicio(user) {
 }
 
 // Elige entre VARIAS instalaciones de MuMu (2026-09-11, bug real reportado en vivo por
-// wR98): antes devolvia el PRIMER candidato que existiera en disco, sin importar si tenia
+// un usuario): antes devolvia el PRIMER candidato que existiera en disco, sin importar si tenia
 // instancias configuradas de verdad -- un usuario con dos instalaciones (MuMuPlayer normal
 // sin uso + MuMuPlayerGlobal-12.0 con su farm real) siempre se conectaba a la vacia. Ahora
 // se consulta cada candidato y se elige el que reporte mas instancias reales configuradas.
@@ -4495,7 +4499,7 @@ function derivarRutasDesdeRaiz(raiz) {
 const RUTA_MAIN_AHK_DEFAULT = 'C:\\PTCGPB\\Scripts\\Main.ahk';
 
 // IMPORTANTE (bug real reportado en vivo 2026-09-14, "faltan_archivos" en TODO usuario nuevo
-// -- wR98 y otro amigo, ambos con Main Path bien configurado): el parametro de esta funcion
+// -- dos amigos, ambos con Main Path bien configurado): el parametro de esta funcion
 // (y de obtenerRutasInject mas abajo) SIEMPRE tiene que ser interaction.guildId, nunca
 // interaction.user.id -- modal_ruta_raiz (el que guarda "Main Path") guarda estas filas
 // usando el guildId, igual que ruta_raiz/obtenerRutaRaiz. 16+ lugares del codigo las
@@ -5790,7 +5794,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // rutaFoto acepta tanto una ruta de archivo (string) como un Buffer ya armado en memoria
     // (2026-09-16, a pedido explicito del usuario -- necesario para mandar los collages de
     // 2 paneles de componerCollageAntesDespues, que no se guardan a disco).
-    const mandarFotoTradeAlCanal = async (rutaFoto, mensajeTexto, sinDatosCarta = false) => {
+    const mandarFotoTradeAlCanal = async (rutaFoto, mensajeTexto, sinDatosCarta = false, componentes = []) => {
         const esBuffer = Buffer.isBuffer(rutaFoto);
         if (!esBuffer && !fs.existsSync(rutaFoto)) return;
         try {
@@ -5799,11 +5803,11 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             const formFoto = new FormData();
             if (sinDatosCarta) {
                 const embedFoto = new EmbedBuilder().setColor(0xE91E63).setImage('attachment://trade_photo.png');
-                formFoto.append('payload_json', JSON.stringify({ content: mensajeTexto, embeds: [embedFoto.toJSON()] }));
+                formFoto.append('payload_json', JSON.stringify({ content: mensajeTexto, embeds: [embedFoto.toJSON()], components: componentes.map(c => c.toJSON()) }));
             } else {
                 const payloadCarta = await construirEmbedDetalleCarta(cartaId, nombreCarta, rutaMasterCfg?.webhook_url, null, interaction.guild);
                 const embedCarta = payloadCarta.embeds[0].setImage('attachment://trade_photo.png');
-                formFoto.append('payload_json', JSON.stringify({ content: mensajeTexto, embeds: [embedCarta.toJSON()] }));
+                formFoto.append('payload_json', JSON.stringify({ content: mensajeTexto, embeds: [embedCarta.toJSON()], components: componentes.map(c => c.toJSON()) }));
                 const archivoSymbol = (payloadCarta.files || []).find(f => f.name === 'symbol.png');
                 if (archivoSymbol) formFoto.append('files[1]', archivoSymbol.attachment, { filename: 'symbol.png' });
             }
@@ -5835,6 +5839,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // el popup "Send a thanks?" -- la puerta al perfil de Main -- se va solo si nadie lo toca. Arranca
     // apenas la donante termina su "Got it!", en paralelo con lo que le queda a Main.
     let promesaDesmarcar = null;
+    let avisoWishlistEnviado = false;
     // Fotos a Discord en segundo plano (2026-09-28, medido con Ale: subirlas frenaba el paso
     // siguiente varios segundos). Se encadenan para que salgan en el mismo orden de siempre.
     let colaFotos = Promise.resolve();
@@ -5897,11 +5902,22 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             const rutaMarcadorSinMatch = outputFilePaso.replace(/\.txt$/, '_WishlistNoMatch.txt');
             if (fs.existsSync(rutaMarcadorSinMatch)) {
                 try { fs.unlinkSync(rutaMarcadorSinMatch); } catch (e) { /* nada que limpiar */ }
-                await mandarFotoTradeAlCanal(rutaImagenReferencia, `⚠️ <@${interaction.user.id}> The requested card was not found in the friend's profile. Please mark the following card as favorite:`, true);
+                // Con Stop y Retry (2026-10-06, pedido de Ale): se marca la carta en Main y se reintenta
+                // desde el mismo aviso. El mensaje de error generico de abajo ya no sale en este caso.
+                const filaAviso = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger),
+                    botonRetry()
+                );
+                await mandarFotoTradeAlCanal(rutaImagenReferencia, `⚠️ <@${interaction.user.id}> The requested card was not found in the friend's profile. Please mark the following card as favorite, then press **🔄 Retry**:`, true, [filaAviso]);
+                avisoWishlistEnviado = true;
             }
         }
         if (!ok) {
             await colaFotos;
+            if (avisoWishlistEnviado) {
+                onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'error', detalle: resultado });
+                return;
+            }
             return await reportarFalloPaso(paso.nombre, resultado);
         }
         if (paso.nombre === 'donor_respond_finalize' && !promesaDesmarcar) {

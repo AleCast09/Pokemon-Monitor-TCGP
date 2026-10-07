@@ -248,19 +248,33 @@ esperarViewButtonYTap(timeoutMs := 35000) {
     ; (207,421) y no (207,402) (2026-10-04, bug real en vivo con Ale): con una oferta recibida, el
     ; juego pone el cartel verde "Oferta de intercambio recibida" en la mitad del tile y ese cartel
     ; se come el toque. Se toca abajo, sobre el nombre del tile. Mismo cambio en todos los scripts.
-    tap(207, 421)  ; entra al tile de Trade sin condicion
     inicio := A_TickCount
     matchesSeguidos := 0
     ultimoRefresco := A_TickCount
+    ultimoTapTile := 0
     Loop {
+        ; Estilo Kevin (2026-10-06, en vivo con Ale: 4 toques a Intercambio sin entrar). Los toques
+        ; eran a ciegas -- al arrancar y 1,5 s despues de tocar la pestaña Comunidad, en plena
+        ; animacion -- y el juego los ignoraba. Ahora: mientras se VEA Comunidad (icono de Amigos,
+        ; sin texto) se toca Intercambio cada 2,5 s, hasta que entre.
+        if (chequeoRapidoNeedle("own_mainaccept_friends_icon_native", 30)) {
+            if (A_TickCount - ultimoTapTile >= 2500) {
+                tap(207, 421)
+                ultimoTapTile := A_TickCount
+                ultimoRefresco := A_TickCount
+            }
+            Sleep, 300
+            if (A_TickCount - inicio > timeoutMs)
+                return false
+            continue
+        }
         ; Recargar la pantalla (2026-09-28, bug real en vivo con Ale): el juego NO actualiza la
         ; pantalla de Intercambio sola. Si Main entraba justo antes de que la oferta llegara del
         ; servidor, se quedaba viendo "Puedes intercambiar cartas con amigos" (sin oferta) y se
         ; vencian los 35 s. Cada 8 s sin ver el "!", sale a Comunidad y vuelve a entrar.
         if (A_TickCount - ultimoRefresco > 8000) {
             logDebugMain("paso1: 8 s sin ver la oferta, saliendo a Comunidad y volviendo a entrar para recargar")
-            tap(141, 511, 1500)   ; pestana Comunidad
-            tap(207, 421, 1500)   ; tile Intercambio
+            tap(141, 511, 1500)   ; pestana Comunidad (el tile lo toca la vuelta siguiente, al ver Comunidad)
             ultimoRefresco := A_TickCount
             matchesSeguidos := 0
             continue

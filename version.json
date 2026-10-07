@@ -1,7 +1,10 @@
 {
-  "version": "1.6.4",
-  "notesCount": 2,
+  "version": "1.6.5",
+  "notesCount": 3,
   "notes": [
+    "Fixed: Main getting stuck in Community and not entering Trade.",
+    "Fixed: the Trade button is now only enabled for cards the game lets you trade (not Crown or Immersive).",
+    "Added: Stop and Retry buttons on the \"card not found in the friend's profile\" notice.",
     "Fixed: Share now finds the card in the \"Cards You Can Share\" section and checks it before sharing.",
     "Known issue: Main Trade and Friend Trade can fail at some steps - we are working on it.",
     "Added: Share - send a 1-4 diamond card to your Main account (🎁 Share button).",
