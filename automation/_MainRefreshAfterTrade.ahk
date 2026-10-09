@@ -337,8 +337,8 @@ Sleep, 3000
 ; realmente se mando -- mismo motivo y mismo needle que en _DonorRespondAndFinalize.ahk (es
 ; la misma pantalla generica del juego, sin importar de que lado se mando la carta). Se
 ; espera la pantalla de verdad en vez de un Sleep fijo, para no sacar la foto de un cuadro
-; intermedio todavia en transicion. No hace falta tocar "Tap to Proceed" aca -- Main se
-; apaga solo enseguida (ver apagarInstanciaMuMu en bot.js), no necesita seguir navegando.
+; intermedio todavia en transicion. Despues de la foto se cierra la secuencia del juego (ver
+; cerrarSecuenciaPostTradeo mas abajo) para que Main no quede con un popup pendiente.
 ; Needle cambiado a own_donorfinalize_gotit_bg (2026-09-29, bug real con Ale: faltaba la foto
 ; "Main -- Received" en el resumen). El viejo own_donorfinalize_tap_to_proceed era la esquina de la
 ; letra G de "Got it!", y el icono flotante del speed mod queda justo encima: nunca coincidia y la
@@ -361,6 +361,97 @@ if (!esperarNeedleSinAccion("own_donorfinalize_gotit_bg", 20, 15000, "own_donorf
         Sleep, 1200
         AdbScreenshot(adbPath, puerto, StrReplace(g_outputFile, ".txt", "_MainSentPhoto.png"))
     }
+
+; Cierre limpio de Main (2026-10-08, pedido de Ale): antes Main se apagaba en el "Got it!" y al
+; entrar el usuario le salia un popup pendiente. Ahora termina la secuencia del juego: Tap to Proceed
+; -> (carta nueva) primer >| -> dex -> Next -> "Items acquired" OK -> "Send a thanks?" -> X. NO abre
+; el perfil. Es de cortesia: si algo no aparece, sale OK igual (el tradeo ya esta hecho).
+pantallaEstableMain(needle, variation) {
+    if (!chequeoRapidoNeedle(needle, variation))
+        return false
+    Sleep, 300
+    return chequeoRapidoNeedle(needle, variation)
+}
+vistaContinuaMain(needle, variation, ms) {
+    inicio := A_TickCount
+    Loop {
+        if (!chequeoRapidoNeedle(needle, variation))
+            return false
+        if (A_TickCount - inicio >= ms)
+            return true
+        Sleep, 250
+    }
+}
+cerrarSecuenciaPostTradeo() {
+    Sleep, 1200
+    tap(152, 486)   ; Tap to Proceed
+    logDebugRefresh("cierre: Tap to Proceed tocado")
+    inicio := A_TickCount
+    ultimoChequeoThanks := 0
+    inicioComunidad := 0
+    while (A_TickCount - inicio < 50000) {
+        ; "Send a thanks?" (lupita del avatar, ADB): se cierra con la X y se termina.
+        if (A_TickCount - ultimoChequeoThanks >= 1500) {
+            ultimoChequeoThanks := A_TickCount
+            if (esperarNeedleSinAccion("own_thanks_avatar_lupa", 40, 1)) {
+                Loop, 3 {
+                    logDebugRefresh("cierre: 'Send a thanks?' visible, tocando la X (intento " . A_Index . ")")
+                    Sleep, 500
+                    tap(152, 486)
+                    Sleep, 1500
+                    if (!esperarNeedleSinAccion("own_thanks_avatar_lupa", 40, 1))
+                        return true
+                }
+                return false
+            }
+        }
+        if (pantallaEstableMain("kevin_pack_skip_native", 40)) {
+            ; Solo el PRIMER >| (el segundo, sobre el dex, avanza solo y un toque ahi abre una carta).
+            logDebugRefresh("cierre: primer >|, tocando")
+            Sleep, 700
+            tap(247, 500)
+            Loop, 4 {
+                Sleep, 1000
+                if (!chequeoRapidoNeedle("kevin_pack_skip_native", 40) || chequeoRapidoNeedle("kevin_pack_next_native", 50))
+                    break
+                logDebugRefresh("cierre: el primer >| sigue a la vista, tocandolo otra vez")
+                tap(247, 500)
+            }
+            ; Que el >| del dex no se confunda con el primero: se espera a que se vaya.
+            espera := A_TickCount
+            while (A_TickCount - espera < 6000 && chequeoRapidoNeedle("kevin_pack_skip_native", 40))
+                Sleep, 250
+            continue
+        }
+        if (vistaContinuaMain("kevin_pack_next_native", 50, 1500)) {
+            logDebugRefresh("cierre: dex, tocando Next")
+            Sleep, 700
+            tap(146, 489)
+            Sleep, 2000
+            continue
+        }
+        if (pantallaEstableMain("kevin_getitem_dialog_native", 20)) {
+            logDebugRefresh("cierre: 'Items acquired', tocando OK")
+            Sleep, 700
+            tap(141, 420)
+            Sleep, 2000
+            continue
+        }
+        ; En Comunidad sin popup: el "Send a thanks?" sale ~6 s despues; si a los 15 s no salio, listo.
+        if (chequeoRapidoNeedle("own_mainaccept_friends_icon_native", 30)) {
+            if (!inicioComunidad)
+                inicioComunidad := A_TickCount
+            else if (A_TickCount - inicioComunidad > 15000) {
+                logDebugRefresh("cierre: en Comunidad y sin 'Send a thanks?' en 15 s, listo")
+                return true
+            }
+        }
+        Sleep, 300
+    }
+    logDebugRefresh("cierre: 50 s sin ver 'Send a thanks?', se apaga igual")
+    return false
+}
+cerrarSecuenciaPostTradeo()
 
 WriteResult("OK")
 Gdip_Shutdown(pToken)

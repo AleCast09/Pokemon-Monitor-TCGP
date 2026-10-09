@@ -21,6 +21,7 @@ global g_outputFile := A_Args[3]
 #Include %A_ScriptDir%\_ZonasNeedles.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Imagesearch.ahk
+#Include %A_ScriptDir%\_EnergiaIntercambio.ahk
 
 global pToken := Gdip_Startup()
 
@@ -356,11 +357,35 @@ logDebugMain("paso1: OK, oferta vista y View tocado")
 ; variation=10 en ambas capturas reales -- variation 40 usado aca, margen parejo de los dos
 ; lados. Sin needle nativa todavia (no se pudo capturar la ventana nativa hoy) -- cae siempre al
 ; chequeo lento por ADB, un poco mas lento pero funciona en cualquier idioma.
-if (!esperarNeedleYTap("own_maintrade_trade_button", 40, 204, 460, 15000))
+; Reintento de View estilo Kevin (2026-10-08, log real de un usuario: "View tocado" y 16 s despues
+; FALLO en paso3). El toque a View se hacia UNA vez; si el juego no lo agarraba, Main se quedaba en
+; la pantalla de Intercambio esperando una pantalla que nunca iba a abrir. Ahora, mientras se siga
+; viendo el boton View con su "!", se vuelve a tocar cada 2,5 s. Apenas aparece el reloj de la
+; pantalla de la oferta, se toca Intercambiar como siempre. Tope 20 s.
+inicioP3 := A_TickCount
+ultimoTapView := A_TickCount
+llegoOferta := false
+Loop {
+    if (esperarNeedleSinAccion("own_maintrade_trade_button", 40, 1)) {
+        llegoOferta := true
+        break
+    }
+    if (A_TickCount - inicioP3 > 20000)
+        break
+    if (A_TickCount - ultimoTapView >= 2500 && chequeoRapidoNeedle("own_maintrade_offer_received_banner_native", 30)) {
+        logDebugMain("paso3: View sigue a la vista, el toque no entro -- tocando View otra vez")
+        tap(143, 424)
+        ultimoTapView := A_TickCount
+    }
+    Sleep, 300
+}
+if (!llegoOferta)
     {
         logDebugMain("FALLO en no_aparecio_intercambiar_button_paso3")
         ExitConError("no_aparecio_intercambiar_button_paso3")
     }
+Sleep, 900
+tap(204, 460)
 logDebugMain("paso3: Intercambiar tocado")
 ; Chequeo rapido cableado (2026-08-26): needle propia own_maintrade_choosecard_title_native
 ; (titulo "Choose a Card to Trade", recorte mas ajustado que el de la donante -- ese incluia
@@ -538,11 +563,20 @@ if (!esperarNeedleYTap("own_maintrade_choosecard_title", 30, 138, 460, 15000, "o
 ; texto daba falso positivo contra la pantalla "Trade Offer Received", que tambien muestra
 ; "Trade Partner"; ampliado hacia arriba para diferenciarlas). Validada en vivo -- limpio
 ; hasta variation 40 contra 24 capturas de otras pantallas.
-if (!esperarNeedleYTap("own_maintrade_tradepartner_header", 20, 197, 464, 15000, "own_maintrade_tradepartner_header_native", 30))
+if (!esperarNeedleSinAccion("own_maintrade_tradepartner_header", 20, 15000, "own_maintrade_tradepartner_header_native", 30))
     {
         logDebugMain("FALLO en no_aparecio_preview_envio_paso8")
         ExitConError("no_aparecio_preview_envio_paso8")
     }
+Sleep, 900
+; Sin energia de intercambio (2026-10-08, Ale): se recupera 1 con relojes (_EnergiaIntercambio.ahk).
+if (faltaEnergiaIntercambio()) {
+    logDebugMain("paso8: sin energia de intercambio, recuperando con relojes")
+    if (!recuperarEnergiaIntercambio())
+        ExitConError("sin_energia_intercambio")
+    Sleep, 900
+}
+tap(197, 464)
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_setcard_confirm_native,
 ; ya validada en _DonorOfferCard.ahk -- matchea exacto tambien esta pantalla del lado de Main
 ; (mismo popup real, confirmado en vivo).

@@ -1,7 +1,11 @@
 {
-  "version": "1.6.5",
-  "notesCount": 3,
+  "version": "1.6.6",
+  "notesCount": 4,
   "notes": [
+    "Added: when an account runs out of trade energy, it is recovered automatically with trade hourglasses (only what is needed).",
+    "Fixed: trades getting stuck on slower PCs (Choose a Card, card preview and Skip button).",
+    "Fixed: Main sometimes not entering Trade after tapping View.",
+    "Improved: Main closes the after-trade screens before shutting down, and Favorites are cleared faster.",
     "Fixed: Main getting stuck in Community and not entering Trade.",
     "Fixed: the Trade button is now only enabled for cards the game lets you trade (not Crown or Immersive).",
     "Added: Stop and Retry buttons on the \"card not found in the friend's profile\" notice.",

@@ -47,6 +47,11 @@ const GUILD_ID_TRADE_HABILITADO = process.env.GUILD_ID_TRADE_HABILITADO || '';
 // servidor, sin depender de GUILD_ID_TRADE_HABILITADO. Poner en false para volver al
 // comportamiento seguro de siempre (Trade deshabilitado salvo en el guild configurado).
 const TRADE_ABIERTO_A_TODOS = true;
+// Servidor propio de Ale (GUILD_ID_TRADE_HABILITADO de su .env): para funciones en prueba que solo
+// se activan ahi, aunque Trade este abierto a todos (2026-10-06: Trade de Gold Cards).
+function esServidorPropio(guildId) {
+    return !!GUILD_ID_TRADE_HABILITADO && guildId === GUILD_ID_TRADE_HABILITADO;
+}
 function tradeHabilitadoEnGuild(guildId) {
     if (TRADE_ABIERTO_A_TODOS) return true;
     return !!GUILD_ID_TRADE_HABILITADO && guildId === GUILD_ID_TRADE_HABILITADO;
@@ -3968,7 +3973,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         // Ver tradeHabilitadoEnGuild() arriba del archivo -- deshabilitado en todo servidor
         // que no sea el propio del usuario, reactivado ahi el 2026-09-02.
         // Trade de Gold Cards deshabilitado (2026-09-30, pedido de Ale).
-        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold || !tradeable || !tradeHabilitadoEnGuild(guild?.id)),
+        new ButtonBuilder().setCustomId(datosGold ? `goldcards_trade::${cartaId}` : `card_trade::${cartaId}`).setLabel('🔄 Trade').setStyle(ButtonStyle.Primary).setDisabled((datosGold ? !esServidorPropio(guild?.id) : false) || !tradeable || !tradeHabilitadoEnGuild(guild?.id)),  // Gold: solo en el servidor propio (2026-10-06)
         new ButtonBuilder().setCustomId(`card_share::${cartaId}`.slice(0, 100)).setLabel('🎁 Share').setStyle(ButtonStyle.Primary).setDisabled(!!datosGold || !compartible || !tradeHabilitadoEnGuild(guild?.id)),  // bloqueado en Gold Cards (2026-10-04, Ale)
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_shinedust::${cartaId}` : `card_shinedust::${cartaId}`).setLabel('👛 Shinedust').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(datosGold ? `goldcards_extract::${cartaId}` : `card_extract::${cartaId}`).setLabel('📄 Extract XML').setStyle(ButtonStyle.Secondary),
@@ -5597,7 +5602,8 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             ? '\n\n⚠️ The **Trade** button may be locked because that account already has a trade in progress. Please check your pending trades, cancel them, and press **🔄 Retry**.'
             : '';
         const pistaAmigo = String(resultado || '').includes('amigo_no_acepto') ? '\n\n⏳ Your friend did not accept the friend request within 15 minutes.'
-            : String(resultado || '').includes('amigo_no_respondio') ? '\n\n⏳ Your friend did not respond to the trade offer within 15 minutes.' : '';
+            : String(resultado || '').includes('amigo_no_respondio') ? '\n\n⏳ Your friend did not respond to the trade offer within 15 minutes.'
+            : String(resultado || '').includes('sin_energia_intercambio') ? '\n\n⚡ The account ran out of trade energy and could not recover it with trade hourglasses. Wait for the energy to refill, then press **🔄 Retry**.' : '';
         const mensaje = `❌ ${etiquetaModo} failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.${pistaBloqueado}${pistaAmigo}`;
         try {
             const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
@@ -14511,8 +14517,10 @@ client.on('interactionCreate', async interaction => {
             // "cualquier cuenta con al menos 1 copia". Gold Cards no tiene los 3
             // modos todavía (solo el equivalente a Friend Trade) -- reenvía la
             // carta al canal de Trading ya directo con el selector de amigo.
-            // Deshabilitado (2026-09-30, pedido de Ale): cubre botones viejos que quedaron activos.
-            return await interaction.reply({ content: '❌ Trade from Gold Cards is disabled.', ephemeral: true });
+            // Reactivado solo en el servidor propio (2026-10-06, pedido de Ale); en los demas sigue cerrado.
+            if (!esServidorPropio(interaction.guildId)) {
+                return await interaction.reply({ content: '❌ Trade from Gold Cards is disabled.', ephemeral: true });
+            }
             const cartaId = interaction.customId.replace('goldcards_trade::', '');
             await interaction.deferReply({ ephemeral: true }); // obtenerCartasGoldCacheadas + armar la carta pueden tardar más de 3s
             const { rutaIni } = await obtenerRutasInject(interaction.guildId);

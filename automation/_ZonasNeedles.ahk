@@ -161,6 +161,12 @@ zonaDeNeedle(clave) {
         ; letras; la pantalla del swipe ahi es verde, asi que no se confunden.
         ; Pantallas despues del "Got it!" (2026-10-01, desmarcar favoritas): needles de Kevin
         ; (Coords.ahk) con su misma zona y un margen de 6 px.
+        zonas["own_donoroffer_choosecard_lupa_native@275x528"] := "227,131,259,163"   ; "Choose a Card": lupa de busqueda, match en (235,139)
+        zonas["own_maintrade_sin_energia@540x960"] := "56,737,104,785"   ; vista previa sin energia de intercambio: triangulo rojo, match en (68,749)
+        zonas["own_energia_popup_opcion1@540x960"] := "34,454,76,522"   ; popup de energia insuficiente: borde verde de la opcion 1, match en (46,466)
+        zonas["own_energia_confirm_reloj@540x960"] := "178,547,224,604"   ; confirmar uso de relojes: icono del reloj (sin el numero), match en (190,559)
+        zonas["own_energia_recuperada_flecha@540x960"] := "240,452,300,497"   ; popup "energia recuperada": flechita entre las dos barras, match en (252,464)
+        zonas["own_thanks_avatar_lupa@540x960"] := "312,380,366,434"   ; "Send a thanks?": lupita del avatar, match en (326,394)
         zonas["own_share_landing_native@275x528"] := "28,341,62,375"   ; pantalla Share: icono verde de dos personas, match en (36,349)
         zonas["own_friends_lista_native@275x528"] := "227,97,261,131"   ; lista de Friends: icono "agregar amigo", match en (235,105)
         zonas["kevin_pack_skip_native@275x528"] := "239,489,262,513"     ; registrar en el dex (>|)

@@ -25,6 +25,7 @@ global g_outputFile := A_Args[3]
 #Include %A_ScriptDir%\_ZonasNeedles.ahk
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Imagesearch.ahk
+#Include %A_ScriptDir%\_EnergiaIntercambio.ahk
 
 global pToken := Gdip_Startup()
 
@@ -244,8 +245,13 @@ if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 48, 357, 15000, "o
 }
 if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 145, 458, 15000, "own_donoroffer_choosecard_title_native", 30))
     ExitConError("no_aparecio_ok_habilitado_paso10")
-if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 20, 197, 461, 15000, "own_donoroffer_tradepartner_header_native", 30))
+if (!esperarNeedleSinAccion("own_donoroffer_tradepartner_header", 20, 15000, "own_donoroffer_tradepartner_header_native", 30))
     ExitConError("no_aparecio_preview_envio_paso11")
+Sleep, 900
+; Sin energia de intercambio (2026-10-08, Ale): se recupera 1 con relojes (_EnergiaIntercambio.ahk).
+if (faltaEnergiaIntercambio() && !recuperarEnergiaIntercambio())
+    ExitConError("sin_energia_intercambio")
+tap(197, 461, 0)
 if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 20))
     ExitConError("no_aparecio_confirmar_set_card_paso12")
 

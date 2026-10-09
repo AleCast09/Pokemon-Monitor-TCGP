@@ -42,6 +42,7 @@ if (A_Args.Length() >= 5) {
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Extra.ahk
 #Include %A_ScriptDir%\lib\Gdip_Imagesearch.ahk
+#Include %A_ScriptDir%\_EnergiaIntercambio.ahk
 
 global pToken := Gdip_Startup()
 
@@ -1157,7 +1158,7 @@ cartaSharePreviewEsLaPedida(ByRef diffOut) {
 }
 
 flujoShare() {
-    global adbPath, puerto, g_outputFile, g_rutaImagenReferencia, g_modoDesmarcar, g_bajarVelocidadEnPerfil, g_favoritoMarcado, g_hwndFast
+    global adbPath, puerto, g_outputFile, g_rutaImagenReferencia, g_modoDesmarcar, g_bajarVelocidadEnPerfil, g_favoritoMarcado, g_hwndFast, g_sinSkipCiego
     ; S1: tile Share de Comunidad -> pantalla Share (needle: icono verde de dos personas, sin texto)
     logDebugWishlist("share1: tocando el tile Share")
     if (!tocarHastaVerNeedle(73, 410, "own_share_landing_native", 40, 2500, 20000))
@@ -1266,6 +1267,7 @@ flujoShare() {
     ; igual quedo compartida: no se corta el resultado.
     g_modoDesmarcar := true
     g_bajarVelocidadEnPerfil := false
+    g_sinSkipCiego := true
     if (llegarAlPerfilDespuesDelTradeo())
         intentarMarcarFavoritoPorWishlist("")
     else
@@ -1283,7 +1285,7 @@ flujoShare() {
 ; "Grand total cards acquired" pasa sola. Cualquier pantalla sin needle propio recibe el toque
 ; de la portada: en "Send a thanks?" abre el perfil y en las demas cae en un lugar vacio.
 llegarAlPerfilDespuesDelTradeo() {
-    global adbPath, puerto, g_bajarVelocidadEnPerfil
+    global adbPath, puerto, g_bajarVelocidadEnPerfil, g_sinSkipCiego
     asegurarHwndFast()
     inicio := A_TickCount
     ultimoTap := 0
@@ -1291,6 +1293,55 @@ llegarAlPerfilDespuesDelTradeo() {
     ; coincide con "Send a thanks?" y su toque (152,486) cae justo sobre la X de ese popup -- lo
     ; cerraba. _DonorRespondAndFinalize ya toco "Tap to Proceed"; si quedara, la portada tambien avanza.
     vacias := 0
+    ; Los dos >| despues de un tradeo con carta nueva (2026-10-07, flujo de Ale):
+    ;   1) primer >| (registrar la carta): se espera a verlo (match) y se toca -- ese si agarra.
+    ;   2) segundo >| (dex cargando atras): un toque ahi mientras carga abre una carta de la grilla,
+    ;      asi que va A CIEGAS en el mismo lugar: si se abrio una carta, este toque la cierra y el
+    ;      >| vuelve a aparecer.
+    ;   3) mientras se vea el >| (match) es que no agarro el click por la carga: se toca otra vez.
+    ;      Sin match, salio bien y se sigue (Next -> "Send a thanks?" -> perfil).
+    ; Si la carta no era nueva no hay >| y se salta todo. En Share no corre (no hay dex).
+    if (!g_sinSkipCiego) {
+        inicioSkip := A_TickCount
+        vioSkip := false
+        ultimoChequeoThanks := 0
+        vioThanks := false
+        while (A_TickCount - inicioSkip < 15000) {   ; el primer >| tarda ~6,5 s (medido 2026-10-08)
+            if (pantallaEstable("kevin_pack_skip_native", 40)) {
+                vioSkip := true
+                break
+            }
+            ; Carta que la donante YA tenia (2026-10-08, visto por Ale): no hay >| y el juego pasa
+            ; directo a "Send a thanks?", que se va solo si nadie lo toca. Si el popup aparece antes
+            ; que el >|, se sigue al instante (la lupita se busca por ADB, cada ~1,5 s).
+            if (A_TickCount - ultimoChequeoThanks >= 1500) {
+                ultimoChequeoThanks := A_TickCount
+                if (esperarNeedleSinAccion("own_thanks_avatar_lupa", 40, 1)) {
+                    vioThanks := true
+                    break
+                }
+            }
+            Sleep, 300
+        }
+        if (vioSkip) {
+            logDebugWishlist("DESMARCAR: primer >| (match), tocando")
+            Sleep, 700
+            tap(247, 500)
+            ; Medido en vivo 2026-10-08: despues del primer >| sale el dex con un SEGUNDO >| encima de
+            ; una carta, y la pantalla AVANZA SOLA hasta Next (ese >| solo salta la animacion). No se
+            ; toca nunca: un toque ahi abre la carta de abajo. Solo se reintenta el PRIMERO, si sigue su
+            ; pantalla (>| a la vista SIN el libro del dex arriba).
+            Loop, 4 {
+                Sleep, 1000
+                if (!chequeoRapidoNeedle("kevin_pack_skip_native", 40) || chequeoRapidoNeedle("kevin_pack_next_native", 50))
+                    break
+                logDebugWishlist("DESMARCAR: el primer >| sigue a la vista (no agarro), tocandolo otra vez")
+                tap(247, 500)
+            }
+        } else {
+            logDebugWishlist("DESMARCAR: sin >| (la carta no era nueva)" . (vioThanks ? " -- 'Send a thanks?' ya a la vista" : ""))
+        }
+    }
     Loop {
         if (chequeoRapidoNeedle("own_donoroffer_userprofile_battlerecord_native", 60)) {
             logDebugWishlist("DESMARCAR: perfil de Main abierto")
@@ -1316,7 +1367,9 @@ llegarAlPerfilDespuesDelTradeo() {
             tap(247, 500)
             esperarQueDesaparezca("kevin_pack_skip_native", 40, 3000)
             vacias := 0
-        } else if (pantallaEstable("kevin_pack_next_native", 50)) {
+        } else if (vistaContinua("kevin_pack_next_native", 50, 1500)) {
+            ; Quieto 1,5 s (2026-10-08): el libro del dex se ve desde que carga la grilla, pero el boton
+            ; Next aparece recien despues de la animacion "Cards registered"; tocar antes abria una carta.
             logDebugWishlist("DESMARCAR: dex, tocando Next")
             Sleep, 700
             tap(146, 489)
@@ -1327,6 +1380,13 @@ llegarAlPerfilDespuesDelTradeo() {
             Sleep, 700
             tap(141, 420)
             esperarQueDesaparezca("kevin_getitem_dialog_native", 20, 3000)
+            vacias := 0
+        } else if (esperarNeedleSinAccion("own_thanks_avatar_lupa", 40, 1)) {
+            ; "Send a thanks?" reconocido por la lupita del avatar (2026-10-07): ahora la portada se toca
+            ; solo si se VE el popup, no por descarte (por descarte cayo sobre una carta del dex).
+            logDebugWishlist("DESMARCAR: 'Send a thanks?' visible, tocando la portada (141,203)")
+            Sleep, 500
+            tap(141, 203)
             vacias := 0
         } else if (pantallaEstable("own_share_landing_native", 40)) {
             ; Pantalla de Share (despues del swipe de Share, 2026-10-04): a Comunidad por la pestaña
@@ -1346,7 +1406,9 @@ llegarAlPerfilDespuesDelTradeo() {
             tap(54, 182)
             esperarQueDesaparezca("own_friends_lista_native", 40, 3000)
             vacias := 0
-        } else if (pantallaEstable("own_mainaccept_friends_icon_native", 30)) {
+        } else if ((g_sinSkipCiego || A_TickCount - inicio > 15000) && pantallaEstable("own_mainaccept_friends_icon_native", 30)) {
+            ; Despues de un tradeo el "Send a thanks?" sale ~6 s DESPUES de llegar al Social Hub
+            ; (medido 2026-10-08): el plan B por Friends espera 15 s para no adelantarse. En Share, ya.
             logDebugWishlist("DESMARCAR: en Comunidad, tocando Friends")
             Sleep, 500
             tap(34, 462)
@@ -1356,7 +1418,7 @@ llegarAlPerfilDespuesDelTradeo() {
             ; Ninguna pantalla conocida: la portada solo se toca si eso se repite 2 vueltas (no en
             ; medio de una transicion, donde podria caer sobre una carta del dex).
             vacias++
-            if (vacias >= 2) {
+            if (vacias >= 4) {
                 logDebugWishlist("DESMARCAR: tocando la portada (141,203)")
                 tap(141, 203)
                 vacias := 0
@@ -1371,6 +1433,18 @@ pantallaEstable(needle, variation) {
         return false
     Sleep, 300
     return chequeoRapidoNeedle(needle, variation)
+}
+
+; La needle se ve en TODAS las capturas durante ms (cada 250 ms): pantalla quieta de verdad.
+vistaContinua(needle, variation, ms) {
+    inicio := A_TickCount
+    Loop {
+        if (!chequeoRapidoNeedle(needle, variation))
+            return false
+        if (A_TickCount - inicio >= ms)
+            return true
+        Sleep, 250
+    }
 }
 
 esperarQueDesaparezca(needle, variation, timeoutMs) {
@@ -1885,6 +1959,7 @@ seleccionarCartaPorFavoritos() {
 ; Uso: _DonorOfferCard.ahk "<winTitle>" "<folderPath>" "DESMARCAR" "<outputFile>"
 global g_modoDesmarcar := (g_rutaImagenReferencia = "DESMARCAR")
 global g_bajarVelocidadEnPerfil := false
+global g_sinSkipCiego := false
 if (g_modoDesmarcar) {
     if (!llegarAlPerfilDespuesDelTradeo())
         ExitConError("desmarcar_no_llego_al_perfil")
@@ -2201,6 +2276,23 @@ Loop, 2 {
 logDebugWishlist("paso10: tocando OK a ciegas (sin needle de confirmacion, ver comentario)")
 Sleep, 900
 tap(145, 458)
+; Reintento SEGURO del OK (2026-10-08, captura real de un usuario: carta seleccionada con el check y
+; el OK sin tocar). El reintento viejo se saco el 28/09 porque un segundo toque podia caer sobre la
+; vista previa ya cargando. Ahora solo se retoca mientras se VEA "Choose a Card" (la lupa de busqueda,
+; icono sin texto: coincide en 5 capturas de esa pantalla y no en la vista previa). Apenas sale la
+; vista previa, se sigue. Tope 12 s; despues paso11 decide como siempre.
+inicioP10 := A_TickCount
+ultimoOkP10 := A_TickCount
+while (A_TickCount - inicioP10 < 12000) {
+    if (chequeoRapidoNeedle("own_donoroffer_tradepartner_header_native", 30))
+        break
+    if (A_TickCount - ultimoOkP10 >= 2500 && pantallaEstable("own_donoroffer_choosecard_lupa_native", 30)) {
+        logDebugWishlist("paso10: sigue en Choose a Card, el OK no entro -- tocando OK otra vez")
+        tap(145, 458)
+        ultimoOkP10 := A_TickCount
+    }
+    Sleep, 300
+}
 ; Reintento del OK RETIRADO 2026-09-28 (bug real en vivo con Ale): volvia a tocar OK si 1,5 s
 ; despues la lupa seguia a la vista, pero a veces la pantalla todavia no habia terminado de
 ; cambiar; el segundo toque caia sobre la vista previa y desordenaba los pasos siguientes. La
@@ -2209,20 +2301,60 @@ tap(145, 458)
 ; ("Trade Partner"), validada en vivo -- match exacto contra una captura real y sin ningun
 ; falso positivo hasta variation 80 contra 12 capturas de otras pantallas.
 logDebugWishlist("paso11: esperando preview de envio (Trade Partner)")
-if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 20, 197, 461, 15000, "own_donoroffer_tradepartner_header_native", 30)) {
+if (!esperarNeedleSinAccion("own_donoroffer_tradepartner_header", 20, 15000, "own_donoroffer_tradepartner_header_native", 30)) {
     logDebugWishlist("paso11: FALLO -- nunca aparecio el preview de envio")
     ExitConError("no_aparecio_preview_envio_paso11")
 }
+Sleep, 900
+; Sin energia de intercambio (2026-10-08, Ale): se recupera 1 con relojes (_EnergiaIntercambio.ahk).
+if (faltaEnergiaIntercambio()) {
+    logDebugWishlist("paso11: sin energia de intercambio, recuperando con relojes")
+    if (!recuperarEnergiaIntercambio())
+        ExitConError("sin_energia_intercambio")
+    Sleep, 900
+}
+tap(197, 461)
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_setcard_confirm_native
 ; (el texto especifico de este popup, "Do you want to set this as your card to be traded?" --
 ; NO el boton OK generico, que es solo un color solido y dio falsos positivos en vivo contra
 ; otras pantallas con botones celestes). Validada en vivo: match exacto, sin ningun falso
 ; positivo hasta variation 80 contra 13 capturas de otras pantallas.
+; Reintento del OK de la vista previa estilo Kevin (2026-10-08, captura real de un usuario: la
+; donante quedo parada en "Trade Partner" con el OK sin tocar). Se tocaba UNA vez; si el juego no lo
+; agarraba, se esperaban 15 s un popup que nunca iba a salir. Ahora, mientras se siga viendo la
+; vista previa, se vuelve a tocar OK cada 2,5 s hasta que salga "set this as your card". Tope 20 s.
 logDebugWishlist("paso12: esperando confirmacion 'set this as your card'")
-if (!esperarNeedleYTap("own_donoroffer_cancel_ok", 30, 200, 365, 15000, "own_donoroffer_setcard_confirm_native", 20)) {
+inicioP12 := A_TickCount
+ultimoOkPreview := A_TickCount
+ultimoAdbP12 := 0
+llegoSetCard := false
+Loop {
+    if (chequeoRapidoNeedle("own_donoroffer_setcard_confirm_native", 20)) {
+        llegoSetCard := true
+        break
+    }
+    if (A_TickCount - ultimoAdbP12 >= 3000) {   ; respaldo lento por ADB, como antes
+        ultimoAdbP12 := A_TickCount
+        if (esperarNeedleSinAccion("own_donoroffer_cancel_ok", 30, 1)) {
+            llegoSetCard := true
+            break
+        }
+    }
+    if (A_TickCount - inicioP12 > 20000)
+        break
+    if (A_TickCount - ultimoOkPreview >= 2500 && chequeoRapidoNeedle("own_donoroffer_tradepartner_header_native", 30)) {
+        logDebugWishlist("paso12: la vista previa sigue a la vista, el OK no entro -- tocando OK otra vez")
+        tap(197, 461)
+        ultimoOkPreview := A_TickCount
+    }
+    Sleep, 300
+}
+if (!llegoSetCard) {
     logDebugWishlist("paso12: FALLO -- nunca aparecio la confirmacion de set card")
     ExitConError("no_aparecio_confirmar_set_card_paso12")
 }
+Sleep, 900
+tap(200, 365)
 logDebugWishlist("paso12: OK, carta confirmada")
 
 ; Aviso "solo te queda 1 copia" -- puede no aparecer siempre. Pasado a needle real

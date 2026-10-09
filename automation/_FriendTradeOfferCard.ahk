@@ -24,6 +24,7 @@ global g_outputFile := A_Args[3]
 #Include %A_ScriptDir%\lib\Gdip_All.ahk
 #Include %A_ScriptDir%\lib\Gdip_Extra.ahk
 #Include %A_ScriptDir%\lib\Gdip_Imagesearch.ahk
+#Include %A_ScriptDir%\_EnergiaIntercambio.ahk
 
 global pToken := Gdip_Startup()
 
@@ -408,8 +409,13 @@ if (!esperarNeedleYTap("own_donoroffer_choosecard_title", 30, 145, 458, 15000, "
     ExitConError("no_aparecio_ok_habilitado_paso10")
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_tradepartner_header_native,
 ; ya validada en vivo en _DonorOfferCard.ahk.
-if (!esperarNeedleYTap("own_donoroffer_tradepartner_header", 20, 197, 461, 15000, "own_donoroffer_tradepartner_header_native", 30))
+if (!esperarNeedleSinAccion("own_donoroffer_tradepartner_header", 20, 15000, "own_donoroffer_tradepartner_header_native", 30))
     ExitConError("no_aparecio_preview_envio_paso11")
+Sleep, 900
+; Sin energia de intercambio (2026-10-08, Ale): se recupera 1 con relojes (_EnergiaIntercambio.ahk).
+if (faltaEnergiaIntercambio() && !recuperarEnergiaIntercambio())
+    ExitConError("sin_energia_intercambio")
+tap(197, 461, 0)
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_setcard_confirm_native
 ; (el texto especifico de este popup -- NO el boton OK generico, que dio falsos positivos
 ; en vivo contra otras pantallas con botones celestes, ver _DonorOfferCard.ahk).
