@@ -1312,6 +1312,14 @@ app.use((req, res, next) => {
     next();
 });
 
+// Cualquier ruta llega al mismo receptor (2026-10-16): desde la v10.3.0 de Leanny el P BOT
+// descarta las Webhook URL sin ruta (ej. "http://localhost:3000"), asi que se usa "/s4t"
+// y se sigue aceptando "/" para quien ya la tenia configurada.
+app.use((req, res, next) => {
+    if (req.method === 'POST' && req.path !== '/') req.url = '/';
+    next();
+});
+
 let enviando = false;
 
 app.post('/', upload.any(), async (req, res) => {
@@ -1865,7 +1873,7 @@ const ENCABEZADO_AVISO_PUERTOS = [
 function avisarPuertoCambiado(nombreServicio, puertoReal) {
     try {
         const prefijo = `${nombreServicio}: `;
-        const lineaNueva = `${prefijo}http://localhost:${puertoReal}`;
+        const lineaNueva = `${prefijo}http://localhost:${puertoReal}/s4t`;
         const lineasDatos = fs.existsSync(RUTA_AVISO_PUERTOS)
             ? fs.readFileSync(RUTA_AVISO_PUERTOS, 'utf8').split(/\r?\n/).filter((l) => l.includes(': http://localhost:') && !l.startsWith(prefijo))
             : [];

@@ -19,12 +19,12 @@ function obtenerUrlsPBot() {
         try {
             const contenido = fs.readFileSync(PUERTOS_AVISO_PATH, 'utf8');
             for (const linea of contenido.split(/\r?\n/)) {
-                const match = linea.match(/^(\w+): http:\/\/localhost:(\d+)$/);
+                const match = linea.match(/^(\w+): http:\/\/localhost:(\d+)(\/\S*)?$/);
                 if (match && base[match[1]] !== undefined) base[match[1]] = Number(match[2]);
             }
         } catch (e) { /* si falla la lectura, se usan los valores por defecto */ }
     }
-    return { s4tUrl: `http://localhost:${base.S4T}`, heartbeatUrl: `http://localhost:${base.Heartbeat}` };
+    return { s4tUrl: `http://localhost:${base.S4T}/s4t`, heartbeatUrl: `http://localhost:${base.Heartbeat}/heartbeat` };
 }
 
 function leerEnvExistente() {

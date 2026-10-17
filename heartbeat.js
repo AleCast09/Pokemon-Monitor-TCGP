@@ -998,6 +998,14 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
     // instancia, asi que 5 minutos empezaba a confundir un ciclo lento y legitimo con un freeze real.
     const TIEMPO_MAXIMO_INACTIVO_MS = 10 * 60 * 1000;
 
+    // Cualquier ruta llega al mismo receptor (2026-10-16): desde la v10.3.0 de Leanny el P BOT
+    // descarta las Webhook URL sin ruta (ej. "http://localhost:3000"), asi que se usa "/heartbeat"
+    // y se sigue aceptando "/" para quien ya la tenia configurada.
+    app.use((req, res, next) => {
+        if (req.method === 'POST' && req.path !== '/') req.url = '/';
+        next();
+    });
+
     app.post('/', async (req, res) => {
         if (!validarIngestToken(req)) {
             return res.status(401).send('UNAUTHORIZED');
@@ -1455,7 +1463,7 @@ if (require.main === module || process.env.MONITOR_ROLE === 'heartbeat') {
     function avisarPuertoCambiado(nombreServicio, puertoReal) {
         try {
             const prefijo = `${nombreServicio}: `;
-            const lineaNueva = `${prefijo}http://localhost:${puertoReal}`;
+            const lineaNueva = `${prefijo}http://localhost:${puertoReal}/heartbeat`;
             const lineasDatos = fs.existsSync(RUTA_AVISO_PUERTOS)
                 ? fs.readFileSync(RUTA_AVISO_PUERTOS, 'utf8').split(/\r?\n/).filter((l) => l.includes(': http://localhost:') && !l.startsWith(prefijo))
                 : [];

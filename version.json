@@ -1,7 +1,9 @@
 {
-  "version": "1.6.6",
-  "notesCount": 4,
+  "version": "1.6.7",
+  "notesCount": 2,
   "notes": [
+    "Fixed: S4T and Heartbeat not receiving data with Leanny's bot v10.3.0-beta. In P BOT, use http://localhost:3000/s4t and http://localhost:3003/heartbeat as Webhook URLs (the old addresses still work).",
+    "Improved: the setup page and the panel now show the new addresses.",
     "Added: when an account runs out of trade energy, it is recovered automatically with trade hourglasses (only what is needed).",
     "Fixed: trades getting stuck on slower PCs (Choose a Card, card preview and Skip button).",
     "Fixed: Main sometimes not entering Trade after tapping View.",

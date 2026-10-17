@@ -102,12 +102,12 @@ function leerUrlsPBot(env) {
         try {
             const contenido = fs.readFileSync(rutaAviso, 'utf8');
             for (const linea of contenido.split(/\r?\n/)) {
-                const match = linea.match(/^(\w+): http:\/\/localhost:(\d+)$/);
+                const match = linea.match(/^(\w+): http:\/\/localhost:(\d+)(\/\S*)?$/);
                 if (match && base[match[1]] !== undefined) base[match[1]] = Number(match[2]);
             }
         } catch (e) { /* se queda con los valores por defecto */ }
     }
-    return { s4tUrl: `http://localhost:${base.S4T}`, heartbeatUrl: `http://localhost:${base.Heartbeat}` };
+    return { s4tUrl: `http://localhost:${base.S4T}/s4t`, heartbeatUrl: `http://localhost:${base.Heartbeat}/heartbeat` };
 }
 
 // Puerto del dashboard (2026-08-13, bug real encontrado en auditoria; completado 2026-08-21
