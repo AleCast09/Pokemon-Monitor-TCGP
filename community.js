@@ -66,6 +66,16 @@ function permisosPrivados(guild) {
     ];
 }
 
+// Permisos de una categoria publica en comunidad: el bot con Administrador, y @everyone con
+// "Use External Emojis" -- los mensajes de webhook usan los emojis del server propio del bot, y
+// Discord solo los dibuja si @everyone tiene ese permiso en el canal.
+function permisosPublicos(guild) {
+    return [
+        { id: guild.roles.everyone.id, allow: [PermissionsBitField.Flags.UseExternalEmojis] },
+        { id: guild.members.me.id, allow: [PermissionsBitField.Flags.Administrator] }
+    ];
+}
+
 // Guardia al principio de interactionCreate. Devuelve true si la interaccion se corto aca.
 async function bloquearSiHaceFalta(interaction) {
     if (!esComunidad(interaction.guildId) || esStaff(interaction.user?.id)) return false;
@@ -95,4 +105,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, bloquearSiHaceFalta, quitarComponentes };
+module.exports = { esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes };

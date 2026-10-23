@@ -278,6 +278,15 @@ async function construirMapaEmojisGuild(guild) {
 // y cachea en memoria el resto de la sesión.
 async function obtenerMapaEmojisGuild(guild) {
     if (!guild) return {};
+    // Server de comunidad (community.js, 2026-10-23): NUNCA se suben, borran ni "limpian"
+    // emojis ahi -- son del server de otra persona (bug real: la limpieza de duplicados borro un
+    // emoji propio de wr98 en Zenith Rise, y subir ~35 emojis a un server lleno trababa el Sync).
+    // Se usan los emojis del server propio del bot: un bot puede mostrar emojis de cualquier
+    // server donde este.
+    if (require('./community.js').esComunidad(guild.id)) {
+        const origen = guild.client?.guilds?.cache?.find(g => !require('./community.js').esComunidad(g.id));
+        return origen ? obtenerMapaEmojisGuild(origen) : {};
+    }
     const cacheado = cachePorGuild.get(guild.id);
     if (cacheado && Date.now() - cacheado.ts < CACHE_TTL_MS) return cacheado.mapa;
     if (promesaEnCursoPorGuild.has(guild.id)) return promesaEnCursoPorGuild.get(guild.id);

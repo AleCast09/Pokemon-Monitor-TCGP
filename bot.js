@@ -15344,17 +15344,20 @@ client.on('interactionCreate', async interaction => {
                         let categoria = interaction.guild.channels.cache.find(c => c.name === nombreCategoria && c.type === ChannelType.GuildCategory);
                         // Categoria privada del modo comunidad (🔒 STAFF): solo el bot y el staff la ven.
                         // Se reaplica en cada Sync por si alguien toco los permisos a mano.
-                        const permisos = privada ? comunidad.permisosPrivados(interaction.guild) : [{
-                            id: interaction.guild.members.me.id,
-                            allow: [PermissionsBitField.Flags.Administrator]
-                        }];
+                        const enComunidad = comunidad.esComunidad(interaction.guildId);
+                        const permisos = privada ? comunidad.permisosPrivados(interaction.guild)
+                            : enComunidad ? comunidad.permisosPublicos(interaction.guild)
+                            : [{
+                                id: interaction.guild.members.me.id,
+                                allow: [PermissionsBitField.Flags.Administrator]
+                            }];
                         if (!categoria) {
                             categoria = await interaction.guild.channels.create({
                                 name: nombreCategoria,
                                 type: ChannelType.GuildCategory,
                                 permissionOverwrites: permisos
                             });
-                        } else if (privada) {
+                        } else if (privada || enComunidad) {
                             await categoria.permissionOverwrites.set(permisos).catch(console.error);
                         }
                         return categoria;
