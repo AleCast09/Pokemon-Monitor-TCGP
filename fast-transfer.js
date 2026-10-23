@@ -131,7 +131,7 @@ function construirEmbed(ctx) {
             if (final || ctx.posicion > 0) break;
             est = 'start';
         }
-        let linea = `${final === 'stopped' && est !== 'ok' ? '⏹️' : icono(est, mapa)} ${texto}`;
+        let linea = `${final === 'stopped' && est !== 'ok' ? '🚫' : icono(est, mapa)} ${texto}`;
         if (detalles[clave] && final !== 'stopped') linea += `\n　*${detalles[clave]}*`;
         lineas.push(linea);
         if (est !== 'ok') break;
@@ -152,7 +152,7 @@ function construirEmbed(ctx) {
         color = 0xE74C3C;
     } else if (final === 'stopped') {
         color = 0x95A5A6;
-        lineas.push('', `⏹️ Cancelled${ctx.cancelMsg ? ` — ${ctx.cancelMsg}` : ''}`);
+        lineas.push('', `🚫 Cancelled${ctx.cancelMsg ? ` — ${ctx.cancelMsg}` : ''}`);
     } else if (ctx.posicion > 0) {
         lineas.unshift(`🕒 Queued — position #${ctx.posicion}`, '');
     }
@@ -227,7 +227,7 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
     };
     try { ctx.copias = (await deps.auditarStockCarta(fileName, cartaId))?.disponible ?? null; } catch (e) { /* sin dato */ }
     const filaStop = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`fast_stop::${runId}`).setLabel('⏹️ Cancel').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId(`fast_stop::${runId}`).setLabel('✖️ Cancel').setStyle(ButtonStyle.Danger)
     );
     const filaRetry = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`fast_go::${cartaId}::${friendId}::${fileName}::${modo}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
@@ -280,7 +280,7 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
             } else {
                 ctx.detalles[ev.step] = ev.msg && ev.state !== 'ok' ? ev.msg : '';
             }
-            ultimaEdicion = ultimaEdicion.then(() => editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaStop] }));
+            ultimaEdicion = ultimaEdicion.then(() => editar(interaction, { embeds: [construirEmbed(ctx)], components: corridas.get(runId)?.detenido ? [] : [filaStop] }));
         });
         await ultimaEdicion;
 
@@ -399,7 +399,9 @@ async function manejarInteraccion(interaction) {
                 if (hijo.exitCode === null) spawnSync('taskkill', ['/PID', String(hijo.pid), '/T', '/F'], { windowsHide: true });
             }, 60000);
         }
-        await interaction.reply({ content: '⏹️ Cancelling — undoing the friend request and anything started…', ephemeral: true });
+        // Sin mensaje aparte: se quita el boton del mismo progreso y el script muestra
+        // "Cancelling…" y despues lo que deshizo.
+        await interaction.update({ components: [] });
         return true;
     }
     if (id.startsWith('fast_det::')) {

@@ -95,8 +95,12 @@ def deshacer(at, sess, pid):
     emitir("cancel", "start", "Undoing what was started…")
     hecho = []
     try:
-        at.cleanup_stale_sessions(sess)  # rechaza el trade abierto, si hay
-        hecho.append("open trade closed")
+        # Rechaza el trade abierto, solo si de verdad habia uno.
+        r = sess.get_trade()
+        ts = r.get("trade_state") if r.get("success") else None
+        if ts is not None and getattr(getattr(ts, "trade_session", None), "session_id", ""):
+            at.cleanup_stale_sessions(sess)
+            hecho.append("open trade closed")
     except Exception:
         pass
     if pid:
