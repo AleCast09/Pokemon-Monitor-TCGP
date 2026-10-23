@@ -5480,7 +5480,11 @@ const ETIQUETAS_PASOS_MAIN_TRADE = {
 // onProgreso (2026-08-08, a pedido explicito del usuario: log en vivo con check/cruz por
 // paso en el panel de trade de la pagina web) -- opcional, default no-op para no cambiar en
 // nada el comportamiento ya probado cuando se dispara desde Discord (que nunca lo pasa).
-async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, amigo = false, share = false }, onProgreso = () => {}) {
+async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, amigo = false, share = false, gold = false, copias = 1 }, onProgreso = () => {}) {
+    // Gold Trade (2026-10-09, diseño de Ale): el MISMO flujo de Main Trade, repetido `copias` veces
+    // con la misma carta. Entre una copia y otra la donante cierra "Send a thanks?" con la X y vuelve
+    // a ofrecer (modo REPETIR de _DonorOfferCard.ahk, sin wishlist) y Main no se apaga. Solo despues
+    // de la ultima copia la donante entra al perfil y desmarca las estrellas.
     // Share a Main (2026-10-04, trayecto de Ale): mismo arranque que Main Trade (Main acepta la
     // solicitud sola) y Main se APAGA apenas acepta -- despues no hace nada. La donante comparte por el
     // tile Share y desmarca la estrella entrando por Friends (todo en _DonorOfferCard.ahk modo SHARE).
@@ -5488,12 +5492,28 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // un AMIGO (persona) en vez de la instancia Main. No se prende Main ni corren sus pasos; la
     // donante espera a que el amigo acepte la solicitud (puntito rojo en Friends) y despues a que
     // responda la oferta (X + tres personas), 15 min cada espera. El resumen muestra solo la donante.
-    const etiquetaModo = share ? 'Share' : amigo ? 'Friend Trade' : 'Main Trade';
+    const etiquetaModo = gold ? 'Gold Trade' : share ? 'Share' : amigo ? 'Friend Trade' : 'Main Trade';
+    // Cronometro por etapa (2026-10-13, pedido de Ale: medir donde se va el tiempo de un tradeo).
+    // automation/Logs/_tiempos_trade.log: segundos de cada etapa y desde el inicio.
+    const t0Trade = Date.now();
+    const tiempoTrade = (etapa, desde) => {
+        try {
+            const ahora = Date.now();
+            fs.appendFileSync(path.join(__dirname, 'automation', 'Logs', '_tiempos_trade.log'),
+                `${new Date(ahora).toLocaleTimeString('en-GB')} [${etiquetaModo} ${fileName}] ${etapa}: ${desde ? ((ahora - desde) / 1000).toFixed(1) + ' s' : '-'} (total ${((ahora - t0Trade) / 1000).toFixed(1)} s)
+`);
+        } catch (e) { /* solo diagnostico */ }
+    };
+    tiempoTrade('INICIO', null);
+    let copiasEnviadas = 0;
     const botonRetry = () => share
         ? new ButtonBuilder().setCustomId(`share_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
         : amigo
         ? new ButtonBuilder().setCustomId(`friend_trade_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
-        : botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre);
+        : gold
+        // Retry del Gold: vuelve al Start con las copias que faltan.
+        ? new ButtonBuilder().setCustomId(`card_trade_confirmado::${cartaId}::${friendId}::${fileName}::${index}::${nombre}::goldmain::${Math.max(1, copias - copiasEnviadas)}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+        : botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre).components[0];
     const ahkExe = rutaAutoHotkey();
     const folderPath = carpetaBaseMuMu();
     const scripts = [RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, RUTA_DONOR_OFFER_CARD_SCRIPT, RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, RUTA_DONOR_RESPOND_FINALIZE_SCRIPT];
@@ -5535,9 +5555,11 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     if (prendidaMain && prendidaDonante) await new Promise(r => setTimeout(r, 10000));
     if (!prendidaMain || !prendidaDonante) {
         onProgreso({ paso: 'Turn on instances', estado: 'error', detalle: 'could not turn on one of the instances' });
-        return await enviarErrorMainTrade(interaction, '❌ Could not turn on one of the instances.', [botonRetry()]);
+        return await enviarErrorMainTrade(interaction, '❌ Could not turn on one of the instances.', [new ActionRowBuilder().addComponents(botonRetry())]);
     }
     onProgreso({ paso: 'Turn on instances', estado: 'ok' });
+    tiempoTrade('prender instancias (+10 s de asentamiento)', t0Trade);
+    const tPrep = Date.now();
 
     // Acomoda las ventanas en pantalla (2026-08-19, a pedido explicito del usuario --
     // "igual que el bot de Kevin, que acomoda las instancias en orden al prenderlas"):
@@ -5604,7 +5626,11 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         const pistaAmigo = String(resultado || '').includes('amigo_no_acepto') ? '\n\n⏳ Your friend did not accept the friend request within 15 minutes.'
             : String(resultado || '').includes('amigo_no_respondio') ? '\n\n⏳ Your friend did not respond to the trade offer within 15 minutes.'
             : String(resultado || '').includes('sin_energia_intercambio') ? '\n\n⚡ The account ran out of trade energy and could not recover it with trade hourglasses. Wait for the energy to refill, then press **🔄 Retry**.' : '';
-        const mensaje = `❌ ${etiquetaModo} failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.${pistaBloqueado}${pistaAmigo}`;
+        // Gold Trade (2026-10-09, pedido de Ale): cuantas copias salieron de la cuenta y por que pudo fallar.
+        const pistaGold = gold
+            ? `\n\n🟡 **${copiasEnviadas} of ${copias}** copies of **${nombreCarta}** were sent from \`${fileName}\`. Press **🔄 Retry** to send the remaining ${copias - copiasEnviadas}.\n\nPossible causes:\n1. Not enough trade hourglasses to recover trade energy.\n2. Not enough Shinedust for this card's rarity.\n3. No copies of this card left in the account.`
+            : '';
+        const mensaje = `❌ ${etiquetaModo} failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.${pistaBloqueado}${pistaAmigo}${pistaGold}`;
         try {
             const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
             if (canalRunInstance?.webhook_url) {
@@ -5641,6 +5667,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
                 : Promise.resolve({ ok: true });
             const promesaEspera = new Promise((resolve) => ejecutarWaitWelcomeScreens(infoMain.name, (ok, detalle) => resolve({ ok, detalle }), RUTA_WAIT_WELCOME_SCREENS_MAIN_SCRIPT));
             const [resSpeedModMain, espera] = await Promise.all([promesaSpeedModMain, promesaEspera]);
+            tiempoTrade(`Main: speed mod + pantallas de bienvenida (intento ${intento})`, tPrep);
             if (!resSpeedModMain.ok) onProgreso({ paso: 'Speed Mod (Main)', estado: 'warning', detalle: resSpeedModMain.resultado });
             if (espera.ok) return espera;
             ultimo = espera;
@@ -5670,7 +5697,9 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
                 if (!(await asegurarInstanciaEncendida(index)))
                     return { ok: false, resultado: 'no_se_pudo_reencender_la_instancia' };
             }
+            const tInject = Date.now();
             const resInject = await ejecutarInjectDonante();
+            tiempoTrade(`donante: inyeccion (intento ${intento})`, tInject);
             if (!resInject.ok) {
                 ultimo = resInject;
                 continue;
@@ -5689,7 +5718,9 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             // del arranque de Main y del chequeo de oferta pendiente. Ademas es lo que arranca el
             // juego de la donante: si quedara como paso posterior, cuando el chequeo de oferta
             // pendiente saltea la solicitud nadie arrancaria la donante y quedaria en Tap to Start.
+            const tSolicitud = Date.now();
             const resSolicitud = await ejecutarPasoAhk(ahkExe, RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, [nombre, folderPath, friendId], 5 * 60 * 1000, tmp());
+            tiempoTrade('donante: speed mod + solicitud de amistad', tSolicitud);
             if (resSolicitud.ok) return { ok: true, resultado: resSolicitud.resultado };
             ultimo = resSolicitud;
         }
@@ -5700,17 +5731,20 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // donante (que puede tardar minutos) y recien ahi revisaba, con Main parado sin hacer nada.
     const promesaMainYChequeo = promesaEsperaMain.then(async (esperaMain) => {
         if (!esperaMain.ok || amigo || share) return { esperaMain, resultadoCheck: { ok: false } };
+        const tCheck = Date.now();
         const resultadoCheck = await ejecutarPasoAhk(ahkExe, RUTA_CHECK_PENDING_OFFER_SCRIPT, ['Main', folderPath], 45 * 1000, tmp());
+        tiempoTrade('Main: chequeo de oferta pendiente', tCheck);
         return { esperaMain, resultadoCheck };
     });
     const [{ esperaMain, resultadoCheck }, prepDonante] = await Promise.all([promesaMainYChequeo, promesaPrepDonante]);
+    tiempoTrade('preparacion completa (Main y donante en paralelo)', tPrep);
     if (!esperaMain.ok) {
         onProgreso({ paso: 'Reach Main menu', estado: 'error', detalle: esperaMain.detalle });
-        return await enviarErrorMainTrade(interaction, `❌ Could not reach the main menu on instance **${infoMain?.name || 'Main'}** (${esperaMain.detalle}).`, [botonRetry()]);
+        return await enviarErrorMainTrade(interaction, `❌ Could not reach the main menu on instance **${infoMain?.name || 'Main'}** (${esperaMain.detalle}).`, [new ActionRowBuilder().addComponents(botonRetry())]);
     }
     if (!prepDonante.ok) {
         onProgreso({ paso: 'Inject donor account', estado: 'error', detalle: prepDonante.resultado });
-        return await enviarErrorMainTrade(interaction, `❌ Could not prepare the donor instance **${nombre}** (${prepDonante.resultado}).`, [botonRetry()]);
+        return await enviarErrorMainTrade(interaction, `❌ Could not prepare the donor instance **${nombre}** (${prepDonante.resultado}).`, [new ActionRowBuilder().addComponents(botonRetry())]);
     }
     onProgreso({ paso: 'Inject donor account', estado: 'ok' });
     if (!amigo) onProgreso({ paso: 'Reach Main menu', estado: 'ok' });
@@ -5850,178 +5884,201 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // siguiente varios segundos). Se encadenan para que salgan en el mismo orden de siempre.
     let colaFotos = Promise.resolve();
     const enColaFoto = (fn) => { colaFotos = colaFotos.then(fn).catch(e => console.error('DEBUG: error subiendo foto del trade:', e?.message || e)); };
-    for (const paso of pasos) {
-        if (share && paso.nombre === 'donor_share_card' && infoMain) apagarInstanciaMuMu(infoMain.index);  // Main ya acepto (o ya eran amigos)
-        if (paso.nombre === 'main_accept_friend_request' && saltearAceptarAmigo) {
-            onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok', detalle: 'skipped -- the previous step confirmed they were already friends' });
-            continue;
+    // Copias 2+ del Gold: solo los 4 pasos del tradeo; la donante arranca en modo REPETIR.
+    const pasosRepeticion = [
+        { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath, rutaImagenReferencia, 'REPETIR'], timeoutMs: 5 * 60 * 1000 },
+        { nombre: 'main_accept_trade_offer', script: RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, args: ['Main', folderPath], timeoutMs: 4 * 60 * 1000 },
+        { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath], timeoutMs: 4 * 60 * 1000 },
+        { nombre: 'main_finalize_own_card', script: RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT, args: ['Main', folderPath], timeoutMs: 3 * 60 * 1000 }
+    ];
+    for (let copia = 1; copia <= copias; copia++) {
+        const pasosCopia = copia === 1 ? pasos : pasosRepeticion.map(p => ({ ...p }));
+        mainFinalAnticipado = null;
+        if (copia > 1) {
+            onProgreso({ paso: `Gold copy ${copia}/${copias}`, estado: 'ok' });
+            try { await interaction.followUp({ content: `🟡 Gold Trade: sending copy **${copia} of ${copias}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
         }
-        // Main en paralelo con el swipe de la donante (2026-09-28, idea de Ale): apenas
-        // _DonorRespondAndFinalize.ahk confirma el trade escribe <outputFile>_Confirmado.txt y en
-        // ese momento se lanza main_finalize_own_card (Actualizar + swipe de Main), sin esperar a
-        // que la donante termine su swipe y su pantalla final (~30 s ganados).
-        if (paso.nombre === 'main_finalize_own_card' && mainFinalAnticipado) {
-            paso.outputAnticipado = mainFinalAnticipado.outputFile;
-        }
-        const outputFilePaso = paso.outputAnticipado || tmp();
-        let promesaPaso;
-        if (paso.outputAnticipado) {
-            promesaPaso = mainFinalAnticipado.promesa;
-        } else if (paso.promesa) {
-            promesaPaso = paso.promesa();
-        } else {
-            promesaPaso = ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, outputFilePaso);
-        }
-        if (paso.nombre === 'donor_respond_finalize') {
-            const pasoMainFinal = pasos.find(p => p.nombre === 'main_finalize_own_card');
-            const rutaConfirmado = outputFilePaso.replace(/\.txt$/, '_Confirmado.txt');
-            let donanteTermino = false;
-            promesaPaso.then(() => { donanteTermino = true; }, () => { donanteTermino = true; });
-            while (pasoMainFinal && !donanteTermino && !mainFinalAnticipado) {
-                if (fs.existsSync(rutaConfirmado)) {
-                    const outMain = tmp();
-                    mainFinalAnticipado = {
-                        outputFile: outMain,
-                        promesa: ejecutarPasoAhk(ahkExe, pasoMainFinal.script, pasoMainFinal.args, pasoMainFinal.timeoutMs, outMain)
-                    };
-                    break;
+        for (const paso of pasosCopia) {
+            if (share && paso.nombre === 'donor_share_card' && infoMain) apagarInstanciaMuMu(infoMain.index);  // Main ya acepto (o ya eran amigos)
+            if (paso.nombre === 'main_accept_friend_request' && saltearAceptarAmigo) {
+                onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok', detalle: 'skipped -- the previous step confirmed they were already friends' });
+                continue;
+            }
+            // Main en paralelo con el swipe de la donante (2026-09-28, idea de Ale): apenas
+            // _DonorRespondAndFinalize.ahk confirma el trade escribe <outputFile>_Confirmado.txt y en
+            // ese momento se lanza main_finalize_own_card (Actualizar + swipe de Main), sin esperar a
+            // que la donante termine su swipe y su pantalla final (~30 s ganados).
+            if (paso.nombre === 'main_finalize_own_card' && mainFinalAnticipado) {
+                paso.outputAnticipado = mainFinalAnticipado.outputFile;
+            }
+            const tPaso = Date.now();
+            const outputFilePaso = paso.outputAnticipado || tmp();
+            let promesaPaso;
+            if (paso.outputAnticipado) {
+                promesaPaso = mainFinalAnticipado.promesa;
+            } else if (paso.promesa) {
+                promesaPaso = paso.promesa();
+            } else {
+                promesaPaso = ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, outputFilePaso);
+            }
+            if (paso.nombre === 'donor_respond_finalize') {
+                const pasoMainFinal = pasosCopia.find(p => p.nombre === 'main_finalize_own_card');
+                const rutaConfirmado = outputFilePaso.replace(/\.txt$/, '_Confirmado.txt');
+                let donanteTermino = false;
+                promesaPaso.then(() => { donanteTermino = true; }, () => { donanteTermino = true; });
+                while (pasoMainFinal && !donanteTermino && !mainFinalAnticipado) {
+                    if (fs.existsSync(rutaConfirmado)) {
+                        const outMain = tmp();
+                        mainFinalAnticipado = {
+                            outputFile: outMain,
+                            promesa: ejecutarPasoAhk(ahkExe, pasoMainFinal.script, pasoMainFinal.args, pasoMainFinal.timeoutMs, outMain)
+                        };
+                        break;
+                    }
+                    await new Promise(r => setTimeout(r, 300));
                 }
-                await new Promise(r => setTimeout(r, 300));
+                try { fs.unlinkSync(rutaConfirmado); } catch (e) { /* nada que limpiar */ }
             }
-            try { fs.unlinkSync(rutaConfirmado); } catch (e) { /* nada que limpiar */ }
-        }
-        let { ok, resultado } = await promesaPaso;
-        // Si la donante falla DESPUES de confirmar (p. ej. en la pantalla final), Main ya esta
-        // cerrando su lado: se espera a que termine antes de reportar el fallo.
-        if (!ok && paso.nombre === 'donor_respond_finalize' && mainFinalAnticipado) {
-            await mainFinalAnticipado.promesa;
-        }
-        if (paso.nombre === 'send_friend_request' && String(resultado || '').includes('YA_AMIGOS')) saltearAceptarAmigo = true;
-        // Aviso de "no matcheo en el wishlist" (2026-09-03, a pedido explicito del usuario):
-        // chequeado ANTES del "if (!ok) return" de abajo -- el marcador lo deja
-        // _DonorOfferCard.ahk apenas termina de revisar las 3 cartas del wishlist, mucho antes
-        // de que el script llegue a su propio final (paso7b en adelante); si el script falla
-        // en un paso POSTERIOR (bug real reproducido en vivo: fallo en no_aparecio_selectfriend_paso7b
-        // justo despues de esto), el aviso igual tiene que salir -- el wishlist ya se reviso de
-        // verdad, sin importar que el resto del paso haya fallado despues.
-        if (paso.nombre === 'donor_offer_card' || paso.nombre === 'donor_share_card') {
-            const rutaMarcadorSinMatch = outputFilePaso.replace(/\.txt$/, '_WishlistNoMatch.txt');
-            if (fs.existsSync(rutaMarcadorSinMatch)) {
-                try { fs.unlinkSync(rutaMarcadorSinMatch); } catch (e) { /* nada que limpiar */ }
-                // Con Stop y Retry (2026-10-06, pedido de Ale): se marca la carta en Main y se reintenta
-                // desde el mismo aviso. El mensaje de error generico de abajo ya no sale en este caso.
-                const filaAviso = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger),
-                    botonRetry()
-                );
-                await mandarFotoTradeAlCanal(rutaImagenReferencia, `⚠️ <@${interaction.user.id}> The requested card was not found in the friend's profile. Please mark the following card as favorite, then press **🔄 Retry**:`, true, [filaAviso]);
-                avisoWishlistEnviado = true;
+            let { ok, resultado } = await promesaPaso;
+            tiempoTrade(`${copias > 1 ? `copia ${copia} - ` : ''}${paso.nombre}${ok ? '' : ' (FALLO)'}`, tPaso);
+            // Si la donante falla DESPUES de confirmar (p. ej. en la pantalla final), Main ya esta
+            // cerrando su lado: se espera a que termine antes de reportar el fallo.
+            if (!ok && paso.nombre === 'donor_respond_finalize' && mainFinalAnticipado) {
+                await mainFinalAnticipado.promesa;
             }
-        }
-        if (!ok) {
-            await colaFotos;
-            if (avisoWishlistEnviado) {
-                onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'error', detalle: resultado });
-                return;
+            if (paso.nombre === 'send_friend_request' && String(resultado || '').includes('YA_AMIGOS')) saltearAceptarAmigo = true;
+            // Aviso de "no matcheo en el wishlist" (2026-09-03, a pedido explicito del usuario):
+            // chequeado ANTES del "if (!ok) return" de abajo -- el marcador lo deja
+            // _DonorOfferCard.ahk apenas termina de revisar las 3 cartas del wishlist, mucho antes
+            // de que el script llegue a su propio final (paso7b en adelante); si el script falla
+            // en un paso POSTERIOR (bug real reproducido en vivo: fallo en no_aparecio_selectfriend_paso7b
+            // justo despues de esto), el aviso igual tiene que salir -- el wishlist ya se reviso de
+            // verdad, sin importar que el resto del paso haya fallado despues.
+            if (paso.nombre === 'donor_offer_card' || paso.nombre === 'donor_share_card') {
+                const rutaMarcadorSinMatch = outputFilePaso.replace(/\.txt$/, '_WishlistNoMatch.txt');
+                if (fs.existsSync(rutaMarcadorSinMatch)) {
+                    try { fs.unlinkSync(rutaMarcadorSinMatch); } catch (e) { /* nada que limpiar */ }
+                    // Con Stop y Retry (2026-10-06, pedido de Ale): se marca la carta en Main y se reintenta
+                    // desde el mismo aviso. El mensaje de error generico de abajo ya no sale en este caso.
+                    const filaAviso = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger),
+                        botonRetry()
+                    );
+                    await mandarFotoTradeAlCanal(rutaImagenReferencia, `⚠️ <@${interaction.user.id}> The requested card was not found in the friend's profile. Please mark the following card as favorite, then press **🔄 Retry**:`, true, [filaAviso]);
+                    avisoWishlistEnviado = true;
+                }
             }
-            return await reportarFalloPaso(paso.nombre, resultado);
-        }
-        if (paso.nombre === 'donor_respond_finalize' && !promesaDesmarcar) {
-            promesaDesmarcar = ejecutarPasoAhk(ahkExe, RUTA_DONOR_OFFER_CARD_SCRIPT, [nombre, folderPath, 'DESMARCAR'], 2 * 60 * 1000, tmp())
-                .catch(e => ({ ok: false, resultado: e?.message || String(e) }));
-        }
-        onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok' });
-        // Fotos reales del trade en distintos puntos del pipeline (2026-08-09/18, a pedido
-        // explicito del usuario) -- cada script guarda su propia captura al lado de su
-        // outputFile (mismo nombre, extension distinta por foto), justo antes del tap/swipe
-        // que avanza la pantalla, para que quede la evidencia real de que paso en cada paso.
-        if (paso.nombre === 'donor_offer_card') {
-            // Foto de recuperacion (2026-08-25, a pedido explicito del usuario, bug real
-            // reproducido en vivo): _DonorOfferCard.ahk guarda esta SOLO si el toque de
-            // seleccion dejo la carta en vista ampliada en vez de seleccionarla -- se manda
-            // nada mas si el archivo existe de verdad (la mayoria de las corridas no lo
-            // generan). Sirve para confirmar a distancia si el bug pasa sin mirar la pantalla.
-            const rutaFotoZoom = outputFilePaso.replace(/\.txt$/, '_ZoomRecoveryPhoto.png');
-            if (fs.existsSync(rutaFotoZoom)) {
-                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoZoom, `⚠️ <@${interaction.user.id}> The donor got stuck in the zoomed card view while choosing the card -- it recovered on its own and continued.`, true));
+            if (!ok) {
+                await colaFotos;
+                if (avisoWishlistEnviado) {
+                    onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'error', detalle: resultado });
+                    return;
+                }
+                return await reportarFalloPaso(paso.nombre, resultado);
             }
-            // _DonorOfferCard.ahk guarda 2 capturas de este paso, ambas confirmadas con needle
-            // propio sin texto (2026-09-16, ver comentario completo en paso14/paso15 de ese
-            // script): "You have offered the card..." (mascota del rincon superior izquierdo) y
-            // "Waiting for a Response" (icono de Refresh) justo despues. Se arma un collage de
-            // 2 paneles con ambas -- si la segunda no llego a tiempo (best-effort, no corta el
-            // trade), se cae a mandar la primera sola.
-            const rutaFotoOferta = outputFilePaso.replace(/\.txt$/, '_OfferPhoto.png');
-            const rutaFotoEsperando = outputFilePaso.replace(/\.txt$/, '_WaitingResponsePhoto.png');
-            rutaFaseOfertaDonante = fs.existsSync(rutaFotoEsperando) ? rutaFotoEsperando : rutaFotoOferta;
-            const collageOferta = await componerCollageAntesDespues(rutaFotoOferta, 'Oferta enviada', rutaFotoEsperando, 'Esperando respuesta');
-            if (collageOferta) {
-                enColaFoto(() => mandarFotoTradeAlCanal(collageOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → ${amigo ? 'your friend' : 'Main'}`, true));
-            } else {
-                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → ${amigo ? 'your friend' : 'Main'}`));
+            if (paso.nombre === 'donor_respond_finalize' && !promesaDesmarcar && copia === copias) {
+                promesaDesmarcar = ejecutarPasoAhk(ahkExe, RUTA_DONOR_OFFER_CARD_SCRIPT, [nombre, folderPath, 'DESMARCAR'], 2 * 60 * 1000, tmp())
+                    .catch(e => ({ ok: false, resultado: e?.message || String(e) }));
             }
-        }
-        if (paso.nombre === 'main_accept_trade_offer') {
-            // _MainAcceptTradeOffer.ahk guarda la captura de "You have offered the card..."
-            // del lado de Main (2026-08-22, a pedido explicito del usuario) -- misma logica
-            // que la foto de oferta de la donante, pero del lado de Main.
-            // Collage de 2 paneles (2026-09-17, mismo mecanismo que donor_offer_card arriba):
-            // paso11 de _MainAcceptTradeOffer.ahk agrega una segunda foto de "Waiting for a
-            // Response" del lado de Main, confirmada con needle real (icono de Refresh).
-            const rutaFotoMainOferta = outputFilePaso.replace(/\.txt$/, '_MainOfferPhoto.png');
-            const rutaFotoMainEsperando = outputFilePaso.replace(/\.txt$/, '_MainWaitingResponsePhoto.png');
-            rutaFaseOfertaMain = fs.existsSync(rutaFotoMainEsperando) ? rutaFotoMainEsperando : rutaFotoMainOferta;
-            const collageMainOferta = await componerCollageAntesDespues(rutaFotoMainOferta, 'Main ofreció su carta', rutaFotoMainEsperando, 'Esperando respuesta');
-            if (collageMainOferta) {
-                enColaFoto(() => mandarFotoTradeAlCanal(collageMainOferta, `<@${interaction.user.id}> Main offered its card!`, true));
-            } else {
-                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainOferta, `<@${interaction.user.id}> Main offered its card!`, true));
+            onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok' });
+            // Fotos reales del trade en distintos puntos del pipeline (2026-08-09/18, a pedido
+            // explicito del usuario) -- cada script guarda su propia captura al lado de su
+            // outputFile (mismo nombre, extension distinta por foto), justo antes del tap/swipe
+            // que avanza la pantalla, para que quede la evidencia real de que paso en cada paso.
+            if (paso.nombre === 'donor_offer_card') {
+                // Foto de recuperacion (2026-08-25, a pedido explicito del usuario, bug real
+                // reproducido en vivo): _DonorOfferCard.ahk guarda esta SOLO si el toque de
+                // seleccion dejo la carta en vista ampliada en vez de seleccionarla -- se manda
+                // nada mas si el archivo existe de verdad (la mayoria de las corridas no lo
+                // generan). Sirve para confirmar a distancia si el bug pasa sin mirar la pantalla.
+                const rutaFotoZoom = outputFilePaso.replace(/\.txt$/, '_ZoomRecoveryPhoto.png');
+                if (fs.existsSync(rutaFotoZoom)) {
+                    enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoZoom, `⚠️ <@${interaction.user.id}> The donor got stuck in the zoomed card view while choosing the card -- it recovered on its own and continued.`, true));
+                }
+                // _DonorOfferCard.ahk guarda 2 capturas de este paso, ambas confirmadas con needle
+                // propio sin texto (2026-09-16, ver comentario completo en paso14/paso15 de ese
+                // script): "You have offered the card..." (mascota del rincon superior izquierdo) y
+                // "Waiting for a Response" (icono de Refresh) justo despues. Se arma un collage de
+                // 2 paneles con ambas -- si la segunda no llego a tiempo (best-effort, no corta el
+                // trade), se cae a mandar la primera sola.
+                const rutaFotoOferta = outputFilePaso.replace(/\.txt$/, '_OfferPhoto.png');
+                const rutaFotoEsperando = outputFilePaso.replace(/\.txt$/, '_WaitingResponsePhoto.png');
+                rutaFaseOfertaDonante = fs.existsSync(rutaFotoEsperando) ? rutaFotoEsperando : rutaFotoOferta;
+                const collageOferta = await componerCollageAntesDespues(rutaFotoOferta, 'Oferta enviada', rutaFotoEsperando, 'Esperando respuesta');
+                if (collageOferta) {
+                    enColaFoto(() => mandarFotoTradeAlCanal(collageOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → ${amigo ? 'your friend' : 'Main'}`, true));
+                } else {
+                    enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → ${amigo ? 'your friend' : 'Main'}`));
+                }
             }
-        }
-        if (paso.nombre === 'donor_respond_finalize') {
-            // _DonorRespondAndFinalize.ahk guarda 2 capturas: una en "Trade for This Card?"
-            // (las 2 cartas juntas) y otra en "Swipe the card..." (la carta sola, justo antes
-            // del swipe que la manda de verdad) -- si esta ahi, se avisa la ruta para que el
-            // panel web la muestre tambien.
-            const rutaFotoTrade = outputFilePaso.replace(/\.txt$/, '_TradePhoto.png');
-            if (fs.existsSync(rutaFotoTrade)) onProgreso({ paso: 'Trade photo', estado: 'ok', fotoPath: rutaFotoTrade });
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoTrade, `<@${interaction.user.id}> Trade in progress!\n\nCard sent: **${nombreCarta}** → Main`));
+            if (paso.nombre === 'main_accept_trade_offer') {
+                // _MainAcceptTradeOffer.ahk guarda la captura de "You have offered the card..."
+                // del lado de Main (2026-08-22, a pedido explicito del usuario) -- misma logica
+                // que la foto de oferta de la donante, pero del lado de Main.
+                // Collage de 2 paneles (2026-09-17, mismo mecanismo que donor_offer_card arriba):
+                // paso11 de _MainAcceptTradeOffer.ahk agrega una segunda foto de "Waiting for a
+                // Response" del lado de Main, confirmada con needle real (icono de Refresh).
+                const rutaFotoMainOferta = outputFilePaso.replace(/\.txt$/, '_MainOfferPhoto.png');
+                const rutaFotoMainEsperando = outputFilePaso.replace(/\.txt$/, '_MainWaitingResponsePhoto.png');
+                rutaFaseOfertaMain = fs.existsSync(rutaFotoMainEsperando) ? rutaFotoMainEsperando : rutaFotoMainOferta;
+                const collageMainOferta = await componerCollageAntesDespues(rutaFotoMainOferta, 'Main ofreció su carta', rutaFotoMainEsperando, 'Esperando respuesta');
+                if (collageMainOferta) {
+                    enColaFoto(() => mandarFotoTradeAlCanal(collageMainOferta, `<@${interaction.user.id}> Main offered its card!`, true));
+                } else {
+                    enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainOferta, `<@${interaction.user.id}> Main offered its card!`, true));
+                }
+            }
+            if (paso.nombre === 'donor_respond_finalize') {
+                // _DonorRespondAndFinalize.ahk guarda 2 capturas: una en "Trade for This Card?"
+                // (las 2 cartas juntas) y otra en "Swipe the card..." (la carta sola, justo antes
+                // del swipe que la manda de verdad) -- si esta ahi, se avisa la ruta para que el
+                // panel web la muestre tambien.
+                const rutaFotoTrade = outputFilePaso.replace(/\.txt$/, '_TradePhoto.png');
+                if (fs.existsSync(rutaFotoTrade)) onProgreso({ paso: 'Trade photo', estado: 'ok', fotoPath: rutaFotoTrade });
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoTrade, `<@${interaction.user.id}> Trade in progress!\n\nCard sent: **${nombreCarta}** → Main`));
 
-            const rutaFotoSwipe = outputFilePaso.replace(/\.txt$/, '_SwipePhoto.png');
-            rutaFaseEnviaDonante = rutaFotoSwipe;
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoSwipe, `Card sent successfully to user <@${interaction.user.id}> (${interaction.user.username})\n\n**${nombreCarta}**`));
+                const rutaFotoSwipe = outputFilePaso.replace(/\.txt$/, '_SwipePhoto.png');
+                rutaFaseEnviaDonante = rutaFotoSwipe;
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoSwipe, `Card sent successfully to user <@${interaction.user.id}> (${interaction.user.username})\n\n**${nombreCarta}**`));
 
-            // Foto DESPUES del swipe (2026-08-22, a pedido explicito del usuario: las 2 fotos
-            // de arriba son ambas de ANTES de mandar la carta -- faltaba una prueba real de
-            // que el swipe se registro de verdad, no solo que se intento.
-            const rutaFotoEnviada = outputFilePaso.replace(/\.txt$/, '_SentPhoto.png');
-            rutaFaseRecibeDonante = rutaFotoEnviada;
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoEnviada, `Swipe registered — card actually sent.\n\n**${nombreCarta}**`));
-        }
-        if (paso.nombre === 'donor_share_card') {
-            // Fotos de Share (2026-10-04): vista previa, pantalla del swipe y vuelta a Share.
-            rutaFaseOfertaDonante = outputFilePaso.replace(/\.txt$/, '_SharePhoto.png');
-            rutaFaseEnviaDonante = outputFilePaso.replace(/\.txt$/, '_ShareSwipePhoto.png');
-            rutaFaseRecibeDonante = outputFilePaso.replace(/\.txt$/, '_ShareSentPhoto.png');
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFaseOfertaDonante, `<@${interaction.user.id}> The donor is sharing the card with Main!\n\nCard shared: **${nombreCarta}**`));
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFaseRecibeDonante, `Swipe registered — card actually shared.\n\n**${nombreCarta}**`));
-        }
-        if (paso.nombre === 'main_finalize_own_card') {
-            // Foto de la carta de Main justo antes de su propio swipe (2026-08-19, a pedido
-            // explicito del usuario) -- no se conoce el nombre de esta carta (se elige a
-            // ciegas por "mas cantidad primero"), asi que el mensaje no la nombra.
-            const rutaFotoMainSwipe = outputFilePaso.replace(/\.txt$/, '_MainSwipePhoto.png');
-            rutaFaseEnviaMain = rutaFotoMainSwipe;
-            if (fs.existsSync(rutaFotoMainSwipe)) onProgreso({ paso: 'Main swipe photo', estado: 'ok', fotoPath: rutaFotoMainSwipe });
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainSwipe, `<@${interaction.user.id}> Main sent its card — the trade is complete on both sides.`, true));
+                // Foto DESPUES del swipe (2026-08-22, a pedido explicito del usuario: las 2 fotos
+                // de arriba son ambas de ANTES de mandar la carta -- faltaba una prueba real de
+                // que el swipe se registro de verdad, no solo que se intento.
+                const rutaFotoEnviada = outputFilePaso.replace(/\.txt$/, '_SentPhoto.png');
+                rutaFaseRecibeDonante = rutaFotoEnviada;
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoEnviada, `Swipe registered — card actually sent.\n\n**${nombreCarta}**`));
+            }
+            if (paso.nombre === 'donor_share_card') {
+                // Fotos de Share (2026-10-04): vista previa, pantalla del swipe y vuelta a Share.
+                rutaFaseOfertaDonante = outputFilePaso.replace(/\.txt$/, '_SharePhoto.png');
+                rutaFaseEnviaDonante = outputFilePaso.replace(/\.txt$/, '_ShareSwipePhoto.png');
+                rutaFaseRecibeDonante = outputFilePaso.replace(/\.txt$/, '_ShareSentPhoto.png');
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFaseOfertaDonante, `<@${interaction.user.id}> The donor is sharing the card with Main!\n\nCard shared: **${nombreCarta}**`));
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFaseRecibeDonante, `Swipe registered — card actually shared.\n\n**${nombreCarta}**`));
+            }
+            if (paso.nombre === 'main_finalize_own_card') {
+                // Foto de la carta de Main justo antes de su propio swipe (2026-08-19, a pedido
+                // explicito del usuario) -- no se conoce el nombre de esta carta (se elige a
+                // ciegas por "mas cantidad primero"), asi que el mensaje no la nombra.
+                const rutaFotoMainSwipe = outputFilePaso.replace(/\.txt$/, '_MainSwipePhoto.png');
+                rutaFaseEnviaMain = rutaFotoMainSwipe;
+                if (fs.existsSync(rutaFotoMainSwipe)) onProgreso({ paso: 'Main swipe photo', estado: 'ok', fotoPath: rutaFotoMainSwipe });
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainSwipe, `<@${interaction.user.id}> Main sent its card — the trade is complete on both sides.`, true));
 
-            // Foto DESPUES del swipe de Main (2026-08-22, mismo motivo que la de la donante).
-            const rutaFotoMainEnviada = outputFilePaso.replace(/\.txt$/, '_MainSentPhoto.png');
-            rutaFaseRecibeMain = rutaFotoMainEnviada;
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainEnviada, `Main swipe registered — card actually sent.`, true));
+                // Foto DESPUES del swipe de Main (2026-08-22, mismo motivo que la de la donante).
+                const rutaFotoMainEnviada = outputFilePaso.replace(/\.txt$/, '_MainSentPhoto.png');
+                rutaFaseRecibeMain = rutaFotoMainEnviada;
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainEnviada, `Main swipe registered — card actually sent.`, true));
+            }
+        }
+
+        copiasEnviadas = copia;
+        // Historial por copia: la ultima la registra el bloque de abajo (con su embed).
+        if (copia < copias) {
+            try { await registrarTransferenciaCarta(fileName, cartaId, 'main', interaction.user.id, friendId); } catch (e) { console.error('DEBUG: error guardando el historial de la copia Gold:', e?.message || e); }
         }
     }
-
+    tiempoTrade('tradeo completo', null);
     await colaFotos;  // todas las fotos del trade ya subidas, en orden, antes del resumen
     // Historial de transferencias (2026-09-28, pedido de Ale): trade completo = la carta salio de
     // esta cuenta. Se anota y se avisa con un embed chico: cuenta, carta y cantidad antes/despues.
@@ -6089,7 +6146,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
                         ? `Card shared. Thank you!\n\n**${nombreCarta}**\n\n🏠 **You can now log into your Main account — the card was shared!**`
                         : amigo
                         ? `Trade confirmed. Thank you very much for the trade!\n\n**${nombreCarta}**\n\n🤝 **Your friend can now check their trades — the card was sent!**\n⏳ Please wait a few minutes while we remove the traded card from Favorites to avoid future errors.`
-                        : `Trade confirmed. Thank you very much for the trade!\n\n**${nombreCarta}**\n\n🏠 **You can now log into your Main account!**\n⏳ Please wait a few minutes while we remove the traded card from Favorites to avoid future errors.`)
+                        : `Trade confirmed. Thank you very much for the trade!\n\n**${nombreCarta}**${copias > 1 ? `\n\n🟡 **${copias}/${copias}** copies sent.` : ''}\n\n🏠 **You can now log into your Main account!**\n⏳ Please wait a few minutes while we remove the traded card from Favorites to avoid future errors.`)
                     .setImage('attachment://main_trade_resumen.png');
                 const formCollage = new FormData();
                 formCollage.append('payload_json', JSON.stringify({ embeds: [embedCollage.toJSON()] }));
@@ -6119,6 +6176,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         try {
             const r = await (promesaDesmarcar || ejecutarPasoAhk(ahkExe, RUTA_DONOR_OFFER_CARD_SCRIPT, [nombre, folderPath, 'DESMARCAR'], 2 * 60 * 1000, tmp()));
             okDesmarcar = !!r?.ok;
+            tiempoTrade(`desmarcar favoritas${okDesmarcar ? '' : ' (FALLO)'}`, null);
             if (!okDesmarcar) console.error('DEBUG: desmarcar favoritas fallo:', r?.resultado);
         } catch (e) {
             console.error('DEBUG: error desmarcando favoritas:', e?.message || e);
@@ -6138,7 +6196,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     })();
 
     onProgreso({ paso: 'Trade completed', estado: 'ok', terminado: true });
-    const mensaje = `✅ ${etiquetaModo} completed: **${nombreCarta}** (\`${fileName}\`) ${share ? 'shared with' : 'sent to'} ${amigo ? 'your friend' : 'Main'}.`;
+    const mensaje = `✅ ${etiquetaModo} completed: ${copias > 1 ? `${copias}x ` : ''}**${nombreCarta}** (\`${fileName}\`) ${share ? 'shared with' : 'sent to'} ${amigo ? 'your friend' : 'Main'}.`;
     try {
         const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
         if (canalRunInstance?.webhook_url) {
@@ -13387,7 +13445,7 @@ client.on('interactionCreate', async interaction => {
         const nombreCartaConfirm = resolverNombreCarta(cartaId, rutaMasterCfgConfirm?.webhook_url);
         const payloadCartaConfirm = await construirEmbedDetalleCarta(cartaId, nombreCartaConfirm, rutaMasterCfgConfirm?.webhook_url, null, interaction.guild);
         const embedConfirmacion = payloadCartaConfirm.embeds[0]
-            .setTitle(`📋 Confirm ${modo === 'main' ? 'Main Trade' : modo === 'sharemain' ? 'Share to Main' : modo === 'sharefriend' ? 'Share to Friend' : 'Friend Trade'}`)
+            .setTitle(`📋 Confirm ${modo === 'goldmain' ? 'Gold Trade' : modo === 'main' ? 'Main Trade' : modo === 'sharemain' ? 'Share to Main' : modo === 'sharefriend' ? 'Share to Friend' : 'Friend Trade'}`)
             .addFields(
                 { name: 'Instance', value: `**${nombre}**`, inline: true },
                 { name: 'Friend ID', value: `\`${friendId}\``, inline: true },
@@ -13403,6 +13461,11 @@ client.on('interactionCreate', async interaction => {
                 ? `✅ No previous transfers of this card from this account.\nAvailable: **x${auditoria.disponible}**`
                 : `This account already transferred this card **${auditoria.transferidas}** time(s).\nIn account: x${auditoria.enJson} − ${auditoria.transferidas} transferred = **x${auditoria.disponible}** available`;
             embedConfirmacion.addFields({ name: '🔎 Transfer audit', value: textoAuditoria.slice(0, 1024) });
+            // Gold Trade: tantas copias como el umbral del panel de Gold Cards, sin pasar de las disponibles.
+            if (modo === 'goldmain' && auditoria.disponible > 0) {
+                const copiasGold = Math.min(await obtenerUmbralGold(interaction.user.id), auditoria.disponible);
+                embedConfirmacion.addFields({ name: '🟡 Copies to send', value: `**x${copiasGold}** (one trade per copy)` });
+            }
             if (auditoria.disponible <= 0) {
                 const sugeridas = auditoria.otras.slice(0, 5).map(r => `\`${r.fileName}\` — x${r.disponible}`).join('\n');
                 embedConfirmacion.setColor(0xE74C3C).addFields({
@@ -13421,7 +13484,7 @@ client.on('interactionCreate', async interaction => {
     // Botón "Start" del embed de confirmación de arriba -- recién acá arranca la
     // automatización de verdad.
     if (interaction.isButton() && interaction.customId.startsWith('card_trade_confirmado::')) {
-        const [, cartaId, friendId, fileName, index, nombre, modo] = interaction.customId.split('::');
+        const [, cartaId, friendId, fileName, index, nombre, modo, copiasTexto] = interaction.customId.split('::');
         await interaction.update({ components: [] });
         try { await interaction.followUp({ content: `🟢 Preparing instance **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
@@ -13440,6 +13503,19 @@ client.on('interactionCreate', async interaction => {
             if (modo !== 'sharemain') return await interaction.followUp({ content: '❌ Share is only available to your Main account.', ephemeral: true });
             try { await interaction.followUp({ content: `🎁 Running Share: turning on **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
             return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, share: true });
+        }
+        // Gold Trade (2026-10-09): copias = umbral del panel de Gold Cards (o las que faltaban, si
+        // viene del Retry), sin pasar de las que le quedan a la cuenta. Solo en el servidor propio.
+        if (modo === 'goldmain') {
+            if (!esServidorPropio(interaction.guildId)) return await interaction.followUp({ content: '❌ Trade from Gold Cards is disabled.', ephemeral: true });
+            let copias = parseInt(copiasTexto, 10) || await obtenerUmbralGold(interaction.user.id);
+            try {
+                const auditoriaGold = await auditarStockCarta(fileName, cartaId);
+                if (auditoriaGold.disponible > 0) copias = Math.min(copias, auditoriaGold.disponible);
+            } catch (e) { /* sin auditoria, se usa el pedido */ }
+            copias = Math.max(1, copias);
+            try { await interaction.followUp({ content: `🟡 Running Gold Trade (${copias} ${copias === 1 ? 'copy' : 'copies'}): turning on **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+            return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, gold: true, copias });
         }
         if (modo === 'main') {
             try { await interaction.followUp({ content: `🏠 Running Main Trade: turning on **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
@@ -14532,7 +14608,7 @@ client.on('interactionCreate', async interaction => {
             const datosGold = mapaCopias ? { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral } : null;
             const menu = new StringSelectMenuBuilder()
                 // Modo Main Trade (2026-09-29): Friend Trade quedo deshabilitado.
-                .setCustomId(`card_trade_friendid::gold::main::${cartaId}`.slice(0, 100))
+                .setCustomId(`card_trade_friendid::gold::goldmain::${cartaId}`.slice(0, 100))
                 .setPlaceholder('Select your Main account')
                 .addOptions(friends.slice(0, 25).map(f => ({
                     label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
