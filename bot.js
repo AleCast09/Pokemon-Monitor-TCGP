@@ -695,7 +695,18 @@ async function construirEmbedTransferencias(discordId, pagina, guild = null) {
 // mantener una lista propia y paralela. Decidido asi el 2026-09-26 tras ver que ya existia:
 // una segunda lista obligaria al usuario a registrar el mismo ID dos veces y a mantenerlas
 // sincronizadas a mano.
-async function idsFarmRegistrados(discordId) {
+async function idsFarmRegistrados(discordId, userId = null) {
+    // Comunidad (community.js): solo los perfiles que ESE miembro registro con wr98 (su Main y su
+    // secundaria), nunca los amigos guardados de esta PC ni los de otros miembros.
+    if (comunidad.esComunidad(discordId)) {
+        if (!userId) return [];
+        try {
+            return (await comunidad.destinosDe(userId)).map(d => ({ friend_id: d.id, alias: d.label }));
+        } catch (e) {
+            console.error('DEBUG: no se pudo leer el registro de wr98 para Farm Tickets:', e?.message || e);
+            return [];
+        }
+    }
     const rutaIniCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_inject_ini'`);
     const friends = parsearListaFriends(rutaIniCfg?.webhook_url || undefined);
     // Sin repetidos (2026-10-03, bug real de un usuario: "Could not open the panel" siempre): el
@@ -819,9 +830,9 @@ async function cuentasPoolFarmTickets() {
 // vuelve a estar disponible, y cuantas cuentas le quedan sin usar. Cada ID lleva su propia
 // cuenta de todo, porque el limite de 5 tickets diarios es POR PERFIL que recibe los likes,
 // no global (confirmado con Ale).
-async function construirPanelFarmTickets(discordId) {
+async function construirPanelFarmTickets(discordId, userId = null) {
     await asegurarTablasFarmTickets();
-    const ids = await idsFarmRegistrados(discordId);
+    const ids = await idsFarmRegistrados(discordId, userId);
     const pool = await cuentasPoolFarmTickets();
 
     const embed = new EmbedBuilder()
@@ -11712,7 +11723,7 @@ client.on('interactionCreate', async interaction => {
         const [, friendIdRun, instanciasTxt] = interaction.customId.split('::');
         const porTanda = Math.max(1, Math.min(parseInt(instanciasTxt, 10) || 1, FARM_TICKETS_MAX_INSTANCIAS));
 
-        const idsRun = await idsFarmRegistrados(interaction.guildId);
+        const idsRun = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
         const aliasRun = (idsRun.find(f => f.friend_id === friendIdRun) || {}).alias || formatearFriendId(friendIdRun);
 
         // Que instancias usar: las primeras N que no sean Main. Main se excluye siempre porque
@@ -11812,7 +11823,7 @@ client.on('interactionCreate', async interaction => {
         }
         await interaction.deferReply();
         try {
-            return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+            return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
         } catch (error) {
             console.error('DEBUG: error abriendo el panel de Farm Shop Tickets:', error?.message || error);
             const causa = String(error?.rawError?.message || error?.message || 'unknown error').slice(0, 300);
@@ -11849,17 +11860,17 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferUpdate();
         await asegurarTablasFarmTickets();
         await agregarIdFarm(interaction.guildId, friendId, alias);
-        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
     }
 
     if (interaction.isButton() && interaction.customId === 'farmtickets_refrescar') {
         await interaction.deferUpdate();
-        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
     }
 
     if (interaction.isButton() && interaction.customId === 'farmtickets_volver') {
         await interaction.deferUpdate();
-        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
     }
 
     // Quitar una cuenta de la LISTA. El historial de likes no se toca a proposito: si el
@@ -11867,8 +11878,8 @@ client.on('interactionCreate', async interaction => {
     // Sin eso, reagregar un ID sortearia cuentas ya usadas y las quemaria sin dar ticket.
     if (interaction.isButton() && interaction.customId === 'farmtickets_quitar_id') {
         await interaction.deferUpdate();
-        const ids = await idsFarmRegistrados(interaction.guildId);
-        if (!ids.length) return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        const ids = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
+        if (!ids.length) return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
         const menu = new StringSelectMenuBuilder()
             .setCustomId('farmtickets_confirmar_quitar')
             .setPlaceholder('Which account do you want to remove?')
@@ -11890,14 +11901,14 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isStringSelectMenu() && interaction.customId === 'farmtickets_confirmar_quitar') {
         await interaction.deferUpdate();
         await quitarIdFarm(interaction.guildId, interaction.values[0]);
-        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
     }
 
     // Elegido el perfil, se pasa a elegir cuantas instancias.
     if (interaction.isStringSelectMenu() && interaction.customId === 'farmtickets_elegir_id') {
         await interaction.deferUpdate();
         const friendId = interaction.values[0];
-        const ids = await idsFarmRegistrados(interaction.guildId);
+        const ids = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
         const alias = (ids.find(f => f.friend_id === friendId) || {}).alias;
         const panelFarm = await construirPanelInstanciasFarm(friendId, alias);
         // ⚡ Fast Farm (fast-transfer.js): sin MuMu, solo donde esta habilitado y si quedan tickets hoy.
@@ -11922,7 +11933,7 @@ client.on('interactionCreate', async interaction => {
         try {
             const friendId = interaction.customId.split('::')[1];
             const instancias = parseInt(interaction.values[0], 10) || 1;
-            const ids = await idsFarmRegistrados(interaction.guildId);
+            const ids = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
             const alias = (ids.find(f => f.friend_id === friendId) || {}).alias;
             const hechos = await ticketsFarmeadosHoy(friendId);
             const restantes = FARM_TICKETS_MAX_DIARIO - hechos;
