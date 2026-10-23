@@ -31,8 +31,11 @@ iniciarAutoSyncCardTypes();
 // Fast Share/Trade sin MuMu (2026-10-23): todo en fast-transfer.js, apagado salvo que el .env
 // tenga FAST_TRANSFER_ENGINE_DIR y sea el servidor propio.
 const fastTransfer = require('./fast-transfer.js');
+// Modo comunidad (community.js): solo para los servers de COMMUNITY_GUILD_IDS del .env.
+const comunidad = require('./community.js');
 fastTransfer.init({
     db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
+    esComunidad: (guildId) => comunidad.esComunidad(guildId),
     auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
     // ⚡ Fast Farm: mismas reglas y tablas que el Farm Tickets con MuMu.
     formatearFriendId, ticketsFarmeadosHoy, cuentasPoolFarmTickets, cuentasYaUsadasParaId,
@@ -9669,7 +9672,8 @@ async function registrarSlashCommands() {
     }
 
     for (const guildId of guildIds) {
-        await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: commands });
+        // Modo comunidad: ahi solo los comandos de los canales prioritarios (community.js).
+        await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: comunidad.comandosPara(guildId, commands) });
         console.log(`✅ Slash commands registered in guild ${guildId}`);
     }
 }
@@ -10890,6 +10894,8 @@ function prefijoDeCartas(customId) {
 }
 
 client.on('interactionCreate', async interaction => {
+    // Modo comunidad: fuera del staff, nadie usa el bot ahi todavia (nunca ve datos de esta PC).
+    if (await comunidad.bloquearSiHaceFalta(interaction)) return;
     if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith('fast_')) {
         if (await fastTransfer.manejarInteraccion(interaction)) return;
     }
@@ -11866,6 +11872,14 @@ client.on('interactionCreate', async interaction => {
         if (filaFastFarm && (await ticketsFarmeadosHoy(friendId)) < FARM_TICKETS_MAX_DIARIO) {
             panelFarm.components.splice(panelFarm.components.length - 1, 0, filaFastFarm);
         }
+        // Modo comunidad: sin el menu de instancias de MuMu, solo ⚡ Fast Farm y Back.
+        if (comunidad.esComunidad(interaction.guildId)) {
+            panelFarm.components = panelFarm.components.filter(fila =>
+                !fila.components?.some(c => (c.data?.custom_id || '').startsWith('farmtickets_elegir_instancias::')));
+            if (panelFarm.embeds?.[0]?.data?.description) {
+                panelFarm.embeds[0].setDescription(panelFarm.embeds[0].data.description.replace('How many instances do you want to run at once?', 'Press ⚡ Fast Farm to claim them — no MuMu needed.'));
+            }
+        }
         return await interaction.editReply(panelFarm);
     }
 
@@ -11945,7 +11959,7 @@ client.on('interactionCreate', async interaction => {
         const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
         // ⚡ Fast Shinedust (fast-transfer.js): valores leidos del servidor + botones de refresco.
         const resultados = await fastTransfer.mezclarShinedust(buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url), rutaJsonCfg?.webhook_url);
-        const payloadSd = construirEmbedShinedust(resultados, 0);
+        const payloadSd = comunidad.quitarComponentes(interaction.guildId, construirEmbedShinedust(resultados, 0), ['shinedust_track_select::']);
         const filaSd = fastTransfer.filaBotonesDust(interaction.guildId, 0);
         if (filaSd && payloadSd.components) payloadSd.components.push(filaSd);
         return await interaction.editReply(payloadSd);
@@ -11956,7 +11970,7 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferUpdate();
         const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
         const resultados = await fastTransfer.mezclarShinedust(buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url), rutaJsonCfg?.webhook_url);
-        const payloadSd = construirEmbedShinedust(resultados, pagina);
+        const payloadSd = comunidad.quitarComponentes(interaction.guildId, construirEmbedShinedust(resultados, pagina), ['shinedust_track_select::']);
         const filaSd = fastTransfer.filaBotonesDust(interaction.guildId, Math.max(0, pagina));
         if (filaSd && payloadSd.components) payloadSd.components.push(filaSd);
         return await interaction.editReply(payloadSd);
@@ -12919,6 +12933,14 @@ client.on('interactionCreate', async interaction => {
         // ⚡ Fast Share/Trade (fast-transfer.js): solo aparece donde esta habilitado; no necesita MuMu.
         const filaFast = fastTransfer.filaBoton(interaction.guildId, { cartaId, friendId, fileName, modo });
         const extraFast = filaFast ? [filaFast] : [];
+        // Modo comunidad: sin MuMu (las instancias son de la PC del host, no del miembro) -- solo ⚡.
+        if (comunidad.esComunidad(interaction.guildId)) {
+            return await interaction.editReply({
+                content: filaFast ? `⚡ Ready to send \`${fileName}\` — no MuMu needed.` : '❌ This option isn\'t available here.',
+                components: [...extraFast, new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('card_trade_cancelar').setLabel('⬅️ Cancel').setStyle(ButtonStyle.Secondary))]
+            });
+        }
 
         const instancias = obtenerInstanciasMuMu();
         if (instancias === null) {
@@ -15318,17 +15340,22 @@ client.on('interactionCreate', async interaction => {
                         cmd_run_instance: 'run_instance'
                     };
 
-                    const crearCategoriaSiNoExiste = async (nombreCategoria) => {
+                    const crearCategoriaSiNoExiste = async (nombreCategoria, privada = false) => {
                         let categoria = interaction.guild.channels.cache.find(c => c.name === nombreCategoria && c.type === ChannelType.GuildCategory);
+                        // Categoria privada del modo comunidad (🔒 STAFF): solo el bot y el staff la ven.
+                        // Se reaplica en cada Sync por si alguien toco los permisos a mano.
+                        const permisos = privada ? comunidad.permisosPrivados(interaction.guild) : [{
+                            id: interaction.guild.members.me.id,
+                            allow: [PermissionsBitField.Flags.Administrator]
+                        }];
                         if (!categoria) {
                             categoria = await interaction.guild.channels.create({
                                 name: nombreCategoria,
                                 type: ChannelType.GuildCategory,
-                                permissionOverwrites: [{
-                                    id: interaction.guild.members.me.id,
-                                    allow: [PermissionsBitField.Flags.Administrator]
-                                }]
+                                permissionOverwrites: permisos
                             });
+                        } else if (privada) {
+                            await categoria.permissionOverwrites.set(permisos).catch(console.error);
                         }
                         return categoria;
                     };
@@ -15437,9 +15464,12 @@ client.on('interactionCreate', async interaction => {
 
                     const reportePartes = [];
                     const categoriasGestionadas = [];
-                    for (let i = 0; i < grupos.length; i++) {
-                        const grupo = grupos[i];
-                        const categoria = await crearCategoriaSiNoExiste(grupo.categoria);
+                    // Modo comunidad: solo MANAGER + RUN MUMU PLAYER + 🔒 STAFF. En cualquier otro
+                    // server la lista queda igual que siempre.
+                    const gruposSync = comunidad.gruposSync(interaction.guildId, grupos);
+                    for (let i = 0; i < gruposSync.length; i++) {
+                        const grupo = gruposSync[i];
+                        const categoria = await crearCategoriaSiNoExiste(grupo.categoria, !!grupo.privado);
                         categoriasGestionadas.push(categoria);
                         await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, grupo.tipoCategoria]);
                         await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, 'N/A')`, [interaction.guildId, grupo.tipoCategoria, categoria.id]);
@@ -15585,7 +15615,7 @@ client.once('ready', async () => {
             await guardarGuildsAutorizados(guildsAutorizados);
         } else {
             for (const g of client.guilds.cache.values()) {
-                if (!guildsAutorizados.includes(g.id)) await rechazarGuildNoAutorizado(g);
+                if (!guildsAutorizados.includes(g.id) && !comunidad.esComunidad(g.id)) await rechazarGuildNoAutorizado(g);
             }
         }
     } catch (error) {
@@ -15701,7 +15731,9 @@ client.once('ready', async () => {
 
 client.on('guildCreate', async (guild) => {
     const guildsAutorizados = (await obtenerGuildsAutorizados()) || [];
-    if (!guildsAutorizados.includes(guild.id)) {
+    // El server de comunidad (COMMUNITY_GUILD_IDS del .env) cuenta como autorizado: si no, al
+    // invitar el bot ahi se saldria solo.
+    if (!guildsAutorizados.includes(guild.id) && !comunidad.esComunidad(guild.id)) {
         if (guildsAutorizados.length > 0) {
             await rechazarGuildNoAutorizado(guild);
             return;
@@ -15719,7 +15751,7 @@ client.on('guildCreate', async (guild) => {
         const rest = new REST({ version: '10' }).setToken(TOKEN);
         const applicationId = CLIENT_ID || client.user?.id;
         if (applicationId) {
-            await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: construirSlashCommands() });
+            await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: comunidad.comandosPara(guild.id, construirSlashCommands()) });
             console.log(`✅ Slash commands registered in guild ${guild.id}`);
         }
     } catch (error) {

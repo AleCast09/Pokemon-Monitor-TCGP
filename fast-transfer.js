@@ -58,7 +58,8 @@ function rutaMotor() {
 }
 
 function habilitado(guildId) {
-    return !!deps && !!rutaMotor() && deps.esServidorPropio(guildId);
+    // Servidor propio, o server de comunidad (community.js) donde ⚡ es la unica forma de operar.
+    return !!deps && !!rutaMotor() && (deps.esServidorPropio(guildId) || !!deps.esComunidad?.(guildId));
 }
 
 // Boton que va al lado del menu de instancias de MuMu en el flujo de /card.
