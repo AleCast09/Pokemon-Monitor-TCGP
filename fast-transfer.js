@@ -127,6 +127,12 @@ function construirEmbed(ctx) {
         if (detalles[clave]) linea += `\n　*${detalles[clave]}*`;
         return linea;
     });
+    // Copias de esta carta en la cuenta (JSON − transferencias del historial), pedido de Ale.
+    if (typeof ctx.copias === 'number') {
+        lineas.unshift(final === 'ok'
+            ? `📦 Copies on this account: x${ctx.copias} − 1 → **x${Math.max(0, ctx.copias - 1)}** left`
+            : `📦 Copies on this account: **x${ctx.copias}**`, '');
+    }
     let color = 0x3498DB;
     if (final === 'ok') {
         color = 0x2ECC71;
@@ -146,12 +152,16 @@ function construirEmbed(ctx) {
         .setFooter({ text: `Card ${cartaId} · From ${fileName} · To ${friendId}`.slice(0, 2048) });
 }
 
-async function editar(interaction, payload) {
+// El progreso es un mensaje efimero (solo lo ve quien apreto el boton, con "Dismiss message").
+// Su token vence a los 15 min (amistad 5 + trade 10 + cola pueden pasarse): si el resultado
+// final ya no se puede editar, se le manda por DM.
+async function editar(interaction, payload, final = false) {
     try {
         await interaction.editReply(payload);
     } catch (e) {
-        // El token de la interaccion vence a los 15 min; el mensaje del canal sigue editable.
-        try { await interaction.message?.edit(payload); } catch (e2) { /* nada mas que hacer */ }
+        if (final) {
+            try { await interaction.user.send({ embeds: payload.embeds }); } catch (e2) { /* DMs cerrados */ }
+        }
     }
 }
 
@@ -200,8 +210,9 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
     const ctx = {
         fast, mapa, cartaId, fileName, friendId,
         nombreCarta: (await Promise.resolve(deps.nombreCarta?.(cartaId)).catch(() => null)) || cartaId,
-        estados: {}, detalles: {}, final: null, inicio: Date.now(), posicion: 0
+        estados: {}, detalles: {}, final: null, inicio: Date.now(), posicion: 0, copias: null
     };
+    try { ctx.copias = (await deps.auditarStockCarta(fileName, cartaId))?.disponible ?? null; } catch (e) { /* sin dato */ }
     const filaStop = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`fast_stop::${runId}`).setLabel('⏹️ Stop').setStyle(ButtonStyle.Danger)
     );
@@ -225,7 +236,7 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
             ctx.estados.login = 'error';
             ctx.detalles.login = `XML ${fileName} not found in the XML Accounts Path`;
             ctx.final = 'error';
-            return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] });
+            return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] }, true);
         }
 
         if (!(await puertoAbierto(PUERTO_TUNEL))) {
@@ -236,7 +247,7 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
                 ctx.estados.login = 'error';
                 ctx.detalles.login = 'Could not start the tunnel (port 9090) — open any bot .bat once to check it';
                 ctx.final = 'error';
-                return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] });
+                return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] }, true);
             }
             ctx.detalles.login = '';
         }
@@ -255,11 +266,11 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
 
         if (corridas.get(runId).detenido) {
             ctx.final = 'stopped';
-            return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] });
+            return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] }, true);
         }
         if (resultado?.success) {
             ctx.final = 'ok';
-            await editar(interaction, { embeds: [construirEmbed(ctx)], components: [] });
+            await editar(interaction, { embeds: [construirEmbed(ctx)], components: [] }, true);
             await registrarYResumir(interaction, ctx, modo, resultado.received);
             return;
         }
@@ -272,7 +283,7 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
                 ctx.detalles[pendiente[0]] = (ultimas[ultimas.length - 1] || 'The engine stopped unexpectedly').slice(0, 300);
             }
         }
-        return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] });
+        return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] }, true);
     }).catch(e => {
         console.error('DEBUG: Fast Transfer error:', e);
     }).finally(() => {
@@ -354,7 +365,8 @@ async function manejarInteraccion(interaction) {
         return true;
     }
     const [, cartaId, friendId, fileName, modo] = id.split('::');
-    await interaction.deferUpdate();
+    // Respuesta efimera: el progreso lo ve solo quien apreto el boton.
+    await interaction.deferReply({ ephemeral: true });
     ejecutar(interaction, { cartaId, friendId, fileName, modo });
     return true;
 }
