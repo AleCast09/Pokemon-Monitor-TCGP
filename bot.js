@@ -28,6 +28,13 @@ const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, avisarA
 const { obtenerMapaEmojisGuild, FUENTES_EMOJIS, obtenerErroresEmojisGuild } = require('./guild-emojis.js');
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
 iniciarAutoSyncCardTypes();
+// Fast Share/Trade sin MuMu (2026-10-23): todo en fast-transfer.js, apagado salvo que el .env
+// tenga FAST_TRANSFER_ENGINE_DIR y sea el servidor propio.
+const fastTransfer = require('./fast-transfer.js');
+fastTransfer.init({
+    db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
+    nombreCarta: async id => resolverNombreCarta(id, (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url)
+});
 
 // Trade quedo bloqueado por completo para TODOS los servidores el 2026-08-30 mientras
 // el mecanismo de wishlist/Main Trade estaba en pruebas en vivo (ver los comentarios
@@ -10874,6 +10881,9 @@ function prefijoDeCartas(customId) {
 }
 
 client.on('interactionCreate', async interaction => {
+    if (interaction.isButton() && interaction.customId.startsWith('fast_')) {
+        if (await fastTransfer.manejarInteraccion(interaction)) return;
+    }
     if (interaction.isAutocomplete() && interaction.commandName === 'card') {
         const campoFocus = interaction.options.getFocused(true);
         const focused = campoFocus.value.trim().toLowerCase();
@@ -12884,13 +12894,16 @@ client.on('interactionCreate', async interaction => {
         const [, cartaId, friendId, modo] = interaction.customId.split('::');
         const fileName = interaction.values[0];
         await interaction.deferUpdate(); // MuMuManager puede tardar más de 3s
+        // ⚡ Fast Share/Trade (fast-transfer.js): solo aparece donde esta habilitado; no necesita MuMu.
+        const filaFast = fastTransfer.filaBoton(interaction.guildId, { cartaId, friendId, fileName, modo });
+        const extraFast = filaFast ? [filaFast] : [];
 
         const instancias = obtenerInstanciasMuMu();
         if (instancias === null) {
-            return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+            return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: extraFast });
         }
         if (!instancias.length) {
-            return await interaction.editReply({ content: '❌ No MuMuPlayer instances found.', components: [] });
+            return await interaction.editReply({ content: '❌ No MuMuPlayer instances found.', components: extraFast });
         }
 
         const menu = new StringSelectMenuBuilder()
@@ -12908,7 +12921,7 @@ client.on('interactionCreate', async interaction => {
         const filaCancelar = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('card_trade_cancelar').setLabel('⬅️ Cancel').setStyle(ButtonStyle.Secondary)
         );
-        return await interaction.editReply({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu), filaCancelar] });
+        return await interaction.editReply({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu), ...extraFast, filaCancelar] });
     }
 
     if (interaction.isButton() && interaction.customId === 'card_trade_cancelar') {
