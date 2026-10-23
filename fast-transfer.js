@@ -121,12 +121,20 @@ function construirEmbed(ctx) {
     const { fast, estados, detalles, mapa, nombreCarta, cartaId, fileName, friendId, final, inicio } = ctx;
     const ficha = mapa.Ficha_de_intercambio_TCGP ? `<:Ficha_de_intercambio_TCGP:${mapa.Ficha_de_intercambio_TCGP}> ` : '🔄 ';
     const titulo = fast === 'share' ? `🎁 ⚡ Fast Share — ${nombreCarta}` : `${ficha}⚡ Fast Trade — ${nombreCarta}`;
-    const lineas = PASOS[fast].map(([clave, texto]) => {
-        const est = estados[clave];
+    // Los pasos aparecen de a uno (pedido de Ale): los hechos con check y el que esta corriendo
+    // con ⏳; los que faltan no se muestran.
+    const lineas = [];
+    for (const [clave, texto] of PASOS[fast]) {
+        let est = estados[clave];
+        if (!est) {
+            if (final || ctx.posicion > 0) break;
+            est = 'start';
+        }
         let linea = `${icono(est, mapa)} ${texto}`;
         if (detalles[clave]) linea += `\n　*${detalles[clave]}*`;
-        return linea;
-    });
+        lineas.push(linea);
+        if (est !== 'ok') break;
+    }
     // Copias de esta carta en la cuenta (JSON − transferencias del historial), pedido de Ale.
     if (typeof ctx.copias === 'number') {
         lineas.unshift(final === 'ok'
