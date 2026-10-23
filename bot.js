@@ -895,10 +895,10 @@ async function construirPanelFarmTickets(discordId, userId = null) {
     // panel de Settings (Status ID -- Saved Friends), que es de donde se lee. Tener aqui una
     // segunda forma de editarla solo llevaria a que las dos se desincronicen.
     const filaBotonesFarm = new ActionRowBuilder();
-    // Comunidad (pedido de Ale): atajo directo a la Main propia, y regalar tickets a otro miembro.
+    // Comunidad (pedido de Ale): regalar tickets a otro miembro del registro de wr98. La Main propia
+    // ya sale en el menu de arriba, asi que no lleva atajo aparte.
     if (comunidad.esComunidad(discordId)) {
         filaBotonesFarm.addComponents(
-            new ButtonBuilder().setCustomId('farm_mi_main').setLabel('🏠 My Main').setStyle(ButtonStyle.Success).setDisabled(!ids.length),
             new ButtonBuilder().setCustomId('farm_regalo').setLabel('🎁 Gift to a member').setStyle(ButtonStyle.Primary)
         );
     }
