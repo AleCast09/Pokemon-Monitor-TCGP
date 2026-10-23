@@ -331,8 +331,8 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
         } catch (e) {
             embed = new EmbedBuilder();
         }
+        // Sin campo "Type" (pedido de Ale): ya lo dicen el canal y el mensaje de arriba.
         const campos = [
-            { name: 'Type', value: fast === 'share' ? '🎁 ⚡ Fast Share' : '🔄 ⚡ Fast Trade', inline: true },
             { name: 'Account (XML)', value: `\`${fileName}\``, inline: true }
         ];
         if (antes) {
