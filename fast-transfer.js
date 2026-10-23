@@ -295,12 +295,17 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
         }
         return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] }, true);
     }).then(async () => {
-        // Mensaje de la carta en el canal: queda el resultado en una linea.
+        // Mensaje de la carta en el canal: si salio bien queda con una linea de resultado; si fallo
+        // o se detuvo se borra (pedido de Ale: en el canal solo quedan los completados). El Retry
+        // sigue en el mensaje privado.
         if (!interaction._fastCanal) return;
-        const texto = ctx.final === 'ok' ? `✅ ${interaction._fastCanal} completed.`
-            : ctx.final === 'stopped' ? `⏹️ ${interaction._fastCanal} stopped.`
-            : `❌ ${interaction._fastCanal} did not complete — use 🔄 Retry in your private message.`;
-        try { await interaction.editReply({ content: `<@${interaction.user.id}> ${texto}`, components: [] }); } catch (e) { /* token vencido */ }
+        try {
+            if (ctx.final === 'ok') {
+                await interaction.editReply({ content: `<@${interaction.user.id}> ✅ ${interaction._fastCanal} completed.`, components: [] });
+            } else {
+                await interaction.deleteReply();
+            }
+        } catch (e) { /* token vencido */ }
     }).catch(e => {
         console.error('DEBUG: Fast Transfer error:', e);
     }).finally(() => {

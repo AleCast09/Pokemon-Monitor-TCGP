@@ -12928,7 +12928,14 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.isButton() && interaction.customId === 'card_trade_cancelar') {
-        return await interaction.update({ content: '❌ Cancelled -- nothing was injected.', components: [] });
+        // Cancel borra el mensaje de la carta (2026-10-23, pedido de Ale): en Trading/Share solo
+        // quedan los trades y shares que se completaron. Si no se puede borrar, queda el aviso viejo.
+        await interaction.deferUpdate();
+        try {
+            return await interaction.deleteReply();
+        } catch (e) {
+            return await interaction.editReply({ content: '❌ Cancelled -- nothing was injected.', components: [] });
+        }
     }
 
     // Aggressive Trade (2026-08-24) -- selects del flujo de seleccion, ver el comentario
