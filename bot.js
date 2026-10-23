@@ -4810,6 +4810,13 @@ async function reenviarCartaATrading(interaction, cartaId, datosGold, componente
         return await interaction.editReply({ content: '❌ Could not build this card. Try again.' });
     }
 
+    // Comunidad (pedido de Ale): Trading/Share Cards son solo para el historial de lo completado. La
+    // carta con sus menus (elegir destino, cuenta, ⚡) se muestra en PRIVADO a quien la pidio, en vez
+    // de publicarse en el canal. Todos los pasos siguientes editan ese mismo mensaje privado.
+    if (comunidad.esComunidad(interaction.guildId)) {
+        return await interaction.editReply({ content: '', embeds: payload.embeds, files: payload.files, components: payload.components });
+    }
+
     const canalTrading = await obtenerCanalComando(interaction.guildId, tipoCanal);
     if (!canalTrading?.webhook_url) {
         return await interaction.editReply({ content: `❌ Your **${nombreCanal}** channel isn't set up yet. Run **Sync Channels** first.` });

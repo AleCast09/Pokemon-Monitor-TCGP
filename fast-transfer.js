@@ -961,8 +961,8 @@ async function manejarInteraccion(interaction) {
     const [, cartaId, friendId, fileName, modo] = id.split('::');
     const etiqueta = MODO_A_FAST[modo] === 'share' ? '⚡ Fast Share' : '⚡ Fast Trade';
     // Respuesta efimera: el progreso lo ve solo quien apreto el boton.
-    if (interaction.message?.flags?.has(MessageFlags.Ephemeral)) {
-        // Retry desde el mensaje privado: otro mensaje privado.
+    if (interaction.message?.flags?.has(MessageFlags.Ephemeral) && id.startsWith('fast_go::') && interaction.message?.embeds?.[0]?.title?.includes('⚡ Fast')) {
+        // Retry desde el mensaje privado del progreso: otro mensaje privado.
         await interaction.deferReply({ ephemeral: true });
     } else {
         // Desde el mensaje de la carta en el canal: se le sacan los menus y el Cancel (si no,
