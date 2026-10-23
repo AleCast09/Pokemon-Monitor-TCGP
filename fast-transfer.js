@@ -315,8 +315,14 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
         console.error('DEBUG: Fast Transfer no pudo guardar el historial:', e?.message || e);
     }
     try {
-        const canal = await deps.obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
+        // Share al canal de Share, Trade al de Trading (pedido de Ale); si el de Share no esta
+        // configurado, cae al de Trading para no perder el resumen.
+        let canal = fast === 'share' ? await deps.obtenerCanalComando(interaction.guildId, 'share-cards') : null;
+        if (!canal?.webhook_url) canal = await deps.obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
         if (!canal?.webhook_url) return;
+        // Nombre guardado de la cuenta que recibio (lista de amigos de /setup), no el codigo.
+        const nombreDestino = (await Promise.resolve(deps.nombreAmigo?.(interaction.guildId, friendId)).catch(() => null))
+            || (modo === 'friend' ? 'your friend' : 'your Main');
         let embed, files = [];
         try {
             const payload = await deps.construirEmbedDetalleCarta(cartaId, nombreCarta, await deps.rutaMaster(), null, interaction.guild);
@@ -325,7 +331,6 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
         } catch (e) {
             embed = new EmbedBuilder();
         }
-        const destino = modo === 'friend' ? 'Friend' : 'Main';
         const campos = [
             { name: 'Type', value: fast === 'share' ? '🎁 ⚡ Fast Share' : '🔄 ⚡ Fast Trade', inline: true },
             { name: 'Account (XML)', value: `\`${fileName}\``, inline: true },
@@ -334,7 +339,7 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
         if (antes) {
             campos.push({ name: 'Quantity', value: `x${antes.disponible} − 1 → **x${Math.max(0, antes.disponible - 1)}** left`, inline: true });
         }
-        campos.push({ name: fast === 'share' ? 'Shared to' : 'Sent to', value: `${destino} (\`${friendId}\`)`, inline: true });
+        campos.push({ name: fast === 'share' ? 'Shared to' : 'Sent to', value: `**${nombreDestino}**`, inline: true });
         if (fast === 'trade' && recibida) {
             const nombreRecibida = (await Promise.resolve(deps.nombreCarta?.(recibida)).catch(() => null)) || recibida;
             campos.push({ name: 'Received', value: `**${nombreRecibida}** (\`${recibida}\`)`, inline: true });
@@ -344,7 +349,13 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
             { name: 'Date', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true }
         );
         embed.setColor(0x2ECC71).setTitle('📦 Transfer completed').addFields(campos);
-        await new WebhookClient({ url: canal.webhook_url }).send({ embeds: [embed], files });
+        const aviso = fast === 'share'
+            ? `<@${interaction.user.id}> 🎉 Congrats on the share! **${nombreCarta}** was sent to **${nombreDestino}**.`
+            : `<@${interaction.user.id}> 🎉 Trade completed! **${nombreCarta}** was sent to **${nombreDestino}**.`;
+        await new WebhookClient({ url: canal.webhook_url }).send({
+            content: aviso, embeds: [embed], files,
+            allowedMentions: { users: [interaction.user.id] }
+        });
     } catch (e) {
         console.error('DEBUG: Fast Transfer no pudo mandar el resumen:', e?.response?.data || e?.message || e);
     }

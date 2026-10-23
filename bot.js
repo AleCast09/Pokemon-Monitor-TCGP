@@ -34,6 +34,7 @@ const fastTransfer = require('./fast-transfer.js');
 fastTransfer.init({
     db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
     auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
+    nombreAmigo: async (guildId, friendId) => parsearListaFriends((await obtenerRutasInject(guildId)).rutaIni).find(f => f.id === friendId)?.label || null,
     rutaMaster: async () => (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url,
     nombreCarta: async id => resolverNombreCarta(id, (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url)
 });
