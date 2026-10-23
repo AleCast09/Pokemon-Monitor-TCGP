@@ -43,7 +43,15 @@ fastTransfer.init({
     farmMaxDiario: () => FARM_TICKETS_MAX_DIARIO,
     buscarShinedustTodasCuentas,
     etiquetasInventario: () => ETIQUETAS_INVENTARIO,
-    nombreAmigo: async (guildId, friendId) => parsearListaFriends((await obtenerRutasInject(guildId)).rutaIni).find(f => f.id === friendId)?.label || null,
+    // En comunidad el nombre sale del registro de wr98 de quien hizo el pedido (nunca de la lista
+    // de amigos guardados de esta PC).
+    nombreAmigo: async (guildId, friendId, userId) => {
+        if (comunidad.esComunidad(guildId)) {
+            const r = userId ? await comunidad.registroDe(userId).catch(() => null) : null;
+            return r ? r.name : null;
+        }
+        return parsearListaFriends((await obtenerRutasInject(guildId)).rutaIni).find(f => f.id === friendId)?.label || null;
+    },
     rutaMaster: async () => (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url,
     nombreCarta: async id => resolverNombreCarta(id, (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url)
 });
@@ -4682,6 +4690,22 @@ function leerIniInject(rutaIni = RUTA_INJECT_INI_DEFAULT) {
     return datos;
 }
 
+// Destinos para Share/Trade. En el server de comunidad (community.js) NO se usa la lista de
+// amigos guardados de esta PC: solo la Main/secundaria que ESE miembro registro en el panel de
+// wr98. Si no esta registrado (o la clave del registro vencio) devuelve [] y el llamador avisa.
+async function amigosParaInteraccion(interaction, rutaIni) {
+    if (!comunidad.esComunidad(interaction.guildId)) return parsearListaFriends(rutaIni);
+    try {
+        const destinos = await comunidad.destinosDe(interaction.user.id);
+        if (!destinos.length) interaction._sinDestinosMsg = '❌ You\'re not registered yet. Register your **Main** in the community panel first, then try again.';
+        return destinos;
+    } catch (e) {
+        console.error('DEBUG: no se pudo leer el registro de wr98:', e?.message || e);
+        interaction._sinDestinosMsg = '❌ Could not read the member registry right now (the registry key may have expired). Tell staff and try again later.';
+        return [];
+    }
+}
+
 function parsearListaFriends(rutaIni = RUTA_INJECT_INI_DEFAULT) {
     const datos = leerIniInject(rutaIni);
     const ids = (datos.favoriteFriendIDs || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -4747,8 +4771,8 @@ async function reenviarCartaATrading(interaction, cartaId, datosGold, componente
 // configuración nueva para esto.
 async function actualizarConSeleccionFriendId(interaction, cartaId, origen, modo = 'friend') {
     const { rutaIni } = await obtenerRutasInject(interaction.guildId);
-    const friends = parsearListaFriends(rutaIni);
-    if (!friends.length) {
+    const friends = await amigosParaInteraccion(interaction, rutaIni);  // comunidad: registro de wr98
+    if (!friends.length) { if (interaction._sinDestinosMsg) return await interaction.editReply({ content: interaction._sinDestinosMsg, components: [] });
         return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.', components: [] });
     }
 
@@ -10809,7 +10833,10 @@ async function generarPanelControl(guildId) {
         archivos.push({ ruta: SYMBOL_EMBEDS_PATH, filename: 'symbol.png' });
     }
 
-    return { embeds: [embed], components: [filaSistema, filaGestion, filaTrade], archivos };
+    // Comunidad: sin Add Friend / Status ID -- los destinos salen del registro de wr98 (community.js),
+    // nunca de la lista de amigos guardados de esta PC.
+    return comunidad.quitarComponentes(guildId, { embeds: [embed], components: [filaSistema, filaGestion, filaTrade], archivos },
+        ['setup_add_friend', 'setup_status_friends']);
 }
 
 const FUENTES_CARTAS = {
@@ -14525,8 +14552,8 @@ client.on('interactionCreate', async interaction => {
             // Share solo a Main (2026-10-04, pedido de Ale): va directo a elegir cual amigo guardado es
             // Main, sin preguntar Main o amigo (antes habia "Share to Main" / "Share to Friend").
             const { rutaIni } = await obtenerRutasInject(interaction.guildId);
-            const friends = parsearListaFriends(rutaIni);
-            if (!friends.length) {
+            const friends = await amigosParaInteraccion(interaction, rutaIni);  // comunidad: registro de wr98
+            if (!friends.length) { if (interaction._sinDestinosMsg) return await interaction.editReply({ content: interaction._sinDestinosMsg, components: [] });
                 return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add your Main account first from **🆔 Add Friend** in /setup.' });
             }
             const menuShare = new StringSelectMenuBuilder()
@@ -14670,8 +14697,8 @@ client.on('interactionCreate', async interaction => {
             const cartaId = interaction.customId.replace('goldcards_trade::', '');
             await interaction.deferReply({ ephemeral: true }); // obtenerCartasGoldCacheadas + armar la carta pueden tardar más de 3s
             const { rutaIni } = await obtenerRutasInject(interaction.guildId);
-            const friends = parsearListaFriends(rutaIni);
-            if (!friends.length) {
+            const friends = await amigosParaInteraccion(interaction, rutaIni);  // comunidad: registro de wr98
+            if (!friends.length) { if (interaction._sinDestinosMsg) return await interaction.editReply({ content: interaction._sinDestinosMsg, components: [] });
                 return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.' });
             }
             const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);

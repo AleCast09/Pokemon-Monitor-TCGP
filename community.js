@@ -92,6 +92,67 @@ async function bloquearSiHaceFalta(interaction) {
     return true;
 }
 
+// ============ Registro de miembros del bot de wr98 (Upstash Redis, solo lectura) ============
+// Cada miembro se registra en el panel de wr98 con su Main (main_id) y opcionalmente una
+// secundaria (sec_id). Se guarda en hashes users:<grupo> con el ID de Discord como campo:
+//   users:Elite_Four  { "111...": {"name":"wR98","main_id":"8727...","sec_id":"6672..."} }
+// En comunidad, ⚡ Share/Trade manda SIEMPRE a la Main/secundaria registrada de quien lo pide --
+// nunca se muestra la lista de amigos guardados de la PC host ni la de otros miembros.
+// .env: WR98_REDIS_URL / WR98_REDIS_TOKEN (wr98 los rota cada ~15 dias).
+const cacheRegistro = new Map();   // userId -> { ts, dato }
+let gruposCache = { ts: 0, lista: [] };
+
+async function redis(...args) {
+    const url = process.env.WR98_REDIS_URL, token = process.env.WR98_REDIS_TOKEN;
+    if (!url || !token) throw new Error('wr98 registry is not configured');
+    const r = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(args) });
+    if (r.status === 401 || r.status === 403) throw new Error('wr98 registry key expired or invalid');
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    return j.result;
+}
+
+async function gruposRegistro() {
+    if (Date.now() - gruposCache.ts < 10 * 60 * 1000 && gruposCache.lista.length) return gruposCache.lista;
+    const lista = [];
+    let cursor = '0';
+    do {
+        const [siguiente, claves] = await redis('SCAN', cursor, 'MATCH', 'users:*', 'COUNT', '200');
+        lista.push(...claves);
+        cursor = siguiente;
+    } while (cursor !== '0');
+    gruposCache = { ts: Date.now(), lista };
+    return lista;
+}
+
+// { name, main_id, sec_id, grupo } del miembro, o null si no esta registrado.
+async function registroDe(userId) {
+    const c = cacheRegistro.get(userId);
+    if (c && Date.now() - c.ts < 2 * 60 * 1000) return c.dato;
+    let dato = null;
+    for (const clave of await gruposRegistro()) {
+        const crudo = await redis('HGET', clave, String(userId));
+        if (!crudo) continue;
+        try {
+            const d = typeof crudo === 'string' ? JSON.parse(crudo) : crudo;
+            dato = { name: d.name || 'Unknown', main_id: String(d.main_id || '').replace(/\D/g, ''), sec_id: String(d.sec_id || '').replace(/\D/g, ''), grupo: clave.replace(/^users:/, '') };
+            break;
+        } catch (e) { /* registro ilegible: se sigue buscando */ }
+    }
+    cacheRegistro.set(userId, { ts: Date.now(), dato });
+    return dato;
+}
+
+// Opciones de destino para ⚡ Share/Trade: solo las cuentas registradas de ESE miembro.
+async function destinosDe(userId) {
+    const r = await registroDe(userId);
+    if (!r) return [];
+    const salida = [];
+    if (r.main_id) salida.push({ id: r.main_id, label: `${r.name} — Main` });
+    if (r.sec_id && r.sec_id !== r.main_id) salida.push({ id: r.sec_id, label: `${r.name} — Secondary` });
+    return salida;
+}
+
 // Saca de un payload los botones/menus cuyo customId empieza con alguno de los prefijos (los de
 // MuMu/needles, que en comunidad no tienen sentido). Filas que quedan vacias se eliminan.
 function quitarComponentes(guildId, payload, prefijos) {
@@ -105,4 +166,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes };
+module.exports = { esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe };

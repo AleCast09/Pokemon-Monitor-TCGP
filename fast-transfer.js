@@ -347,7 +347,7 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
         if (!canal?.webhook_url) canal = await deps.obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
         if (!canal?.webhook_url) return;
         // Nombre guardado de la cuenta que recibio (lista de amigos de /setup), no el codigo.
-        const nombreDestino = (await Promise.resolve(deps.nombreAmigo?.(interaction.guildId, friendId)).catch(() => null))
+        const nombreDestino = (await Promise.resolve(deps.nombreAmigo?.(interaction.guildId, friendId, interaction.user?.id)).catch(() => null))
             || (modo === 'friend' ? 'your friend' : 'your Main');
         let embed, files = [];
         try {
@@ -425,7 +425,7 @@ async function ejecutarFarm(interaction, friendId) {
     const runId = `${interaction.id}`;
     const mapa = (await deps.obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))) || {};
     const ticket = mapa.Cupon_de_tienda_TCGP ? `<:Cupon_de_tienda_TCGP:${mapa.Cupon_de_tienda_TCGP}>` : '🎟️';
-    const alias = (await Promise.resolve(deps.nombreAmigo?.(interaction.guildId, friendId)).catch(() => null)) || deps.formatearFriendId(friendId);
+    const alias = (await Promise.resolve(deps.nombreAmigo?.(interaction.guildId, friendId, interaction.user?.id)).catch(() => null)) || deps.formatearFriendId(friendId);
     const maximo = deps.farmMaxDiario();
     const stopFile = path.join(os.tmpdir(), `fast_farm_stop_${runId}`);
     try { fs.unlinkSync(stopFile); } catch (e) { /* no existia */ }
@@ -934,7 +934,7 @@ async function manejarInteraccion(interaction) {
     }
     if (id.startsWith('fast_det::')) {
         const [, tipo, fileName, friendId, antes, ts, recibida] = id.split('::');
-        const nombreDestino = (await Promise.resolve(deps.nombreAmigo?.(interaction.guildId, friendId)).catch(() => null))
+        const nombreDestino = (await Promise.resolve(deps.nombreAmigo?.(interaction.guildId, friendId, interaction.user?.id)).catch(() => null))
             || (tipo === 'f' ? 'your friend' : 'your Main');
         const lineas = [
             `⚡ Type: ${tipo === 's' ? 'Fast Share' : 'Fast Trade'}`,
