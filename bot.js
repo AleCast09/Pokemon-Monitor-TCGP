@@ -48,7 +48,9 @@ fastTransfer.init({
     nombreAmigo: async (guildId, friendId, userId) => {
         if (comunidad.esComunidad(guildId)) {
             const r = userId ? await comunidad.registroDe(userId).catch(() => null) : null;
-            return r ? r.name : null;
+            if (r && (r.main_id === friendId || r.sec_id === friendId)) return r.name;
+            // 🎁 Regalo de tickets: el perfil es de OTRO miembro.
+            return await comunidad.nombreDeFriendId(friendId).catch(() => null);
         }
         return parsearListaFriends((await obtenerRutasInject(guildId)).rutaIni).find(f => f.id === friendId)?.label || null;
     },
@@ -892,9 +894,18 @@ async function construirPanelFarmTickets(discordId, userId = null) {
     // Sin botones de agregar/quitar a proposito: la lista de amigos se administra desde el
     // panel de Settings (Status ID -- Saved Friends), que es de donde se lee. Tener aqui una
     // segunda forma de editarla solo llevaria a que las dos se desincronicen.
-    componentes.push(new ActionRowBuilder().addComponents(
+    const filaBotonesFarm = new ActionRowBuilder();
+    // Comunidad (pedido de Ale): atajo directo a la Main propia, y regalar tickets a otro miembro.
+    if (comunidad.esComunidad(discordId)) {
+        filaBotonesFarm.addComponents(
+            new ButtonBuilder().setCustomId('farm_mi_main').setLabel('🏠 My Main').setStyle(ButtonStyle.Success).setDisabled(!ids.length),
+            new ButtonBuilder().setCustomId('farm_regalo').setLabel('🎁 Gift to a member').setStyle(ButtonStyle.Primary)
+        );
+    }
+    filaBotonesFarm.addComponents(
         new ButtonBuilder().setCustomId('farmtickets_refrescar').setLabel('🔄 Refresh').setStyle(ButtonStyle.Secondary)
-    ));
+    );
+    componentes.push(filaBotonesFarm);
     return { embeds: [embed], components: componentes };
 }
 
@@ -11910,6 +11921,69 @@ client.on('interactionCreate', async interaction => {
         const friendId = interaction.values[0];
         const ids = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
         const alias = (ids.find(f => f.friend_id === friendId) || {}).alias;
+        return await mostrarPerfilFarm(interaction, friendId, alias);
+    }
+
+    // 🎁 Regalar tickets a otro miembro (modo comunidad, pedido de Ale): grupo -> miembro (25 por
+    // pagina) -> el mismo panel del perfil con ⚡ Fast Farm. El tope diario y las cuentas ya usadas
+    // se respetan igual, porque se cuentan por el perfil que RECIBE los likes.
+    if (interaction.isButton() && interaction.customId === 'farm_mi_main') {
+        await interaction.deferUpdate();
+        const propios = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
+        if (!propios.length) {
+            return await interaction.followUp({ content: '❌ You\'re not registered yet. Register your **Main** in the community panel first.', ephemeral: true });
+        }
+        return await mostrarPerfilFarm(interaction, propios[0].friend_id, propios[0].alias);
+    }
+    if (interaction.isButton() && interaction.customId === 'farm_regalo') {
+        await interaction.deferUpdate();
+        const grupos = await comunidad.gruposConConteo().catch(() => []);
+        if (!grupos.length) {
+            return await interaction.editReply({ content: '❌ Could not read the member registry right now. Tell staff and try again later.', embeds: [], components: [] });
+        }
+        const embed = new EmbedBuilder().setTitle('🎁 Gift Shop Tickets').setColor(0xF0A93A)
+            .setDescription('Pick the **group** of the member you want to give tickets to.\nThe likes come from **your** accounts.');
+        const menu = new StringSelectMenuBuilder().setCustomId('farm_regalo_grupo').setPlaceholder('Pick a group')
+            .addOptions(grupos.slice(0, 25).map(g => ({ label: g.grupo.replace(/_/g, ' '), description: `${g.total} member(s)`, value: g.grupo })));
+        return await interaction.editReply({ content: '', embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary))
+        ] });
+    }
+    if ((interaction.isStringSelectMenu() && interaction.customId === 'farm_regalo_grupo')
+        || (interaction.isButton() && interaction.customId.startsWith('farm_regalo_pag::'))) {
+        await interaction.deferUpdate();
+        const [grupo, paginaTxt] = interaction.isStringSelectMenu()
+            ? [interaction.values[0], '0']
+            : interaction.customId.replace('farm_regalo_pag::', '').split('::');
+        const miembros = await comunidad.miembrosDeGrupo(grupo).catch(() => []);
+        const totalPag = Math.max(1, Math.ceil(miembros.length / 25));
+        const pagina = Math.min(Math.max(0, parseInt(paginaTxt, 10) || 0), totalPag - 1);
+        const items = miembros.slice(pagina * 25, pagina * 25 + 25);
+        const embed = new EmbedBuilder().setTitle('🎁 Gift Shop Tickets').setColor(0xF0A93A)
+            .setDescription(`**${grupo.replace(/_/g, ' ')}** — pick the member who gets the tickets.`)
+            .setFooter({ text: `Page ${pagina + 1} of ${totalPag} • ${miembros.length} member(s)` });
+        const filas = [];
+        if (items.length) {
+            filas.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('farm_regalo_miembro').setPlaceholder('Pick a member')
+                .addOptions(items.map(m => ({ label: m.name.slice(0, 100), description: formatearFriendId(m.main_id), value: m.main_id })))));
+        }
+        filas.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`farm_regalo_pag::${grupo}::${pagina - 1}`).setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(pagina <= 0),
+            new ButtonBuilder().setCustomId(`farm_regalo_pag::${grupo}::${pagina + 1}`).setLabel('▶️').setStyle(ButtonStyle.Secondary).setDisabled(pagina >= totalPag - 1),
+            new ButtonBuilder().setCustomId('farm_regalo').setLabel('🔙 Groups').setStyle(ButtonStyle.Secondary)
+        ));
+        return await interaction.editReply({ content: '', embeds: [embed], components: filas });
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId === 'farm_regalo_miembro') {
+        await interaction.deferUpdate();
+        const friendId = interaction.values[0];
+        const nombre = await comunidad.nombreDeFriendId(friendId).catch(() => null);
+        return await mostrarPerfilFarm(interaction, friendId, nombre ? `🎁 ${nombre}` : null);
+    }
+
+    // (resto de la seleccion de perfil, compartido con el regalo de tickets)
+    async function mostrarPerfilFarm(interaction, friendId, alias) {
         const panelFarm = await construirPanelInstanciasFarm(friendId, alias);
         // ⚡ Fast Farm (fast-transfer.js): sin MuMu, solo donde esta habilitado y si quedan tickets hoy.
         const filaFastFarm = fastTransfer.filaBotonFarm(interaction.guildId, friendId);

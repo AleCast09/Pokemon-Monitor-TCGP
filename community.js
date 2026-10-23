@@ -153,6 +153,46 @@ async function destinosDe(userId) {
     return salida;
 }
 
+// ---- Lista de miembros (para 🎁 regalar tickets en Farm Tickets, pedido de Ale) ----
+// Solo nombre + Main de cada miembro registrado; se lee del mismo registro de wr98.
+const cacheMiembros = new Map();   // grupo -> { ts, lista }
+
+async function miembrosDeGrupo(grupo) {
+    const c = cacheMiembros.get(grupo);
+    if (c && Date.now() - c.ts < 5 * 60 * 1000) return c.lista;
+    const plano = await redis('HGETALL', `users:${grupo}`);   // [campo, valor, campo, valor, ...]
+    const lista = [];
+    for (let i = 0; i + 1 < (plano || []).length; i += 2) {
+        try {
+            const d = typeof plano[i + 1] === 'string' ? JSON.parse(plano[i + 1]) : plano[i + 1];
+            const main = String(d.main_id || '').replace(/\D/g, '');
+            if (main) lista.push({ discordId: plano[i], name: d.name || 'Unknown', main_id: main });
+        } catch (e) { /* registro ilegible */ }
+    }
+    lista.sort((a, b) => a.name.localeCompare(b.name));
+    cacheMiembros.set(grupo, { ts: Date.now(), lista });
+    return lista;
+}
+
+async function gruposConConteo() {
+    const salida = [];
+    for (const clave of await gruposRegistro()) {
+        const grupo = clave.replace(/^users:/, '');
+        salida.push({ grupo, total: (await miembrosDeGrupo(grupo)).length });
+    }
+    return salida;
+}
+
+// Nombre registrado de una Main (o secundaria) cualquiera, para mostrar a quien se le regalo.
+async function nombreDeFriendId(friendId) {
+    const id = String(friendId || '').replace(/\D/g, '');
+    for (const clave of await gruposRegistro()) {
+        const m = (await miembrosDeGrupo(clave.replace(/^users:/, ''))).find(x => x.main_id === id);
+        if (m) return m.name;
+    }
+    return null;
+}
+
 // Saca de un payload los botones/menus cuyo customId empieza con alguno de los prefijos (los de
 // MuMu/needles, que en comunidad no tienen sentido). Filas que quedan vacias se eliminan.
 function quitarComponentes(guildId, payload, prefijos) {
@@ -166,4 +206,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe };
+module.exports = { esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId };
