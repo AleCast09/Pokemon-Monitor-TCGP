@@ -47,6 +47,35 @@ def error_legible(err):
     return s[:150] or "unknown error"
 
 
+def leer_inventario(sess):
+    """Inventario desde PlayerResources/SyncV1 (todo menos Poke Gold, que el juego no manda por
+    aca: solo aparece al gastarlo o recibirlo, asi que sigue saliendo del OCR de MuMu)."""
+    from google.protobuf.json_format import MessageToDict
+    r = sess.sync_resources()
+    if not r or not r.get("success"):
+        raise RuntimeError(r.get("error") if isinstance(r, dict) else "sync_resources failed")
+    resp = r.get("resp")
+    d = MessageToDict(resp, preserving_proto_field_name=True) if hasattr(resp, "DESCRIPTOR") else (resp or {})
+    pr = d.get("player_resources", {}) or {}
+
+    def suma(lista):
+        return sum(int(x.get("amount", 0) or 0) for x in (lista or []))
+
+    monedas = {str(c.get("type", "")): int(c.get("amount", 0) or 0) for c in pr.get("currencies", []) or []}
+    exp = pr.get("exp_stock", {}) or {}
+    return {
+        "dust": monedas.get("TYPE_BRIGHT_SAND", 0),
+        "shopticket": monedas.get("TYPE_SHOP_TICKET", 0),
+        "specialshopticket": monedas.get("TYPE_PREMIER_SHOP_TICKET", 0),
+        "premiumticket": monedas.get("TYPE_SUBSCRIPTION_TICKET", 0),
+        "packhourglass": suma(pr.get("pack_power_chargers")),
+        "wonderhourglass": suma(pr.get("challenge_power_chargers")),
+        "tradehourglass": suma(pr.get("trade_power_chargers")),
+        "rewindwatch": suma(pr.get("revival_clocks")),
+        "level": int(exp.get("current_level", 0) or 0),
+    }
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--engine-dir", required=True)
@@ -72,11 +101,8 @@ def main():
         try:
             usuario, clave = leer_credenciales(c["xml"])
             sess = at.login_bot(usuario, clave)
-            r = at.fetch_dust(sess)
-            if r.get("ok"):
-                emitir(key=c["key"], state="ok", dust=int(r.get("dust") or 0), tickets=int(r.get("tickets") or 0))
-            else:
-                emitir(key=c["key"], state="error", msg=error_legible(r.get("error")))
+            inv = leer_inventario(sess)
+            emitir(key=c["key"], state="ok", dust=inv["dust"], tickets=inv["shopticket"], inv=inv)
         except Exception as e:
             emitir(key=c["key"], state="error", msg=error_legible(e))
         finally:

@@ -542,6 +542,8 @@ async function asegurarTablaDust() {
         ts           INTEGER,
         valor_json   INTEGER
     )`);
+    // Inventario completo menos Poke Gold (JSON), agregado despues: la tabla puede venir sin la columna.
+    try { await deps.db.run(`ALTER TABLE shinedust_fast ADD COLUMN inventario TEXT`); } catch (e) { /* ya existe */ }
 }
 
 async function filasDust() {
@@ -660,9 +662,9 @@ function correrDust(runId, cuentas, alEvento) {
 
 async function guardarDust(cuenta, ev) {
     await deps.db.run(
-        `INSERT INTO shinedust_fast (archivo_json, valor, tickets, ts, valor_json) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(archivo_json) DO UPDATE SET valor = excluded.valor, tickets = excluded.tickets, ts = excluded.ts, valor_json = excluded.valor_json`,
-        [cuenta.archivoJson, ev.dust, ev.tickets, Date.now(), cuenta.valorJson]
+        `INSERT INTO shinedust_fast (archivo_json, valor, tickets, ts, valor_json, inventario) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(archivo_json) DO UPDATE SET valor = excluded.valor, tickets = excluded.tickets, ts = excluded.ts, valor_json = excluded.valor_json, inventario = excluded.inventario`,
+        [cuenta.archivoJson, ev.dust, ev.tickets, Date.now(), cuenta.valorJson, JSON.stringify(ev.inv || {})]
     );
 }
 
@@ -692,7 +694,7 @@ async function refrescarDust(runId, cuentas, alProgreso) {
             estado.hechas++;
             if (ev.state === 'ok') {
                 estado.ok++;
-                estado.ultimo = { nombre: cuenta?.nombreCuenta || ev.key, antes: cuenta?.valorJson, dust: ev.dust, tickets: ev.tickets };
+                estado.ultimo = { nombre: cuenta?.nombreCuenta || ev.key, antes: cuenta?.valorJson, dust: ev.dust, tickets: ev.tickets, inv: ev.inv || {} };
                 edicion = edicion.then(() => guardarDust(cuenta, ev)).catch(() => {});
             } else {
                 estado.fallas++;
@@ -762,7 +764,18 @@ async function manejarDust(interaction) {
         if (estado.ok) {
             const u = estado.ultimo;
             const antes = typeof u.antes === 'number' ? `${u.antes.toLocaleString('en-US')} → ` : '';
-            texto = `${icono('ok', mapa)} **${u.nombre}**\n${polvo} Shinedust: ${antes}**${u.dust.toLocaleString('en-US')}**\n${ticket} Shop Tickets: **${u.tickets}**`;
+            // Mismo orden y emojis que el inventario del bot normal (ETIQUETAS_INVENTARIO), sin
+            // Poke Gold: el juego no lo manda por esta via, sigue saliendo del OCR de MuMu.
+            const lineasInv = [];
+            for (const [clave, emoji, etiqueta] of (deps.etiquetasInventario?.() || [])) {
+                if (clave.startsWith('pokegold') || typeof u.inv[clave] !== 'number') continue;
+                const tag = mapa[emoji] ? `<:${emoji}:${mapa[emoji]}> ` : '';
+                lineasInv.push(`${tag}${etiqueta}: **${u.inv[clave].toLocaleString('en-US')}**`);
+            }
+            texto = `${icono('ok', mapa)} **${u.nombre}**${u.inv.level ? ` (Lv. ${u.inv.level})` : ''}\n` +
+                `${polvo} Shinedust: ${antes}**${u.dust.toLocaleString('en-US')}**\n` +
+                (lineasInv.length ? lineasInv.join('\n') : `${ticket} Shop Ticket: **${u.tickets}**`) +
+                `\n\n*Poké Gold isn't sent by the game this way — it still comes from the normal MuMu check.*`;
         } else {
             texto = `${icono('error', mapa)} **${cuenta.nombreCuenta}** — ${estado.errores[0] || 'failed'}`;
         }
