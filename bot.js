@@ -4728,6 +4728,51 @@ async function amigosParaInteraccion(interaction, rutaIni) {
     }
 }
 
+// 🎁 Gift to a member (modo comunidad, pedido de Ale): en Share/Trade/Gold, ademas de la propia
+// Main, se puede elegir a cualquier miembro del registro de wr98 como destino. El ultimo menu usa el
+// MISMO customId que el de "tu Main" (card_trade_friendid::...), asi que sigue el flujo de siempre.
+function filasGiftComunidad(guildId, origen, modo, cartaId) {
+    if (!comunidad.esComunidad(guildId)) return [];
+    const id = `gift_inicio::${origen}::${modo}::${cartaId}`;
+    if (id.length > 100) return [];
+    return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(id).setLabel('🎁 Gift to a member').setStyle(ButtonStyle.Primary)
+    )];
+}
+
+async function pantallaGiftGrupos(interaction, origen, modo, cartaId) {
+    const grupos = await comunidad.gruposConConteo().catch(() => []);
+    if (!grupos.length) {
+        return await interaction.editReply({ content: '❌ Could not read the member registry right now. Tell staff and try again later.', components: [] });
+    }
+    const menu = new StringSelectMenuBuilder().setCustomId(`gift_grupo::${origen}::${modo}::${cartaId}`.slice(0, 100)).setPlaceholder('Pick the member\'s group')
+        .addOptions(grupos.slice(0, 25).map(g => ({ label: g.grupo.replace(/_/g, ' '), description: `${g.total} member(s)`, value: g.grupo })));
+    return await interaction.editReply({ content: '🎁 **Gift to a member** — pick their group.', components: [
+        new ActionRowBuilder().addComponents(menu),
+        new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('card_trade_cancelar').setLabel('⬅️ Cancel').setStyle(ButtonStyle.Secondary))
+    ] });
+}
+
+async function pantallaGiftMiembros(interaction, grupo, pagina, origen, modo, cartaId) {
+    const miembros = await comunidad.miembrosDeGrupo(grupo).catch(() => []);
+    const totalPag = Math.max(1, Math.ceil(miembros.length / 25));
+    pagina = Math.min(Math.max(0, pagina), totalPag - 1);
+    const items = miembros.slice(pagina * 25, pagina * 25 + 25);
+    const filas = [];
+    if (items.length) {
+        filas.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+            .setCustomId(`card_trade_friendid::${origen}::${modo}::${cartaId}`.slice(0, 100))
+            .setPlaceholder('Pick the member who receives it')
+            .addOptions(items.map(m => ({ label: m.name.slice(0, 100), description: formatearFriendId(m.main_id), value: m.main_id })))));
+    }
+    filas.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`gift_pag::${grupo}::${pagina - 1}::${origen}::${modo}::${cartaId}`.slice(0, 100)).setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(pagina <= 0),
+        new ButtonBuilder().setCustomId(`gift_pag::${grupo}::${pagina + 1}::${origen}::${modo}::${cartaId}`.slice(0, 100)).setLabel('▶️').setStyle(ButtonStyle.Secondary).setDisabled(pagina >= totalPag - 1),
+        new ButtonBuilder().setCustomId(`gift_inicio::${origen}::${modo}::${cartaId}`.slice(0, 100)).setLabel('🔙 Groups').setStyle(ButtonStyle.Secondary)
+    ));
+    return await interaction.editReply({ content: `🎁 **${grupo.replace(/_/g, ' ')}** — page ${pagina + 1} of ${totalPag}. Pick who receives it.`, components: filas });
+}
+
 function parsearListaFriends(rutaIni = RUTA_INJECT_INI_DEFAULT) {
     const datos = leerIniInject(rutaIni);
     const ids = (datos.favoriteFriendIDs || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -4808,7 +4853,7 @@ async function actualizarConSeleccionFriendId(interaction, cartaId, origen, modo
     const textoAmigo = modo === 'sharemain' ? 'Which saved friend is your **Main** account? (it receives the card)'
         : modo === 'sharefriend' ? 'Which friend do you want to share this card with?'
         : 'Which friend do you want to send the trade request to?';
-    return await interaction.editReply({ content: textoAmigo, components: [new ActionRowBuilder().addComponents(menu)] });
+    return await interaction.editReply({ content: textoAmigo, components: [new ActionRowBuilder().addComponents(menu), ...filasGiftComunidad(interaction.guildId, origen, modo, cartaId)] });
 }
 
 function construirEmbedStatusInstancia(index, name, rutaIni = RUTA_INJECT_INI_DEFAULT) {
@@ -11935,6 +11980,22 @@ client.on('interactionCreate', async interaction => {
         }
         return await mostrarPerfilFarm(interaction, propios[0].friend_id, propios[0].alias);
     }
+    // 🎁 Gift en Share/Trade/Gold (ver filasGiftComunidad).
+    if (interaction.isButton() && interaction.customId.startsWith('gift_inicio::')) {
+        await interaction.deferUpdate();
+        const [, origen, modo, cartaId] = interaction.customId.split('::');
+        return await pantallaGiftGrupos(interaction, origen, modo, cartaId);
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('gift_grupo::')) {
+        await interaction.deferUpdate();
+        const [, origen, modo, cartaId] = interaction.customId.split('::');
+        return await pantallaGiftMiembros(interaction, interaction.values[0], 0, origen, modo, cartaId);
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('gift_pag::')) {
+        await interaction.deferUpdate();
+        const [, grupo, pagina, origen, modo, cartaId] = interaction.customId.split('::');
+        return await pantallaGiftMiembros(interaction, grupo, parseInt(pagina, 10) || 0, origen, modo, cartaId);
+    }
     if (interaction.isButton() && interaction.customId === 'farm_regalo') {
         await interaction.deferUpdate();
         const grupos = await comunidad.gruposConConteo().catch(() => []);
@@ -14648,7 +14709,7 @@ client.on('interactionCreate', async interaction => {
                     label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
                     value: f.id
                 })));
-            return await reenviarCartaATrading(interaction, cartaId, null, [new ActionRowBuilder().addComponents(menuShare)], 'share-cards', 'Share Cards');
+            return await reenviarCartaATrading(interaction, cartaId, null, [new ActionRowBuilder().addComponents(menuShare), ...filasGiftComunidad(interaction.guildId, 'normal', 'sharemain', cartaId)], 'share-cards', 'Share Cards');
         }
         if (interaction.customId.startsWith('card_share_main::') || interaction.customId.startsWith('card_share_friend::')) {
             // Share to Friend quitado (2026-10-04): solo Main. Cubre botones viejos de mensajes anteriores.
@@ -14796,7 +14857,7 @@ client.on('interactionCreate', async interaction => {
                     label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
                     value: f.id
                 })));
-            return await reenviarCartaATrading(interaction, cartaId, datosGold, [new ActionRowBuilder().addComponents(menu)]);
+            return await reenviarCartaATrading(interaction, cartaId, datosGold, [new ActionRowBuilder().addComponents(menu), ...filasGiftComunidad(interaction.guildId, 'gold', 'goldmain', cartaId)]);
         }
 
         if (interaction.customId.startsWith('goldcards_shinedust::')) {
