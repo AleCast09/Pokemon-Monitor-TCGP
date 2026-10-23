@@ -9697,6 +9697,12 @@ async function registrarSlashCommands() {
 // hay dos a la vez -- solo cambia de posición (queda al final), nunca se
 // duplica.
 async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, archivos = [], forzarReubicar = false, guild = null) {
+    // Filas de botones vacias (2026-10-23, bug real en un Sync desde cero: el panel de Trading
+    // sin tutorial armaba una fila sin botones y Discord rechazaba todo el mensaje con 400).
+    if (Array.isArray(payloadJson?.components)) {
+        payloadJson.components = payloadJson.components.filter(fila =>
+            ((fila?.components ?? fila?.data?.components ?? fila?.toJSON?.().components) || []).length > 0);
+    }
     const claveMsg = `interfaz_msg_${clave}`;
     const filaMsg = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [userId, claveMsg]);
     const msgId = filaMsg?.estado || null;
