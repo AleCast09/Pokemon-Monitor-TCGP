@@ -603,6 +603,8 @@ function rutaXmlDe(mapa, fileNameXml) {
 // Para /shinedust: mezcla la lista de Kevin con los valores ⚡ (ver comentario de arriba).
 async function mezclarShinedust(resultados, rutaJson) {
     if (!deps || resultados === null) return resultados;
+    // Comunidad: la lista ya viene del resumen del usuario; la carpeta de esta PC no aplica.
+    if (deps.usuarioComunidad?.()) return resultados;
     let filas;
     try { filas = await filasDust(); } catch (e) { return resultados; }
     if (!filas.size) return resultados;
@@ -884,6 +886,14 @@ async function correrLoteDust(interaction, pendientes, titulo, paginaVolver = 0)
 // Devuelve true si la interaccion era de Fast Transfer (bot.js deja de procesarla).
 async function manejarInteraccion(interaction) {
     const id = interaction.customId || '';
+    // Comunidad, hasta que Monitor Link mande la XML de cada miembro: los ⚡ todavia usan las XML de
+    // ESTA PC, asi que solo los puede usar su dueño (el primero de COMMUNITY_STAFF_IDS). Si no, un
+    // miembro con una cuenta del mismo nombre de archivo terminaria usando la del host.
+    const dueno = (process.env.COMMUNITY_STAFF_IDS || '').split(',')[0].trim();
+    if (deps?.esComunidad?.(interaction.guildId) && interaction.user?.id !== dueno && !id.startsWith('fast_det::')) {
+        await interaction.reply({ content: '⚡ with **your own** accounts is coming with the next Monitor Link update.', ephemeral: true }).catch(() => {});
+        return true;
+    }
     if (id.startsWith('fast_dust')) {
         if (!habilitado(interaction.guildId)) {
             await interaction.reply({ content: '❌ Fast Shinedust is not available here.', ephemeral: true });

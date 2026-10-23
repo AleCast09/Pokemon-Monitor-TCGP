@@ -13,6 +13,17 @@
 // Mientras no exista el programa de cada miembro para vincular SUS cuentas, en el server de
 // comunidad solo el staff puede usar el bot: cualquier otro recibe un aviso y nunca ve datos.
 const { PermissionsBitField, OverwriteType } = require('discord.js');
+const { AsyncLocalStorage } = require('async_hooks');
+
+// Quien esta usando el bot en este momento (por interaccion). En el server de comunidad, las
+// funciones que leen la carpeta de cuentas usan el resumen de Monitor Link de ESE usuario en vez de
+// la carpeta de la PC host (ver monitor-link-server.js). Fuera de comunidad no cambia nada.
+const contexto = new AsyncLocalStorage();
+
+function usuarioActual() {
+    const s = contexto.getStore();
+    return s && esComunidad(s.guildId) ? s.userId : null;
+}
 
 function lista(nombre) {
     return (process.env[nombre] || '').split(',').map(x => x.trim()).filter(Boolean);
@@ -213,4 +224,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId };
+module.exports = { esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual };

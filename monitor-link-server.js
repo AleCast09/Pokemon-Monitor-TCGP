@@ -129,6 +129,44 @@ function registrar(app, dependencias) {
     });
 }
 
+// ---- Datos derivados del resumen, en memoria (las funciones del bot que los usan son sincronicas) ----
+// cache: discordId -> { ts, cuentas, mapaCopias }. precargar() se llama al empezar cada interaccion de
+// comunidad; despues mapaCopiasDe/cuentasPorCartaDe/shinedustDe responden al instante.
+const cache = new Map();
+
+async function precargar(discordId) {
+    await asegurarTablas();
+    const fila = await db.get(`SELECT ts FROM link_resumen WHERE discord_id = ?`, [String(discordId)]);
+    if (!fila) { cache.delete(String(discordId)); return false; }
+    const c = cache.get(String(discordId));
+    if (c && c.ts === fila.ts) return true;
+    const r = await resumenDe(discordId);
+    if (!r) return false;
+    const mapaCopias = {};
+    for (const cuenta of r.cuentas) {
+        for (const [id, n] of Object.entries(cuenta.c || {})) (mapaCopias[id] ||= []).push({ fileName: cuenta.f, cantidad: n });
+    }
+    for (const id of Object.keys(mapaCopias)) mapaCopias[id].sort((a, b) => b.cantidad - a.cantidad);
+    cache.set(String(discordId), { ts: fila.ts, cuentas: r.cuentas, mapaCopias });
+    return true;
+}
+
+function mapaCopiasDe(discordId) {
+    return cache.get(String(discordId))?.mapaCopias || {};
+}
+
+function cuentasPorCartaDe(discordId, cartaId) {
+    return (mapaCopiasDe(discordId)[cartaId] || []).map(r => ({ ...r }));
+}
+
+// Mismo formato que buscarShinedustTodasCuentas de bot.js.
+function shinedustDe(discordId) {
+    return (cache.get(String(discordId))?.cuentas || [])
+        .filter(c => typeof c.d === 'number')
+        .map(c => ({ nombreCuenta: c.n || c.f, valor: c.d, fileNameXml: c.f, archivoJson: c.f }))
+        .sort((a, b) => b.valor - a.valor);
+}
+
 // Para los comandos: resumen subido por un usuario (o null) y si su Monitor Link esta en linea.
 async function resumenDe(discordId) {
     await asegurarTablas();
@@ -144,4 +182,4 @@ async function estadoAgente(discordId) {
     return { vinculado: true, enLinea: Date.now() - (fila.ultimo || 0) < 3 * 60 * 1000, ultimo: fila.ultimo };
 }
 
-module.exports = { registrar, crearCodigo, armarClave, resumenDe, estadoAgente };
+module.exports = { registrar, crearCodigo, armarClave, resumenDe, estadoAgente, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };

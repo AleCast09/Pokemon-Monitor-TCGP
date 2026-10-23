@@ -38,6 +38,7 @@ const monitorLink = require('./monitor-link-server.js');
 fastTransfer.init({
     db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
     esComunidad: (guildId) => comunidad.esComunidad(guildId),
+    usuarioComunidad: () => comunidad.usuarioActual(),
     auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
     // ⚡ Fast Farm: mismas reglas y tablas que el Farm Tickets con MuMu.
     formatearFriendId, ticketsFarmeadosHoy, cuentasPoolFarmTickets, cuentasYaUsadasParaId,
@@ -3417,6 +3418,9 @@ async function obtenerImagenGoldBot(cardMap, cartaId) {
 const TTL_CACHE_MAPA_COPIAS_MS = 90 * 1000;
 let _mapaCopiasCacheBot = null;
 function construirMapaCopiasPorCartaCacheado(rutaJsonCuentas) {
+    // Comunidad: las copias de quien pregunta, del resumen de su Monitor Link (no de esta PC).
+    const usuarioComunidad = comunidad.usuarioActual();
+    if (usuarioComunidad) return monitorLink.mapaCopiasDe(usuarioComunidad);
     if (_mapaCopiasCacheBot && _mapaCopiasCacheBot.ruta === rutaJsonCuentas && Date.now() - _mapaCopiasCacheBot.ts < TTL_CACHE_MAPA_COPIAS_MS) {
         return _mapaCopiasCacheBot.mapa;
     }
@@ -9509,6 +9513,8 @@ async function resolverImagenReferenciaCartaBot(cartaId, rutaMasterPath) {
 }
 
 function buscarXmlPorCarta(rutaJsonCuentas, cartaId) {
+    const usuarioComunidad = comunidad.usuarioActual();
+    if (usuarioComunidad) return monitorLink.cuentasPorCartaDe(usuarioComunidad, cartaId);
     if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
     const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
     const resultados = [];
@@ -9542,6 +9548,8 @@ function buscarXmlPorCarta(rutaJsonCuentas, cartaId) {
 // tocar ninguna instancia. El bot NUNCA escribe estos archivos -- son de la herramienta de
 // Kevin, no nuestros.
 function buscarShinedustTodasCuentas(rutaJsonCuentas) {
+    const usuarioComunidad = comunidad.usuarioActual();
+    if (usuarioComunidad) return monitorLink.shinedustDe(usuarioComunidad);
     if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
     const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
     const resultados = [];
@@ -11009,9 +11017,28 @@ function prefijoDeCartas(customId) {
     return customId.startsWith('allcards') ? 'allcards' : 'wishlist';
 }
 
-client.on('interactionCreate', async interaction => {
+// Cada interaccion corre con su usuario en comunidad.contexto (ver community.js / monitor-link-server.js).
+client.on('interactionCreate', (interaction) => comunidad.contexto.run(
+    { guildId: interaction.guildId, userId: interaction.user?.id },
+    () => manejarInteraccionPrincipal(interaction).catch(e => console.error('DEBUG: error en interaccion:', e))
+));
+async function manejarInteraccionPrincipal(interaction) {
     // Modo comunidad: fuera del staff, nadie usa el bot ahi todavia (nunca ve datos de esta PC).
     if (await comunidad.bloquearSiHaceFalta(interaction)) return;
+    // Comunidad + Monitor Link: las cartas salen del resumen que subio el programa de ESTE usuario.
+    if (comunidad.esComunidad(interaction.guildId) && interaction.user) {
+        const vinculado = await monitorLink.precargar(interaction.user.id).catch(() => false);
+        if (interaction.isChatInputCommand()) {
+            const cmd = interaction.commandName;
+            // Todavia sin version por miembro (necesitan la XML o la wishlist de su PC).
+            if (cmd === 'wishlist' || cmd === 'extract') {
+                return await interaction.reply({ content: '🛠️ This isn\'t available here yet — coming with the next Monitor Link update.', ephemeral: true });
+            }
+            if (!vinculado && ['card', 'goldcards', 'shinedust'].includes(cmd)) {
+                return await interaction.reply({ content: '🔗 Link your PC first: type **/link** and paste the key in **Monitor Link** — then the bot shows **your** cards.', ephemeral: true });
+            }
+        }
+    }
     // /link (Monitor Link, solo en comunidad): clave de un solo uso para vincular el programa de la PC
     // del miembro con su usuario de Discord.
     if (interaction.isChatInputCommand() && interaction.commandName === 'link') {
@@ -15784,7 +15811,7 @@ client.on('interactionCreate', async interaction => {
                 break;
         }
     }
-});
+}
 
 // El link de invitación no es secreto (cualquiera puede rearmar uno con el mismo
 // client ID), así que el bot se autoriza solo al primer servidor donde se usa y
