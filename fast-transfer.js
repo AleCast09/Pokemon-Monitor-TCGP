@@ -82,12 +82,32 @@ function puertoAbierto(puerto) {
     });
 }
 
-// El motor habla con el juego a traves del tunel local (takasho-proxy, puerto 9090). Se usa el
-// mismo _tunnel_manager.bat del bot nuevo, que lo reutiliza si ya esta prendido.
-function tunel(accion) {
-    return spawnSync('cmd.exe', ['/c', 'call', '_tunnel_manager.bat', accion, 'discord_fast'], {
-        cwd: rutaMotor(), windowsHide: true, timeout: 30000
-    });
+// El motor habla con el juego a traves del tunel local (takasho-proxy, puerto 9090). Si no esta
+// prendido se lanza el exe directo, separado del bot (sigue vivo entre corridas), con el mismo
+// log que usan los .bat. No se usa _tunnel_manager.bat: desde PM2 no hay consola y su
+// "timeout /t" y "start" fallan.
+async function asegurarTunel() {
+    if (await puertoAbierto(PUERTO_TUNEL)) return true;
+    const dir = rutaMotor();
+    const dirProxy = path.join(dir, 'proxy');
+    const exe = path.join(dirProxy, 'takasho-proxy.exe');
+    if (!fs.existsSync(exe)) return false;
+    fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
+    const out = fs.openSync(path.join(dir, 'logs', 'proxy_stdout.log'), 'a');
+    const err = fs.openSync(path.join(dir, 'logs', 'proxy_stderr.log'), 'a');
+    try {
+        const hijo = spawn(exe, [], { cwd: dirProxy, detached: true, windowsHide: true, stdio: ['ignore', out, err] });
+        hijo.on('error', () => {});
+        hijo.unref();
+    } finally {
+        fs.closeSync(out);
+        fs.closeSync(err);
+    }
+    for (let i = 0; i < 20; i++) {
+        if (await puertoAbierto(PUERTO_TUNEL)) return true;
+        await new Promise(r => setTimeout(r, 1000));
+    }
+    return false;
 }
 
 function icono(estado, mapa) {
@@ -208,13 +228,16 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
             return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] });
         }
 
-        let tunelPropio = false;
         if (!(await puertoAbierto(PUERTO_TUNEL))) {
             ctx.estados.login = 'start';
             ctx.detalles.login = 'Starting the tunnel…';
             await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaStop] });
-            tunel('acquire');
-            tunelPropio = true;
+            if (!(await asegurarTunel())) {
+                ctx.estados.login = 'error';
+                ctx.detalles.login = 'Could not start the tunnel (port 9090) — open any bot .bat once to check it';
+                ctx.final = 'error';
+                return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] });
+            }
             ctx.detalles.login = '';
         }
 
@@ -229,7 +252,6 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
             ultimaEdicion = ultimaEdicion.then(() => editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaStop] }));
         });
         await ultimaEdicion;
-        if (tunelPropio) tunel('release');
 
         if (corridas.get(runId).detenido) {
             ctx.final = 'stopped';
