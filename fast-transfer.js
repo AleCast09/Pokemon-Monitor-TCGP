@@ -331,25 +331,22 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
         } catch (e) {
             embed = new EmbedBuilder();
         }
-        // Sin campo "Type" (pedido de Ale): ya lo dicen el canal y el mensaje de arriba.
-        const campos = [
-            { name: 'Account (XML)', value: `\`${fileName}\``, inline: true }
-        ];
-        if (antes) {
-            campos.push({ name: 'Quantity', value: `x${antes.disponible} − 1 → **x${Math.max(0, antes.disponible - 1)}** left`, inline: true });
-        }
-        campos.push({ name: fast === 'share' ? 'Shared to' : 'Sent to', value: `**${nombreDestino}**`, inline: true });
-        if (fast === 'trade' && recibida) {
-            const nombreRecibida = (await Promise.resolve(deps.nombreCarta?.(recibida)).catch(() => null)) || recibida;
-            campos.push({ name: 'Received', value: `**${nombreRecibida}** (\`${recibida}\`)`, inline: true });
-        }
-        campos.push({ name: 'Date', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true });
-        embed.setColor(0x2ECC71).setTitle('📦 Transfer completed').addFields(campos);
+        // Arriba solo la carta; los datos de la transferencia van detras del boton
+        // "📦 Transfer details" (pedido de Ale). El boton lleva todo en su customId, asi sigue
+        // funcionando aunque el bot se reinicie: tipo, cuenta, destino, copias antes, fecha y,
+        // en trade, la carta recibida.
+        embed.setColor(0x2ECC71).setTitle('📦 Transfer completed');
+        const ts = Math.floor(Date.now() / 1000).toString(36);
+        const idDetalle = ['fast_det', fast === 'share' ? 's' : modo === 'friend' ? 'f' : 't', fileName, friendId,
+            antes ? antes.disponible : '', ts, recibida || ''].join('::');
+        const fila = idDetalle.length <= 100 ? [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(idDetalle).setLabel('📦 Transfer details').setStyle(ButtonStyle.Secondary)
+        )] : [];
         const aviso = fast === 'share'
             ? `<@${interaction.user.id}> 🎉 Congrats on the share! **${nombreCarta}** was sent to **${nombreDestino}**.`
             : `<@${interaction.user.id}> 🎉 Trade completed! **${nombreCarta}** was sent to **${nombreDestino}**.`;
         await new WebhookClient({ url: canal.webhook_url }).send({
-            content: aviso, embeds: [embed], files,
+            content: aviso, embeds: [embed], files, components: fila,
             allowedMentions: { users: [interaction.user.id] }
         });
     } catch (e) {
@@ -372,6 +369,27 @@ async function manejarInteraccion(interaction) {
             spawnSync('taskkill', ['/PID', String(corrida.hijo.pid), '/T', '/F'], { windowsHide: true });
         }
         await interaction.reply({ content: '⏹️ Stopping…', ephemeral: true });
+        return true;
+    }
+    if (id.startsWith('fast_det::')) {
+        const [, tipo, fileName, friendId, antes, ts, recibida] = id.split('::');
+        const nombreDestino = (await Promise.resolve(deps.nombreAmigo?.(interaction.guildId, friendId)).catch(() => null))
+            || (tipo === 'f' ? 'your friend' : 'your Main');
+        const lineas = [
+            `⚡ Type: ${tipo === 's' ? 'Fast Share' : 'Fast Trade'}`,
+            `📄 Account: \`${fileName}\``
+        ];
+        if (antes !== '') lineas.push(`📦 Quantity: x${antes} − 1 → x${Math.max(0, Number(antes) - 1)} left`);
+        lineas.push(`🏠 ${tipo === 's' ? 'Shared to' : 'Sent to'}: ${nombreDestino}`);
+        if (recibida) {
+            const nombreRecibida = (await Promise.resolve(deps.nombreCarta?.(recibida)).catch(() => null)) || recibida;
+            lineas.push(`🎁 Received: ${nombreRecibida}`);
+        }
+        lineas.push(`📅 Date: <t:${parseInt(ts, 36)}:f>`);
+        await interaction.reply({
+            embeds: [new EmbedBuilder().setColor(0x2ECC71).setTitle('📦 Transfer details').setDescription(lineas.join('\n'))],
+            ephemeral: true
+        });
         return true;
     }
     if (!id.startsWith('fast_go::')) return false;
