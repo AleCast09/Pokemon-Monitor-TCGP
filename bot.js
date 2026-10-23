@@ -34,6 +34,10 @@ const fastTransfer = require('./fast-transfer.js');
 fastTransfer.init({
     db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
     auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
+    // ⚡ Fast Farm: mismas reglas y tablas que el Farm Tickets con MuMu.
+    formatearFriendId, ticketsFarmeadosHoy, cuentasPoolFarmTickets, cuentasYaUsadasParaId,
+    sortearCuentasFarm, registrarLikeDado, guardarTandaFarm,
+    farmMaxDiario: () => FARM_TICKETS_MAX_DIARIO,
     nombreAmigo: async (guildId, friendId) => parsearListaFriends((await obtenerRutasInject(guildId)).rutaIni).find(f => f.id === friendId)?.label || null,
     rutaMaster: async () => (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url,
     nombreCarta: async id => resolverNombreCarta(id, (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url)
@@ -11854,7 +11858,13 @@ client.on('interactionCreate', async interaction => {
         const friendId = interaction.values[0];
         const ids = await idsFarmRegistrados(interaction.guildId);
         const alias = (ids.find(f => f.friend_id === friendId) || {}).alias;
-        return await interaction.editReply(await construirPanelInstanciasFarm(friendId, alias));
+        const panelFarm = await construirPanelInstanciasFarm(friendId, alias);
+        // ⚡ Fast Farm (fast-transfer.js): sin MuMu, solo donde esta habilitado y si quedan tickets hoy.
+        const filaFastFarm = fastTransfer.filaBotonFarm(interaction.guildId, friendId);
+        if (filaFastFarm && (await ticketsFarmeadosHoy(friendId)) < FARM_TICKETS_MAX_DIARIO) {
+            panelFarm.components.splice(panelFarm.components.length - 1, 0, filaFastFarm);
+        }
+        return await interaction.editReply(panelFarm);
     }
 
     // Elegidas las instancias: confirmacion con el desglose de tandas antes de arrancar.

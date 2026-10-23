@@ -379,6 +379,151 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
     }
 }
 
+// ============ ⚡ Fast Farm Tickets (2026-10-23, pedido de Ale) ============
+// Los likes a la Community Showcase, sin MuMu: scripts/fast_farm.py hace login con cada cuenta
+// XML y manda el like directo al servidor. Usa las MISMAS reglas y tablas que el Farm Tickets de
+// siempre (bot.js): tope diario por perfil, cuentas sorteadas entre las que nunca le dieron like
+// a ese perfil, y likes_dados se anota solo con el like confirmado por el servidor.
+const RUTA_SCRIPT_FARM = path.join(__dirname, 'scripts', 'fast_farm.py');
+
+function filaBotonFarm(guildId, friendId) {
+    if (!habilitado(guildId)) return null;
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`fast_farm::${friendId}`).setLabel('⚡ Fast Farm (no MuMu)').setStyle(ButtonStyle.Success)
+    );
+}
+
+function correrFarm(runId, args, alEvento) {
+    return new Promise(resolve => {
+        const python = process.env.FAST_TRANSFER_PYTHON || 'python';
+        const hijo = spawn(python, ['-X', 'utf8', RUTA_SCRIPT_FARM, ...args], {
+            cwd: rutaMotor(), windowsHide: true,
+            env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8' }
+        });
+        corridas.get(runId).hijo = hijo;
+        let resto = '';
+        let resultado = null;
+        const procesar = linea => {
+            if (linea.startsWith('@@FF_RESULT ')) { try { resultado = JSON.parse(linea.slice(12)); } catch (e) { /* ignorar */ } }
+            else if (linea.startsWith('@@FF ')) { try { alEvento(JSON.parse(linea.slice(5))); } catch (e) { /* ignorar */ } }
+        };
+        const leer = buf => {
+            resto += buf.toString('utf8');
+            const partes = resto.split(/\r?\n/);
+            resto = partes.pop();
+            partes.forEach(procesar);
+        };
+        hijo.stdout.on('data', leer);
+        hijo.stderr.on('data', leer);
+        hijo.on('error', () => {});
+        hijo.on('close', () => { if (resto) procesar(resto); resolve(resultado || { liked: [] }); });
+    });
+}
+
+async function ejecutarFarm(interaction, friendId) {
+    const runId = `${interaction.id}`;
+    const mapa = (await deps.obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))) || {};
+    const ticket = mapa.Cupon_de_tienda_TCGP ? `<:Cupon_de_tienda_TCGP:${mapa.Cupon_de_tienda_TCGP}>` : '🎟️';
+    const alias = (await Promise.resolve(deps.nombreAmigo?.(interaction.guildId, friendId)).catch(() => null)) || deps.formatearFriendId(friendId);
+    const maximo = deps.farmMaxDiario();
+    const stopFile = path.join(os.tmpdir(), `fast_farm_stop_${runId}`);
+    try { fs.unlinkSync(stopFile); } catch (e) { /* no existia */ }
+    corridas.set(runId, { hijo: null, detenido: false, stopFile });
+
+    const lineas = [];
+    let conseguidos = 0;
+    let estadoFinal = null;
+    const filaCancel = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`fast_farm_stop::${runId}`).setLabel('✖️ Cancel').setStyle(ButtonStyle.Danger)
+    );
+    const filaVolver = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary)
+    );
+    const pintar = async (pie) => {
+        const color = estadoFinal === null ? 0xF0A93A : conseguidos > 0 ? 0x57F287 : 0xE74C3C;
+        const embed = new EmbedBuilder().setTitle(`🎟️ ⚡ Fast Farm — ${alias}`).setColor(color)
+            .setDescription([...lineas, ...(pie ? ['', pie] : [])].join('\n').slice(0, 4000));
+        try {
+            await interaction.editReply({ embeds: [embed], components: estadoFinal === null && !corridas.get(runId)?.detenido ? [filaCancel] : [filaVolver] });
+        } catch (e) { /* token vencido */ }
+    };
+
+    enCola++;
+    if (enCola > 1) await pintar(`🕒 Queued — position #${enCola - 1}`);
+    const turno = cola.then(async () => {
+        if (corridas.get(runId).detenido) { estadoFinal = 'stopped'; return; }
+        if (!(await puertoAbierto(PUERTO_TUNEL))) {
+            await pintar('⏳ Starting the tunnel…');
+            if (!(await asegurarTunel())) { estadoFinal = 'error'; lineas.push(`${icono('error', mapa)} Could not start the tunnel (port 9090)`); return; }
+        }
+        const cfgXml = await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        let ronda = 0;
+        while (!corridas.get(runId).detenido) {
+            const restantes = maximo - (await deps.ticketsFarmeadosHoy(friendId));
+            if (restantes <= 0) break;
+            const pool = await deps.cuentasPoolFarmTickets();
+            const usadas = await deps.cuentasYaUsadasParaId(friendId);
+            const cuentas = deps.sortearCuentasFarm(pool, usadas, restantes);
+            if (!cuentas.length) { lineas.push('⚠️ Ran out of unused accounts for this profile.'); break; }
+            ronda++;
+            if (ronda > 1) lineas.push('', `**Round ${ronda}**`);
+            const args = ['--engine-dir', rutaMotor(), '--target', friendId, '--stop-file', stopFile];
+            for (const c of cuentas) {
+                const ruta = deps.buscarArchivoXmlPorNombre(cfgXml?.webhook_url, c);
+                if (ruta) args.push('--account', `${c}|${ruta}`);
+            }
+            let okRonda = 0;
+            const indice = {};
+            let edicion = Promise.resolve();
+            await correrFarm(runId, args, ev => {
+                if (!ev.account) return;
+                const nombre = String(ev.account).replace(/\.xml$/i, '');
+                let linea;
+                if (ev.state === 'start') {
+                    linea = `⏳ \`${nombre}\` — logging in and liking…`;
+                } else if (ev.state === 'ok') {
+                    linea = `${icono('ok', mapa)} \`${nombre}\` — like sent (+1 ${ticket})`;
+                    okRonda++;
+                    conseguidos++;
+                    // Se anota al momento: si despues se corta, lo ya hecho queda guardado.
+                    edicion = edicion.then(async () => {
+                        await deps.registrarLikeDado(ev.account, friendId);
+                        await deps.guardarTandaFarm(friendId, 1);
+                    });
+                } else {
+                    linea = `${icono('error', mapa)} \`${nombre}\` — ${ev.msg || 'failed'}`;
+                    // Rechazado por el juego = esa cuenta ya no sirve para este perfil: se anota
+                    // para no volver a sortearla (no suma ticket).
+                    if (ev.rejected) edicion = edicion.then(() => deps.registrarLikeDado(ev.account, friendId));
+                }
+                if (indice[ev.account] === undefined) { indice[ev.account] = lineas.length; lineas.push(linea); }
+                else lineas[indice[ev.account]] = linea;
+                edicion = edicion.then(() => pintar(null));
+            });
+            await edicion;
+            if (okRonda === 0) { lineas.push('⚠️ Stopped: no like went through this round.'); break; }
+        }
+        estadoFinal = corridas.get(runId).detenido ? 'stopped' : 'done';
+    }).catch(e => {
+        console.error('DEBUG: Fast Farm error:', e);
+        estadoFinal = 'error';
+    }).then(async () => {
+        if (estadoFinal === null) estadoFinal = 'done';
+        const hoy = await deps.ticketsFarmeadosHoy(friendId).catch(() => null);
+        const pie = [
+            estadoFinal === 'stopped' ? '🚫 Cancelled' : null,
+            `${ticket} **${conseguidos}** ticket(s) claimed now` + (hoy !== null ? ` · **${hoy}/${maximo}** today` : '')
+        ].filter(Boolean).join('\n');
+        await pintar(pie);
+    }).finally(() => {
+        enCola = Math.max(0, enCola - 1);
+        corridas.delete(runId);
+        try { fs.unlinkSync(stopFile); } catch (e) { /* no se pidio Cancel */ }
+    });
+    cola = turno;
+    return turno;
+}
+
 // Devuelve true si la interaccion era de Fast Transfer (bot.js deja de procesarla).
 async function manejarInteraccion(interaction) {
     if (!interaction.isButton()) return false;
@@ -402,6 +547,25 @@ async function manejarInteraccion(interaction) {
         // Sin mensaje aparte: se quita el boton del mismo progreso y el script muestra
         // "Cancelling…" y despues lo que deshizo.
         await interaction.update({ components: [] });
+        return true;
+    }
+    if (id.startsWith('fast_farm_stop::')) {
+        const corrida = corridas.get(id.replace('fast_farm_stop::', ''));
+        if (corrida) {
+            // Termina la cuenta en curso y no sigue con las demas.
+            corrida.detenido = true;
+            try { fs.writeFileSync(corrida.stopFile, 'stop'); } catch (e) { /* nada */ }
+        }
+        await interaction.deferUpdate();
+        return true;
+    }
+    if (id.startsWith('fast_farm::')) {
+        if (!habilitado(interaction.guildId)) {
+            await interaction.reply({ content: '❌ Fast Farm is not available here.', ephemeral: true });
+            return true;
+        }
+        await interaction.deferUpdate();
+        ejecutarFarm(interaction, id.replace('fast_farm::', ''));
         return true;
     }
     if (id.startsWith('fast_det::')) {
@@ -449,4 +613,4 @@ async function manejarInteraccion(interaction) {
     return true;
 }
 
-module.exports = { init, habilitado, filaBoton, manejarInteraccion };
+module.exports = { init, habilitado, filaBoton, filaBotonFarm, manejarInteraccion };
