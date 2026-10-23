@@ -15,7 +15,7 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, WebhookClient } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, WebhookClient, MessageFlags } = require('discord.js');
 
 const RUTA_SCRIPT = path.join(__dirname, 'scripts', 'fast_transfer.py');
 const PUERTO_TUNEL = 9090;
@@ -165,7 +165,9 @@ function construirEmbed(ctx) {
 // final ya no se puede editar, se le manda por DM.
 async function editar(interaction, payload, final = false) {
     try {
-        await interaction.editReply(payload);
+        // Si se arranco desde el mensaje del canal, el progreso es un followUp efimero aparte.
+        if (interaction._fastMsgId) await interaction.webhook.editMessage(interaction._fastMsgId, payload);
+        else await interaction.editReply(payload);
     } catch (e) {
         if (final) {
             try { await interaction.user.send({ embeds: payload.embeds }); } catch (e2) { /* DMs cerrados */ }
@@ -235,7 +237,7 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
 
     const turno = cola.then(async () => {
         ctx.posicion = 0;
-        if (corridas.get(runId).detenido) return;
+        if (corridas.get(runId).detenido) { ctx.final = 'stopped'; return; }
 
         // Ruta del XML de la cuenta elegida (misma carpeta que usa el resto del bot).
         const cfgXml = await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
@@ -292,6 +294,13 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
             }
         }
         return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] }, true);
+    }).then(async () => {
+        // Mensaje de la carta en el canal: queda el resultado en una linea.
+        if (!interaction._fastCanal) return;
+        const texto = ctx.final === 'ok' ? `✅ ${interaction._fastCanal} completed.`
+            : ctx.final === 'stopped' ? `⏹️ ${interaction._fastCanal} stopped.`
+            : `❌ ${interaction._fastCanal} did not complete — use 🔄 Retry in your private message.`;
+        try { await interaction.editReply({ content: `<@${interaction.user.id}> ${texto}`, components: [] }); } catch (e) { /* token vencido */ }
     }).catch(e => {
         console.error('DEBUG: Fast Transfer error:', e);
     }).finally(() => {
@@ -398,8 +407,20 @@ async function manejarInteraccion(interaction) {
         return true;
     }
     const [, cartaId, friendId, fileName, modo] = id.split('::');
+    const etiqueta = MODO_A_FAST[modo] === 'share' ? '⚡ Fast Share' : '⚡ Fast Trade';
     // Respuesta efimera: el progreso lo ve solo quien apreto el boton.
-    await interaction.deferReply({ ephemeral: true });
+    if (interaction.message?.flags?.has(MessageFlags.Ephemeral)) {
+        // Retry desde el mensaje privado: otro mensaje privado.
+        await interaction.deferReply({ ephemeral: true });
+    } else {
+        // Desde el mensaje de la carta en el canal: se le sacan los menus y el Cancel (si no,
+        // quedaban vivos y "Cancel" mostraba "nothing was injected" despues de un Fast exitoso)
+        // y el progreso va en un mensaje privado aparte.
+        await interaction.update({ content: `<@${interaction.user.id}> ${etiqueta} running — the progress is only shown to you.`, components: [] });
+        const privado = await interaction.followUp({ content: '⏳ Starting…', ephemeral: true });
+        interaction._fastMsgId = privado.id;
+        interaction._fastCanal = etiqueta;
+    }
     ejecutar(interaction, { cartaId, friendId, fileName, modo });
     return true;
 }
