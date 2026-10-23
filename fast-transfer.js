@@ -13,6 +13,7 @@
 //   FAST_TRANSFER_PROXY_FILE=...\proxies.txt (opcional; sin esto va directo, sin proxy)
 const fs = require('fs');
 const net = require('net');
+const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, WebhookClient, MessageFlags } = require('discord.js');
@@ -130,11 +131,13 @@ function construirEmbed(ctx) {
             if (final || ctx.posicion > 0) break;
             est = 'start';
         }
-        let linea = `${icono(est, mapa)} ${texto}`;
-        if (detalles[clave]) linea += `\n　*${detalles[clave]}*`;
+        let linea = `${final === 'stopped' && est !== 'ok' ? '⏹️' : icono(est, mapa)} ${texto}`;
+        if (detalles[clave] && final !== 'stopped') linea += `\n　*${detalles[clave]}*`;
         lineas.push(linea);
         if (est !== 'ok') break;
     }
+    // Cancel en curso / terminado: que se deshizo (solicitud, amistad, trade abierto).
+    if (ctx.cancelando && !final) lineas.push('', `⏳ Cancelling — ${ctx.cancelMsg || 'undoing what was started…'}`);
     // Copias de esta carta en la cuenta (JSON − transferencias del historial), pedido de Ale.
     if (typeof ctx.copias === 'number') {
         lineas.unshift(final === 'ok'
@@ -149,7 +152,7 @@ function construirEmbed(ctx) {
         color = 0xE74C3C;
     } else if (final === 'stopped') {
         color = 0x95A5A6;
-        lineas.push('', '⏹️ Stopped');
+        lineas.push('', `⏹️ Cancelled${ctx.cancelMsg ? ` — ${ctx.cancelMsg}` : ''}`);
     } else if (ctx.posicion > 0) {
         lineas.unshift(`🕒 Queued — position #${ctx.posicion}`, '');
     }
@@ -224,12 +227,14 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
     };
     try { ctx.copias = (await deps.auditarStockCarta(fileName, cartaId))?.disponible ?? null; } catch (e) { /* sin dato */ }
     const filaStop = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`fast_stop::${runId}`).setLabel('⏹️ Stop').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId(`fast_stop::${runId}`).setLabel('⏹️ Cancel').setStyle(ButtonStyle.Danger)
     );
     const filaRetry = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`fast_go::${cartaId}::${friendId}::${fileName}::${modo}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
     );
-    corridas.set(runId, { hijo: null, detenido: false });
+    const stopFile = path.join(os.tmpdir(), `fast_transfer_stop_${runId}`);
+    try { fs.unlinkSync(stopFile); } catch (e) { /* no existia */ }
+    corridas.set(runId, { hijo: null, detenido: false, stopFile });
 
     ctx.posicion = enCola;
     enCola++;
@@ -262,14 +267,19 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
             ctx.detalles.login = '';
         }
 
-        const args = ['--engine-dir', rutaMotor(), '--xml', rutaXml, '--card-id', cartaId, '--target', friendId, '--mode', fast];
+        const args = ['--engine-dir', rutaMotor(), '--xml', rutaXml, '--card-id', cartaId, '--target', friendId, '--mode', fast, '--stop-file', stopFile];
         if (process.env.FAST_TRANSFER_PROXY_FILE) args.push('--proxy-file', process.env.FAST_TRANSFER_PROXY_FILE);
 
         // Las ediciones se encadenan para no pisarse (Discord limita la frecuencia).
         let ultimaEdicion = Promise.resolve();
         const { resultado, ultimas } = await correrMotor(runId, args, ev => {
             ctx.estados[ev.step] = ev.state;
-            ctx.detalles[ev.step] = ev.msg && ev.state !== 'ok' ? ev.msg : '';
+            if (ev.step === 'cancel') {
+                ctx.cancelando = true;
+                ctx.cancelMsg = ev.state === 'ok' ? ev.msg : '';
+            } else {
+                ctx.detalles[ev.step] = ev.msg && ev.state !== 'ok' ? ev.msg : '';
+            }
             ultimaEdicion = ultimaEdicion.then(() => editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaStop] }));
         });
         await ultimaEdicion;
@@ -311,6 +321,7 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
     }).finally(() => {
         enCola = Math.max(0, enCola - 1);
         corridas.delete(runId);
+        try { fs.unlinkSync(stopFile); } catch (e) { /* no se pidio Cancel */ }
     });
     cola = turno;
     return turno;
@@ -378,11 +389,17 @@ async function manejarInteraccion(interaction) {
             await interaction.reply({ content: 'This run already finished.', ephemeral: true });
             return true;
         }
+        // Cancel ordenado: el script ve el archivo, corta la espera y deshace lo empezado
+        // (trade abierto, solicitud de amistad, amistad). Si en 60 s no termino, se mata.
         corrida.detenido = true;
-        if (corrida.hijo?.pid) {
-            spawnSync('taskkill', ['/PID', String(corrida.hijo.pid), '/T', '/F'], { windowsHide: true });
+        try { fs.writeFileSync(corrida.stopFile, 'stop'); } catch (e) { /* sigue con el kill */ }
+        const hijo = corrida.hijo;
+        if (hijo?.pid) {
+            setTimeout(() => {
+                if (hijo.exitCode === null) spawnSync('taskkill', ['/PID', String(hijo.pid), '/T', '/F'], { windowsHide: true });
+            }, 60000);
         }
-        await interaction.reply({ content: '⏹️ Stopping…', ephemeral: true });
+        await interaction.reply({ content: '⏹️ Cancelling — undoing the friend request and anything started…', ephemeral: true });
         return true;
     }
     if (id.startsWith('fast_det::')) {

@@ -7,13 +7,17 @@ XML hacia la Main, hablando directo con el servidor del juego a traves del bot n
 No es interactivo: lo lanza fast-transfer.js y lee el progreso de stdout. Cada evento es una
 linea "@@FT {json}"; todo lo demas es log crudo del motor.
 
+Cancelar (boton Cancel de Discord): fast-transfer.js crea el archivo --stop-file. Apenas aparece,
+se corta la espera en curso y se deshace lo empezado: trade abierto rechazado, solicitud de
+amistad retirada y amistad borrada.
+
 NUNCA escribe los JSON de cuentas (son de la herramienta de Kevin/Leanny): el historial lo
 guarda bot.js en su propia tabla de transferencias.
 
 Uso:
     python -X utf8 fast_transfer.py --engine-dir <ptcgp-capturedeluxe> --xml <cuenta.xml>
         --card-id PK_10_017410_00 --target 2549-7648-8483-0011 --mode share|trade
-        [--proxy-file proxies.txt]
+        [--proxy-file proxies.txt] [--stop-file <ruta>]
 """
 import argparse
 import json
@@ -21,6 +25,43 @@ import os
 import re
 import sys
 import time
+
+
+class Cancelado(Exception):
+    pass
+
+
+ESTADO = {"stop_file": "", "limpiando": False}
+
+
+def cancelacion_pedida():
+    return bool(ESTADO["stop_file"]) and os.path.exists(ESTADO["stop_file"])
+
+
+def revisar_cancelacion():
+    if not ESTADO["limpiando"] and cancelacion_pedida():
+        raise Cancelado()
+
+
+def dormir(segundos):
+    """sleep en pedazos cortos para reaccionar rapido al Cancel."""
+    fin = time.time() + segundos
+    while True:
+        revisar_cancelacion()
+        resto = fin - time.time()
+        if resto <= 0:
+            return
+        time.sleep(min(0.5, resto))
+
+
+class _TiempoCancelable:
+    """Reemplaza el modulo time dentro de auto_trade: sus esperas (amistad, trade) cortan al
+    pedir Cancel. Todo lo demas pasa al time real."""
+    def __getattr__(self, nombre):
+        return getattr(time, nombre)
+
+    def sleep(self, segundos):
+        dormir(segundos)
 
 
 def emitir(paso, estado, msg=""):
@@ -48,6 +89,31 @@ def error_legible(err):
     return s[:300] or "unknown error"
 
 
+def deshacer(at, sess, pid):
+    """Cancel: deja la cuenta como estaba antes de empezar."""
+    ESTADO["limpiando"] = True
+    emitir("cancel", "start", "Undoing what was started…")
+    hecho = []
+    try:
+        at.cleanup_stale_sessions(sess)  # rechaza el trade abierto, si hay
+        hecho.append("open trade closed")
+    except Exception:
+        pass
+    if pid:
+        try:
+            sess.cancel_sent_friend_requests([pid])
+            hecho.append("friend request withdrawn")
+        except Exception:
+            pass
+        try:
+            if at.is_friend(sess, pid):
+                at.unfriend(sess, pid)
+                hecho.append("unfriended")
+        except Exception:
+            pass
+    emitir("cancel", "ok", ", ".join(hecho) or "nothing to undo")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--engine-dir", required=True)
@@ -56,12 +122,15 @@ def main():
     p.add_argument("--target", required=True)
     p.add_argument("--mode", choices=["share", "trade"], required=True)
     p.add_argument("--proxy-file", default="")
+    p.add_argument("--stop-file", default="")
     a = p.parse_args()
+    ESTADO["stop_file"] = a.stop_file
 
     os.chdir(a.engine_dir)
     sys.path.insert(0, a.engine_dir)
     sys.path.insert(0, os.path.join(a.engine_dir, "engine"))
     import auto_trade as at
+    at.time = _TiempoCancelable()
 
     # run_trade() informa todo con print(): se intercepta para convertir sus lineas en pasos.
     print_real = print
@@ -70,6 +139,8 @@ def main():
     def print_trade(*args, **kw):
         linea = " ".join(str(x) for x in args)
         print_real(linea, flush=True)
+        if ESTADO["limpiando"]:
+            return
         if "No trade power" in linea:
             emitir("offer", "error", "This account has no trade energy left (1 per day, max 5)")
         elif "not in tradeable friends" in linea:
@@ -111,98 +182,122 @@ def main():
         emitir("login", "error", f"Bad XML: {e}")
         return 1
 
+    if cancelacion_pedida():
+        emitir("cancel", "ok", "nothing to undo")
+        return 2
     emitir("login", "start")
     try:
         sess = at.login_bot(cuenta, clave)
+    except Cancelado:
+        emitir("cancel", "ok", "nothing to undo")
+        return 2
     except Exception as e:
         emitir("login", "error", error_legible(e))
         return 1
     emitir("login", "ok", getattr(sess, "nickname", "") or "")
 
+    pid = None
     try:
-        at.cleanup_stale_sessions(sess)
-    except Exception:
-        pass
-
-    try:
-        pid = at.resolve_player_id(sess, a.target)
-    except Exception as e:
-        emitir("friend_request", "error", f"Could not find your Main: {error_legible(e)}")
-        return 1
-
-    # Amistad: solicitud + espera a que la Main acepte (5 min, igual que el motor).
-    emitir("friend_request", "start")
-    try:
-        if at.is_friend(sess, pid):
-            emitir("friend_request", "ok", "already friends")
-            emitir("accept", "ok")
-        else:
-            sess.send_friend_requests([pid])
-            emitir("friend_request", "ok")
-            emitir("accept", "wait", "Accept the friend request on your Main")
-            inicio = time.time()
-            aceptada = False
-            while time.time() - inicio < at.FRIEND_POLL_TIMEOUT:
-                time.sleep(at.FRIEND_POLL_INTERVAL)
-                if at.is_friend(sess, pid):
-                    aceptada = True
-                    break
-            if not aceptada:
-                emitir("accept", "error", "Your Main didn't accept the friend request in 5 min")
-                try:
-                    at.unfriend(sess, pid)
-                except Exception:
-                    pass
-                return 1
-            emitir("accept", "ok")
-    except Exception as e:
-        emitir("friend_request", "error", error_legible(e))
-        return 1
-    time.sleep(5)
-
-    exito = False
-    recibida = ""
-    if a.mode == "share":
-        emitir("share", "start")
+        revisar_cancelacion()
         try:
-            r = at.run_share_flow(sess, pid, card_info, log_fn=lambda m: print_real(m, flush=True))
-            exito = bool(r.get("success"))
-            if exito:
-                emitir("share", "ok")
+            at.cleanup_stale_sessions(sess)
+        except Cancelado:
+            raise
+        except Exception:
+            pass
+
+        try:
+            pid = at.resolve_player_id(sess, a.target)
+        except Cancelado:
+            raise
+        except Exception as e:
+            emitir("friend_request", "error", f"Could not find your Main: {error_legible(e)}")
+            return 1
+
+        # Amistad: solicitud + espera a que la Main acepte (5 min, igual que el motor).
+        emitir("friend_request", "start")
+        try:
+            if at.is_friend(sess, pid):
+                emitir("friend_request", "ok", "already friends")
+                emitir("accept", "ok")
             else:
-                err = str(r.get("error") or "")
-                if err.startswith("quota/limit") or "already" in err.lower():
-                    emitir("share", "error", "Your Main already received a share today (1 per day)")
-                elif err.startswith("feature locked"):
-                    emitir("share", "error", "Share is locked on this account (it may be too new)")
+                sess.send_friend_requests([pid])
+                emitir("friend_request", "ok")
+                emitir("accept", "wait", "Accept the friend request on your Main")
+                inicio = time.time()
+                aceptada = False
+                while time.time() - inicio < at.FRIEND_POLL_TIMEOUT:
+                    dormir(at.FRIEND_POLL_INTERVAL)
+                    if at.is_friend(sess, pid):
+                        aceptada = True
+                        break
+                if not aceptada:
+                    emitir("accept", "error", "Your Main didn't accept the friend request in 5 min")
+                    deshacer(at, sess, pid)
+                    return 1
+                emitir("accept", "ok")
+        except Cancelado:
+            raise
+        except Exception as e:
+            emitir("friend_request", "error", error_legible(e))
+            return 1
+        dormir(5)
+
+        exito = False
+        recibida = ""
+        if a.mode == "share":
+            emitir("share", "start")
+            try:
+                r = at.run_share_flow(sess, pid, card_info, log_fn=lambda m: print_real(m, flush=True))
+                exito = bool(r.get("success"))
+                if exito:
+                    emitir("share", "ok")
                 else:
-                    emitir("share", "error", error_legible(err))
-        except Exception as e:
-            emitir("share", "error", error_legible(e))
-    else:
-        emitir("offer", "start")
-        try:
-            outcome = at.run_trade(sess, pid, card_info)
-            exito = bool(outcome and outcome.get("success"))
-            if exito:
-                try:
-                    resp = outcome.get("response")
-                    recibida = getattr(resp.outcome, "card_id", "") or "" if resp and resp.outcome else ""
-                except Exception:
-                    recibida = ""
-                emitir("confirm", "ok", recibida)
-                try:
-                    time.sleep(2)
-                    at.send_thanks(sess, pid)
-                except Exception:
-                    pass
-            elif estado_trade["esperando"]:
-                emitir("confirm", "error", "Trade did not complete")
-            else:
-                emitir("offer", "error", "Could not send the trade offer")
-        except Exception as e:
-            emitir("offer", "error", error_legible(e))
+                    err = str(r.get("error") or "")
+                    if err.startswith("quota/limit") or "already" in err.lower():
+                        emitir("share", "error", "Your Main already received a share today (1 per day)")
+                    elif err.startswith("feature locked"):
+                        emitir("share", "error", "Share is locked on this account (it may be too new)")
+                    else:
+                        emitir("share", "error", error_legible(err))
+            except Cancelado:
+                raise
+            except Exception as e:
+                emitir("share", "error", error_legible(e))
+        else:
+            emitir("offer", "start")
+            try:
+                outcome = at.run_trade(sess, pid, card_info)
+                exito = bool(outcome and outcome.get("success"))
+                if exito:
+                    try:
+                        resp = outcome.get("response")
+                        recibida = getattr(resp.outcome, "card_id", "") or "" if resp and resp.outcome else ""
+                    except Exception:
+                        recibida = ""
+                    emitir("confirm", "ok", recibida)
+                    try:
+                        dormir(2)
+                        at.send_thanks(sess, pid)
+                    except Cancelado:
+                        pass  # el trade ya se hizo: no hay nada que deshacer
+                    except Exception:
+                        pass
+                elif estado_trade["esperando"]:
+                    emitir("confirm", "error", "Trade did not complete")
+                else:
+                    emitir("offer", "error", "Could not send the trade offer")
+            except Cancelado:
+                raise
+            except Exception as e:
+                emitir("offer", "error", error_legible(e))
+    except Cancelado:
+        deshacer(at, sess, pid)
+        print_real("@@FT_RESULT " + json.dumps({"success": False, "cancelled": True}), flush=True)
+        return 2
 
+    # Cierre normal: quitar la amistad (tambien si el share/trade fallo).
+    ESTADO["limpiando"] = True
     emitir("unfriend", "start")
     try:
         time.sleep(2)
