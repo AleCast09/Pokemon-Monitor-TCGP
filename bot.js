@@ -33,6 +33,8 @@ iniciarAutoSyncCardTypes();
 const fastTransfer = require('./fast-transfer.js');
 // Modo comunidad (community.js): solo para los servers de COMMUNITY_GUILD_IDS del .env.
 const comunidad = require('./community.js');
+// Monitor Link: el programa de cada miembro sube el resumen de SUS cartas (monitor-link-server.js).
+const monitorLink = require('./monitor-link-server.js');
 fastTransfer.init({
     db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
     esComunidad: (guildId) => comunidad.esComunidad(guildId),
@@ -7484,6 +7486,12 @@ function crearSesionTrade() {
 // Cada pagina del PDF original se pre-rendea una sola vez a PNG (ver assets/tutoriales_web/)
 // y esta ruta las sirve estaticas para la pagina /tutorials.
 dashboardApp.use('/tutorial-img', express.static(path.join(__dirname, 'assets', 'tutoriales_web')));
+// Monitor Link (monitor-link-server.js): rutas /link/* para el programa de cada miembro. Va ANTES
+// del express.json global porque /link/summary manda varios MB como texto.
+monitorLink.registrar(dashboardApp, {
+    db,
+    nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null
+});
 dashboardApp.use(express.json());
 // Fondos animados de la pantalla de bienvenida de /tutorials (2026-08-08, a pedido
 // explicito del usuario -- reusa el mismo repositorio local de wallpapers ya usado para el
@@ -9732,6 +9740,7 @@ function construirSlashCommands() {
             .addAttachmentOption(opt => opt.setName('image').setDescription('Optional screenshot/photo of the problem').setRequired(false)),
         new SlashCommandBuilder().setName('farmtickets').setDescription('Farm Shop Tickets by liking Community Showcases'),
         new SlashCommandBuilder().setName('shinedust').setDescription('Shows the saved Shinedust total for every account, sorted highest first'),
+        new SlashCommandBuilder().setName('link').setDescription('Link Monitor Link on your PC so the bot works with YOUR cards'),
         new SlashCommandBuilder().setName('transfers').setDescription('Shows the card transfers you have made: accounts used, cards sent and where')
     ].map(cmd => cmd.toJSON());
 }
@@ -11003,6 +11012,26 @@ function prefijoDeCartas(customId) {
 client.on('interactionCreate', async interaction => {
     // Modo comunidad: fuera del staff, nadie usa el bot ahi todavia (nunca ve datos de esta PC).
     if (await comunidad.bloquearSiHaceFalta(interaction)) return;
+    // /link (Monitor Link, solo en comunidad): clave de un solo uso para vincular el programa de la PC
+    // del miembro con su usuario de Discord.
+    if (interaction.isChatInputCommand() && interaction.commandName === 'link') {
+        await interaction.deferReply({ ephemeral: true });
+        const codigo = await monitorLink.crearCodigo(interaction.user.id, interaction.guildId);
+        const url = DASHBOARD_PUBLIC_URL || `http://localhost:${DASHBOARD_PORT_BASE}`;
+        const clave = monitorLink.armarClave(url, codigo);
+        const estado = await monitorLink.estadoAgente(interaction.user.id);
+        const embed = new EmbedBuilder().setTitle('🔗 Link Monitor Link').setColor(0x5865F2)
+            .setDescription(
+                (estado.vinculado ? '⚠️ You already have a PC linked — linking again replaces it.\n\n' : '') +
+                '1. Open **Monitor Link** on your PC.\n' +
+                '2. Paste this key when it asks for it:\n' +
+                '```\n' + clave + '\n```\n' +
+                '3. Pick your accounts folder (it tries to find it by itself).\n\n' +
+                '⏳ The key works **once** and expires in **10 minutes**. Don\'t share it.\n' +
+                '🔒 Monitor Link only sends **which cards your accounts have** — never your passwords.'
+            );
+        return await interaction.editReply({ embeds: [embed] });
+    }
     if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith('fast_')) {
         if (await fastTransfer.manejarInteraccion(interaction)) return;
     }

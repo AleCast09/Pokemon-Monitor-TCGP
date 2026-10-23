@@ -28,10 +28,16 @@ function esStaff(userId) {
 
 // Comandos que existen en el server de comunidad (los de los canales prioritarios + /setup para
 // el staff). Todo lo demas (/embed, /webhook, /run, /feedback, ...) no se registra ahi.
-const COMANDOS_COMUNIDAD = new Set(['setup', 'card', 'wishlist', 'goldcards', 'extract', 'shinedust', 'farmtickets', 'transfers']);
+const COMANDOS_COMUNIDAD = new Set(['setup', 'card', 'wishlist', 'goldcards', 'extract', 'shinedust', 'farmtickets', 'transfers', 'link']);
+// Comandos que SOLO existen en comunidad (en el server propio y en los del release no aparecen).
+const SOLO_COMUNIDAD = new Set(['link']);
+// Comandos que cualquier miembro puede usar aunque el server este en prueba (solo staff).
+const ABIERTOS_A_TODOS = new Set(['link']);
 
 function comandosPara(guildId, comandos) {
-    return esComunidad(guildId) ? comandos.filter(c => COMANDOS_COMUNIDAD.has(c.name)) : comandos;
+    return esComunidad(guildId)
+        ? comandos.filter(c => COMANDOS_COMUNIDAD.has(c.name))
+        : comandos.filter(c => !SOLO_COMUNIDAD.has(c.name));
 }
 
 // Categorias de Sync Channels: en comunidad solo MANAGER y RUN MUMU PLAYER, mas 🔒 STAFF privada
@@ -79,6 +85,7 @@ function permisosPublicos(guild) {
 // Guardia al principio de interactionCreate. Devuelve true si la interaccion se corto aca.
 async function bloquearSiHaceFalta(interaction) {
     if (!esComunidad(interaction.guildId) || esStaff(interaction.user?.id)) return false;
+    if (interaction.isChatInputCommand?.() && ABIERTOS_A_TODOS.has(interaction.commandName)) return false;
     if (interaction.isAutocomplete()) {
         await interaction.respond([]).catch(() => {});
         return true;
