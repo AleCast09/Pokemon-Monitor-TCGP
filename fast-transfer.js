@@ -333,8 +333,7 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
         }
         const campos = [
             { name: 'Type', value: fast === 'share' ? '🎁 ⚡ Fast Share' : '🔄 ⚡ Fast Trade', inline: true },
-            { name: 'Account (XML)', value: `\`${fileName}\``, inline: true },
-            { name: 'Card transferred', value: `**${nombreCarta}**`, inline: true }
+            { name: 'Account (XML)', value: `\`${fileName}\``, inline: true }
         ];
         if (antes) {
             campos.push({ name: 'Quantity', value: `x${antes.disponible} − 1 → **x${Math.max(0, antes.disponible - 1)}** left`, inline: true });
@@ -344,10 +343,7 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
             const nombreRecibida = (await Promise.resolve(deps.nombreCarta?.(recibida)).catch(() => null)) || recibida;
             campos.push({ name: 'Received', value: `**${nombreRecibida}** (\`${recibida}\`)`, inline: true });
         }
-        campos.push(
-            { name: 'Time', value: `${Math.round((Date.now() - ctx.inicio) / 1000)}s`, inline: true },
-            { name: 'Date', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true }
-        );
+        campos.push({ name: 'Date', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true });
         embed.setColor(0x2ECC71).setTitle('📦 Transfer completed').addFields(campos);
         const aviso = fast === 'share'
             ? `<@${interaction.user.id}> 🎉 Congrats on the share! **${nombreCarta}** was sent to **${nombreDestino}**.`
