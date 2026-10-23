@@ -620,6 +620,7 @@ function filaBotonesDust(guildId, pagina) {
     if (!habilitado(guildId)) return null;
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`fast_dust_one::${pagina}`).setLabel('⚡ Refresh one').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`fast_dust_page::${pagina}`).setLabel('⚡ Refresh this page').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('fast_dust_all').setLabel('⚡ Refresh all').setStyle(ButtonStyle.Success)
     );
 }
@@ -791,6 +792,40 @@ async function manejarDust(interaction) {
         await interaction.update({ content: '▶️ Started — the progress is in the channel.', components: [] });
         const filas = await filasDust();
         const pendientes = cuentasJson(rutaJson).filter(c => !(filas.get(c.archivoJson)?.ts > Date.now() - DUST_SALTAR_SI_MENOS_DE_MS));
+        await correrLoteDust(interaction, pendientes, 'all accounts');
+        return true;
+    }
+
+    // Pagina actual del reporte (pedido de Ale): las 25 cuentas que se estan viendo, todas.
+    if (interaction.isButton() && id.startsWith('fast_dust_page::')) {
+        const pagina = parseInt(id.split('::')[1], 10) || 0;
+        const lista = await mezclarShinedust(deps.buscarShinedustTodasCuentas(rutaJson), rutaJson);
+        const claves = new Set((lista || []).slice(pagina * 25, pagina * 25 + 25).map(r => r.archivoJson));
+        const cuentas = cuentasJson(rutaJson).filter(c => claves.has(c.archivoJson));
+        if (!cuentas.length) {
+            await interaction.reply({ content: '❌ No accounts on this page.', ephemeral: true });
+            return true;
+        }
+        await interaction.reply({ content: `▶️ Refreshing page ${pagina + 1} (${cuentas.length} accounts, about ${Math.ceil(cuentas.length * DUST_SEG_POR_CUENTA / 60)} min) — the progress is in the channel.`, ephemeral: true });
+        await correrLoteDust(interaction, cuentas, `page ${pagina + 1}`, pagina);
+        return true;
+    }
+
+    if (interaction.isButton() && id.startsWith('fast_dust_stop::')) {
+        const corrida = corridas.get(id.replace('fast_dust_stop::', ''));
+        if (corrida) {
+            corrida.detenido = true;
+            try { fs.writeFileSync(corrida.stopFile, 'stop'); } catch (e) { /* nada */ }
+        }
+        await interaction.deferUpdate();
+        return true;
+    }
+    return false;
+}
+
+// Lote de cuentas (todas o una pagina) con un mensaje de progreso en el canal y Cancel.
+async function correrLoteDust(interaction, pendientes, titulo, paginaVolver = 0) {
+    {
         const runId = `${interaction.id}`;
         const stopFile = path.join(os.tmpdir(), `fast_dust_stop_${runId}`);
         try { fs.unlinkSync(stopFile); } catch (e) { /* no existia */ }
@@ -812,7 +847,7 @@ async function manejarDust(interaction) {
                 lineas.push('', estado.detenido ? `🚫 Cancelled — ${estado.ok} account(s) were refreshed and saved.` : `🎉 Done in ${Math.round(seg / 60)} min.`);
                 if (estado.errores.length) lineas.push('', '**Failed:**', ...estado.errores.slice(0, 10).map(e => `• ${e}`));
             }
-            return new EmbedBuilder().setTitle(`${polvo} ⚡ Refresh Shinedust`).setColor(final ? (estado.detenido ? 0x95A5A6 : 0x2ECC71) : 0xE91E63)
+            return new EmbedBuilder().setTitle(`${polvo} ⚡ Refresh Shinedust — ${titulo}`).setColor(final ? (estado.detenido ? 0x95A5A6 : 0x2ECC71) : 0xE91E63)
                 .setDescription(lineas.join('\n').slice(0, 4000));
         };
         // Mensaje propio del bot en el canal: se puede editar todo lo que dure (el de la
@@ -827,21 +862,9 @@ async function manejarDust(interaction) {
         corridas.delete(runId);
         try { fs.unlinkSync(stopFile); } catch (e) { /* nada */ }
         await msg.edit({ embeds: [armar(estado, true)], components: [new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('shinedust_reporte::0').setLabel('🔄 Show updated list').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`shinedust_reporte::${paginaVolver}`).setLabel('🔄 Show updated list').setStyle(ButtonStyle.Secondary)
         )] }).catch(() => {});
-        return true;
     }
-
-    if (interaction.isButton() && id.startsWith('fast_dust_stop::')) {
-        const corrida = corridas.get(id.replace('fast_dust_stop::', ''));
-        if (corrida) {
-            corrida.detenido = true;
-            try { fs.writeFileSync(corrida.stopFile, 'stop'); } catch (e) { /* nada */ }
-        }
-        await interaction.deferUpdate();
-        return true;
-    }
-    return false;
 }
 
 // Devuelve true si la interaccion era de Fast Transfer (bot.js deja de procesarla).
