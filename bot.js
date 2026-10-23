@@ -33,6 +33,8 @@ iniciarAutoSyncCardTypes();
 const fastTransfer = require('./fast-transfer.js');
 fastTransfer.init({
     db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
+    auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
+    rutaMaster: async () => (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url,
     nombreCarta: async id => resolverNombreCarta(id, (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url)
 });
 

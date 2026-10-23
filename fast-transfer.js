@@ -15,7 +15,7 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, WebhookClient } = require('discord.js');
 
 const RUTA_SCRIPT = path.join(__dirname, 'scripts', 'fast_transfer.py');
 const PUERTO_TUNEL = 9090;
@@ -259,10 +259,9 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
         }
         if (resultado?.success) {
             ctx.final = 'ok';
-            try {
-                await deps.registrarTransferenciaCarta(fileName, cartaId, fast === 'share' ? 'share' : modo === 'friend' ? 'friend' : 'main', interaction.user.id, friendId);
-            } catch (e) { console.error('DEBUG: Fast Transfer no pudo guardar el historial:', e?.message || e); }
-            return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [] });
+            await editar(interaction, { embeds: [construirEmbed(ctx)], components: [] });
+            await registrarYResumir(interaction, ctx, modo, resultado.received);
+            return;
         }
         ctx.final = 'error';
         // Si el motor se cayo sin marcar el paso, se muestra la ultima linea de su log.
@@ -282,6 +281,54 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
     });
     cola = turno;
     return turno;
+}
+
+// Historial + resumen final (pedido de Ale): el mismo embed "📦 Transfer completed" que manda el
+// Share/Trade con MuMu al canal de Trading -- foto de la carta, cuenta, cantidad antes/despues,
+// destino -- mas el tipo (⚡ Fast Share / ⚡ Fast Trade) y, en trade, la carta recibida.
+async function registrarYResumir(interaction, ctx, modo, recibida) {
+    const { fast, cartaId, fileName, friendId, nombreCarta } = ctx;
+    let antes = null;
+    try { antes = await deps.auditarStockCarta(fileName, cartaId); } catch (e) { /* sin stock, sigue */ }
+    try {
+        await deps.registrarTransferenciaCarta(fileName, cartaId, fast === 'share' ? 'share' : modo === 'friend' ? 'friend' : 'main', interaction.user.id, friendId);
+    } catch (e) {
+        console.error('DEBUG: Fast Transfer no pudo guardar el historial:', e?.message || e);
+    }
+    try {
+        const canal = await deps.obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
+        if (!canal?.webhook_url) return;
+        let embed, files = [];
+        try {
+            const payload = await deps.construirEmbedDetalleCarta(cartaId, nombreCarta, await deps.rutaMaster(), null, interaction.guild);
+            embed = payload.embeds[0];
+            files = payload.files || [];
+        } catch (e) {
+            embed = new EmbedBuilder();
+        }
+        const destino = modo === 'friend' ? 'Friend' : 'Main';
+        const campos = [
+            { name: 'Type', value: fast === 'share' ? '🎁 ⚡ Fast Share' : '🔄 ⚡ Fast Trade', inline: true },
+            { name: 'Account (XML)', value: `\`${fileName}\``, inline: true },
+            { name: 'Card transferred', value: `**${nombreCarta}**`, inline: true }
+        ];
+        if (antes) {
+            campos.push({ name: 'Quantity', value: `x${antes.disponible} − 1 → **x${Math.max(0, antes.disponible - 1)}** left`, inline: true });
+        }
+        campos.push({ name: fast === 'share' ? 'Shared to' : 'Sent to', value: `${destino} (\`${friendId}\`)`, inline: true });
+        if (fast === 'trade' && recibida) {
+            const nombreRecibida = (await Promise.resolve(deps.nombreCarta?.(recibida)).catch(() => null)) || recibida;
+            campos.push({ name: 'Received', value: `**${nombreRecibida}** (\`${recibida}\`)`, inline: true });
+        }
+        campos.push(
+            { name: 'Time', value: `${Math.round((Date.now() - ctx.inicio) / 1000)}s`, inline: true },
+            { name: 'Date', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true }
+        );
+        embed.setColor(0x2ECC71).setTitle('📦 Transfer completed').addFields(campos);
+        await new WebhookClient({ url: canal.webhook_url }).send({ embeds: [embed], files });
+    } catch (e) {
+        console.error('DEBUG: Fast Transfer no pudo mandar el resumen:', e?.response?.data || e?.message || e);
+    }
 }
 
 // Devuelve true si la interaccion era de Fast Transfer (bot.js deja de procesarla).
