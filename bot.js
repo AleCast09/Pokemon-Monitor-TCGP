@@ -38,6 +38,7 @@ fastTransfer.init({
     formatearFriendId, ticketsFarmeadosHoy, cuentasPoolFarmTickets, cuentasYaUsadasParaId,
     sortearCuentasFarm, registrarLikeDado, guardarTandaFarm,
     farmMaxDiario: () => FARM_TICKETS_MAX_DIARIO,
+    buscarShinedustTodasCuentas,
     nombreAmigo: async (guildId, friendId) => parsearListaFriends((await obtenerRutasInject(guildId)).rutaIni).find(f => f.id === friendId)?.label || null,
     rutaMaster: async () => (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url,
     nombreCarta: async id => resolverNombreCarta(id, (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url)
@@ -10888,7 +10889,7 @@ function prefijoDeCartas(customId) {
 }
 
 client.on('interactionCreate', async interaction => {
-    if (interaction.isButton() && interaction.customId.startsWith('fast_')) {
+    if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith('fast_')) {
         if (await fastTransfer.manejarInteraccion(interaction)) return;
     }
     if (interaction.isAutocomplete() && interaction.commandName === 'card') {
@@ -11941,16 +11942,23 @@ client.on('interactionCreate', async interaction => {
         }
         await interaction.deferReply();
         const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-        const resultados = buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url);
-        return await interaction.editReply(construirEmbedShinedust(resultados, 0));
+        // ⚡ Fast Shinedust (fast-transfer.js): valores leidos del servidor + botones de refresco.
+        const resultados = await fastTransfer.mezclarShinedust(buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url), rutaJsonCfg?.webhook_url);
+        const payloadSd = construirEmbedShinedust(resultados, 0);
+        const filaSd = fastTransfer.filaBotonesDust(interaction.guildId, 0);
+        if (filaSd && payloadSd.components) payloadSd.components.push(filaSd);
+        return await interaction.editReply(payloadSd);
     }
 
     if (interaction.isButton() && interaction.customId.startsWith('shinedust_reporte::')) {
         const pagina = parseInt(interaction.customId.split('::')[1], 10) || 0;
         await interaction.deferUpdate();
         const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-        const resultados = buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url);
-        return await interaction.editReply(construirEmbedShinedust(resultados, pagina));
+        const resultados = await fastTransfer.mezclarShinedust(buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url), rutaJsonCfg?.webhook_url);
+        const payloadSd = construirEmbedShinedust(resultados, pagina);
+        const filaSd = fastTransfer.filaBotonesDust(interaction.guildId, Math.max(0, pagina));
+        if (filaSd && payloadSd.components) payloadSd.components.push(filaSd);
+        return await interaction.editReply(payloadSd);
     }
 
     // "Track Shinedust" (2026-09-16, a pedido explicito del usuario): elegir una cuenta de

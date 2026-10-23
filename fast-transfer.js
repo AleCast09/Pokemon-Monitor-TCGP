@@ -16,7 +16,7 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, WebhookClient, MessageFlags } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, WebhookClient, MessageFlags, StringSelectMenuBuilder } = require('discord.js');
 
 const RUTA_SCRIPT = path.join(__dirname, 'scripts', 'fast_transfer.py');
 const PUERTO_TUNEL = 9090;
@@ -524,10 +524,337 @@ async function ejecutarFarm(interaction, friendId) {
     return turno;
 }
 
+// ============ ⚡ Fast Shinedust (2026-10-23, pedido de Ale) ============
+// Lee Shinedust y Shop Tickets preguntandole al servidor (scripts/fast_dust.py), sin MuMu ni OCR.
+// Los valores van a una tabla propia (shinedust_fast) -- los JSON son de Kevin/Leanny y no se
+// tocan. /shinedust muestra el valor ⚡ mientras Kevin no haya escrito uno nuevo despues: se
+// guarda el valor que tenia el JSON al refrescar, y si el JSON cambio, manda el de Kevin.
+const RUTA_SCRIPT_DUST = path.join(__dirname, 'scripts', 'fast_dust.py');
+const DUST_DELAY_S = 1.5;           // pausa entre logins (salen todos de la IP de casa)
+const DUST_SEG_POR_CUENTA = 4;      // estimado para el ETA: login + consulta + pausa
+const DUST_SALTAR_SI_MENOS_DE_MS = 24 * 60 * 60 * 1000; // "Refresh all" salta las refrescadas hace <24 h
+
+async function asegurarTablaDust() {
+    await deps.db.run(`CREATE TABLE IF NOT EXISTS shinedust_fast (
+        archivo_json TEXT PRIMARY KEY,
+        valor        INTEGER,
+        tickets      INTEGER,
+        ts           INTEGER,
+        valor_json   INTEGER
+    )`);
+}
+
+async function filasDust() {
+    await asegurarTablaDust();
+    const filas = await deps.db.all(`SELECT archivo_json, valor, tickets, ts, valor_json FROM shinedust_fast`);
+    const mapa = new Map();
+    for (const f of filas || []) mapa.set(f.archivo_json, f);
+    return mapa;
+}
+
+function leerJson(ruta) {
+    try { return JSON.parse(fs.readFileSync(ruta, 'utf8')); } catch (e) { return null; }
+}
+
+// Todas las cuentas de la carpeta JSON (tengan o no un valor de Kevin).
+function cuentasJson(rutaJson) {
+    if (!rutaJson || !fs.existsSync(rutaJson)) return [];
+    const salida = [];
+    for (const archivo of fs.readdirSync(rutaJson)) {
+        if (!archivo.toLowerCase().endsWith('.json')) continue;
+        const data = leerJson(path.join(rutaJson, archivo));
+        if (!data) continue;
+        const fileNameXml = data.metadata?.fileName || archivo;
+        salida.push({
+            archivoJson: archivo,
+            fileNameXml,
+            nombreCuenta: data.metadata?.accountName || fileNameXml,
+            valorJson: typeof data.metadata?.shinedust?.value === 'number' ? data.metadata.shinedust.value : null
+        });
+    }
+    return salida;
+}
+
+// Nombre de XML -> ruta, recorriendo la carpeta UNA vez (son ~1200 archivos en subcarpetas).
+function mapaXml(rutaBase) {
+    const mapa = new Map();
+    const recorrer = (dir, prof) => {
+        if (prof > 4) return;
+        let entradas;
+        try { entradas = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+        for (const e of entradas) {
+            const completo = path.join(dir, e.name);
+            if (e.isDirectory()) recorrer(completo, prof + 1);
+            else if (e.name.toLowerCase().endsWith('.xml')) mapa.set(e.name.toLowerCase(), completo);
+        }
+    };
+    if (rutaBase && fs.existsSync(rutaBase)) recorrer(rutaBase, 0);
+    return mapa;
+}
+
+function rutaXmlDe(mapa, fileNameXml) {
+    const n = String(fileNameXml || '').toLowerCase();
+    return mapa.get(n.endsWith('.xml') ? n : `${n}.xml`) || null;
+}
+
+// Para /shinedust: mezcla la lista de Kevin con los valores ⚡ (ver comentario de arriba).
+async function mezclarShinedust(resultados, rutaJson) {
+    if (!deps || resultados === null) return resultados;
+    let filas;
+    try { filas = await filasDust(); } catch (e) { return resultados; }
+    if (!filas.size) return resultados;
+    const porArchivo = new Map((resultados || []).map(r => [r.archivoJson, r]));
+    for (const c of cuentasJson(rutaJson)) {
+        const f = filas.get(c.archivoJson);
+        if (!f) continue;
+        const kevinCambio = c.valorJson !== null && f.valor_json !== null && c.valorJson !== f.valor_json;
+        if (kevinCambio) continue;
+        const r = porArchivo.get(c.archivoJson);
+        if (r) r.valor = f.valor;
+        else porArchivo.set(c.archivoJson, { nombreCuenta: c.nombreCuenta, valor: f.valor, fileNameXml: c.fileNameXml, archivoJson: c.archivoJson });
+    }
+    return [...porArchivo.values()].sort((a, b) => b.valor - a.valor);
+}
+
+function filaBotonesDust(guildId, pagina) {
+    if (!habilitado(guildId)) return null;
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`fast_dust_one::${pagina}`).setLabel('⚡ Refresh one').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('fast_dust_all').setLabel('⚡ Refresh all').setStyle(ButtonStyle.Success)
+    );
+}
+
+function correrDust(runId, cuentas, alEvento) {
+    return new Promise(resolve => {
+        const archivoCuentas = path.join(os.tmpdir(), `fast_dust_${runId}.json`);
+        fs.writeFileSync(archivoCuentas, JSON.stringify(cuentas));
+        const python = process.env.FAST_TRANSFER_PYTHON || 'python';
+        const corrida = corridas.get(runId);
+        const hijo = spawn(python, ['-X', 'utf8', RUTA_SCRIPT_DUST, '--engine-dir', rutaMotor(),
+            '--accounts-file', archivoCuentas, '--delay', String(DUST_DELAY_S), '--stop-file', corrida.stopFile], {
+            cwd: rutaMotor(), windowsHide: true,
+            env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8' }
+        });
+        corrida.hijo = hijo;
+        let resto = '';
+        const procesar = linea => {
+            if (linea.startsWith('@@FD ')) { try { alEvento(JSON.parse(linea.slice(5))); } catch (e) { /* ignorar */ } }
+        };
+        const leer = buf => {
+            resto += buf.toString('utf8');
+            const partes = resto.split(/\r?\n/);
+            resto = partes.pop();
+            partes.forEach(procesar);
+        };
+        hijo.stdout.on('data', leer);
+        hijo.stderr.on('data', leer);
+        hijo.on('error', () => {});
+        hijo.on('close', () => {
+            if (resto) procesar(resto);
+            try { fs.unlinkSync(archivoCuentas); } catch (e) { /* nada */ }
+            resolve();
+        });
+    });
+}
+
+async function guardarDust(cuenta, ev) {
+    await deps.db.run(
+        `INSERT INTO shinedust_fast (archivo_json, valor, tickets, ts, valor_json) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(archivo_json) DO UPDATE SET valor = excluded.valor, tickets = excluded.tickets, ts = excluded.ts, valor_json = excluded.valor_json`,
+        [cuenta.archivoJson, ev.dust, ev.tickets, Date.now(), cuenta.valorJson]
+    );
+}
+
+// Corre el refresco de una lista de cuentas en la cola compartida. alProgreso recibe el estado.
+async function refrescarDust(runId, cuentas, alProgreso) {
+    await asegurarTablaDust();
+    const estado = { total: cuentas.length, hechas: 0, ok: 0, fallas: 0, ultimo: null, errores: [], inicio: Date.now() };
+    enCola++;
+    const turno = cola.then(async () => {
+        if (corridas.get(runId)?.detenido) return;
+        if (!(await puertoAbierto(PUERTO_TUNEL)) && !(await asegurarTunel())) {
+            estado.errores.push('Could not start the tunnel (port 9090)');
+            return;
+        }
+        const porClave = new Map(cuentas.map(c => [c.archivoJson, c]));
+        const xmls = mapaXml((await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`))?.webhook_url);
+        const lista = [];
+        for (const c of cuentas) {
+            const xml = rutaXmlDe(xmls, c.fileNameXml);
+            if (xml) lista.push({ key: c.archivoJson, xml });
+            else { estado.hechas++; estado.fallas++; estado.errores.push(`${c.nombreCuenta}: XML not found`); }
+        }
+        let edicion = Promise.resolve();
+        await correrDust(runId, lista, ev => {
+            if (!ev.key) return;
+            const cuenta = porClave.get(ev.key);
+            estado.hechas++;
+            if (ev.state === 'ok') {
+                estado.ok++;
+                estado.ultimo = { nombre: cuenta?.nombreCuenta || ev.key, antes: cuenta?.valorJson, dust: ev.dust, tickets: ev.tickets };
+                edicion = edicion.then(() => guardarDust(cuenta, ev)).catch(() => {});
+            } else {
+                estado.fallas++;
+                if (estado.errores.length < 30) estado.errores.push(`${cuenta?.nombreCuenta || ev.key}: ${ev.msg || 'failed'}`);
+            }
+            alProgreso(estado, false);
+        });
+        await edicion;
+    }).catch(e => {
+        console.error('DEBUG: Fast Shinedust error:', e);
+    }).finally(() => {
+        enCola = Math.max(0, enCola - 1);
+    });
+    cola = turno;
+    await turno;
+    estado.detenido = !!corridas.get(runId)?.detenido;
+    return estado;
+}
+
+function barra(hechas, total) {
+    const llenos = total ? Math.round((hechas / total) * 15) : 0;
+    return '▰'.repeat(llenos) + '▱'.repeat(15 - llenos);
+}
+
+async function manejarDust(interaction) {
+    const id = interaction.customId;
+    const rutaJson = (await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`))?.webhook_url;
+
+    // Una cuenta: menu con las de la pagina actual del reporte.
+    if (interaction.isButton() && id.startsWith('fast_dust_one::')) {
+        const pagina = parseInt(id.split('::')[1], 10) || 0;
+        await interaction.deferReply({ ephemeral: true });
+        const lista = await mezclarShinedust(deps.buscarShinedustTodasCuentas(rutaJson), rutaJson);
+        const pag = (lista || []).slice(pagina * 25, pagina * 25 + 25);
+        if (!pag.length) {
+            await interaction.editReply({ content: '❌ No accounts on this page.' });
+            return true;
+        }
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId('fast_dust_pick')
+            .setPlaceholder('Which account do you want to refresh?')
+            .addOptions(pag.map(r => ({
+                label: r.nombreCuenta.slice(0, 100),
+                description: `Saved: ${r.valor.toLocaleString('en-US')}`.slice(0, 100),
+                value: r.archivoJson.slice(0, 100)
+            })));
+        await interaction.editReply({ content: '⚡ Refresh one account — straight from the game server, no MuMu.', components: [new ActionRowBuilder().addComponents(menu)] });
+        return true;
+    }
+
+    if (interaction.isStringSelectMenu() && id === 'fast_dust_pick') {
+        const archivo = interaction.values[0];
+        const cuenta = cuentasJson(rutaJson).find(c => c.archivoJson === archivo);
+        if (!cuenta) {
+            await interaction.update({ content: '❌ That account\'s JSON file is gone.', components: [] });
+            return true;
+        }
+        await interaction.update({ content: `⏳ Refreshing **${cuenta.nombreCuenta}**…`, components: [] });
+        const runId = `${interaction.id}`;
+        corridas.set(runId, { hijo: null, detenido: false, stopFile: path.join(os.tmpdir(), `fast_dust_stop_${runId}`) });
+        const estado = await refrescarDust(runId, [cuenta], () => {});
+        corridas.delete(runId);
+        const mapa = (await deps.obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))) || {};
+        const polvo = mapa.Polvo_iris_TCGP ? `<:Polvo_iris_TCGP:${mapa.Polvo_iris_TCGP}>` : '✨';
+        const ticket = mapa.Cupon_de_tienda_TCGP ? `<:Cupon_de_tienda_TCGP:${mapa.Cupon_de_tienda_TCGP}>` : '🎟️';
+        let texto;
+        if (estado.ok) {
+            const u = estado.ultimo;
+            const antes = typeof u.antes === 'number' ? `${u.antes.toLocaleString('en-US')} → ` : '';
+            texto = `${icono('ok', mapa)} **${u.nombre}**\n${polvo} Shinedust: ${antes}**${u.dust.toLocaleString('en-US')}**\n${ticket} Shop Tickets: **${u.tickets}**`;
+        } else {
+            texto = `${icono('error', mapa)} **${cuenta.nombreCuenta}** — ${estado.errores[0] || 'failed'}`;
+        }
+        await interaction.editReply({ content: texto, components: [] });
+        return true;
+    }
+
+    // Todas: confirmacion con cantidad y tiempo estimado.
+    if (interaction.isButton() && id === 'fast_dust_all') {
+        await interaction.deferReply({ ephemeral: true });
+        const filas = await filasDust();
+        const todas = cuentasJson(rutaJson);
+        const pendientes = todas.filter(c => !(filas.get(c.archivoJson)?.ts > Date.now() - DUST_SALTAR_SI_MENOS_DE_MS));
+        const min = Math.ceil((pendientes.length * DUST_SEG_POR_CUENTA) / 60);
+        await interaction.editReply({
+            content: `⚡ **Refresh all** — **${pendientes.length}** of ${todas.length} account(s)` +
+                (todas.length > pendientes.length ? ` (${todas.length - pendientes.length} already refreshed in the last 24 h are skipped)` : '') +
+                `.\n⏱️ About **${min} min**. Every login goes out from your home IP, one at a time.\nYou can cancel at any moment.`,
+            components: pendientes.length ? [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('fast_dust_all_go').setLabel('▶️ Start').setStyle(ButtonStyle.Success)
+            )] : []
+        });
+        return true;
+    }
+
+    if (interaction.isButton() && id === 'fast_dust_all_go') {
+        await interaction.update({ content: '▶️ Started — the progress is in the channel.', components: [] });
+        const filas = await filasDust();
+        const pendientes = cuentasJson(rutaJson).filter(c => !(filas.get(c.archivoJson)?.ts > Date.now() - DUST_SALTAR_SI_MENOS_DE_MS));
+        const runId = `${interaction.id}`;
+        const stopFile = path.join(os.tmpdir(), `fast_dust_stop_${runId}`);
+        try { fs.unlinkSync(stopFile); } catch (e) { /* no existia */ }
+        corridas.set(runId, { hijo: null, detenido: false, stopFile });
+        const mapa = (await deps.obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))) || {};
+        const polvo = mapa.Polvo_iris_TCGP ? `<:Polvo_iris_TCGP:${mapa.Polvo_iris_TCGP}>` : '✨';
+        const filaCancel = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`fast_dust_stop::${runId}`).setLabel('✖️ Cancel').setStyle(ButtonStyle.Danger)
+        );
+        const armar = (estado, final) => {
+            const seg = (Date.now() - estado.inicio) / 1000;
+            const resta = estado.hechas ? Math.round(((estado.total - estado.hechas) * seg / estado.hechas) / 60) : null;
+            const lineas = [
+                `${barra(estado.hechas, estado.total)}  **${estado.hechas}/${estado.total}**`,
+                `${icono('ok', mapa)} ${estado.ok}   ${icono('error', mapa)} ${estado.fallas}` + (!final && resta !== null ? `   ⏱️ ~${resta} min left` : '')
+            ];
+            if (estado.ultimo) lineas.push('', `Last: **${estado.ultimo.nombre}** — ${polvo} ${estado.ultimo.dust.toLocaleString('en-US')}`);
+            if (final) {
+                lineas.push('', estado.detenido ? `🚫 Cancelled — ${estado.ok} account(s) were refreshed and saved.` : `🎉 Done in ${Math.round(seg / 60)} min.`);
+                if (estado.errores.length) lineas.push('', '**Failed:**', ...estado.errores.slice(0, 10).map(e => `• ${e}`));
+            }
+            return new EmbedBuilder().setTitle(`${polvo} ⚡ Refresh Shinedust`).setColor(final ? (estado.detenido ? 0x95A5A6 : 0x2ECC71) : 0xE91E63)
+                .setDescription(lineas.join('\n').slice(0, 4000));
+        };
+        // Mensaje propio del bot en el canal: se puede editar todo lo que dure (el de la
+        // interaccion vence a los 15 min y esto puede tardar mas de una hora).
+        const msg = await interaction.channel.send({ embeds: [armar({ total: pendientes.length, hechas: 0, ok: 0, fallas: 0, errores: [], inicio: Date.now() }, false)], components: [filaCancel] });
+        let ultimaEdicion = 0;
+        const estado = await refrescarDust(runId, pendientes, (est) => {
+            if (Date.now() - ultimaEdicion < 4000) return; // Discord limita la frecuencia de ediciones
+            ultimaEdicion = Date.now();
+            msg.edit({ embeds: [armar(est, false)], components: [filaCancel] }).catch(() => {});
+        });
+        corridas.delete(runId);
+        try { fs.unlinkSync(stopFile); } catch (e) { /* nada */ }
+        await msg.edit({ embeds: [armar(estado, true)], components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('shinedust_reporte::0').setLabel('🔄 Show updated list').setStyle(ButtonStyle.Secondary)
+        )] }).catch(() => {});
+        return true;
+    }
+
+    if (interaction.isButton() && id.startsWith('fast_dust_stop::')) {
+        const corrida = corridas.get(id.replace('fast_dust_stop::', ''));
+        if (corrida) {
+            corrida.detenido = true;
+            try { fs.writeFileSync(corrida.stopFile, 'stop'); } catch (e) { /* nada */ }
+        }
+        await interaction.deferUpdate();
+        return true;
+    }
+    return false;
+}
+
 // Devuelve true si la interaccion era de Fast Transfer (bot.js deja de procesarla).
 async function manejarInteraccion(interaction) {
+    const id = interaction.customId || '';
+    if (id.startsWith('fast_dust')) {
+        if (!habilitado(interaction.guildId)) {
+            await interaction.reply({ content: '❌ Fast Shinedust is not available here.', ephemeral: true });
+            return true;
+        }
+        return await manejarDust(interaction);
+    }
     if (!interaction.isButton()) return false;
-    const id = interaction.customId;
     if (id.startsWith('fast_stop::')) {
         const corrida = corridas.get(id.replace('fast_stop::', ''));
         if (!corrida) {
@@ -613,4 +940,4 @@ async function manejarInteraccion(interaction) {
     return true;
 }
 
-module.exports = { init, habilitado, filaBoton, filaBotonFarm, manejarInteraccion };
+module.exports = { init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };
