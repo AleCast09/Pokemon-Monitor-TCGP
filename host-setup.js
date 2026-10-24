@@ -64,6 +64,55 @@ async function armarClave() {
     console.log('\nSend the key file and the password to the host through DIFFERENT channels (for example the file by Discord DM and the password by WhatsApp).');
 }
 
+// ---- Bot de Miguel: Python y sus librerias (el host solo tiene que tener la carpeta descargada) ----
+function probarPython(comando) {
+    try {
+        const v = execSync(`${comando} --version`, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+        return /^Python 3\./.test(v) ? v : null;
+    } catch (e) { return null; }
+}
+
+// Devuelve el comando de Python a usar (o null). Si no hay, lo instala con winget.
+function asegurarPython() {
+    for (const c of ['python', 'py -3']) if (probarPython(c)) return c;
+    console.log('🐍 Python is not installed — installing it (Windows may ask for permission)…');
+    try {
+        execSync('winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements', { stdio: 'inherit' });
+    } catch (e) { /* se revisa abajo */ }
+    const instalado = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe');
+    if (fs.existsSync(instalado) && probarPython(`"${instalado}"`)) return `"${instalado}"`;
+    return probarPython('py -3') ? 'py -3' : null;
+}
+
+function prepararMotor(motor) {
+    const python = asegurarPython();
+    if (!python) {
+        console.log('⚠️ Could not install Python by itself. Install Python 3.12 from https://www.python.org and run this setup again.');
+        return null;
+    }
+    console.log(`📦 Installing what Miguel's bot needs (${probarPython(python)})… the first time takes a few minutes.`);
+    try {
+        execSync(`${python} -m pip install -r requirements.txt --disable-pip-version-check`, { cwd: motor, stdio: 'inherit' });
+    } catch (e) {
+        console.log('⚠️ Some parts of Miguel\'s bot could not be installed. Check your internet connection and run this setup again.');
+    }
+    // Ruta exacta del python.exe (el bot lo lanza directo, sin pasar por "py -3").
+    try { return execSync(`${python} -c "import sys; print(sys.executable)"`).toString().trim(); } catch (e) { return null; }
+}
+
+// La hora de la PC tiene que estar bien: si esta corrida, Nintendo rechaza el login
+// ("Device datetime is out of alignment").
+async function revisarHora() {
+    try {
+        const r = await fetch('https://www.google.com', { method: 'HEAD', signal: AbortSignal.timeout(10000) });
+        const diferencia = Math.abs(Date.now() - new Date(r.headers.get('date')).getTime()) / 1000;
+        if (diferencia > 120) {
+            console.log(`\n⚠️ This PC's clock is off by ${Math.round(diferencia / 60)} minutes. Fix it or the game will reject the logins:`);
+            console.log('   Windows Settings → Time & language → Date & time → turn on "Set time automatically" → Sync now.\n');
+        }
+    } catch (e) { /* sin internet: no se puede comparar */ }
+}
+
 function derivarRutas(main) {
     const base = main.replace(/[\\/]+$/, '');
     return {
@@ -102,6 +151,9 @@ async function instalarHost() {
     }
     const nombre = (await preguntar(`Name for this host (shown in the logs) [${os.hostname()}]: `)) || os.hostname();
 
+    const python = prepararMotor(motor);
+    await revisarHora();
+
     fs.mkdirSync(CARPETA_HOST, { recursive: true });
     const env = {
         ...datos,
@@ -110,7 +162,8 @@ async function instalarHost() {
         HOST_NAME: nombre,
         MONITOR_DB_PATH: path.join(CARPETA_HOST, 'host.db'),
         DASHBOARD_PORT: '3006',
-        FAST_TRANSFER_ENGINE_DIR: motor
+        FAST_TRANSFER_ENGINE_DIR: motor,
+        ...(python ? { FAST_TRANSFER_PYTHON: python } : {})
     };
     fs.writeFileSync(path.join(CARPETA_HOST, '.env'), Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
 
