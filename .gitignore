@@ -91,3 +91,6 @@ bin/
 
 # MonitorLink.exe (se regenera con scripts/build-monitor-link.js)
 dist-link/
+
+# Clave de host (secretos cifrados de Zenith Bot) - nunca al repo
+host-key.txt
