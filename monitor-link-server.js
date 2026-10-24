@@ -181,6 +181,10 @@ async function agenteDe(req) {
 
 function registrar(app, dependencias) {
     db = dependencias.db;
+    // Host en espera (community-host.js): no atiende a ningun Monitor Link; al recibir 503 cada uno
+    // busca en la libreta la direccion del host que tiene el turno.
+    const activo = dependencias.activo || (() => true);
+    app.use('/link', (req, res, next) => (activo() ? next() : res.status(503).json({ error: 'standby' })));
     sincronizarAgentes();
     setInterval(sincronizarAgentes, 10 * 60 * 1000);
     const nombreUsuario = dependencias.nombreUsuario || (async () => null);

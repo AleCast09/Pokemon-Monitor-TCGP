@@ -35,6 +35,8 @@ const fastTransfer = require('./fast-transfer.js');
 const comunidad = require('./community.js');
 // Monitor Link: el programa de cada miembro sube el resumen de SUS cartas (monitor-link-server.js).
 const monitorLink = require('./monitor-link-server.js');
+// Turno de host en la comunidad: cada host con su propio bot, uno solo atiende a la vez.
+const hostComunidad = require('./community-host.js');
 fastTransfer.init({
     db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
     esComunidad: (guildId) => comunidad.esComunidad(guildId),
@@ -7530,6 +7532,7 @@ dashboardApp.use('/tutorial-img', express.static(path.join(__dirname, 'assets', 
 // del express.json global porque /link/summary manda varios MB como texto.
 if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
     db,
+    activo: () => hostComunidad.esActivo(),
     nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null
 });
 dashboardApp.use(express.json());
@@ -9385,7 +9388,7 @@ async function iniciarTunelDashboard(puerto) {
                 const match = texto.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
                 if (match && !DASHBOARD_PUBLIC_URL) {
                     DASHBOARD_PUBLIC_URL = match[0];
-                    if (comunidad.hayComunidad()) monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL); // libreta de Monitor Link
+                    if (comunidad.hayComunidad() && hostComunidad.esActivo()) monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL); // libreta de Monitor Link
                     console.log(`🌐 Tunel publico Info Accounts: ${DASHBOARD_PUBLIC_URL}`);
                 }
             };
@@ -9822,6 +9825,13 @@ async function obtenerGuildIdsRegistrables() {
     return [...guildIds];
 }
 
+// Comandos de un server: en la comunidad, ninguno si otro host tiene el turno (asi nunca se ven los
+// comandos de dos bots a la vez).
+function comandosDeGuild(guildId, commands) {
+    if (comunidad.esComunidad(guildId) && !hostComunidad.esActivo()) return [];
+    return comunidad.comandosPara(guildId, commands);
+}
+
 async function registrarSlashCommands() {
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     const commands = construirSlashCommands();
@@ -9842,7 +9852,7 @@ async function registrarSlashCommands() {
 
     for (const guildId of guildIds) {
         // Modo comunidad: ahi solo los comandos de los canales prioritarios (community.js).
-        await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: comunidad.comandosPara(guildId, commands) });
+        await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: comandosDeGuild(guildId, commands) });
         console.log(`✅ Slash commands registered in guild ${guildId}`);
     }
 }
@@ -11118,6 +11128,7 @@ client.on('interactionCreate', (interaction) => comunidad.contexto.run(
 ));
 async function manejarInteraccionPrincipal(interaction) {
     if (comunidad.soloComunidad() && !comunidad.esComunidad(interaction.guildId)) return;
+    if (comunidad.esComunidad(interaction.guildId) && !hostComunidad.esActivo()) return;
     // Modo comunidad: fuera del staff, nadie usa el bot ahi todavia (nunca ve datos de esta PC).
     if (await comunidad.bloquearSiHaceFalta(interaction)) return;
     // Comunidad: los botones y menus de un mensaje que abrio otra persona (su wishlist, su carta, su
@@ -15698,297 +15709,7 @@ async function manejarInteraccionPrincipal(interaction) {
 
             case 'btn_crear_canales_menu':
                 await interaction.deferReply({ ephemeral: true });
-                try {
-                    const grupos = [
-                        {
-                            categoria: '🔔 UPDATES 🔔',
-                            tipoCategoria: 'actualizaciones_categoria',
-                            canales: [
-                                { tipo: 'actualizaciones', name: '🔔-updates' },
-                                { tipo: 'tutoriales', name: '📚-tutorials' },
-                                { tipo: 'apoyo', name: '☕-donate' },
-                                { tipo: 'cmd_feedback', name: '📝-feedback' }
-                            ]
-                        },
-                        {
-                            categoria: '⚙️ SETTINGS ⚙️',
-                            tipoCategoria: 'settings_categoria',
-                            canales: [
-                                { tipo: 'cmd_setup', name: '⚙-settings' },
-                                { tipo: 'cmd_build_embed', name: '🔧-build-embed' },
-                                { tipo: 'cmd_build_webhooks', name: '🔗-build-webhooks' }
-                            ]
-                        },
-                        {
-                            categoria: '💓 HEARTBEAT 💓',
-                            tipoCategoria: 'heartbeat_categoria',
-                            canales: [
-                                { tipo: 'heartbeat', name: '💓-heartbeat' }
-                            ]
-                        },
-                        {
-                            categoria: '📦 PTCG POCKET DROPS 📦',
-                            tipoCategoria: 'crear_canales',
-                            canales: [
-                                { tipo: 's4t', name: '🤖-s4t' },
-                                { tipo: 's4t-categoria', name: '📊-s4t-category' },
-                                { tipo: '3-diamond', name: '🔷-3-diamond' },
-                                { tipo: '4-diamond', name: '💠-4-diamond' },
-                                { tipo: '1-star', name: '⭐-1-star' },
-                                { tipo: '1-star-shiny', name: '🌟-1-star-shiny' },
-                                { tipo: '2-star-trainer', name: '⭐⭐-trainer' },
-                                { tipo: '2-star-rainbow', name: '🌈-2-star-rainbow' },
-                                { tipo: '2-star-full-art', name: '🎨-2-star-full-art' },
-                                { tipo: '2-star-shiny', name: '✨-2-star-shiny' },
-                                { tipo: 'immersive', name: '🌌-immersive' },
-                                { tipo: 'crown-rare', name: '👑-crown-rare' },
-                                { tipo: 'wishlist', name: '💖-wishlist' }
-                            ]
-                        },
-                        {
-                            categoria: '📦 GOD PACKS 📦',
-                            tipoCategoria: 'godpack_categoria',
-                            canales: [
-                                { tipo: 'godpack-general', name: '📦-godpack-general' },
-                                { tipo: 'godpack-alive', name: '👼-godpack-alive' },
-                                { tipo: 'godpack-dead', name: '☠️-godpack-dead' }
-                            ]
-                        },
-                        {
-                            categoria: '🔥 MANAGER 🔥',
-                            tipoCategoria: 'manager_categoria',
-                            canales: [
-                                { tipo: 'cmd_card_wishlist', name: '💖-cards-wishlist' },
-                                { tipo: 'cmd_card_all', name: '⚡-all-cards' },
-                                { tipo: 'cmd_card_gold', name: '🏆-gold-cards' },
-                                { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' },
-                                { tipo: 'shinedust', name: '🍬-shinedust' },
-                                { tipo: 'info_accounts', name: '📋-info-accounts' }
-                            ]
-                        },
-                        {
-                            categoria: '🎮 RUN MUMU PLAYER 🎮',
-                            tipoCategoria: 'run_mumu_categoria',
-                            canales: [
-                                { tipo: 'cmd_run_instance', name: '🔄-trading' },
-                                // Agregados 2026-08-24 a pedido explicito del usuario -- canales
-                                // nuevos, todavia sin comando propio (igual que Donate/Heartbeat).
-                                { tipo: 'share-cards', name: '🃏-share-cards' },
-                                { tipo: 'farm-shop-tickets', name: '🎫-farm-shop-tickets' }
-                            ]
-                        }
-                    ];
-
-                    // Solo canales que tienen un comando real asignado (aunque no se pueda
-                    // "ejecutar" solo, como /embed, /webhook, /feedback) o que explican algo
-                    // que no se repite (Updates/Support) reciben un embed al sincronizar. El
-                    // resto (rareza, godpacks, s4t, heartbeat, wishlist-feed) no tiene ningún
-                    // comando propio — meter un embed ahí es ruido innecesario en canales que
-                    // además reciben cartas todo el tiempo.
-                    // Lista mostrada en el canal de Tutorials (2026-08-06, a pedido explicito
-                    // del usuario): un item por fila, cada uno con su boton para abrir el PDF
-                    // correspondiente reusando tutorial_pdf:: (mismo botón que ya usa cada
-                    // canal individual) -- si a algún tipo todavía no se le subió el PDF real,
-                    // el handler de tutorial_pdf:: ya responde "No tutorial available yet" solo.
-                    // TUTORIALES_LISTA ahora vive a nivel de modulo (ver mas arriba) -- se
-                    // reusa tambien en la pagina web /tutorials.
-
-                    const EMBEDS_BIENVENIDA_POR_TIPO = {
-                        actualizaciones: { title: '🔔 Updates', description: 'You\'ll get notified here whenever there\'s a new bot update, with a button to install it right away.' },
-                        tutoriales: {
-                            title: '📚 Tutorials',
-                            description: 'Here you can find all the tutorials for the bot\'s commands and features:',
-                            fields: TUTORIALES_LISTA.map((t, i) => ({ name: `${i + 1}- ${t.label}`, value: '​', inline: false }))
-                        },
-                        apoyo: { title: '☕ Donate', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
-                        'share-cards': { title: '🃏 Share Cards', description: 'Post cards here that you\'re giving away or open to trading.' },
-                        'farm-shop-tickets': { title: '🎫 Farm Shop Tickets', description: 'Track Shop Tickets farmed across your accounts here.' },
-                        cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
-                        cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
-                        cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot — you can attach a screenshot too.' },
-                        shinedust: { title: '🍬 Shinedust', description: 'Results from the 👛 Shinedust button on card lookups land here — the card, the account, and its current Shinedust balance, with buttons to jump straight into Trade or Extract XML for that same account.' },
-                        info_accounts: { title: '📋 Info Accounts', description: 'Press 📋 Info Accounts on a message in your Extract XML channel to get a full PDF report of that account here — every card it has, grouped by expansion, with quantities.' }
-                    };
-
-                    // Canales con un comando real y no-efímero asignado: en vez del embed
-                    // genérico de "acá usas /x", se ejecuta el comando de verdad para que el
-                    // usuario vea la interfaz funcionando apenas se crea el canal.
-                    // cmd_build_embed/cmd_build_webhooks/cmd_feedback quedan afuera porque
-                    // esos comandos responden de forma efímera (o abren un modal), así que no
-                    // hay nada persistente que publicar en el canal sin una interacción real.
-                    const COMANDOS_REALES_POR_TIPO = {
-                        cmd_card_wishlist: 'card_wishlist',
-                        cmd_card_all: 'card_all',
-                        cmd_extract_xlm: 'extract_xlm',
-                        cmd_run_instance: 'run_instance'
-                    };
-
-                    const crearCategoriaSiNoExiste = async (nombreCategoria, privada = false) => {
-                        let categoria = interaction.guild.channels.cache.find(c => c.name === nombreCategoria && c.type === ChannelType.GuildCategory);
-                        // Categoria privada del modo comunidad (🔒 STAFF): solo el bot y el staff la ven.
-                        // Se reaplica en cada Sync por si alguien toco los permisos a mano.
-                        const enComunidad = comunidad.esComunidad(interaction.guildId);
-                        const permisos = privada ? await comunidad.permisosPrivados(interaction.guild)
-                            : enComunidad ? comunidad.permisosPublicos(interaction.guild)
-                            : [{
-                                id: interaction.guild.members.me.id,
-                                allow: [PermissionsBitField.Flags.Administrator]
-                            }];
-                        if (!categoria) {
-                            categoria = await interaction.guild.channels.create({
-                                name: nombreCategoria,
-                                type: ChannelType.GuildCategory,
-                                permissionOverwrites: permisos
-                            });
-                        } else if (privada || enComunidad) {
-                            await categoria.permissionOverwrites.set(permisos).catch(console.error);
-                        }
-                        return categoria;
-                    };
-
-
-                    const crearCanalSincronizado = async (categoria, tipo, nombreCanal) => {
-                        let canal = interaction.guild.channels.cache.find(ch => ch.name === nombreCanal && ch.parentId === categoria.id);
-                        if (!canal) {
-                            // Si el canal ya existe en otra categoría (reorganización), lo movemos en vez de duplicarlo.
-                            canal = interaction.guild.channels.cache.find(ch => ch.name === nombreCanal && ch.type === ChannelType.GuildText);
-                            if (canal) {
-                                await canal.setParent(categoria.id, { lockPermissions: false });
-                            } else {
-                                canal = await interaction.guild.channels.create({ name: nombreCanal, type: ChannelType.GuildText, parent: categoria.id });
-                            }
-                        }
-
-                        // REVERTIDO (2026-09-07, bug real reproducido en vivo: "se me desactivo el
-                        // heartbeat, y cuando lo activo no deja" -- toggle/panel tiraba "First
-                        // configure the Heartbeat Webhook" pese a estar configurado): el intento de
-                        // 2026-09-05 de guardar aca el USER ID en vez del guildId para 'heartbeat'
-                        // rompia tieneConfiguracion(guildId, 'heartbeat') y el toggle On/Off del
-                        // panel, que buscan esta fila por guildId igual que TODOS los demas tipos --
-                        // discord_id tiene que seguir siendo guildId siempre, sin excepcion, para que
-                        // el panel funcione. El DM de heartbeat.js ahora resuelve al dueño real del
-                        // servidor por su cuenta (ver avisarInstanciaCongeladaSiHaceFalta), sin
-                        // depender de este valor.
-                        const filaExistente = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
-                        if (filaExistente && filaExistente.canal_id === canal.id && filaExistente.webhook_url && filaExistente.webhook_url !== 'N/A' && (await webhookEstaVivo(filaExistente.webhook_url))) {
-                            return canal;
-                        }
-
-                        // Si se llega hasta acá es porque el webhook viejo se va a recrear
-                        // (invalido, o el chequeo de arriba dio falso) -- sin esto, el mensaje
-                        // de bienvenida/panel que ya se habia mandado con el webhook VIEJO
-                        // queda huerfano en el canal (el webhook que lo mando ya no existe) y
-                        // el de abajo manda uno nuevo, duplicando el mensaje para siempre.
-                        if (filaExistente?.webhook_url && filaExistente.webhook_url !== 'N/A') {
-                            const claveInterfazVieja = COMANDOS_REALES_POR_TIPO[tipo] || (tipo === 'cmd_setup' ? 'setup' : tipo);
-                            const filaMsgVieja = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, `interfaz_msg_${claveInterfazVieja}`]);
-                            if (filaMsgVieja?.estado) {
-                                try { await axios.delete(`${filaExistente.webhook_url}/messages/${filaMsgVieja.estado}`, { timeout: 10000 }); } catch (e) { /* ya no existia o el webhook viejo ya estaba muerto */ }
-                            }
-                        }
-
-                        const webhooks = await canal.fetchWebhooks();
-                        // Borrar TODOS los webhooks que creo este bot en el canal, no solo los que
-                        // conservan el nombre por defecto (2026-09-30, bug real de un usuario:
-                        // "30007 - Maximum number of webhooks reached (15)"). Los renombrados con
-                        // /webhook no se reconocian por nombre, quedaban, y cada sincronizacion
-                        // sumaba uno nuevo hasta el tope de 15 por canal. Los webhooks de otros
-                        // bots o creados a mano (ej. los del bot de Kevin) no se tocan.
-                        const idBot = interaction.client.user.id;
-                        const existingHooks = webhooks.filter(w =>
-                            w.owner?.id === idBot || w.applicationId === idBot
-                            || w.name === `Bot ${tipo}` || w.name === nombreDefaultWebhook(tipo));
-                        for (const oldWebhook of existingHooks.values()) {
-                            await oldWebhook.delete('Recreating invalid webhook').catch(console.error);
-                        }
-
-                        const webhook = await canal.createWebhook({ name: nombreDefaultWebhook(tipo), avatar: avatarDefaultWebhook(tipo) });
-                        await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
-                        await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.guildId, tipo, canal.id, webhook.url]);
-                        // Si el usuario ya le había puesto nombre/foto propia a este webhook
-                        // con /webhook, se la reaplica al nuevo — si no, se queda con el
-                        // nombre/foto por defecto (nada que reaplicar).
-                        await aplicarPersonalizacionWebhookSiExiste(interaction.user.id, tipo, webhook.url);
-
-                        const commandKeyReal = COMANDOS_REALES_POR_TIPO[tipo];
-                        if (commandKeyReal) {
-                            await enviarComandoAlCanal(commandKeyReal, interaction.user, { webhook_url: webhook.url, canal_id: canal.id }, false, interaction.guild);
-                        } else if (tipo === 'cmd_setup') {
-                            const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.guildId);
-                            await enviarOEditarInterfaz(interaction.user.id, 'setup', webhook.url, panel, archivosPanel || [], false, interaction.guild);
-                        } else {
-                            const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
-                            if (embedBienvenida) {
-                                const payloadBienvenida = { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] };
-                                // Botón de link (style 5) — no requiere que el bot
-                                // maneje ninguna interacción, Discord abre la URL
-                                // directo en el cliente, así que funciona igual
-                                // mandado desde un webhook plano.
-                                if (tipo === 'apoyo') {
-                                    payloadBienvenida.components = [{
-                                        type: 1,
-                                        components: [{ type: 2, style: 5, label: '☕ Donate on Ko-fi', url: 'https://ko-fi.com/alecast' }]
-                                    }];
-                                }
-                                if (tipo === 'tutoriales') {
-                                    const filasTutoriales = [];
-                                    for (let j = 0; j < TUTORIALES_LISTA.length; j += 5) {
-                                        filasTutoriales.push(new ActionRowBuilder().addComponents(
-                                            TUTORIALES_LISTA.slice(j, j + 5).map(t =>
-                                                new ButtonBuilder().setCustomId(`tutorial_pdf::${t.tipo}`).setLabel(`📄 ${t.label}`).setStyle(ButtonStyle.Secondary)
-                                            )
-                                        ));
-                                    }
-                                    payloadBienvenida.components = filasTutoriales;
-                                }
-                                await enviarOEditarInterfaz(interaction.user.id, tipo, webhook.url, payloadBienvenida, [], false, interaction.guild);
-                            }
-                        }
-
-                        return canal;
-                    };
-
-                    const reportePartes = [];
-                    const categoriasGestionadas = [];
-                    // Modo comunidad: solo MANAGER + RUN MUMU PLAYER + 🔒 STAFF. En cualquier otro
-                    // server la lista queda igual que siempre.
-                    const gruposSync = comunidad.gruposSync(interaction.guildId, grupos);
-                    for (let i = 0; i < gruposSync.length; i++) {
-                        const grupo = gruposSync[i];
-                        const categoria = await crearCategoriaSiNoExiste(grupo.categoria, !!grupo.privado);
-                        categoriasGestionadas.push(categoria);
-                        await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, grupo.tipoCategoria]);
-                        await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, 'N/A')`, [interaction.guildId, grupo.tipoCategoria, categoria.id]);
-
-                        for (const c of grupo.canales) {
-                            const canal = await crearCanalSincronizado(categoria, c.tipo, c.name);
-                            reportePartes.push(`🔹 <#${canal.id}>`);
-                        }
-                    }
-
-                    // Reordenar TODAS las categorías del servidor en un solo request (bulk): las
-                    // nuestras primero en el orden deseado, y el resto (no gestionadas por el bot)
-                    // a continuación, respetando su orden actual entre sí. Mandar solo un subconjunto
-                    // hace que Discord reinterprete las posiciones de forma inconsistente.
-                    const idsGestionados = new Set(categoriasGestionadas.map(c => c.id));
-                    const otrasCategorias = interaction.guild.channels.cache
-                        .filter(ch => ch.type === ChannelType.GuildCategory && !idsGestionados.has(ch.id))
-                        .sort((a, b) => a.position - b.position);
-
-                    const posicionesCategorias = [
-                        ...categoriasGestionadas.map((categoria, i) => ({ id: categoria.id, position: i })),
-                        ...[...otrasCategorias.values()].map((ch, i) => ({ id: ch.id, position: categoriasGestionadas.length + i }))
-                    ];
-                    await interaction.client.rest.patch(Routes.guildChannels(interaction.guildId), { body: posicionesCategorias }).catch(console.error);
-
-                    await interaction.editReply({ content: `✅ **Channels synced successfully!**\n\n${reportePartes.join('\n')}` });
-                } catch (e) {
-                    console.error(e);
-                    // Mostrar la causa real (2026-09-30, reporte de un usuario con Administrador que
-                    // igual veia "revisa los permisos"): cualquier fallo caia en ese texto generico.
-                    const causa = [e?.code, e?.rawError?.message || e?.message].filter(Boolean).join(' - ').slice(0, 300);
-                    await interaction.editReply({ content: `❌ Error syncing channels${causa ? `: \`${causa}\`` : '.'}\nIf the bot already has Administrator, send this message to the developer.` });
-                }
+                await sincronizarCanales(interaction);
                 break;
 
             case 'toggle_trading':
@@ -16078,8 +15799,345 @@ async function rechazarGuildNoAutorizado(guild) {
     try { await guild.leave(); } catch (e) { console.error('❌ Error al salir del servidor no autorizado:', e); }
 }
 
+// Sync Channels (antes vivia dentro del case de btn_crear_canales_menu). Funcion aparte para que el
+// host de la comunidad tambien la use al tomar el turno (community-host.js) con una "interaccion"
+// armada a mano: { guild, guildId, user, client, editReply }.
+async function sincronizarCanales(interaction) {
+        try {
+            const grupos = [
+                {
+                    categoria: '🔔 UPDATES 🔔',
+                    tipoCategoria: 'actualizaciones_categoria',
+                    canales: [
+                        { tipo: 'actualizaciones', name: '🔔-updates' },
+                        { tipo: 'tutoriales', name: '📚-tutorials' },
+                        { tipo: 'apoyo', name: '☕-donate' },
+                        { tipo: 'cmd_feedback', name: '📝-feedback' }
+                    ]
+                },
+                {
+                    categoria: '⚙️ SETTINGS ⚙️',
+                    tipoCategoria: 'settings_categoria',
+                    canales: [
+                        { tipo: 'cmd_setup', name: '⚙-settings' },
+                        { tipo: 'cmd_build_embed', name: '🔧-build-embed' },
+                        { tipo: 'cmd_build_webhooks', name: '🔗-build-webhooks' }
+                    ]
+                },
+                {
+                    categoria: '💓 HEARTBEAT 💓',
+                    tipoCategoria: 'heartbeat_categoria',
+                    canales: [
+                        { tipo: 'heartbeat', name: '💓-heartbeat' }
+                    ]
+                },
+                {
+                    categoria: '📦 PTCG POCKET DROPS 📦',
+                    tipoCategoria: 'crear_canales',
+                    canales: [
+                        { tipo: 's4t', name: '🤖-s4t' },
+                        { tipo: 's4t-categoria', name: '📊-s4t-category' },
+                        { tipo: '3-diamond', name: '🔷-3-diamond' },
+                        { tipo: '4-diamond', name: '💠-4-diamond' },
+                        { tipo: '1-star', name: '⭐-1-star' },
+                        { tipo: '1-star-shiny', name: '🌟-1-star-shiny' },
+                        { tipo: '2-star-trainer', name: '⭐⭐-trainer' },
+                        { tipo: '2-star-rainbow', name: '🌈-2-star-rainbow' },
+                        { tipo: '2-star-full-art', name: '🎨-2-star-full-art' },
+                        { tipo: '2-star-shiny', name: '✨-2-star-shiny' },
+                        { tipo: 'immersive', name: '🌌-immersive' },
+                        { tipo: 'crown-rare', name: '👑-crown-rare' },
+                        { tipo: 'wishlist', name: '💖-wishlist' }
+                    ]
+                },
+                {
+                    categoria: '📦 GOD PACKS 📦',
+                    tipoCategoria: 'godpack_categoria',
+                    canales: [
+                        { tipo: 'godpack-general', name: '📦-godpack-general' },
+                        { tipo: 'godpack-alive', name: '👼-godpack-alive' },
+                        { tipo: 'godpack-dead', name: '☠️-godpack-dead' }
+                    ]
+                },
+                {
+                    categoria: '🔥 MANAGER 🔥',
+                    tipoCategoria: 'manager_categoria',
+                    canales: [
+                        { tipo: 'cmd_card_wishlist', name: '💖-cards-wishlist' },
+                        { tipo: 'cmd_card_all', name: '⚡-all-cards' },
+                        { tipo: 'cmd_card_gold', name: '🏆-gold-cards' },
+                        { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' },
+                        { tipo: 'shinedust', name: '🍬-shinedust' },
+                        { tipo: 'info_accounts', name: '📋-info-accounts' }
+                    ]
+                },
+                {
+                    categoria: '🎮 RUN MUMU PLAYER 🎮',
+                    tipoCategoria: 'run_mumu_categoria',
+                    canales: [
+                        { tipo: 'cmd_run_instance', name: '🔄-trading' },
+                        // Agregados 2026-08-24 a pedido explicito del usuario -- canales
+                        // nuevos, todavia sin comando propio (igual que Donate/Heartbeat).
+                        { tipo: 'share-cards', name: '🃏-share-cards' },
+                        { tipo: 'farm-shop-tickets', name: '🎫-farm-shop-tickets' }
+                    ]
+                }
+            ];
+
+            // Solo canales que tienen un comando real asignado (aunque no se pueda
+            // "ejecutar" solo, como /embed, /webhook, /feedback) o que explican algo
+            // que no se repite (Updates/Support) reciben un embed al sincronizar. El
+            // resto (rareza, godpacks, s4t, heartbeat, wishlist-feed) no tiene ningún
+            // comando propio — meter un embed ahí es ruido innecesario en canales que
+            // además reciben cartas todo el tiempo.
+            // Lista mostrada en el canal de Tutorials (2026-08-06, a pedido explicito
+            // del usuario): un item por fila, cada uno con su boton para abrir el PDF
+            // correspondiente reusando tutorial_pdf:: (mismo botón que ya usa cada
+            // canal individual) -- si a algún tipo todavía no se le subió el PDF real,
+            // el handler de tutorial_pdf:: ya responde "No tutorial available yet" solo.
+            // TUTORIALES_LISTA ahora vive a nivel de modulo (ver mas arriba) -- se
+            // reusa tambien en la pagina web /tutorials.
+
+            const EMBEDS_BIENVENIDA_POR_TIPO = {
+                actualizaciones: { title: '🔔 Updates', description: 'You\'ll get notified here whenever there\'s a new bot update, with a button to install it right away.' },
+                tutoriales: {
+                    title: '📚 Tutorials',
+                    description: 'Here you can find all the tutorials for the bot\'s commands and features:',
+                    fields: TUTORIALES_LISTA.map((t, i) => ({ name: `${i + 1}- ${t.label}`, value: '​', inline: false }))
+                },
+                apoyo: { title: '☕ Donate', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
+                'share-cards': { title: '🃏 Share Cards', description: 'Post cards here that you\'re giving away or open to trading.' },
+                'farm-shop-tickets': { title: '🎫 Farm Shop Tickets', description: 'Track Shop Tickets farmed across your accounts here.' },
+                cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
+                cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
+                cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot — you can attach a screenshot too.' },
+                shinedust: { title: '🍬 Shinedust', description: 'Results from the 👛 Shinedust button on card lookups land here — the card, the account, and its current Shinedust balance, with buttons to jump straight into Trade or Extract XML for that same account.' },
+                info_accounts: { title: '📋 Info Accounts', description: 'Press 📋 Info Accounts on a message in your Extract XML channel to get a full PDF report of that account here — every card it has, grouped by expansion, with quantities.' }
+            };
+
+            // Canales con un comando real y no-efímero asignado: en vez del embed
+            // genérico de "acá usas /x", se ejecuta el comando de verdad para que el
+            // usuario vea la interfaz funcionando apenas se crea el canal.
+            // cmd_build_embed/cmd_build_webhooks/cmd_feedback quedan afuera porque
+            // esos comandos responden de forma efímera (o abren un modal), así que no
+            // hay nada persistente que publicar en el canal sin una interacción real.
+            const COMANDOS_REALES_POR_TIPO = {
+                cmd_card_wishlist: 'card_wishlist',
+                cmd_card_all: 'card_all',
+                cmd_extract_xlm: 'extract_xlm',
+                cmd_run_instance: 'run_instance'
+            };
+
+            const crearCategoriaSiNoExiste = async (nombreCategoria, privada = false) => {
+                let categoria = interaction.guild.channels.cache.find(c => c.name === nombreCategoria && c.type === ChannelType.GuildCategory);
+                // Categoria privada del modo comunidad (🔒 STAFF): solo el bot y el staff la ven.
+                // Se reaplica en cada Sync por si alguien toco los permisos a mano.
+                const enComunidad = comunidad.esComunidad(interaction.guildId);
+                const permisos = privada ? await comunidad.permisosPrivados(interaction.guild)
+                    : enComunidad ? comunidad.permisosPublicos(interaction.guild)
+                    : [{
+                        id: interaction.guild.members.me.id,
+                        allow: [PermissionsBitField.Flags.Administrator]
+                    }];
+                if (!categoria) {
+                    categoria = await interaction.guild.channels.create({
+                        name: nombreCategoria,
+                        type: ChannelType.GuildCategory,
+                        permissionOverwrites: permisos
+                    });
+                } else if (privada || enComunidad) {
+                    await categoria.permissionOverwrites.set(permisos).catch(console.error);
+                }
+                return categoria;
+            };
+
+
+            const crearCanalSincronizado = async (categoria, tipo, nombreCanal) => {
+                let canal = interaction.guild.channels.cache.find(ch => ch.name === nombreCanal && ch.parentId === categoria.id);
+                if (!canal) {
+                    // Si el canal ya existe en otra categoría (reorganización), lo movemos en vez de duplicarlo.
+                    canal = interaction.guild.channels.cache.find(ch => ch.name === nombreCanal && ch.type === ChannelType.GuildText);
+                    if (canal) {
+                        await canal.setParent(categoria.id, { lockPermissions: false });
+                    } else {
+                        canal = await interaction.guild.channels.create({ name: nombreCanal, type: ChannelType.GuildText, parent: categoria.id });
+                    }
+                }
+
+                // REVERTIDO (2026-09-07, bug real reproducido en vivo: "se me desactivo el
+                // heartbeat, y cuando lo activo no deja" -- toggle/panel tiraba "First
+                // configure the Heartbeat Webhook" pese a estar configurado): el intento de
+                // 2026-09-05 de guardar aca el USER ID en vez del guildId para 'heartbeat'
+                // rompia tieneConfiguracion(guildId, 'heartbeat') y el toggle On/Off del
+                // panel, que buscan esta fila por guildId igual que TODOS los demas tipos --
+                // discord_id tiene que seguir siendo guildId siempre, sin excepcion, para que
+                // el panel funcione. El DM de heartbeat.js ahora resuelve al dueño real del
+                // servidor por su cuenta (ver avisarInstanciaCongeladaSiHaceFalta), sin
+                // depender de este valor.
+                const filaExistente = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
+                if (filaExistente && filaExistente.canal_id === canal.id && filaExistente.webhook_url && filaExistente.webhook_url !== 'N/A' && (await webhookEstaVivo(filaExistente.webhook_url))) {
+                    return canal;
+                }
+
+                // Si se llega hasta acá es porque el webhook viejo se va a recrear
+                // (invalido, o el chequeo de arriba dio falso) -- sin esto, el mensaje
+                // de bienvenida/panel que ya se habia mandado con el webhook VIEJO
+                // queda huerfano en el canal (el webhook que lo mando ya no existe) y
+                // el de abajo manda uno nuevo, duplicando el mensaje para siempre.
+                if (filaExistente?.webhook_url && filaExistente.webhook_url !== 'N/A') {
+                    const claveInterfazVieja = COMANDOS_REALES_POR_TIPO[tipo] || (tipo === 'cmd_setup' ? 'setup' : tipo);
+                    const filaMsgVieja = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, `interfaz_msg_${claveInterfazVieja}`]);
+                    if (filaMsgVieja?.estado) {
+                        try { await axios.delete(`${filaExistente.webhook_url}/messages/${filaMsgVieja.estado}`, { timeout: 10000 }); } catch (e) { /* ya no existia o el webhook viejo ya estaba muerto */ }
+                    }
+                }
+
+                const webhooks = await canal.fetchWebhooks();
+                // Borrar TODOS los webhooks que creo este bot en el canal, no solo los que
+                // conservan el nombre por defecto (2026-09-30, bug real de un usuario:
+                // "30007 - Maximum number of webhooks reached (15)"). Los renombrados con
+                // /webhook no se reconocian por nombre, quedaban, y cada sincronizacion
+                // sumaba uno nuevo hasta el tope de 15 por canal. Los webhooks de otros
+                // bots o creados a mano (ej. los del bot de Kevin) no se tocan.
+                const idBot = interaction.client.user.id;
+                const existingHooks = webhooks.filter(w =>
+                    w.owner?.id === idBot || w.applicationId === idBot
+                    || w.name === `Bot ${tipo}` || w.name === nombreDefaultWebhook(tipo));
+                for (const oldWebhook of existingHooks.values()) {
+                    await oldWebhook.delete('Recreating invalid webhook').catch(console.error);
+                }
+
+                const webhook = await canal.createWebhook({ name: nombreDefaultWebhook(tipo), avatar: avatarDefaultWebhook(tipo) });
+                await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
+                await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.guildId, tipo, canal.id, webhook.url]);
+                // Si el usuario ya le había puesto nombre/foto propia a este webhook
+                // con /webhook, se la reaplica al nuevo — si no, se queda con el
+                // nombre/foto por defecto (nada que reaplicar).
+                await aplicarPersonalizacionWebhookSiExiste(interaction.user.id, tipo, webhook.url);
+
+                const commandKeyReal = COMANDOS_REALES_POR_TIPO[tipo];
+                if (commandKeyReal) {
+                    await enviarComandoAlCanal(commandKeyReal, interaction.user, { webhook_url: webhook.url, canal_id: canal.id }, false, interaction.guild);
+                } else if (tipo === 'cmd_setup') {
+                    const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.guildId);
+                    await enviarOEditarInterfaz(interaction.user.id, 'setup', webhook.url, panel, archivosPanel || [], false, interaction.guild);
+                } else {
+                    const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
+                    if (embedBienvenida) {
+                        const payloadBienvenida = { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] };
+                        // Botón de link (style 5) — no requiere que el bot
+                        // maneje ninguna interacción, Discord abre la URL
+                        // directo en el cliente, así que funciona igual
+                        // mandado desde un webhook plano.
+                        if (tipo === 'apoyo') {
+                            payloadBienvenida.components = [{
+                                type: 1,
+                                components: [{ type: 2, style: 5, label: '☕ Donate on Ko-fi', url: 'https://ko-fi.com/alecast' }]
+                            }];
+                        }
+                        if (tipo === 'tutoriales') {
+                            const filasTutoriales = [];
+                            for (let j = 0; j < TUTORIALES_LISTA.length; j += 5) {
+                                filasTutoriales.push(new ActionRowBuilder().addComponents(
+                                    TUTORIALES_LISTA.slice(j, j + 5).map(t =>
+                                        new ButtonBuilder().setCustomId(`tutorial_pdf::${t.tipo}`).setLabel(`📄 ${t.label}`).setStyle(ButtonStyle.Secondary)
+                                    )
+                                ));
+                            }
+                            payloadBienvenida.components = filasTutoriales;
+                        }
+                        await enviarOEditarInterfaz(interaction.user.id, tipo, webhook.url, payloadBienvenida, [], false, interaction.guild);
+                    }
+                }
+
+                return canal;
+            };
+
+            const reportePartes = [];
+            const categoriasGestionadas = [];
+            // Modo comunidad: solo MANAGER + RUN MUMU PLAYER + 🔒 STAFF. En cualquier otro
+            // server la lista queda igual que siempre.
+            const gruposSync = comunidad.gruposSync(interaction.guildId, grupos);
+            for (let i = 0; i < gruposSync.length; i++) {
+                const grupo = gruposSync[i];
+                const categoria = await crearCategoriaSiNoExiste(grupo.categoria, !!grupo.privado);
+                categoriasGestionadas.push(categoria);
+                await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, grupo.tipoCategoria]);
+                await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, 'N/A')`, [interaction.guildId, grupo.tipoCategoria, categoria.id]);
+
+                for (const c of grupo.canales) {
+                    const canal = await crearCanalSincronizado(categoria, c.tipo, c.name);
+                    reportePartes.push(`🔹 <#${canal.id}>`);
+                }
+            }
+
+            // Reordenar TODAS las categorías del servidor en un solo request (bulk): las
+            // nuestras primero en el orden deseado, y el resto (no gestionadas por el bot)
+            // a continuación, respetando su orden actual entre sí. Mandar solo un subconjunto
+            // hace que Discord reinterprete las posiciones de forma inconsistente.
+            const idsGestionados = new Set(categoriasGestionadas.map(c => c.id));
+            const otrasCategorias = interaction.guild.channels.cache
+                .filter(ch => ch.type === ChannelType.GuildCategory && !idsGestionados.has(ch.id))
+                .sort((a, b) => a.position - b.position);
+
+            const posicionesCategorias = [
+                ...categoriasGestionadas.map((categoria, i) => ({ id: categoria.id, position: i })),
+                ...[...otrasCategorias.values()].map((ch, i) => ({ id: ch.id, position: categoriasGestionadas.length + i }))
+            ];
+            await interaction.client.rest.patch(Routes.guildChannels(interaction.guildId), { body: posicionesCategorias }).catch(console.error);
+
+            await interaction.editReply({ content: `✅ **Channels synced successfully!**\n\n${reportePartes.join('\n')}` });
+        } catch (e) {
+            console.error(e);
+            // Mostrar la causa real (2026-09-30, reporte de un usuario con Administrador que
+            // igual veia "revisa los permisos"): cualquier fallo caia en ese texto generico.
+            const causa = [e?.code, e?.rawError?.message || e?.message].filter(Boolean).join(' - ').slice(0, 300);
+            await interaction.editReply({ content: `❌ Error syncing channels${causa ? `: \`${causa}\`` : '.'}\nIf the bot already has Administrator, send this message to the developer.` });
+        }
+}
+// Toma del turno en la comunidad: comandos propios, canales/paneles con sus webhooks (Sync), fuera los
+// paneles del bot anterior, y la direccion de Monitor Link en la libreta.
+async function tomarTurnoComunidad() {
+    const applicationId = CLIENT_ID || client.user?.id;
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: comandosDeGuild(guild.id, construirSlashCommands()) });
+        const dueno = await guild.fetchOwner().then(m => m.user).catch(() => client.user);
+        await sincronizarCanales({ guild, guildId: guild.id, user: dueno, client, editReply: async () => {} });
+        await limpiarPanelesDeOtrosBots(guild);
+        console.log(`✅ Community turn: commands and panels published in ${guild.name}`);
+    }
+    if (DASHBOARD_PUBLIC_URL) monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL);
+}
+
+async function soltarTurnoComunidad() {
+    const applicationId = CLIENT_ID || client.user?.id;
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    for (const guild of client.guilds.cache.values()) {
+        if (comunidad.esComunidad(guild.id)) await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: [] }).catch(() => {});
+    }
+}
+
+// Paneles (mensajes de webhook con botones) que publico el bot de OTRO host en los canales del bot:
+// sus botones solo los atiende ese otro bot, asi que se borran al tomar el turno.
+async function limpiarPanelesDeOtrosBots(guild) {
+    const filas = await db.all(`SELECT DISTINCT canal_id FROM configs_canales WHERE discord_id = ? AND canal_id IS NOT NULL`, [guild.id]) || [];
+    for (const { canal_id } of filas) {
+        const canal = guild.channels.cache.get(canal_id);
+        if (!canal?.isTextBased?.() || canal.type === ChannelType.GuildCategory) continue;
+        const mensajes = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+        for (const m of (mensajes?.values() || [])) {
+            if (m.webhookId && m.applicationId && m.applicationId !== client.user.id && m.components?.length) {
+                await m.delete().catch(() => {});
+            }
+        }
+    }
+}
+
 client.once('ready', async () => {
     try {
+        await hostComunidad.iniciar({ alTomar: tomarTurnoComunidad, alSoltar: soltarTurnoComunidad });
         await registrarSlashCommands();
         console.log(`🤖 Bot ready as ${client.user.tag}`);
 
@@ -16243,7 +16301,7 @@ client.on('guildCreate', async (guild) => {
         const rest = new REST({ version: '10' }).setToken(TOKEN);
         const applicationId = CLIENT_ID || client.user?.id;
         if (applicationId) {
-            await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: comunidad.comandosPara(guild.id, construirSlashCommands()) });
+            await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: comandosDeGuild(guild.id, construirSlashCommands()) });
             console.log(`✅ Slash commands registered in guild ${guild.id}`);
         }
     } catch (error) {

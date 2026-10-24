@@ -1,11 +1,11 @@
 // Asistente del host de la comunidad (Zenith Bot). Dos usos:
 //
-//   node host-setup.js --make-key   (en la PC de Ale) arma una "clave de host" cifrada con todo lo que
-//                                    un host necesita: token de Zenith Bot, IDs de la comunidad, Upstash.
-//                                    Se le pasa al host la clave por un lado y la contraseña por otro.
-//   node host-setup.js              (en la PC del host, ej. wr98) pide la clave, la contraseña, su
-//                                    carpeta PTCGPB y la del bot de Miguel; deja todo listo y lo arranca
-//                                    con PM2 (host.js decide solo si queda activo o en espera).
+//   node host-setup.js --make-key   (en la PC de Ale) arma una "clave de host" cifrada con lo que todos
+//                                    los hosts comparten: IDs de la comunidad, staff, Upstash. Se le pasa
+//                                    al host la clave por un lado y la contraseña por otro.
+//   node host-setup.js              (en la PC del host, ej. wr98) pide la clave, la contraseña, SU token
+//                                    de bot (el de su propio bot: nunca sale de su PC), su carpeta PTCGPB
+//                                    y la del bot de Miguel; deja todo listo y lo arranca con PM2.
 //
 // El bot de Miguel NO viaja en la clave ni en este repo: cada host autorizado ya lo tiene en su PC.
 'use strict';
@@ -55,9 +55,6 @@ async function armarClave() {
     if (!datos.COMMUNITY_GUILD_IDS || !datos.LINK_REDIS_URL || !datos.LINK_REDIS_TOKEN) {
         throw new Error('The .env of this PC is missing COMMUNITY_GUILD_IDS or LINK_REDIS_* — they are needed for the host key.');
     }
-    console.log('Zenith Bot (Discord Developer Portal → your app):');
-    datos.DISCORD_BOT_TOKEN = await preguntar('  Bot token: ');
-    datos.DISCORD_CLIENT_ID = await preguntar('  Application ID: ');
     const contrasena = crypto.randomBytes(9).toString('base64url');
     const clave = cifrar(datos, contrasena);
     const archivo = path.join(RAIZ, 'host-key.txt');
@@ -88,6 +85,11 @@ async function instalarHost() {
         try { datos = descifrar(texto, contrasena); } catch (e) { console.log('❌ Wrong key or password. Try again.\n'); }
     }
 
+    // El bot de ESTE host (cada host usa el suyo; su token no viaja en la clave ni sale de esta PC).
+    console.log('\nYour own Discord bot (Developer Portal -> your app). It must be in Zenith Rise with Administrator.');
+    const tokenBot = await preguntar('  Bot token: ');
+    const idApp = await preguntar('  Application ID: ');
+
     let main = '';
     while (!fs.existsSync(path.join(main, 'Helper', 'cardmaster.json'))) {
         main = (await preguntar('Your PTCGPB folder (Main Path, it has Helper and Accounts inside): ')).replace(/^"|"$/g, '');
@@ -103,6 +105,8 @@ async function instalarHost() {
     fs.mkdirSync(CARPETA_HOST, { recursive: true });
     const env = {
         ...datos,
+        DISCORD_BOT_TOKEN: tokenBot,
+        DISCORD_CLIENT_ID: idApp,
         HOST_NAME: nombre,
         MONITOR_DB_PATH: path.join(CARPETA_HOST, 'host.db'),
         DASHBOARD_PORT: '3006',
@@ -129,7 +133,7 @@ async function instalarHost() {
     try {
         execSync(`pm2 start "${path.join(RAIZ, 'host.js')}" --name zenith --cwd "${CARPETA_HOST}"`, { stdio: 'inherit' });
         execSync('pm2 save', { stdio: 'inherit' });
-        console.log('\n🚀 Started. If another host is active, this one waits and takes over when that one goes offline.');
+        console.log('\n🚀 Started. If another host has the turn, this one stays on standby (its commands hidden) and takes over when that one goes offline.');
         console.log('   See it with:  pm2 logs zenith');
     } catch (e) {
         console.log('\n⚠️ Could not start it with PM2. Install PM2 (npm i -g pm2) and run this setup again.');
