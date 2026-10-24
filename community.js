@@ -97,7 +97,8 @@ function permisosPublicos(guild) {
 async function bloquearSiHaceFalta(interaction) {
     if (!esComunidad(interaction.guildId) || esStaff(interaction.user?.id)) return false;
     if (interaction.isChatInputCommand?.() && ABIERTOS_A_TODOS.has(interaction.commandName)) return false;
-    if (interaction.isButton?.() && interaction.customId === 'link_nueva_clave') return false;
+    // Botones y ventana de /link (vincular y elegir carpeta): para cualquier miembro.
+    if ((interaction.isButton?.() || interaction.isModalSubmit?.()) && ['link_nueva_clave', 'link_poner_carpeta', 'link_modal_carpeta', 'link_mi_carpeta'].includes(interaction.customId)) return false;
     if (interaction.isAutocomplete()) {
         await interaction.respond([]).catch(() => {});
         return true;

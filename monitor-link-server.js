@@ -30,8 +30,25 @@ async function asegurarTablas() {
     // Carpeta elegida en Monitor Link (para 📂 All Main Paths / 📁 My Folder). Columna agregada despues.
     if (!asegurarTablas.carpeta) {
         try { await db.run(`ALTER TABLE link_resumen ADD COLUMN carpeta TEXT`); } catch (e) { /* ya existe */ }
+        // 📁 Set My Folder: carpeta pedida desde Discord (Monitor Link la toma en el proximo ping) y,
+        // si en esa PC no existe, el motivo para mostrarlo.
+        try { await db.run(`ALTER TABLE link_agentes ADD COLUMN carpeta_pedida TEXT`); } catch (e) { /* ya existe */ }
+        try { await db.run(`ALTER TABLE link_agentes ADD COLUMN carpeta_error TEXT`); } catch (e) { /* ya existe */ }
         asegurarTablas.carpeta = true;
     }
+}
+
+// 📁 Set My Folder: guarda la ruta pedida; Monitor Link la recibe en su proximo ping (cada minuto).
+async function pedirCarpeta(discordId, ruta) {
+    await asegurarTablas();
+    const r = await db.run(`UPDATE link_agentes SET carpeta_pedida = ?, carpeta_error = NULL WHERE discord_id = ?`,
+        [String(ruta).trim().replace(/^"|"$/g, '').slice(0, 300), String(discordId)]);
+    return (r?.changes ?? 1) > 0;
+}
+
+async function estadoCarpeta(discordId) {
+    await asegurarTablas();
+    return await db.get(`SELECT carpeta_pedida, carpeta_error FROM link_agentes WHERE discord_id = ?`, [String(discordId)]) || null;
 }
 
 // Todos los vinculados, para 📂 All Main Paths: carpeta, cuentas, ultimo resumen y si esta en linea.
@@ -131,7 +148,8 @@ function registrar(app, dependencias) {
             await asegurarTablas();
             const agente = await agenteDe(req);
             if (!agente) return res.status(401).json({ error: 'not_linked' });
-            res.json({ ok: true, user: (await nombreUsuario(agente.discord_id)) || agente.discord_id });
+            const pedido = await db.get(`SELECT carpeta_pedida FROM link_agentes WHERE discord_id = ?`, [agente.discord_id]);
+            res.json({ ok: true, user: (await nombreUsuario(agente.discord_id)) || agente.discord_id, folder: pedido?.carpeta_pedida || null });
         } catch (e) {
             res.status(500).json({ error: 'server_error' });
         }
@@ -159,6 +177,17 @@ function registrar(app, dependencias) {
                 `INSERT INTO link_resumen (discord_id, guild_id, datos, cuentas, ts, carpeta) VALUES (?, ?, ?, ?, ?, ?)
                  ON CONFLICT(discord_id) DO UPDATE SET guild_id = excluded.guild_id, datos = excluded.datos, cuentas = excluded.cuentas, ts = excluded.ts, carpeta = excluded.carpeta`,
                 [agente.discord_id, agente.guild_id, JSON.stringify(limpias), limpias.length, Date.now(), String(datos.folder || "").slice(0, 300) || null]);
+            // Respuesta al 📁 Set My Folder: si ya se esta usando la carpeta pedida, o si en esa PC no
+            // existe (folderError), el pedido se cierra.
+            const pedido = await db.get(`SELECT carpeta_pedida FROM link_agentes WHERE discord_id = ?`, [agente.discord_id]);
+            if (pedido?.carpeta_pedida) {
+                if (datos.folderError) {
+                    await db.run(`UPDATE link_agentes SET carpeta_pedida = NULL, carpeta_error = ? WHERE discord_id = ?`,
+                        [String(datos.folderError).slice(0, 300), agente.discord_id]);
+                } else if (String(datos.folder || '').toLowerCase() === pedido.carpeta_pedida.toLowerCase()) {
+                    await db.run(`UPDATE link_agentes SET carpeta_pedida = NULL, carpeta_error = NULL WHERE discord_id = ?`, [agente.discord_id]);
+                }
+            }
             res.json({ ok: true, accounts: limpias.length });
         } catch (e) {
             console.error('DEBUG: Monitor Link /summary:', e?.message || e);
@@ -220,4 +249,4 @@ async function estadoAgente(discordId) {
     return { vinculado: true, enLinea: Date.now() - (fila.ultimo || 0) < 3 * 60 * 1000, ultimo: fila.ultimo };
 }
 
-module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };

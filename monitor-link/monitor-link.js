@@ -185,8 +185,8 @@ function armarResumen(carpeta) {
     return { version: VERSION, folder: carpeta, accounts: cuentas };
 }
 
-async function subirResumen(cfg, forzar = false) {
-    const resumen = armarResumen(cfg.carpetaJson);
+async function subirResumen(cfg, forzar = false, extra = {}) {
+    const resumen = { ...armarResumen(cfg.carpetaJson), ...extra };
     const texto = JSON.stringify(resumen);
     const huella = crypto.createHash('sha256').update(texto).digest('hex');
     if (!forzar && huella === cfg.ultimaHuella) return;
@@ -235,6 +235,19 @@ async function main() {
         try {
             const r = await fetch(`${cfg.serverUrl}/link/ping`, { headers: { Authorization: `Bearer ${cfg.token}` } });
             if (!r.ok && r.status !== 401 && await actualizarDireccion(cfg)) ciclo(true);
+            // 📁 Set My Folder desde Discord: si pidio otra carpeta, se cambia (si existe en esta PC).
+            const pedida = r.ok ? (await r.json().catch(() => ({}))).folder : null;
+            if (pedida && pedida.toLowerCase() !== String(cfg.carpetaJson).toLowerCase()) {
+                if (contarJsonDeCuentas(pedida)) {
+                    cfg.carpetaJson = pedida;
+                    guardarConfig(cfg);
+                    log(`📁 Folder changed from Discord: ${pedida}`);
+                    await subirResumen(cfg, true);
+                } else {
+                    log(`⚠️ Discord asked for ${pedida}, but there are no account files there. Keeping the current folder.`);
+                    await subirResumen(cfg, true, { folderError: `No account files in ${pedida} on this PC` });
+                }
+            }
         } catch (e) {
             if (await actualizarDireccion(cfg)) ciclo(true);
         }

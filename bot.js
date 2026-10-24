@@ -4042,6 +4042,10 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     );
 
     const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
+    // Comunidad: fuera los botones que usan la PC host (XML, Info Accounts, Wishlist, Shinedust por
+    // OCR, Extract XML, Inject). Quedan Home, Trade y Share.
+    comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::', 'card_info_accounts::', 'goldcards_info_accounts::',
+        'card_wishlist_add::', 'card_shinedust::', 'goldcards_shinedust::', 'card_extract::', 'goldcards_extract::', 'card_inject::', 'goldcards_inject::']);
     const archivosPayload = [];
     if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
@@ -10871,7 +10875,7 @@ async function construirPanelComunidad() {
     const fila1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('btn_crear_canales_menu').setLabel('🏗️ Sync Channels').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('toggle_drive_hd_regular').setLabel('🖼️ Normal Cards HD On/Off').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('btn_status').setLabel('📊 Status').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('link_poner_carpeta').setLabel('📁 Set My Folder').setStyle(ButtonStyle.Success)
     );
     const fila2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('link_todas_rutas').setLabel('📂 All Main Paths').setStyle(ButtonStyle.Primary),
@@ -11072,6 +11076,14 @@ async function manejarInteraccionPrincipal(interaction) {
         const vinculado = await monitorLink.precargar(interaction.user.id).catch(() => false);
         if (interaction.isChatInputCommand()) {
             const cmd = interaction.commandName;
+            // Resultados personales en privado (pedido de Ale): solo los ve quien los pidio, con
+            // "Dismiss message". Se fuerza ephemeral en las respuestas de estos comandos.
+            if (['card', 'goldcards', 'shinedust', 'farmtickets', 'transfers'].includes(cmd)) {
+                const deferOriginal = interaction.deferReply.bind(interaction);
+                const replyOriginal = interaction.reply.bind(interaction);
+                interaction.deferReply = (opts = {}) => deferOriginal({ ...opts, ephemeral: true });
+                interaction.reply = (opts = {}) => replyOriginal(typeof opts === 'string' ? { content: opts, ephemeral: true } : { ...opts, ephemeral: true });
+            }
             // Todavia sin version por miembro (necesitan la XML o la wishlist de su PC).
             if (cmd === 'wishlist' || cmd === 'extract') {
                 return await interaction.reply({ content: '🛠️ This isn\'t available here yet — coming with the next Monitor Link update.', ephemeral: true });
@@ -11083,6 +11095,28 @@ async function manejarInteraccionPrincipal(interaction) {
     }
     // /link (Monitor Link, solo en comunidad): clave de un solo uso para vincular el programa de la PC
     // del miembro con su usuario de Discord.
+    // 📁 Set My Folder: la ruta se pega en Discord y el Monitor Link de esa persona la toma solo en su
+    // proximo ping (≤ 1 min). Si en su PC no existe, sigue con la anterior y lo avisa en 📁 My Folder.
+    if (interaction.isButton() && interaction.customId === 'link_poner_carpeta') {
+        const estadoCarp = await monitorLink.estadoAgente(interaction.user.id);
+        if (!estadoCarp.vinculado) {
+            return await interaction.reply({ content: '🔗 Link your PC first: type **/link** and paste the key in **Monitor Link**.', ephemeral: true });
+        }
+        const actual = (await monitorLink.vinculados()).find(v => v.discordId === interaction.user.id)?.carpeta || '';
+        const modal = new ModalBuilder().setCustomId('link_modal_carpeta').setTitle('📁 Set My Folder')
+            .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
+                .setCustomId('ruta').setLabel('Your Accounts\\Cards\\accounts folder').setStyle(TextInputStyle.Short)
+                .setPlaceholder('C:\\PTCGPB\\Accounts\\Cards\\accounts').setValue(actual.slice(0, 300)).setRequired(true)));
+        return await interaction.showModal(modal);
+    }
+    if (interaction.isModalSubmit() && interaction.customId === 'link_modal_carpeta') {
+        const ruta = interaction.fields.getTextInputValue('ruta').trim();
+        await monitorLink.pedirCarpeta(interaction.user.id, ruta);
+        const estadoCarp = await monitorLink.estadoAgente(interaction.user.id);
+        return await interaction.reply({ ephemeral: true, content: estadoCarp.enLinea
+            ? `📁 Saved. Your Monitor Link switches to \`${ruta}\` within a minute — check it with **📁 My Folder**.`
+            : `📁 Saved. Your PC is offline — Monitor Link switches to \`${ruta}\` as soon as you open it.` });
+    }
     // 📂 All Main Paths / 📁 My Folder (panel de comunidad): carpetas vinculadas con Monitor Link.
     if (interaction.isButton() && (interaction.customId === 'link_todas_rutas' || interaction.customId === 'link_mi_carpeta')) {
         await interaction.deferReply({ ephemeral: true });
@@ -11099,6 +11133,11 @@ async function manejarInteraccionPrincipal(interaction) {
             lineas.push(`${v.enLinea ? '🟢' : '🔴'} **${nombre}** — 📦 ${v.cuentas} accounts` +
                 (v.ts ? ` · updated <t:${Math.floor(v.ts / 1000)}:R>` : '') +
                 `\n　📁 \`${v.carpeta || 'folder not sent yet'}\``);
+        }
+        if (interaction.customId === 'link_mi_carpeta') {
+            const ec = await monitorLink.estadoCarpeta(interaction.user.id);
+            if (ec?.carpeta_pedida) lineas.push(`⏳ Switching to \`${ec.carpeta_pedida}\` — waiting for your Monitor Link.`);
+            if (ec?.carpeta_error) lineas.push(`⚠️ Last change failed: ${ec.carpeta_error}`);
         }
         const embed = new EmbedBuilder().setColor(0x5865F2)
             .setTitle(interaction.customId === 'link_mi_carpeta' ? '📁 My Folder' : `📂 All Main Paths · ${todos.length} linked`)
@@ -11119,10 +11158,12 @@ async function manejarInteraccionPrincipal(interaction) {
                 .setDescription(
                     `${estadoPrevio.enLinea ? '🟢 Your PC is **online**.' : '🔴 Your PC is **offline** — open Monitor Link on it.'}\n` +
                     (resumen ? `📦 **${resumen.total}** accounts · last update <t:${Math.floor(resumen.ts / 1000)}:R>\n` : '📦 No cards received yet.\n') +
-                    '\nYou\'re linked — nothing else to do. To use another folder, start Monitor Link with `--change-folder`.\n' +
+                    '\nYou\'re linked — nothing else to do. To use another folder, press **📁 Set My Folder**.\n' +
                     'Changed PC? Get a new key below.'
                 );
             return await interaction.editReply({ embeds: [embedEstado], components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('link_poner_carpeta').setLabel('📁 Set My Folder').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('link_mi_carpeta').setLabel('📁 My Folder').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('link_nueva_clave').setLabel('🔑 Get a new key').setStyle(ButtonStyle.Secondary))] });
         }
         const codigo = await monitorLink.crearCodigo(interaction.user.id, interaction.guildId);
