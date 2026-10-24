@@ -7528,7 +7528,7 @@ function crearSesionTrade() {
 dashboardApp.use('/tutorial-img', express.static(path.join(__dirname, 'assets', 'tutoriales_web')));
 // Monitor Link (monitor-link-server.js): rutas /link/* para el programa de cada miembro. Va ANTES
 // del express.json global porque /link/summary manda varios MB como texto.
-monitorLink.registrar(dashboardApp, {
+if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
     db,
     nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null
 });
@@ -9385,7 +9385,7 @@ async function iniciarTunelDashboard(puerto) {
                 const match = texto.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
                 if (match && !DASHBOARD_PUBLIC_URL) {
                     DASHBOARD_PUBLIC_URL = match[0];
-                    monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL); // libreta de Monitor Link
+                    if (comunidad.hayComunidad()) monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL); // libreta de Monitor Link
                     console.log(`🌐 Tunel publico Info Accounts: ${DASHBOARD_PUBLIC_URL}`);
                 }
             };
@@ -9827,6 +9827,7 @@ async function registrarSlashCommands() {
     const commands = construirSlashCommands();
     const guildIds = new Set(client.guilds.cache.map(guild => guild.id));
     for (const guildId of await obtenerGuildIdsRegistrables()) guildIds.add(guildId);
+    if (comunidad.soloComunidad()) for (const id of [...guildIds]) if (!comunidad.esComunidad(id)) guildIds.delete(id);
     const applicationId = CLIENT_ID || client.user?.id;
 
     if (!applicationId) {
@@ -11116,6 +11117,7 @@ client.on('interactionCreate', (interaction) => comunidad.contexto.run(
     () => manejarInteraccionPrincipal(interaction).catch(e => console.error('DEBUG: error en interaccion:', e))
 ));
 async function manejarInteraccionPrincipal(interaction) {
+    if (comunidad.soloComunidad() && !comunidad.esComunidad(interaction.guildId)) return;
     // Modo comunidad: fuera del staff, nadie usa el bot ahi todavia (nunca ve datos de esta PC).
     if (await comunidad.bloquearSiHaceFalta(interaction)) return;
     // Comunidad: los botones y menus de un mensaje que abrio otra persona (su wishlist, su carta, su
@@ -16094,7 +16096,9 @@ client.once('ready', async () => {
         // autorizarse — justo el bug real que reportó el usuario probando como
         // usuario nuevo.
         let guildsAutorizados = await obtenerGuildsAutorizados();
-        if (!guildsAutorizados || guildsAutorizados.length === 0) {
+        if (comunidad.soloComunidad()) {
+            // Host de la comunidad: solo atiende COMMUNITY_GUILD_IDS y no se sale de ningun otro.
+        } else if (!guildsAutorizados || guildsAutorizados.length === 0) {
             guildsAutorizados = [...client.guilds.cache.keys()];
             await guardarGuildsAutorizados(guildsAutorizados);
         } else {
@@ -16106,9 +16110,11 @@ client.once('ready', async () => {
         console.error('❌ Error registrando slash commands:', error?.response?.data || error?.message || error);
     }
 
-    chequearActualizaciones(client);
-    avisarActualizacionAplicadaSiHaceFalta(client);
-    avisarActualizacionFallidaSiHaceFalta(client);
+    if (!comunidad.soloComunidad()) {
+        chequearActualizaciones(client);
+        avisarActualizacionAplicadaSiHaceFalta(client);
+        avisarActualizacionFallidaSiHaceFalta(client);
+    }
 
     // Chequeo al arrancar (2026-08-11, a pedido explicito del usuario): si Drive HD
     // regular esta prendido pero no hay NINGUNA API key configurada (ej. la borraron del
@@ -16204,6 +16210,7 @@ client.once('ready', async () => {
 
     const refrescarEmojisTodosLosGuilds = () => {
         for (const guild of client.guilds.cache.values()) {
+            if (comunidad.soloComunidad() && !comunidad.esComunidad(guild.id)) continue;
             obtenerMapaEmojisGuild(guild)
                 .then((mapa) => avisarEmojisFaltantesSiHaceFalta(guild, mapa))
                 .catch((e) => console.error(`❌ Error refrescando emojis de ${guild.name}:`, e?.message || e));
@@ -16214,6 +16221,7 @@ client.once('ready', async () => {
 });
 
 client.on('guildCreate', async (guild) => {
+    if (comunidad.soloComunidad() && !comunidad.esComunidad(guild.id)) return;
     const guildsAutorizados = (await obtenerGuildsAutorizados()) || [];
     // El server de comunidad (COMMUNITY_GUILD_IDS del .env) cuenta como autorizado: si no, al
     // invitar el bot ahi se saldria solo.

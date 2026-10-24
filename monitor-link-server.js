@@ -94,6 +94,55 @@ async function publicarDireccion(urlPublica) {
     }
 }
 
+// ---- Vinculaciones compartidas entre hosts (2026-10-24, Zenith Bot con varios hosts) ----
+// Quien esta vinculado (hash del token -> usuario) vive en Upstash (hash ml:agentes), para que
+// cualquier host activo reconozca el Monitor Link de cada miembro. La tabla link_agentes de cada host
+// es una copia local: se sincroniza al arrancar y cada 10 min, y si llega un token que no conoce lo
+// busca ahi. Los resumenes de cartas NO se comparten: cuando cambia el host, cada Monitor Link
+// encuentra la direccion nueva en la libreta y vuelve a mandar el suyo solo.
+const CLAVE_AGENTES = process.env.ML_AGENTES_KEY || 'ml:agentes';
+
+async function redisLibreta(...comando) {
+    const url = process.env.LINK_REDIS_URL, token = process.env.LINK_REDIS_TOKEN;
+    if (!url || !token) return null;
+    const r = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(comando), signal: AbortSignal.timeout(10000) });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    return j.result;
+}
+const hayLibreta = () => !!(process.env.LINK_REDIS_URL && process.env.LINK_REDIS_TOKEN);
+
+async function guardarAgenteCompartido(tokenHash, fila) {
+    if (!hayLibreta()) return;
+    await redisLibreta('HSET', CLAVE_AGENTES, tokenHash, JSON.stringify({ d: fila.discord_id, g: fila.guild_id, c: fila.creado, v: fila.version }))
+        .catch(e => console.error('DEBUG: Monitor Link no pudo compartir la vinculacion:', e?.message || e));
+}
+
+// Copia local <- Upstash. La primera vez (Upstash vacio) sube las vinculaciones que ya existian aca.
+async function sincronizarAgentes() {
+    if (!hayLibreta()) return;
+    try {
+        await asegurarTablas();
+        const plano = await redisLibreta('HGETALL', CLAVE_AGENTES) || [];
+        const remotos = new Map();
+        for (let i = 0; i + 1 < plano.length; i += 2) {
+            try { remotos.set(plano[i], JSON.parse(plano[i + 1])); } catch (e) { /* entrada rota */ }
+        }
+        const locales = await db.all(`SELECT token_hash, discord_id, guild_id, creado, version FROM link_agentes`) || [];
+        if (!remotos.size) {
+            for (const f of locales) await guardarAgenteCompartido(f.token_hash, f);
+            return;
+        }
+        for (const f of locales) if (!remotos.has(f.token_hash)) await db.run(`DELETE FROM link_agentes WHERE token_hash = ?`, [f.token_hash]);
+        for (const [th, a] of remotos) {
+            await db.run(`INSERT INTO link_agentes (token_hash, discord_id, guild_id, creado, ultimo, version) VALUES (?, ?, ?, ?, 0, ?)
+                ON CONFLICT(token_hash) DO NOTHING`, [th, String(a.d), String(a.g || ''), a.c || Date.now(), String(a.v || '')]);
+        }
+    } catch (e) {
+        console.error('DEBUG: Monitor Link no pudo sincronizar las vinculaciones:', e?.message || e);
+    }
+}
+
 // "Clave de vinculacion" = direccion del bot + codigo (+ la libreta de solo lectura si existe), en un
 // solo texto para pegar.
 function armarClave(urlPublica, codigo) {
@@ -114,7 +163,17 @@ function demasiadosIntentos(ip) {
 async function agenteDe(req) {
     const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || '');
     if (!m) return null;
-    const fila = await db.get(`SELECT discord_id, guild_id FROM link_agentes WHERE token_hash = ?`, [hash(m[1])]);
+    let fila = await db.get(`SELECT discord_id, guild_id FROM link_agentes WHERE token_hash = ?`, [hash(m[1])]);
+    if (!fila && hayLibreta()) {
+        // Vinculado en otro host mientras este ya estaba corriendo.
+        const a = await redisLibreta('HGET', CLAVE_AGENTES, hash(m[1])).then(t => t && JSON.parse(t)).catch(() => null);
+        if (a) {
+            await db.run(`DELETE FROM link_agentes WHERE discord_id = ?`, [String(a.d)]);
+            await db.run(`INSERT INTO link_agentes (token_hash, discord_id, guild_id, creado, ultimo, version) VALUES (?, ?, ?, ?, ?, ?)`,
+                [hash(m[1]), String(a.d), String(a.g || ''), a.c || Date.now(), Date.now(), String(a.v || '')]);
+            fila = { discord_id: String(a.d), guild_id: String(a.g || '') };
+        }
+    }
     if (!fila) return null;
     await db.run(`UPDATE link_agentes SET ultimo = ? WHERE token_hash = ?`, [Date.now(), hash(m[1])]);
     return fila;
@@ -122,6 +181,8 @@ async function agenteDe(req) {
 
 function registrar(app, dependencias) {
     db = dependencias.db;
+    sincronizarAgentes();
+    setInterval(sincronizarAgentes, 10 * 60 * 1000);
     const nombreUsuario = dependencias.nombreUsuario || (async () => null);
 
     app.post('/link/claim', express.json(), async (req, res) => {
@@ -133,11 +194,21 @@ function registrar(app, dependencias) {
             const fila = await db.get(`SELECT discord_id, guild_id, expira FROM link_codigos WHERE codigo = ?`, [codigo]);
             if (!fila || fila.expira < Date.now()) return res.status(404).json({ error: 'invalid_or_expired_code' });
             await db.run(`DELETE FROM link_codigos WHERE codigo = ?`, [codigo]); // un solo uso
-            // Un agente por usuario: vincular de nuevo reemplaza al anterior.
+            // Un agente por usuario: vincular de nuevo reemplaza al anterior (aca y en los demas hosts).
+            const viejos = await db.all(`SELECT token_hash FROM link_agentes WHERE discord_id = ?`, [fila.discord_id]) || [];
             await db.run(`DELETE FROM link_agentes WHERE discord_id = ?`, [fila.discord_id]);
+            if (hayLibreta()) {
+                const plano = await redisLibreta('HGETALL', CLAVE_AGENTES).catch(() => []) || [];
+                for (let i = 0; i + 1 < plano.length; i += 2) {
+                    try { if (String(JSON.parse(plano[i + 1]).d) === String(fila.discord_id)) viejos.push({ token_hash: plano[i] }); } catch (e) { /* nada */ }
+                }
+                for (const v of viejos) await redisLibreta('HDEL', CLAVE_AGENTES, v.token_hash).catch(() => {});
+            }
             const token = crypto.randomBytes(32).toString('hex');
+            const nuevo = { discord_id: fila.discord_id, guild_id: fila.guild_id, creado: Date.now(), version: String(req.body?.version || '') };
             await db.run(`INSERT INTO link_agentes (token_hash, discord_id, guild_id, creado, ultimo, version) VALUES (?, ?, ?, ?, ?, ?)`,
-                [hash(token), fila.discord_id, fila.guild_id, Date.now(), Date.now(), String(req.body?.version || '')]);
+                [hash(token), nuevo.discord_id, nuevo.guild_id, nuevo.creado, Date.now(), nuevo.version]);
+            await guardarAgenteCompartido(hash(token), nuevo);
             res.json({ token, user: (await nombreUsuario(fila.discord_id)) || fila.discord_id });
         } catch (e) {
             console.error('DEBUG: Monitor Link /claim:', e?.message || e);

@@ -276,8 +276,42 @@ async function construirMapaEmojisGuild(guild) {
 // type_emojis.json / card_emojis.json — así el código que arma el tag
 // `<:nombre:id>` a mano no necesita cambiar. Sube lo que falte la primera vez
 // y cachea en memoria el resto de la sesión.
+// Emojis de la APLICACION (2026-10-24, host de la comunidad / Zenith Bot): se suben al bot mismo, no
+// a un server, y se pueden usar en cualquier server sin estar en el server de origen ni tocar los
+// emojis de nadie. Mismos nombres y archivos que FUENTES_EMOJIS.
+let cacheAplicacion = null;
+let promesaAplicacion = null;
+async function obtenerMapaEmojisAplicacion(client) {
+    if (cacheAplicacion && Date.now() - cacheAplicacion.ts < CACHE_TTL_MS) return cacheAplicacion.mapa;
+    if (promesaAplicacion) return promesaAplicacion;
+    promesaAplicacion = (async () => {
+        const app = client.application;
+        let existentes = await app.emojis.fetch();
+        const mapa = {};
+        for (const [nombre, rutaRelativa] of Object.entries(FUENTES_EMOJIS)) {
+            const existente = existentes.find((e) => e.name === nombre);
+            if (existente) { mapa[nombre] = existente.id; continue; }
+            try {
+                const buffer = await sharp(fs.readFileSync(path.join(__dirname, 'assets', rutaRelativa)))
+                    .resize(128, 128, { fit: 'inside', withoutEnlargement: true }).png({ compressionLevel: 9 }).toBuffer();
+                mapa[nombre] = (await app.emojis.create({ attachment: buffer, name: nombre })).id;
+            } catch (e) {
+                console.error(`❌ No se pudo subir el emoji de aplicacion ${nombre}:`, e?.message || e);
+            }
+        }
+        cacheAplicacion = { mapa, ts: Date.now() };
+        return mapa;
+    })().catch((e) => {
+        console.error('❌ Error armando emojis de la aplicacion:', e?.message || e);
+        return cacheAplicacion?.mapa || {};
+    }).finally(() => { promesaAplicacion = null; });
+    return promesaAplicacion;
+}
+
 async function obtenerMapaEmojisGuild(guild) {
     if (!guild) return {};
+    // Host de la comunidad: todos los emojis salen de la aplicacion; nunca se toca ningun server.
+    if (require('./community.js').soloComunidad()) return obtenerMapaEmojisAplicacion(guild.client);
     // Server de comunidad (community.js, 2026-10-23): NUNCA se suben, borran ni "limpian"
     // emojis ahi -- son del server de otra persona (bug real: la limpieza de duplicados borro un
     // emoji propio de wr98 en Zenith Rise, y subir ~35 emojis a un server lleno trababa el Sync).

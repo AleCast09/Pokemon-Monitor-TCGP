@@ -3,7 +3,9 @@ const path = require('path');
 
 let db;
 try {
-    db = new DatabaseSync(path.join(__dirname, 'database.db'));
+    // MONITOR_DB_PATH: el host de la comunidad (Zenith Bot) usa su propia base, separada de la del
+    // bot normal de esta PC (ver host.js).
+    db = new DatabaseSync(process.env.MONITOR_DB_PATH || path.join(__dirname, 'database.db'));
     db.exec(`
         CREATE TABLE IF NOT EXISTS configs_extras (discord_id TEXT, tipo TEXT, estado TEXT, PRIMARY KEY (discord_id, tipo));
         CREATE TABLE IF NOT EXISTS configs_canales (discord_id TEXT, tipo TEXT, canal_id TEXT, webhook_url TEXT, PRIMARY KEY (discord_id, tipo));

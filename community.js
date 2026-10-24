@@ -34,6 +34,19 @@ function lista(nombre) {
     return (process.env[nombre] || '').split(',').map(x => x.trim()).filter(Boolean);
 }
 
+// Modo host (host.js): este proceso es el bot de la comunidad (Zenith Bot) y SOLO atiende los
+// servers de COMMUNITY_GUILD_IDS; cualquier otro server donde este (por ejemplo, el de los emojis) se
+// ignora, sin salirse.
+function soloComunidad() {
+    return process.env.MONITOR_HOST_MODE === 'community';
+}
+
+// Hay comunidad configurada en este proceso (si no, Monitor Link no se monta: el bot normal de Ale
+// deja de atender /link en cuanto la comunidad pasa a Zenith Bot).
+function hayComunidad() {
+    return lista('COMMUNITY_GUILD_IDS').length > 0;
+}
+
 function esComunidad(guildId) {
     return !!guildId && lista('COMMUNITY_GUILD_IDS').includes(String(guildId));
 }
@@ -253,4 +266,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual };
+module.exports = { soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual };
