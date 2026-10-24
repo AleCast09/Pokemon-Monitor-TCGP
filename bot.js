@@ -14468,8 +14468,10 @@ async function manejarInteraccionPrincipal(interaction) {
             // no se responde nada. Ahora se difiere ANTES de cualquier trabajo pesado, publico
             // (mismo motivo que ya usa allcards_ver_expansiones) para que la navegacion
             // encadenada de despues siga funcionando igual.
+            // Comunidad: cada uno ve SUS cartas, asi que la respuesta es privada (igual que /card).
+            const enComunidadCartas = comunidad.esComunidad(interaction.guildId);
             if (esPrimeraVez) {
-                await interaction.deferReply();
+                await interaction.deferReply({ ephemeral: enComunidadCartas });
             } else {
                 await interaction.deferUpdate();
             }
@@ -14478,7 +14480,10 @@ async function manejarInteraccionPrincipal(interaction) {
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
 
             if (cartas === null) {
-                return await interaction.editReply({ content: fuente.errorSinDatos, embeds: [], components: [] });
+                const sinWishlistMiembro = enComunidadCartas && prefijo === 'wishlist';
+                return await interaction.editReply({ content: sinWishlistMiembro
+                    ? '💔 Your Monitor Link didn\'t find a wishlist in your PTCGPB folder (`Accounts\\Cards\\wishlist.json`).\nMark your favorite cards with ❤️ in the Card Database of your bot, and it shows up here within 10 minutes.'
+                    : fuente.errorSinDatos, embeds: [], components: [] });
             }
 
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
