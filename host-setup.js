@@ -133,6 +133,14 @@ async function instalarHost() {
     try {
         execSync(`pm2 start "${path.join(RAIZ, 'host.js')}" --name zenith --cwd "${CARPETA_HOST}"`, { stdio: 'inherit' });
         execSync('pm2 save', { stdio: 'inherit' });
+        // En Windows PM2 no vuelve solo despues de reiniciar la PC: un acceso en Inicio lo levanta
+        // (oculto, sin ventana) con lo guardado por "pm2 save".
+        const inicio = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+        if (fs.existsSync(inicio)) {
+            fs.writeFileSync(path.join(inicio, 'Monitor Pokemon Host.vbs'),
+                'CreateObject("WScript.Shell").Run "cmd /c pm2 resurrect", 0, False\r\n');
+            console.log('🔁 It will also start by itself when Windows starts.');
+        }
         console.log('\n🚀 Started. If another host has the turn, this one stays on standby (its commands hidden) and takes over when that one goes offline.');
         console.log('   See it with:  pm2 logs zenith');
     } catch (e) {
