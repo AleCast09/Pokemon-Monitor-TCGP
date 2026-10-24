@@ -5,7 +5,7 @@
 // contraseñas. Una XML solo sale de esta PC cuando el mismo miembro usa en Discord algo que la
 // necesita (⚡ Share/Trade/Farm/Refresh, Extract XML): se manda solo ESA, y el bot la borra al terminar.
 //
-// Uso: node monitor-link.js            (la primera vez pide la clave de /link y la carpeta)
+// Uso: MonitorLink.exe (o node monitor-link.js) -- la primera vez pide la clave de /link y la carpeta
 //      node monitor-link.js --reset    (olvida la vinculacion y la carpeta)
 //
 // Sin dependencias: solo Node 18+ (fetch incluido).
@@ -339,4 +339,11 @@ async function main() {
     }, CADA_PING_MS);
 }
 
-main().catch(e => { console.error('Monitor Link stopped:', e); process.exitCode = 1; });
+process.title = 'Monitor Link';
+// Como .exe se abre con doble clic: si algo falla, la ventana queda abierta para leer el error.
+main().catch(async e => {
+    console.error('Monitor Link stopped:', e?.message || e);
+    process.exitCode = 1;
+    await preguntar('\nPress Enter to close.');
+    cerrarLector();
+});

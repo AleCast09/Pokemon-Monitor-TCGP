@@ -88,3 +88,6 @@ MonitorPokemonPanel.exe
 # lo copia igual al paquete distribuido (dist/bin), asi el tunel funciona
 # para todos, no solo en esta PC.
 bin/
+
+# MonitorLink.exe (se regenera con scripts/build-monitor-link.js)
+dist-link/
