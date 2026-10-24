@@ -50,11 +50,30 @@ function cerrarLector() {
 }
 
 // ---- Vinculacion con /link ----
+// ML1 = direccion|codigo. ML2 = ademas la libreta de direcciones (solo lectura) para seguir
+// encontrando al bot aunque su direccion cambie.
 function leerClave(clave) {
-    const m = /^ML1-([A-Za-z0-9_-]+)$/.exec(String(clave).trim());
+    const m = /^ML([12])-([A-Za-z0-9_-]+)$/.exec(String(clave).trim());
     if (!m) return null;
-    const [url, code] = Buffer.from(m[1], 'base64url').toString('utf8').split('|');
-    return url && code ? { url: url.replace(/\/+$/, ''), code } : null;
+    const [url, code, libUrl, libToken] = Buffer.from(m[2], 'base64url').toString('utf8').split('|');
+    if (!url || !code) return null;
+    return { url: url.replace(/\/+$/, ''), code, libreta: libUrl && libToken ? { url: libUrl, token: libToken } : null };
+}
+
+// Si el bot cambio de direccion (se reinicio), la busca en la libreta. true si encontro una nueva.
+async function actualizarDireccion(cfg) {
+    if (!cfg.libreta) return false;
+    try {
+        const r = await fetch(`${cfg.libreta.url}/get/monitor_link:url`, { headers: { Authorization: `Bearer ${cfg.libreta.token}` } });
+        const nueva = (await r.json())?.result;
+        if (nueva && nueva !== cfg.serverUrl) {
+            cfg.serverUrl = String(nueva).replace(/\/+$/, '');
+            guardarConfig(cfg);
+            log(`🔁 The bot moved — found its new address.`);
+            return true;
+        }
+    } catch (e) { /* sin internet: se reintenta en el proximo ciclo */ }
+    return false;
 }
 
 async function vincular(cfg) {
@@ -75,6 +94,7 @@ async function vincular(cfg) {
                 continue;
             }
             cfg.serverUrl = datos.url;
+            cfg.libreta = datos.libreta;
             cfg.token = j.token;
             cfg.user = j.user;
             guardarConfig(cfg);
@@ -185,10 +205,14 @@ async function main() {
     console.log(`Monitor Link v${VERSION}`);
     if (process.argv.includes('--reset')) { try { fs.unlinkSync(RUTA_CONFIG); } catch (e) { /* nada */ } }
     const cfg = leerConfig();
+    // Una vez vinculado queda vinculado: solo se vuelve a preguntar si no hay vinculacion, si la
+    // carpeta ya no existe, o si el miembro pide cambiarla (--change-folder).
     if (!cfg.token) await vincular(cfg);
-    if (!cfg.carpetaJson || !contarJsonDeCuentas(cfg.carpetaJson)) await elegirCarpeta(cfg);
+    if (process.argv.includes('--change-folder') || !cfg.carpetaJson || !contarJsonDeCuentas(cfg.carpetaJson)) await elegirCarpeta(cfg);
     cerrarLector();
-    console.log(`Linked as ${cfg.user}. Running — keep this window open (you can minimize it).\n`);
+    console.log(`Linked as ${cfg.user} · folder: ${cfg.carpetaJson}`);
+    console.log('Running — keep this window open (you can minimize it).');
+    console.log('To use another folder later, start it with --change-folder.\n');
 
     const ciclo = async (forzar) => {
         try {
@@ -200,14 +224,20 @@ async function main() {
                 await vincular(cfg);
                 return ciclo(true);
             }
+            // Puede que el bot se haya reiniciado con otra direccion: se busca en la libreta.
+            if (await actualizarDireccion(cfg)) return ciclo(true);
             log(`⚠️ Could not reach the bot (${e.message}). Will retry.`);
         }
     };
     await ciclo(true);
     setInterval(() => ciclo(false), CADA_RESUMEN_MS);
     setInterval(async () => {
-        try { await fetch(`${cfg.serverUrl}/link/ping`, { headers: { Authorization: `Bearer ${cfg.token}` } }); }
-        catch (e) { /* el resumen ya avisa si no hay conexion */ }
+        try {
+            const r = await fetch(`${cfg.serverUrl}/link/ping`, { headers: { Authorization: `Bearer ${cfg.token}` } });
+            if (!r.ok && r.status !== 401 && await actualizarDireccion(cfg)) ciclo(true);
+        } catch (e) {
+            if (await actualizarDireccion(cfg)) ciclo(true);
+        }
     }, CADA_PING_MS);
 }
 

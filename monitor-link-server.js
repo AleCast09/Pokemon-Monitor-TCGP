@@ -40,8 +40,30 @@ async function crearCodigo(discordId, guildId) {
     return codigo;
 }
 
-// "Clave de vinculacion" = direccion del bot + codigo, en un solo texto para pegar.
+// ---- Libreta de direcciones (Upstash propio de Ale, opcional) ----
+// La direccion publica del bot (tunel de Cloudflare) cambia en cada reinicio. El bot la anota en la
+// libreta al arrancar; Monitor Link guarda la llave de SOLO LECTURA de la libreta y, si no encuentra al
+// bot, mira ahi la direccion nueva y sigue solo -- el miembro nunca tiene que vincular de nuevo.
+// .env: LINK_REDIS_URL, LINK_REDIS_TOKEN (escritura, solo en el bot), LINK_REDIS_READONLY_TOKEN.
+const CLAVE_LIBRETA = 'monitor_link:url';
+
+async function publicarDireccion(urlPublica) {
+    const url = process.env.LINK_REDIS_URL, token = process.env.LINK_REDIS_TOKEN;
+    if (!url || !token || !urlPublica) return false;
+    try {
+        const r = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(['SET', CLAVE_LIBRETA, urlPublica]) });
+        return r.ok;
+    } catch (e) {
+        console.error('DEBUG: Monitor Link no pudo anotar la direccion en la libreta:', e?.message || e);
+        return false;
+    }
+}
+
+// "Clave de vinculacion" = direccion del bot + codigo (+ la libreta de solo lectura si existe), en un
+// solo texto para pegar.
 function armarClave(urlPublica, codigo) {
+    const libUrl = process.env.LINK_REDIS_URL, libRo = process.env.LINK_REDIS_READONLY_TOKEN;
+    if (libUrl && libRo) return 'ML2-' + Buffer.from([urlPublica, codigo, libUrl, libRo].join('|')).toString('base64url');
     return 'ML1-' + Buffer.from(`${urlPublica}|${codigo}`).toString('base64url');
 }
 
@@ -182,4 +204,4 @@ async function estadoAgente(discordId) {
     return { vinculado: true, enLinea: Date.now() - (fila.ultimo || 0) < 3 * 60 * 1000, ultimo: fila.ultimo };
 }
 
-module.exports = { registrar, crearCodigo, armarClave, resumenDe, estadoAgente, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };

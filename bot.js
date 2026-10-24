@@ -9349,6 +9349,7 @@ async function iniciarTunelDashboard(puerto) {
                 const match = texto.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
                 if (match && !DASHBOARD_PUBLIC_URL) {
                     DASHBOARD_PUBLIC_URL = match[0];
+                    monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL); // libreta de Monitor Link
                     console.log(`🌐 Tunel publico Info Accounts: ${DASHBOARD_PUBLIC_URL}`);
                 }
             };
@@ -11041,8 +11042,25 @@ async function manejarInteraccionPrincipal(interaction) {
     }
     // /link (Monitor Link, solo en comunidad): clave de un solo uso para vincular el programa de la PC
     // del miembro con su usuario de Discord.
-    if (interaction.isChatInputCommand() && interaction.commandName === 'link') {
-        await interaction.deferReply({ ephemeral: true });
+    if ((interaction.isChatInputCommand() && interaction.commandName === 'link')
+        || (interaction.isButton() && interaction.customId === 'link_nueva_clave')) {
+        if (interaction.isButton()) await interaction.deferUpdate();
+        else await interaction.deferReply({ ephemeral: true });
+        // Ya vinculado: queda vinculado. Se muestra el estado, y solo si el miembro lo pide se arma
+        // una clave nueva (por ejemplo, si cambio de PC).
+        const estadoPrevio = await monitorLink.estadoAgente(interaction.user.id);
+        if (estadoPrevio.vinculado && interaction.isChatInputCommand()) {
+            const resumen = await monitorLink.resumenDe(interaction.user.id);
+            const embedEstado = new EmbedBuilder().setTitle('🔗 Monitor Link').setColor(estadoPrevio.enLinea ? 0x2ECC71 : 0x95A5A6)
+                .setDescription(
+                    `${estadoPrevio.enLinea ? '🟢 Your PC is **online**.' : '🔴 Your PC is **offline** — open Monitor Link on it.'}\n` +
+                    (resumen ? `📦 **${resumen.total}** accounts · last update <t:${Math.floor(resumen.ts / 1000)}:R>\n` : '📦 No cards received yet.\n') +
+                    '\nYou\'re linked — nothing else to do. To use another folder, start Monitor Link with `--change-folder`.\n' +
+                    'Changed PC? Get a new key below.'
+                );
+            return await interaction.editReply({ embeds: [embedEstado], components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('link_nueva_clave').setLabel('🔑 Get a new key').setStyle(ButtonStyle.Secondary))] });
+        }
         const codigo = await monitorLink.crearCodigo(interaction.user.id, interaction.guildId);
         const url = DASHBOARD_PUBLIC_URL || `http://localhost:${DASHBOARD_PORT_BASE}`;
         const clave = monitorLink.armarClave(url, codigo);
@@ -11057,7 +11075,7 @@ async function manejarInteraccionPrincipal(interaction) {
                 '⏳ The key works **once** and expires in **10 minutes**. Don\'t share it.\n' +
                 '🔒 Monitor Link only sends **which cards your accounts have** — never your passwords.'
             );
-        return await interaction.editReply({ embeds: [embed] });
+        return await interaction.editReply({ embeds: [embed], components: [] });
     }
     if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith('fast_')) {
         if (await fastTransfer.manejarInteraccion(interaction)) return;

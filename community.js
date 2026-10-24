@@ -97,6 +97,7 @@ function permisosPublicos(guild) {
 async function bloquearSiHaceFalta(interaction) {
     if (!esComunidad(interaction.guildId) || esStaff(interaction.user?.id)) return false;
     if (interaction.isChatInputCommand?.() && ABIERTOS_A_TODOS.has(interaction.commandName)) return false;
+    if (interaction.isButton?.() && interaction.customId === 'link_nueva_clave') return false;
     if (interaction.isAutocomplete()) {
         await interaction.respond([]).catch(() => {});
         return true;
