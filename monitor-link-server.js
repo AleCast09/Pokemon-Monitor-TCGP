@@ -27,7 +27,7 @@ async function asegurarTablas() {
         token_hash TEXT PRIMARY KEY, discord_id TEXT, guild_id TEXT, creado INTEGER, ultimo INTEGER, version TEXT)`);
     await db.run(`CREATE TABLE IF NOT EXISTS link_resumen (
         discord_id TEXT PRIMARY KEY, guild_id TEXT, datos TEXT, cuentas INTEGER, ts INTEGER)`);
-    // Carpeta elegida en Monitor Link (para 📂 All Main Paths / 📁 My Folder). Columna agregada despues.
+    // Carpeta elegida en Monitor Link (para 📂 All Main Paths). Columna agregada despues.
     if (!asegurarTablas.carpeta) {
         try { await db.run(`ALTER TABLE link_resumen ADD COLUMN carpeta TEXT`); } catch (e) { /* ya existe */ }
         // 📁 Set My Folder: carpeta pedida desde Discord (Monitor Link la toma en el proximo ping) y,

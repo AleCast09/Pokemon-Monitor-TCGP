@@ -10881,7 +10881,7 @@ async function generarPanelBuildEmbed(userId, guild = null) {
 
 // Panel de /setup del server de comunidad (pedido de Ale): sin S4T, Heartbeat, Auto-Close,
 // Configuration, Tutorial ni Add Friend -- son de la PC host. Agrega 📂 All Main Paths (las carpetas
-// que vinculo cada miembro con Monitor Link) y 📁 My Folder (la del que pulsa).
+// que vinculo cada miembro con Monitor Link).
 async function construirPanelComunidad() {
     const driveHdRegularOn = await driveHdRegularHabilitado();
     const embed = new EmbedBuilder()
@@ -10908,7 +10908,6 @@ async function construirPanelComunidad() {
     );
     const fila2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('link_todas_rutas').setLabel('📂 All Main Paths').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('link_mi_carpeta').setLabel('📁 My Folder').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('btn_check_updates').setLabel('🔄 Check for Updates').setStyle(ButtonStyle.Secondary)
     );
     const archivos = [];
@@ -11121,7 +11120,7 @@ async function manejarInteraccionPrincipal(interaction) {
     // /link (Monitor Link, solo en comunidad): clave de un solo uso para vincular el programa de la PC
     // del miembro con su usuario de Discord.
     // 📁 Set My Folder: la ruta se pega en Discord y el Monitor Link de esa persona la toma solo en su
-    // proximo ping (≤ 1 min). Si en su PC no existe, sigue con la anterior y lo avisa en 📁 My Folder.
+    // proximo ping (≤ 1 min). Si en su PC no existe, sigue con la anterior y lo avisa en 📂 All Main Paths.
     if (interaction.isButton() && interaction.customId === 'link_poner_carpeta') {
         const estadoCarp = await monitorLink.estadoAgente(interaction.user.id);
         if (!estadoCarp.vinculado) {
@@ -11139,10 +11138,17 @@ async function manejarInteraccionPrincipal(interaction) {
         await monitorLink.pedirCarpeta(interaction.user.id, ruta);
         const estadoCarp = await monitorLink.estadoAgente(interaction.user.id);
         return await interaction.reply({ ephemeral: true, content: estadoCarp.enLinea
-            ? `📁 Saved. Your Monitor Link switches to \`${ruta}\` within a minute — check it with **📁 My Folder**.`
+            ? `📁 Saved. Your Monitor Link switches to \`${ruta}\` within a minute — check it with **📂 All Main Paths**.`
             : `📁 Saved. Your PC is offline — Monitor Link switches to \`${ruta}\` as soon as you open it.` });
     }
-    // 📂 All Main Paths / 📁 My Folder (panel de comunidad): carpetas vinculadas con Monitor Link.
+    // 📂 All Main Paths (panel de comunidad y /link): carpeta de cada vinculado, si esta en linea, y el
+    // estado de un 📁 Set My Folder pendiente o fallido. (📁 My Folder se quito: repetia esto mismo.)
+    const avisoCarpeta = async (discordId) => {
+        const ec = await monitorLink.estadoCarpeta(discordId);
+        if (ec?.carpeta_pedida) return `\n　⏳ Switching to \`${ec.carpeta_pedida}\` — waiting for Monitor Link`;
+        if (ec?.carpeta_error) return `\n　⚠️ Last change failed: ${ec.carpeta_error}`;
+        return '';
+    };
     if (interaction.isButton() && (interaction.customId === 'link_todas_rutas' || interaction.customId === 'link_mi_carpeta')) {
         await interaction.deferReply({ ephemeral: true });
         const todos = await monitorLink.vinculados();
@@ -11157,12 +11163,7 @@ async function manejarInteraccionPrincipal(interaction) {
             const nombre = (await client.users.fetch(v.discordId).catch(() => null))?.username || v.discordId;
             lineas.push(`${v.enLinea ? '🟢' : '🔴'} **${nombre}** — 📦 ${v.cuentas} accounts` +
                 (v.ts ? ` · updated <t:${Math.floor(v.ts / 1000)}:R>` : '') +
-                `\n　📁 \`${v.carpeta || 'folder not sent yet'}\``);
-        }
-        if (interaction.customId === 'link_mi_carpeta') {
-            const ec = await monitorLink.estadoCarpeta(interaction.user.id);
-            if (ec?.carpeta_pedida) lineas.push(`⏳ Switching to \`${ec.carpeta_pedida}\` — waiting for your Monitor Link.`);
-            if (ec?.carpeta_error) lineas.push(`⚠️ Last change failed: ${ec.carpeta_error}`);
+                `\n　📁 \`${v.carpeta || 'folder not sent yet'}\`` + (await avisoCarpeta(v.discordId)));
         }
         const embed = new EmbedBuilder().setColor(0x5865F2)
             .setTitle(interaction.customId === 'link_mi_carpeta' ? '📁 My Folder' : `📂 All Main Paths · ${todos.length} linked`)
@@ -11188,7 +11189,7 @@ async function manejarInteraccionPrincipal(interaction) {
                 );
             return await interaction.editReply({ embeds: [embedEstado], components: [new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('link_poner_carpeta').setLabel('📁 Set My Folder').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId('link_mi_carpeta').setLabel('📁 My Folder').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('link_todas_rutas').setLabel('📂 All Main Paths').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('link_nueva_clave').setLabel('🔑 Get a new key').setStyle(ButtonStyle.Secondary))] });
         }
         const codigo = await monitorLink.crearCodigo(interaction.user.id, interaction.guildId);
