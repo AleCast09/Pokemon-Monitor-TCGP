@@ -94,3 +94,6 @@ dist-link/
 
 # Clave de host (secretos cifrados de Zenith Bot) - nunca al repo
 host-key.txt
+
+# Paquete de host para wr98 (se regenera con git archive)
+dist-host/
