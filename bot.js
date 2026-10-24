@@ -11123,7 +11123,13 @@ async function manejarInteraccionPrincipal(interaction) {
     // le abria otra carta. Los paneles de los canales (webhooks) no tienen dueño y siguen abiertos.
     if (comunidad.esComunidad(interaction.guildId) && interaction.isMessageComponent?.()) {
         const dueno = interaction.message?.interactionMetadata?.user?.id || interaction.message?.interaction?.user?.id;
-        if (dueno && dueno !== interaction.user.id) {
+        // Next/Previous de una wishlist si los puede usar cualquiera (pedido de Ale): pasa la pagina
+        // de la wishlist DEL DUEÑO, asi que el resto de esta interaccion corre como si fuera el.
+        if (dueno && dueno !== interaction.user.id && /^wishlist_pagina_-?\d+$/.test(interaction.customId)) {
+            interaction._duenoLista = dueno;
+            comunidad.contexto.enterWith({ guildId: interaction.guildId, userId: dueno });
+            await monitorLink.precargar(dueno).catch(() => false);
+        } else if (dueno && dueno !== interaction.user.id) {
             return await interaction.reply({ ephemeral: true,
                 content: `🔒 This belongs to <@${dueno}> — only they can use these buttons. Open your own with **📋 View my Wishlist** or **/card**.` }).catch(() => {});
         }
@@ -14527,7 +14533,7 @@ async function manejarInteraccionPrincipal(interaction) {
                 opcionesLista.mapaCopias = mapaCopias;
             }
             const payload = await construirEmbedListaCartas(cartas, pagina, opcionesLista);
-            if (prefijo === 'wishlist') payload.content = `<@${interaction.user.id}>, here's your wishlist! 💖`;
+            if (prefijo === 'wishlist') payload.content = `<@${interaction._duenoLista || interaction.user.id}>, here's your wishlist! 💖`;
             return await interaction.editReply(payload);
         }
 
