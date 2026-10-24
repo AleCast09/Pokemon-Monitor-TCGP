@@ -198,6 +198,13 @@ function registrar(app, dependencias) {
             const agente = await agenteDe(req);
             if (!agente) return res.status(401).json({ error: 'not_linked' });
             const pedido = await db.get(`SELECT carpeta_pedida FROM link_agentes WHERE discord_id = ?`, [agente.discord_id]);
+            // Si ya esta usando la carpeta pedida, el pedido se cierra aca (Monitor Link no reenvia un
+            // resumen que no cambio, asi que /summary nunca lo cerraria).
+            const actual = pedido?.carpeta_pedida ? await db.get(`SELECT carpeta FROM link_resumen WHERE discord_id = ?`, [agente.discord_id]) : null;
+            if (actual?.carpeta && actual.carpeta.toLowerCase() === pedido.carpeta_pedida.toLowerCase()) {
+                await db.run(`UPDATE link_agentes SET carpeta_pedida = NULL, carpeta_error = NULL WHERE discord_id = ?`, [agente.discord_id]);
+                pedido.carpeta_pedida = null;
+            }
             res.json({ ok: true, user: (await nombreUsuario(agente.discord_id)) || agente.discord_id, folder: pedido?.carpeta_pedida || null });
         } catch (e) {
             res.status(500).json({ error: 'server_error' });
