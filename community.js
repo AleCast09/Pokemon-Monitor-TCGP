@@ -117,7 +117,11 @@ async function bloquearSiHaceFalta(interaction) {
 // En comunidad, ⚡ Share/Trade manda SIEMPRE a la Main/secundaria registrada de quien lo pide --
 // nunca se muestra la lista de amigos guardados de la PC host ni la de otros miembros.
 // .env: WR98_REDIS_URL / WR98_REDIS_TOKEN (wr98 los rota cada ~15 dias).
-const cacheRegistro = new Map();   // userId -> { ts, dato }
+// Pocas operaciones a proposito: el Upstash gratis de wr98 tiene 500k comandos/mes y su propio bot
+// ya lo agota en ~15 dias. Se lee cada grupo ENTERO (1 HGETALL) y se guarda 30 min; la lista de grupos,
+// 6 h. Si la lectura falla (clave rotada) se sigue usando lo ultimo leido.
+const TTL_MIEMBROS_MS = 30 * 60 * 1000;
+const TTL_GRUPOS_MS = 6 * 60 * 60 * 1000;
 let gruposCache = { ts: 0, lista: [] };
 
 async function redis(...args) {
@@ -131,34 +135,31 @@ async function redis(...args) {
 }
 
 async function gruposRegistro() {
-    if (Date.now() - gruposCache.ts < 10 * 60 * 1000 && gruposCache.lista.length) return gruposCache.lista;
-    const lista = [];
-    let cursor = '0';
-    do {
-        const [siguiente, claves] = await redis('SCAN', cursor, 'MATCH', 'users:*', 'COUNT', '200');
-        lista.push(...claves);
-        cursor = siguiente;
-    } while (cursor !== '0');
-    gruposCache = { ts: Date.now(), lista };
-    return lista;
+    if (Date.now() - gruposCache.ts < TTL_GRUPOS_MS && gruposCache.lista.length) return gruposCache.lista;
+    try {
+        const lista = [];
+        let cursor = '0';
+        do {
+            const [siguiente, claves] = await redis('SCAN', cursor, 'MATCH', 'users:*', 'COUNT', '200');
+            lista.push(...claves);
+            cursor = siguiente;
+        } while (cursor !== '0');
+        gruposCache = { ts: Date.now(), lista };
+    } catch (e) {
+        if (!gruposCache.lista.length) throw e;
+    }
+    return gruposCache.lista;
 }
 
-// { name, main_id, sec_id, grupo } del miembro, o null si no esta registrado.
+// { name, main_id, sec_id, grupo } del miembro, o null si no esta registrado. Sale de la lista de
+// cada grupo ya en memoria (sin consultas por persona).
 async function registroDe(userId) {
-    const c = cacheRegistro.get(userId);
-    if (c && Date.now() - c.ts < 2 * 60 * 1000) return c.dato;
-    let dato = null;
     for (const clave of await gruposRegistro()) {
-        const crudo = await redis('HGET', clave, String(userId));
-        if (!crudo) continue;
-        try {
-            const d = typeof crudo === 'string' ? JSON.parse(crudo) : crudo;
-            dato = { name: d.name || 'Unknown', main_id: String(d.main_id || '').replace(/\D/g, ''), sec_id: String(d.sec_id || '').replace(/\D/g, ''), grupo: clave.replace(/^users:/, '') };
-            break;
-        } catch (e) { /* registro ilegible: se sigue buscando */ }
+        const grupo = clave.replace(/^users:/, '');
+        const m = (await miembrosDeGrupo(grupo)).find(x => x.discordId === String(userId));
+        if (m) return { name: m.name, main_id: m.main_id, sec_id: m.sec_id, grupo };
     }
-    cacheRegistro.set(userId, { ts: Date.now(), dato });
-    return dato;
+    return null;
 }
 
 // Opciones de destino para ⚡ Share/Trade: solo las cuentas registradas de ESE miembro.
@@ -177,14 +178,21 @@ const cacheMiembros = new Map();   // grupo -> { ts, lista }
 
 async function miembrosDeGrupo(grupo) {
     const c = cacheMiembros.get(grupo);
-    if (c && Date.now() - c.ts < 5 * 60 * 1000) return c.lista;
-    const plano = await redis('HGETALL', `users:${grupo}`);   // [campo, valor, campo, valor, ...]
+    if (c && Date.now() - c.ts < TTL_MIEMBROS_MS) return c.lista;
+    let plano;
+    try {
+        plano = await redis('HGETALL', `users:${grupo}`);   // [campo, valor, campo, valor, ...]
+    } catch (e) {
+        if (c) return c.lista;   // clave rotada o sin conexion: lo ultimo leido
+        throw e;
+    }
     const lista = [];
     for (let i = 0; i + 1 < (plano || []).length; i += 2) {
         try {
             const d = typeof plano[i + 1] === 'string' ? JSON.parse(plano[i + 1]) : plano[i + 1];
             const main = String(d.main_id || '').replace(/\D/g, '');
-            if (main) lista.push({ discordId: plano[i], name: d.name || 'Unknown', main_id: main });
+            const sec = String(d.sec_id || '').replace(/\D/g, '');
+            if (main) lista.push({ discordId: String(plano[i]), name: d.name || 'Unknown', main_id: main, sec_id: sec });
         } catch (e) { /* registro ilegible */ }
     }
     lista.sort((a, b) => a.name.localeCompare(b.name));
