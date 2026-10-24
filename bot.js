@@ -39,6 +39,8 @@ fastTransfer.init({
     db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
     esComunidad: (guildId) => comunidad.esComunidad(guildId),
     usuarioComunidad: () => comunidad.usuarioActual(),
+    pedirXml: (discordId, nombres) => monitorLink.pedirXml(discordId, nombres),
+    cuentasMiembro: (discordId) => monitorLink.cuentasDe(discordId),
     auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
     // ⚡ Fast Farm: mismas reglas y tablas que el Farm Tickets con MuMu.
     formatearFriendId, ticketsFarmeadosHoy, cuentasPoolFarmTickets, cuentasYaUsadasParaId,
@@ -807,6 +809,9 @@ function textoTiempoRestante(ms) {
 // Son los XML de cuentas, las mismas que usa el autotrade. Se listan por nombre de archivo,
 // que es la clave con la que se guardan en likes_dados.
 async function cuentasPoolFarmTickets() {
+    // Comunidad: las cuentas del miembro (resumen de su Monitor Link), nunca las de esta PC.
+    const usuarioComunidad = comunidad.usuarioActual();
+    if (usuarioComunidad) return monitorLink.cuentasDe(usuarioComunidad).map(c => c.fileNameXml);
     const cfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
     const ruta = cfg?.webhook_url;
     if (!ruta || !fs.existsSync(ruta)) return [];
@@ -1288,13 +1293,21 @@ function entradasExtraPorExpansionCompartida(base, cardMap, expansiones) {
 }
 
 function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
-    const archivoWishlist = resolverArchivoWishlist(rutaWishlistCfg?.webhook_url);
-    if (!archivoWishlist) return null;
+    let ids;
+    const usuarioComunidad = comunidad.usuarioActual();
+    if (usuarioComunidad) {
+        // Comunidad: la wishlist que subio su Monitor Link, nunca la de esta PC.
+        ids = monitorLink.wishlistDe(usuarioComunidad);
+        if (!ids) return null;
+    } else {
+        const archivoWishlist = resolverArchivoWishlist(rutaWishlistCfg?.webhook_url);
+        if (!archivoWishlist) return null;
 
-    const wishlistData = leerJsonSeguro(archivoWishlist);
-    const ids = Array.isArray(wishlistData?.cards)
-        ? wishlistData.cards.map(c => c?.id || c?.code || c?.cardId || c?.cardID).filter(Boolean)
-        : [];
+        const wishlistData = leerJsonSeguro(archivoWishlist);
+        ids = Array.isArray(wishlistData?.cards)
+            ? wishlistData.cards.map(c => c?.id || c?.code || c?.cardId || c?.cardID).filter(Boolean)
+            : [];
+    }
 
     const rutaMaster = rutaMasterCfg?.webhook_url;
     const cardmaster = rutaMaster ? leerJsonSeguroConTimeout(path.join(rutaMaster, 'cardmaster.json')) : null;
@@ -4044,8 +4057,8 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
     // Comunidad: fuera los botones que usan la PC host (XML, Info Accounts, Wishlist, Shinedust por
     // OCR, Extract XML, Inject). Quedan Home, Trade y Share.
-    comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::', 'card_info_accounts::', 'goldcards_info_accounts::',
-        'card_wishlist_add::', 'card_shinedust::', 'goldcards_shinedust::', 'card_extract::', 'goldcards_extract::', 'card_inject::', 'goldcards_inject::']);
+    comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::',
+        'card_wishlist_add::', 'card_shinedust::', 'goldcards_shinedust::', 'card_inject::', 'goldcards_inject::']);
     const archivosPayload = [];
     if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
@@ -9517,6 +9530,22 @@ async function resolverImagenReferenciaCartaBot(cartaId, rutaMasterPath) {
         || null;
 }
 
+// Extract XML en la comunidad: la XML se le pide al Monitor Link del miembro y se le manda SOLO a el,
+// en privado (nunca al canal ni al webhook). Devuelve { archivo: AttachmentBuilder } o { error }.
+async function xmlDeMiembro(discordId, nombre) {
+    const nombreXml = /\.xml$/i.test(nombre) ? nombre : `${nombre}.xml`;
+    try {
+        const archivos = await monitorLink.pedirXml(discordId, [nombreXml]);
+        const contenido = Object.entries(archivos).find(([n]) => n.toLowerCase() === nombreXml.toLowerCase())?.[1];
+        if (!contenido) return { error: `❌ \`${nombreXml}\` was not found in your **Saved** folder.` };
+        return { archivo: new AttachmentBuilder(Buffer.from(contenido, 'utf8'), { name: nombreXml }) };
+    } catch (e) {
+        return { error: e.message === 'offline'
+            ? '🔗 Your **Monitor Link** is not running — open it on your PC and try again.'
+            : '⏱️ Your **Monitor Link** did not answer in time — check it is running and try again.' };
+    }
+}
+
 function buscarXmlPorCarta(rutaJsonCuentas, cartaId) {
     const usuarioComunidad = comunidad.usuarioActual();
     if (usuarioComunidad) return monitorLink.cuentasPorCartaDe(usuarioComunidad, cartaId);
@@ -11078,17 +11107,13 @@ async function manejarInteraccionPrincipal(interaction) {
             const cmd = interaction.commandName;
             // Resultados personales en privado (pedido de Ale): solo los ve quien los pidio, con
             // "Dismiss message". Se fuerza ephemeral en las respuestas de estos comandos.
-            if (['card', 'goldcards', 'shinedust', 'farmtickets', 'transfers'].includes(cmd)) {
+            if (['card', 'goldcards', 'shinedust', 'farmtickets', 'transfers', 'wishlist', 'extract'].includes(cmd)) {
                 const deferOriginal = interaction.deferReply.bind(interaction);
                 const replyOriginal = interaction.reply.bind(interaction);
                 interaction.deferReply = (opts = {}) => deferOriginal({ ...opts, ephemeral: true });
                 interaction.reply = (opts = {}) => replyOriginal(typeof opts === 'string' ? { content: opts, ephemeral: true } : { ...opts, ephemeral: true });
             }
-            // Todavia sin version por miembro (necesitan la XML o la wishlist de su PC).
-            if (cmd === 'wishlist' || cmd === 'extract') {
-                return await interaction.reply({ content: '🛠️ This isn\'t available here yet — coming with the next Monitor Link update.', ephemeral: true });
-            }
-            if (!vinculado && ['card', 'goldcards', 'shinedust'].includes(cmd)) {
+            if (!vinculado && ['card', 'goldcards', 'shinedust', 'wishlist'].includes(cmd)) {
                 return await interaction.reply({ content: '🔗 Link your PC first: type **/link** and paste the key in **Monitor Link** — then the bot shows **your** cards.', ephemeral: true });
             }
         }
@@ -12754,6 +12779,11 @@ async function manejarInteraccionPrincipal(interaction) {
         if (interaction.customId === 'modal_extract_xml') {
             await interaction.deferReply({ ephemeral: true });
             const nombreBuscado = interaction.fields.getTextInputValue('input_xml_nombre');
+            const miembroExtract = comunidad.usuarioActual();
+            if (miembroExtract) {
+                const { archivo, error } = await xmlDeMiembro(miembroExtract, nombreBuscado.trim());
+                return await interaction.editReply(error ? { content: error } : { content: `✅ Found: \`${archivo.name}\` — only you can see this.`, files: [archivo] });
+            }
             const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
             const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, nombreBuscado);
 
@@ -13461,6 +13491,15 @@ async function manejarInteraccionPrincipal(interaction) {
         const fileName = interaction.values[0];
         await interaction.deferUpdate();
 
+        const miembroExtract = comunidad.usuarioActual();
+        if (miembroExtract) {
+            await interaction.editReply({ content: '⏳ Getting the account from your Monitor Link…', components: [] });
+            const { archivo, error } = await xmlDeMiembro(miembroExtract, fileName);
+            return await interaction.editReply(error
+                ? { content: error, components: [] }
+                : { content: `📄 \`${fileName}\` — only you can see this.`, files: [archivo], components: [] });
+        }
+
         try {
             const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
             const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, fileName);
@@ -13562,6 +13601,36 @@ async function manejarInteraccionPrincipal(interaction) {
     // Cuando vienen datos, se agregan como campos extra al embed; nunca dispara una
     // inyeccion nueva aca, eso ya paso antes (o no, si el usuario entro por el camino normal).
     async function enviarInfoAccounts(interaction, fileName, datosInventario = null) {
+        // Comunidad: sale del resumen que subio su Monitor Link (cartas por cuenta), sin XML ni JSON
+        // de esta PC, y en privado. La pagina lee un JSON armado con ese resumen.
+        const miembroInfo = comunidad.usuarioActual();
+        if (miembroInfo) {
+            await monitorLink.precargar(miembroInfo);
+            const clave = String(fileName).toLowerCase().replace(/\.xml$/, '');
+            const cuenta = ((await monitorLink.resumenDe(miembroInfo))?.cuentas || [])
+                .find(c => String(c.f).toLowerCase().replace(/\.xml$/, '') === clave);
+            if (!cuenta) return await interaction.followUp({ content: `❌ \`${fileName}\` is not in your Monitor Link summary.`, ephemeral: true });
+            const pulls = [{ cards: Object.entries(cuenta.c || {}).flatMap(([id, n]) => Array(n).fill(id)) }];
+            const dirInfo = path.join(os.tmpdir(), 'monitor_link_info');
+            fs.mkdirSync(dirInfo, { recursive: true });
+            const archivoJsonMl = path.join(dirInfo, `${miembroInfo}_${crypto.createHash('sha1').update(clave).digest('hex').slice(0, 12)}.json`);
+            fs.writeFileSync(archivoJsonMl, JSON.stringify({ metadata: { fileName: cuenta.f, accountName: cuenta.n }, pulls }));
+            const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+            const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJsonMl, datosInventario, interaction.guildId, fileName);
+            const mapaEmojisInventario = await obtenerMapaEmojisGuild(interaction.guild);
+            const embed = new EmbedBuilder()
+                .setTitle('📋 Info Accounts')
+                .setDescription(`**${cuenta.n || cuenta.f}** — from your Monitor Link summary.`)
+                .addFields(
+                    { name: '💠 Account', value: `\`${cuenta.f}\``, inline: true },
+                    { name: `${emojiTag(mapaEmojisInventario, 'Card_Back_TCGP')} Total Cards`.trim(), value: `${pulls[0].cards.length}`, inline: true }
+                )
+                .setColor(0xE91E63);
+            if (typeof cuenta.d === 'number') embed.addFields({ name: `${emojiTag(mapaEmojisInventario, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: cuenta.d.toLocaleString('en-US'), inline: true });
+            if (DASHBOARD_PUBLIC_URL) embed.addFields({ name: '🔗 All its cards', value: `🌐 [Open the page](${DASHBOARD_PUBLIC_URL}/account/${token})` });
+            embed.setFooter({ text: 'The link stops working if the bot restarts.' });
+            return await interaction.followUp({ embeds: [embed], ephemeral: true });
+        }
         // followUp en vez de editReply en TODA esta funcion (2026-08-03, bug real reportado
         // por el usuario): cuando se llama desde el boton de un resultado de Shinedust
         // (shinedust_result_info_accounts::), el "mensaje original" de la interaccion es la
@@ -13657,6 +13726,10 @@ async function manejarInteraccionPrincipal(interaction) {
     // hace a ciegas. Si dice que no, sigue igual que antes (PDF solo con lo ya guardado).
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_info_accounts_cuenta::')) {
         const fileName = interaction.values[0];
+        if (comunidad.usuarioActual()) {
+            await interaction.update({ content: `📋 \`${fileName}\``, components: [] });
+            return await enviarInfoAccounts(interaction, fileName);
+        }
         const fila = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`info_accounts_extra_si::${fileName}`.slice(0, 100)).setLabel('Yes, get live data').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId(`info_accounts_extra_no::${fileName}`.slice(0, 100)).setLabel('No, just the PDF').setStyle(ButtonStyle.Secondary)

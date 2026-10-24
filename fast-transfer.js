@@ -241,19 +241,28 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
     enCola++;
     await editar(interaction, { content: '', embeds: [construirEmbed(ctx)], components: [filaStop], files: [], attachments: [] });
 
+    const miembro = deps.usuarioComunidad?.() || null;
+    const limpiezas = [];
     const turno = cola.then(async () => {
         ctx.posicion = 0;
         if (corridas.get(runId).detenido) { ctx.final = 'stopped'; return; }
 
-        // Ruta del XML de la cuenta elegida (misma carpeta que usa el resto del bot).
-        const cfgXml = await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
-        const rutaXml = deps.buscarArchivoXmlPorNombre(cfgXml?.webhook_url, fileName);
+        // XML de la cuenta elegida: la carpeta de esta PC, o (comunidad) la que manda su Monitor Link.
+        if (miembro) {
+            ctx.estados.login = 'start';
+            ctx.detalles.login = 'Getting the account from your Monitor Link…';
+            await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaStop] });
+        }
+        const xmls = await prepararXmls(miembro, [fileName], runId);
+        limpiezas.push(xmls.limpiar);
+        const rutaXml = rutaXmlDe(xmls.mapa, fileName);
         if (!rutaXml) {
             ctx.estados.login = 'error';
-            ctx.detalles.login = `XML ${fileName} not found in the XML Accounts Path`;
+            ctx.detalles.login = xmls.error || (miembro ? `${fileName} was not found in your Saved folder` : `XML ${fileName} not found in the XML Accounts Path`);
             ctx.final = 'error';
             return await editar(interaction, { embeds: [construirEmbed(ctx)], components: [filaRetry] }, true);
         }
+        ctx.detalles.login = '';
 
         if (!(await puertoAbierto(PUERTO_TUNEL))) {
             ctx.estados.login = 'start';
@@ -322,6 +331,7 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
     }).finally(() => {
         enCola = Math.max(0, enCola - 1);
         corridas.delete(runId);
+        limpiezas.forEach(f => f());
         try { fs.unlinkSync(stopFile); } catch (e) { /* no se pidio Cancel */ }
     });
     cola = turno;
@@ -449,6 +459,8 @@ async function ejecutarFarm(interaction, friendId) {
         } catch (e) { /* token vencido */ }
     };
 
+    const miembro = deps.usuarioComunidad?.() || null;
+    const limpiezas = [];
     enCola++;
     if (enCola > 1) await pintar(`🕒 Queued — position #${enCola - 1}`);
     const turno = cola.then(async () => {
@@ -457,20 +469,22 @@ async function ejecutarFarm(interaction, friendId) {
             await pintar('⏳ Starting the tunnel…');
             if (!(await asegurarTunel())) { estadoFinal = 'error'; lineas.push(`${icono('error', mapa)} Could not start the tunnel (port 9090)`); return; }
         }
-        const cfgXml = await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
         let ronda = 0;
         while (!corridas.get(runId).detenido) {
             const restantes = maximo - (await deps.ticketsFarmeadosHoy(friendId));
             if (restantes <= 0) break;
-            const pool = await deps.cuentasPoolFarmTickets();
+            const pool = miembro ? deps.cuentasMiembro(miembro).map(c => c.fileNameXml) : await deps.cuentasPoolFarmTickets();
             const usadas = await deps.cuentasYaUsadasParaId(friendId);
             const cuentas = deps.sortearCuentasFarm(pool, usadas, restantes);
             if (!cuentas.length) { lineas.push('⚠️ Ran out of unused accounts for this profile.'); break; }
             ronda++;
             if (ronda > 1) lineas.push('', `**Round ${ronda}**`);
             const args = ['--engine-dir', rutaMotor(), '--target', friendId, '--stop-file', stopFile];
+            const xmls = await prepararXmls(miembro, cuentas, `${runId}_${ronda}`);
+            limpiezas.push(xmls.limpiar);
+            if (xmls.error) { lineas.push(`${icono('error', mapa)} ${xmls.error}`); break; }
             for (const c of cuentas) {
-                const ruta = deps.buscarArchivoXmlPorNombre(cfgXml?.webhook_url, c);
+                const ruta = rutaXmlDe(xmls.mapa, c);
                 if (ruta) args.push('--account', `${c}|${ruta}`);
             }
             let okRonda = 0;
@@ -502,6 +516,7 @@ async function ejecutarFarm(interaction, friendId) {
                 edicion = edicion.then(() => pintar(null));
             });
             await edicion;
+            xmls.limpiar();
             if (okRonda === 0) { lineas.push('⚠️ Stopped: no like went through this round.'); break; }
         }
         estadoFinal = corridas.get(runId).detenido ? 'stopped' : 'done';
@@ -519,6 +534,7 @@ async function ejecutarFarm(interaction, friendId) {
     }).finally(() => {
         enCola = Math.max(0, enCola - 1);
         corridas.delete(runId);
+        limpiezas.forEach(f => f());
         try { fs.unlinkSync(stopFile); } catch (e) { /* no se pidio Cancel */ }
     });
     cola = turno;
@@ -600,17 +616,57 @@ function rutaXmlDe(mapa, fileNameXml) {
     return mapa.get(n.endsWith('.xml') ? n : `${n}.xml`) || null;
 }
 
+// XML de las cuentas a usar. En la comunidad salen del Monitor Link del miembro (nunca de esta PC):
+// se piden en el momento, se escriben en una carpeta temporal y limpiar() las borra al terminar.
+// Devuelve { mapa, limpiar, error } -- error es el texto para el usuario si no se pudieron traer.
+async function prepararXmls(miembro, nombres, runId) {
+    if (!miembro) {
+        const cfgXml = await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
+        return { mapa: mapaXml(cfgXml?.webhook_url), limpiar: () => {}, error: null };
+    }
+    const dir = path.join(os.tmpdir(), `ml_${runId}`);
+    const limpiar = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* nada */ } };
+    let archivos;
+    try {
+        archivos = await deps.pedirXml(miembro, nombres);
+    } catch (e) {
+        return { mapa: new Map(), limpiar, error: e.message === 'offline'
+            ? 'Your Monitor Link is not running — open it on your PC and try again'
+            : 'Your Monitor Link did not answer in time — check it is running and try again' };
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    const mapa = new Map();
+    Object.entries(archivos).forEach(([nombre, contenido], i) => {
+        const ruta = path.join(dir, `${i}.xml`);
+        fs.writeFileSync(ruta, contenido);
+        const n = nombre.toLowerCase();
+        mapa.set(n.endsWith('.xml') ? n : `${n}.xml`, ruta);
+    });
+    return { mapa, limpiar, error: null };
+}
+
+// Cuentas del usuario: las del resumen de su Monitor Link en la comunidad, las de esta PC si no.
+function cuentasPara(miembro, rutaJson) {
+    return miembro ? deps.cuentasMiembro(miembro) : cuentasJson(rutaJson);
+}
+
+// Clave de shinedust_fast: en la comunidad lleva el usuario delante (dos miembros pueden tener una
+// cuenta con el mismo nombre de archivo).
+function claveDust(miembro, archivoJson) {
+    return miembro ? `ml:${miembro}:${archivoJson}` : archivoJson;
+}
+
 // Para /shinedust: mezcla la lista de Kevin con los valores ⚡ (ver comentario de arriba).
 async function mezclarShinedust(resultados, rutaJson) {
     if (!deps || resultados === null) return resultados;
-    // Comunidad: la lista ya viene del resumen del usuario; la carpeta de esta PC no aplica.
-    if (deps.usuarioComunidad?.()) return resultados;
+    // Comunidad: las cuentas y los valores ⚡ son los del miembro (su resumen, claves ml:<id>:...).
+    const miembro = deps.usuarioComunidad?.() || null;
     let filas;
     try { filas = await filasDust(); } catch (e) { return resultados; }
     if (!filas.size) return resultados;
     const porArchivo = new Map((resultados || []).map(r => [r.archivoJson, r]));
-    for (const c of cuentasJson(rutaJson)) {
-        const f = filas.get(c.archivoJson);
+    for (const c of cuentasPara(miembro, rutaJson)) {
+        const f = filas.get(claveDust(miembro, c.archivoJson));
         if (!f) continue;
         const kevinCambio = c.valorJson !== null && f.valor_json !== null && c.valorJson !== f.valor_json;
         if (kevinCambio) continue;
@@ -663,18 +719,19 @@ function correrDust(runId, cuentas, alEvento) {
     });
 }
 
-async function guardarDust(cuenta, ev) {
+async function guardarDust(cuenta, ev, miembro = null) {
     await deps.db.run(
         `INSERT INTO shinedust_fast (archivo_json, valor, tickets, ts, valor_json, inventario) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(archivo_json) DO UPDATE SET valor = excluded.valor, tickets = excluded.tickets, ts = excluded.ts, valor_json = excluded.valor_json, inventario = excluded.inventario`,
-        [cuenta.archivoJson, ev.dust, ev.tickets, Date.now(), cuenta.valorJson, JSON.stringify(ev.inv || {})]
+        [claveDust(miembro, cuenta.archivoJson), ev.dust, ev.tickets, Date.now(), cuenta.valorJson, JSON.stringify(ev.inv || {})]
     );
 }
 
 // Corre el refresco de una lista de cuentas en la cola compartida. alProgreso recibe el estado.
-async function refrescarDust(runId, cuentas, alProgreso) {
+async function refrescarDust(runId, cuentas, alProgreso, miembro = null) {
     await asegurarTablaDust();
     const estado = { total: cuentas.length, hechas: 0, ok: 0, fallas: 0, ultimo: null, errores: [], inicio: Date.now() };
+    let limpiar = () => {};
     enCola++;
     const turno = cola.then(async () => {
         if (corridas.get(runId)?.detenido) return;
@@ -683,7 +740,14 @@ async function refrescarDust(runId, cuentas, alProgreso) {
             return;
         }
         const porClave = new Map(cuentas.map(c => [c.archivoJson, c]));
-        const xmls = mapaXml((await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`))?.webhook_url);
+        const traidas = await prepararXmls(miembro, cuentas.map(c => c.fileNameXml), runId);
+        limpiar = traidas.limpiar;
+        if (traidas.error) {
+            estado.hechas = estado.fallas = cuentas.length;
+            estado.errores.push(traidas.error);
+            return;
+        }
+        const xmls = traidas.mapa;
         const lista = [];
         for (const c of cuentas) {
             const xml = rutaXmlDe(xmls, c.fileNameXml);
@@ -698,7 +762,7 @@ async function refrescarDust(runId, cuentas, alProgreso) {
             if (ev.state === 'ok') {
                 estado.ok++;
                 estado.ultimo = { nombre: cuenta?.nombreCuenta || ev.key, antes: cuenta?.valorJson, dust: ev.dust, tickets: ev.tickets, inv: ev.inv || {} };
-                edicion = edicion.then(() => guardarDust(cuenta, ev)).catch(() => {});
+                edicion = edicion.then(() => guardarDust(cuenta, ev, miembro)).catch(() => {});
             } else {
                 estado.fallas++;
                 if (estado.errores.length < 30) estado.errores.push(`${cuenta?.nombreCuenta || ev.key}: ${ev.msg || 'failed'}`);
@@ -710,6 +774,7 @@ async function refrescarDust(runId, cuentas, alProgreso) {
         console.error('DEBUG: Fast Shinedust error:', e);
     }).finally(() => {
         enCola = Math.max(0, enCola - 1);
+        limpiar();
     });
     cola = turno;
     await turno;
@@ -725,6 +790,7 @@ function barra(hechas, total) {
 async function manejarDust(interaction) {
     const id = interaction.customId;
     const rutaJson = (await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`))?.webhook_url;
+    const miembro = deps.usuarioComunidad?.() || null;
 
     // Una cuenta: menu con las de la pagina actual del reporte.
     if (interaction.isButton() && id.startsWith('fast_dust_one::')) {
@@ -750,7 +816,7 @@ async function manejarDust(interaction) {
 
     if (interaction.isStringSelectMenu() && id === 'fast_dust_pick') {
         const archivo = interaction.values[0];
-        const cuenta = cuentasJson(rutaJson).find(c => c.archivoJson === archivo);
+        const cuenta = cuentasPara(miembro, rutaJson).find(c => c.archivoJson === archivo);
         if (!cuenta) {
             await interaction.update({ content: '❌ That account\'s JSON file is gone.', components: [] });
             return true;
@@ -758,7 +824,7 @@ async function manejarDust(interaction) {
         await interaction.update({ content: `⏳ Refreshing **${cuenta.nombreCuenta}**…`, components: [] });
         const runId = `${interaction.id}`;
         corridas.set(runId, { hijo: null, detenido: false, stopFile: path.join(os.tmpdir(), `fast_dust_stop_${runId}`) });
-        const estado = await refrescarDust(runId, [cuenta], () => {});
+        const estado = await refrescarDust(runId, [cuenta], () => {}, miembro);
         corridas.delete(runId);
         const mapa = (await deps.obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))) || {};
         const polvo = mapa.Polvo_iris_TCGP ? `<:Polvo_iris_TCGP:${mapa.Polvo_iris_TCGP}>` : '✨';
@@ -790,8 +856,8 @@ async function manejarDust(interaction) {
     if (interaction.isButton() && id === 'fast_dust_all') {
         await interaction.deferReply({ ephemeral: true });
         const filas = await filasDust();
-        const todas = cuentasJson(rutaJson);
-        const pendientes = todas.filter(c => !(filas.get(c.archivoJson)?.ts > Date.now() - DUST_SALTAR_SI_MENOS_DE_MS));
+        const todas = cuentasPara(miembro, rutaJson);
+        const pendientes = todas.filter(c => !(filas.get(claveDust(miembro, c.archivoJson))?.ts > Date.now() - DUST_SALTAR_SI_MENOS_DE_MS));
         const min = Math.ceil((pendientes.length * DUST_SEG_POR_CUENTA) / 60);
         await interaction.editReply({
             content: `⚡ **Refresh all** — **${pendientes.length}** of ${todas.length} account(s)` +
@@ -807,7 +873,7 @@ async function manejarDust(interaction) {
     if (interaction.isButton() && id === 'fast_dust_all_go') {
         await interaction.update({ content: '▶️ Started — the progress is in the channel.', components: [] });
         const filas = await filasDust();
-        const pendientes = cuentasJson(rutaJson).filter(c => !(filas.get(c.archivoJson)?.ts > Date.now() - DUST_SALTAR_SI_MENOS_DE_MS));
+        const pendientes = cuentasPara(miembro, rutaJson).filter(c => !(filas.get(claveDust(miembro, c.archivoJson))?.ts > Date.now() - DUST_SALTAR_SI_MENOS_DE_MS));
         await correrLoteDust(interaction, pendientes, 'all accounts');
         return true;
     }
@@ -817,7 +883,7 @@ async function manejarDust(interaction) {
         const pagina = parseInt(id.split('::')[1], 10) || 0;
         const lista = await mezclarShinedust(deps.buscarShinedustTodasCuentas(rutaJson), rutaJson);
         const claves = new Set((lista || []).slice(pagina * 25, pagina * 25 + 25).map(r => r.archivoJson));
-        const cuentas = cuentasJson(rutaJson).filter(c => claves.has(c.archivoJson));
+        const cuentas = cuentasPara(miembro, rutaJson).filter(c => claves.has(c.archivoJson));
         if (!cuentas.length) {
             await interaction.reply({ content: '❌ No accounts on this page.', ephemeral: true });
             return true;
@@ -870,11 +936,12 @@ async function correrLoteDust(interaction, pendientes, titulo, paginaVolver = 0)
         // interaccion vence a los 15 min y esto puede tardar mas de una hora).
         const msg = await interaction.channel.send({ embeds: [armar({ total: pendientes.length, hechas: 0, ok: 0, fallas: 0, errores: [], inicio: Date.now() }, false)], components: [filaCancel] });
         let ultimaEdicion = 0;
+        const miembro = deps.usuarioComunidad?.() || null;
         const estado = await refrescarDust(runId, pendientes, (est) => {
             if (Date.now() - ultimaEdicion < 4000) return; // Discord limita la frecuencia de ediciones
             ultimaEdicion = Date.now();
             msg.edit({ embeds: [armar(est, false)], components: [filaCancel] }).catch(() => {});
-        });
+        }, miembro);
         corridas.delete(runId);
         try { fs.unlinkSync(stopFile); } catch (e) { /* nada */ }
         await msg.edit({ embeds: [armar(estado, true)], components: [new ActionRowBuilder().addComponents(
@@ -886,14 +953,6 @@ async function correrLoteDust(interaction, pendientes, titulo, paginaVolver = 0)
 // Devuelve true si la interaccion era de Fast Transfer (bot.js deja de procesarla).
 async function manejarInteraccion(interaction) {
     const id = interaction.customId || '';
-    // Comunidad, hasta que Monitor Link mande la XML de cada miembro: los ⚡ todavia usan las XML de
-    // ESTA PC, asi que solo los puede usar su dueño (el primero de COMMUNITY_STAFF_IDS). Si no, un
-    // miembro con una cuenta del mismo nombre de archivo terminaria usando la del host.
-    const dueno = (process.env.COMMUNITY_STAFF_IDS || '').split(',')[0].trim();
-    if (deps?.esComunidad?.(interaction.guildId) && interaction.user?.id !== dueno && !id.startsWith('fast_det::')) {
-        await interaction.reply({ content: '⚡ with **your own** accounts is coming with the next Monitor Link update.', ephemeral: true }).catch(() => {});
-        return true;
-    }
     if (id.startsWith('fast_dust')) {
         if (!habilitado(interaction.guildId)) {
             await interaction.reply({ content: '❌ Fast Shinedust is not available here.', ephemeral: true });

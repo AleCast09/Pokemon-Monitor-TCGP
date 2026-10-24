@@ -34,6 +34,8 @@ async function asegurarTablas() {
         // si en esa PC no existe, el motivo para mostrarlo.
         try { await db.run(`ALTER TABLE link_agentes ADD COLUMN carpeta_pedida TEXT`); } catch (e) { /* ya existe */ }
         try { await db.run(`ALTER TABLE link_agentes ADD COLUMN carpeta_error TEXT`); } catch (e) { /* ya existe */ }
+        // Wishlist del miembro (ids de cartas de su Cards\wishlist.json), para /wishlist.
+        try { await db.run(`ALTER TABLE link_resumen ADD COLUMN wishlist TEXT`); } catch (e) { /* ya existe */ }
         asegurarTablas.carpeta = true;
     }
 }
@@ -143,6 +145,53 @@ function registrar(app, dependencias) {
         }
     });
 
+    // Consulta larga del agente: responde apenas haya un pedido de XML, o vacio a los 25 s.
+    app.get('/link/jobs', async (req, res) => {
+        try {
+            await asegurarTablas();
+            const agente = await agenteDe(req);
+            if (!agente) return res.status(401).json({ error: 'not_linked' });
+            const id = agente.discord_id;
+            const previa = esperas.get(id);
+            if (previa) { clearTimeout(previa.timer); try { previa.res.json({ jobs: [] }); } catch (e) { /* ya cerrada */ } }
+            const timer = setTimeout(() => {
+                if (esperas.get(id)?.res === res) esperas.delete(id);
+                try { res.json({ jobs: [] }); } catch (e) { /* ya cerrada */ }
+            }, 25000);
+            esperas.set(id, { res, timer });
+            req.on('close', () => { if (esperas.get(id)?.res === res) { clearTimeout(timer); esperas.delete(id); } });
+            despacharTrabajos(id);
+        } catch (e) {
+            res.status(500).json({ error: 'server_error' });
+        }
+    });
+
+    // Respuesta del agente: { id, files: { nombre: contenido }, missing: [...] }.
+    app.post('/link/xml', express.text({ type: 'text/plain', limit: '20mb' }), async (req, res) => {
+        try {
+            await asegurarTablas();
+            const agente = await agenteDe(req);
+            if (!agente) return res.status(401).json({ error: 'not_linked' });
+            let datos;
+            try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
+            const lista = trabajos.get(agente.discord_id) || [];
+            const trabajo = lista.find(t => t.id === datos.id);
+            if (!trabajo) return res.json({ ok: false, error: 'unknown_job' });
+            clearTimeout(trabajo.timer);
+            trabajos.set(agente.discord_id, lista.filter(t => t !== trabajo));
+            // Solo lo pedido y con forma de XML de cuenta.
+            const archivos = {};
+            for (const nombre of trabajo.archivos) {
+                const c = datos.files?.[nombre];
+                if (typeof c === 'string' && c.length < 20000 && /name="deviceAccount"/.test(c)) archivos[nombre] = c;
+            }
+            trabajo.resolver(archivos);
+            res.json({ ok: true, received: Object.keys(archivos).length });
+        } catch (e) {
+            res.status(500).json({ error: 'server_error' });
+        }
+    });
+
     app.get('/link/ping', async (req, res) => {
         try {
             await asegurarTablas();
@@ -173,10 +222,14 @@ function registrar(app, dependencias) {
                 c: Object.fromEntries(Object.entries(c.c || {})
                     .filter(([id, n]) => /^[A-Za-z0-9_]{5,40}$/.test(id) && Number.isInteger(n) && n > 0 && n < 100000))
             })).filter(c => c.f);
+            // null = ese Monitor Link no manda wishlist (version vieja o no tiene el archivo).
+            const wishlist = Array.isArray(datos.wishlist)
+                ? JSON.stringify(datos.wishlist.map(String).filter(id => /^[A-Za-z0-9_]{5,40}$/.test(id)).slice(0, 5000))
+                : null;
             await db.run(
-                `INSERT INTO link_resumen (discord_id, guild_id, datos, cuentas, ts, carpeta) VALUES (?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(discord_id) DO UPDATE SET guild_id = excluded.guild_id, datos = excluded.datos, cuentas = excluded.cuentas, ts = excluded.ts, carpeta = excluded.carpeta`,
-                [agente.discord_id, agente.guild_id, JSON.stringify(limpias), limpias.length, Date.now(), String(datos.folder || "").slice(0, 300) || null]);
+                `INSERT INTO link_resumen (discord_id, guild_id, datos, cuentas, ts, carpeta, wishlist) VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(discord_id) DO UPDATE SET guild_id = excluded.guild_id, datos = excluded.datos, cuentas = excluded.cuentas, ts = excluded.ts, carpeta = excluded.carpeta, wishlist = excluded.wishlist`,
+                [agente.discord_id, agente.guild_id, JSON.stringify(limpias), limpias.length, Date.now(), String(datos.folder || "").slice(0, 300) || null, wishlist]);
             // Respuesta al 📁 Set My Folder: si ya se esta usando la carpeta pedida, o si en esa PC no
             // existe (folderError), el pedido se cierra.
             const pedido = await db.get(`SELECT carpeta_pedida FROM link_agentes WHERE discord_id = ?`, [agente.discord_id]);
@@ -193,6 +246,47 @@ function registrar(app, dependencias) {
             console.error('DEBUG: Monitor Link /summary:', e?.message || e);
             res.status(500).json({ error: 'server_error' });
         }
+    });
+}
+
+// ---- XML a pedido (etapa 3) ----
+// Cuando un miembro usa algo que necesita la XML de una cuenta suya (⚡ Share/Trade/Farm/Refresh,
+// Extract XML), el bot se la pide a SU Monitor Link: este espera trabajos con una consulta larga
+// (GET /link/jobs, hasta 25 s) y contesta con POST /link/xml. Las XML viven solo en memoria hasta que
+// el que las pidio las usa; nunca se guardan en la base.
+const trabajos = new Map();   // discordId -> [{ id, archivos, entregado, resolver, rechazar, timer }]
+const esperas = new Map();    // discordId -> { res, timer }   (consulta larga abierta del agente)
+
+function despacharTrabajos(discordId) {
+    const espera = esperas.get(discordId);
+    const pendientes = (trabajos.get(discordId) || []).filter(t => !t.entregado);
+    if (!espera || !pendientes.length) return;
+    clearTimeout(espera.timer);
+    esperas.delete(discordId);
+    pendientes.forEach(t => { t.entregado = true; });
+    espera.res.json({ jobs: pendientes.map(t => ({ id: t.id, files: t.archivos })) });
+}
+
+// Pide XML por nombre de archivo al Monitor Link del usuario. Devuelve { nombre: contenido }.
+// Errores: 'offline' (su Monitor Link no esta conectado) o 'timeout'.
+async function pedirXml(discordId, nombres, timeoutMs = 45000) {
+    discordId = String(discordId);
+    const fila = await db.get(`SELECT ultimo FROM link_agentes WHERE discord_id = ?`, [discordId]);
+    if (!fila) throw new Error('offline');
+    // Un Monitor Link abierto siempre tiene una consulta larga esperando (salvo el instante entre
+    // una y la siguiente): si en 5 s no aparece ninguna, esta cerrado.
+    for (let i = 0; i < 10 && !esperas.has(discordId); i++) await new Promise(r => setTimeout(r, 500));
+    if (!esperas.has(discordId)) throw new Error('offline');
+    return await new Promise((resolver, rechazar) => {
+        const trabajo = { id: crypto.randomBytes(8).toString('hex'), archivos: [...new Set(nombres.map(String))].slice(0, 2000), entregado: false };
+        trabajo.resolver = resolver;
+        trabajo.rechazar = rechazar;
+        trabajo.timer = setTimeout(() => {
+            trabajos.set(discordId, (trabajos.get(discordId) || []).filter(t => t !== trabajo));
+            rechazar(new Error('timeout'));
+        }, timeoutMs);
+        trabajos.set(discordId, [...(trabajos.get(discordId) || []), trabajo]);
+        despacharTrabajos(discordId);
     });
 }
 
@@ -214,8 +308,13 @@ async function precargar(discordId) {
         for (const [id, n] of Object.entries(cuenta.c || {})) (mapaCopias[id] ||= []).push({ fileName: cuenta.f, cantidad: n });
     }
     for (const id of Object.keys(mapaCopias)) mapaCopias[id].sort((a, b) => b.cantidad - a.cantidad);
-    cache.set(String(discordId), { ts: fila.ts, cuentas: r.cuentas, mapaCopias });
+    cache.set(String(discordId), { ts: fila.ts, cuentas: r.cuentas, mapaCopias, wishlist: r.wishlist });
     return true;
+}
+
+// Ids de la wishlist del miembro, o null si su Monitor Link no la mando.
+function wishlistDe(discordId) {
+    return cache.get(String(discordId))?.wishlist || null;
 }
 
 function mapaCopiasDe(discordId) {
@@ -234,12 +333,19 @@ function shinedustDe(discordId) {
         .sort((a, b) => b.valor - a.valor);
 }
 
+// Todas las cuentas del resumen, con la forma de cuentasJson de fast-transfer.js.
+function cuentasDe(discordId) {
+    return (cache.get(String(discordId))?.cuentas || []).map(c => ({
+        archivoJson: c.f, fileNameXml: c.f, nombreCuenta: c.n || c.f, valorJson: typeof c.d === 'number' ? c.d : null
+    }));
+}
+
 // Para los comandos: resumen subido por un usuario (o null) y si su Monitor Link esta en linea.
 async function resumenDe(discordId) {
     await asegurarTablas();
-    const fila = await db.get(`SELECT datos, cuentas, ts FROM link_resumen WHERE discord_id = ?`, [String(discordId)]);
+    const fila = await db.get(`SELECT datos, cuentas, ts, wishlist FROM link_resumen WHERE discord_id = ?`, [String(discordId)]);
     if (!fila) return null;
-    try { return { cuentas: JSON.parse(fila.datos), total: fila.cuentas, ts: fila.ts }; } catch (e) { return null; }
+    try { return { cuentas: JSON.parse(fila.datos), total: fila.cuentas, ts: fila.ts, wishlist: fila.wishlist ? JSON.parse(fila.wishlist) : null }; } catch (e) { return null; }
 }
 
 async function estadoAgente(discordId) {
@@ -249,4 +355,4 @@ async function estadoAgente(discordId) {
     return { vinculado: true, enLinea: Date.now() - (fila.ultimo || 0) < 3 * 60 * 1000, ultimo: fila.ultimo };
 }
 
-module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, cuentasDe, wishlistDe, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };

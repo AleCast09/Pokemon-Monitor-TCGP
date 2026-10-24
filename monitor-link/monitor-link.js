@@ -2,7 +2,8 @@
 // Monitor Link (2026-10-23, plan de Ale) -- el programa que cada miembro de la comunidad corre en SU
 // PC. Lee la carpeta de cuentas del bot de Kevin/Leanny y le manda al bot de Discord SOLO el resumen
 // de sus cartas: que cartas tiene cada cuenta, cuantas copias, y su Shinedust. Nunca manda
-// contraseñas ni archivos XML.
+// contraseñas. Una XML solo sale de esta PC cuando el mismo miembro usa en Discord algo que la
+// necesita (⚡ Share/Trade/Farm/Refresh, Extract XML): se manda solo ESA, y el bot la borra al terminar.
 //
 // Uso: node monitor-link.js            (la primera vez pide la clave de /link y la carpeta)
 //      node monitor-link.js --reset    (olvida la vinculacion y la carpeta)
@@ -15,7 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const CARPETA_CONFIG = path.join(process.env.APPDATA || os.homedir(), 'MonitorLink');
 const RUTA_CONFIG = path.join(CARPETA_CONFIG, 'config.json');
 const CADA_PING_MS = 60 * 1000;
@@ -182,7 +183,13 @@ function armarResumen(carpeta) {
             c
         });
     }
-    return { version: VERSION, folder: carpeta, accounts: cuentas };
+    // Wishlist del bot de Kevin/Leanny: Cards\wishlist.json, al lado de Cards\accounts. Solo los ids.
+    let wishlist;
+    try {
+        const w = JSON.parse(fs.readFileSync(path.join(carpeta, '..', 'wishlist.json'), 'utf8').replace(/^\uFEFF/, ''));
+        if (Array.isArray(w?.cards)) wishlist = w.cards.map(c => c?.id || c?.code || c?.cardId || c?.cardID).filter(Boolean);
+    } catch (e) { /* sin wishlist */ }
+    return { version: VERSION, folder: carpeta, accounts: cuentas, wishlist };
 }
 
 async function subirResumen(cfg, forzar = false, extra = {}) {
@@ -199,6 +206,65 @@ async function subirResumen(cfg, forzar = false, extra = {}) {
     cfg.ultimaHuella = huella;
     guardarConfig(cfg);
     log(`📤 Sent your cards summary (${j.accounts} accounts).`);
+}
+
+// ---- XML a pedido ----
+// Las XML estan en ...\Accounts\Saved (en subcarpetas numeradas), al lado de Cardsccounts.
+let indiceXml = null;
+function carpetaXml(cfg) {
+    return path.resolve(cfg.carpetaJson, '..', '..', 'Saved');
+}
+function armarIndiceXml(cfg) {
+    const indice = new Map();
+    const recorrer = (dir, prof) => {
+        if (prof > 3) return;
+        let entradas;
+        try { entradas = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+        for (const e of entradas) {
+            const completo = path.join(dir, e.name);
+            if (e.isDirectory()) recorrer(completo, prof + 1);
+            else if (e.name.toLowerCase().endsWith('.xml')) indice.set(e.name.toLowerCase(), completo);
+        }
+    };
+    recorrer(carpetaXml(cfg), 0);
+    indiceXml = { carpeta: cfg.carpetaJson, indice };
+    return indice;
+}
+function rutaDeXml(cfg, nombre) {
+    const clave = (String(nombre).toLowerCase().endsWith('.xml') ? String(nombre) : `${nombre}.xml`).toLowerCase();
+    let indice = indiceXml?.carpeta === cfg.carpetaJson ? indiceXml.indice : armarIndiceXml(cfg);
+    if (!indice.has(clave)) indice = armarIndiceXml(cfg);   // cuenta nueva desde el ultimo indice
+    return indice.get(clave) || null;
+}
+
+async function atenderTrabajo(cfg, trabajo) {
+    const files = {};
+    const missing = [];
+    for (const nombre of trabajo.files || []) {
+        const ruta = rutaDeXml(cfg, nombre);
+        try { if (ruta) { files[nombre] = fs.readFileSync(ruta, 'utf8'); continue; } } catch (e) { /* cae a missing */ }
+        missing.push(nombre);
+    }
+    await fetch(`${cfg.serverUrl}/link/xml`, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain', Authorization: `Bearer ${cfg.token}` },
+        body: JSON.stringify({ id: trabajo.id, files, missing })
+    });
+    const n = Object.keys(files).length;
+    log(`🔑 Sent ${n} account file${n === 1 ? '' : 's'} you asked for in Discord${missing.length ? ` (${missing.length} not found)` : ''}.`);
+}
+
+// Consulta larga: queda esperando hasta 25 s a que Discord pida algo, y vuelve a esperar.
+async function esperarTrabajos(cfg) {
+    while (true) {
+        try {
+            const r = await fetch(`${cfg.serverUrl}/link/jobs`, { headers: { Authorization: `Bearer ${cfg.token}` } });
+            if (!r.ok) throw new Error(`jobs ${r.status}`);
+            const { jobs } = await r.json();
+            for (const t of jobs || []) await atenderTrabajo(cfg, t).catch(e => log(`⚠️ Could not send an account file (${e.message}).`));
+        } catch (e) {
+            await new Promise(r => setTimeout(r, 10000));
+        }
+    }
 }
 
 async function main() {
@@ -230,6 +296,7 @@ async function main() {
         }
     };
     await ciclo(true);
+    esperarTrabajos(cfg);
     setInterval(() => ciclo(false), CADA_RESUMEN_MS);
     setInterval(async () => {
         try {
