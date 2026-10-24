@@ -15784,7 +15784,7 @@ async function manejarInteraccionPrincipal(interaction) {
                         // Categoria privada del modo comunidad (🔒 STAFF): solo el bot y el staff la ven.
                         // Se reaplica en cada Sync por si alguien toco los permisos a mano.
                         const enComunidad = comunidad.esComunidad(interaction.guildId);
-                        const permisos = privada ? comunidad.permisosPrivados(interaction.guild)
+                        const permisos = privada ? await comunidad.permisosPrivados(interaction.guild)
                             : enComunidad ? comunidad.permisosPublicos(interaction.guild)
                             : [{
                                 id: interaction.guild.members.me.id,

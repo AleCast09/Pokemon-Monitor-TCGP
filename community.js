@@ -8,7 +8,12 @@
 //
 // .env:
 //   COMMUNITY_GUILD_IDS=123...,456...   servers en modo comunidad
-//   COMMUNITY_STAFF_IDS=111...,222...   usuarios de Discord del staff (Ale, wr98, ...)
+//   COMMUNITY_STAFF_IDS=111...,222...   staff fijo (Ale y wr98): nunca pierden el acceso
+//   COMMUNITY_STAFF_ROLE=Bot Staff      opcional, nombre del rol de staff (por defecto "Bot Staff")
+//
+// Para sumar staff no hace falta tocar el .env: quien tenga el rol "Bot Staff" en el server es staff
+// (pedido de Ale: que wr98 pueda sumar gente desde Discord, sin depender de la PC de Ale). Sync
+// Channels crea el rol si no existe y le da acceso a la categoria 🔒 STAFF.
 //
 // Mientras no exista el programa de cada miembro para vincular SUS cuentas, en el server de
 // comunidad solo el staff puede usar el bot: cualquier otro recibe un aviso y nunca ve datos.
@@ -33,8 +38,22 @@ function esComunidad(guildId) {
     return !!guildId && lista('COMMUNITY_GUILD_IDS').includes(String(guildId));
 }
 
-function esStaff(userId) {
-    return !!userId && lista('COMMUNITY_STAFF_IDS').includes(String(userId));
+const nombreRolStaff = () => (process.env.COMMUNITY_STAFF_ROLE || 'Bot Staff').trim();
+
+// member (opcional): el GuildMember de la interaccion, para mirar si tiene el rol de staff.
+function esStaff(userId, member = null) {
+    if (!userId) return false;
+    if (lista('COMMUNITY_STAFF_IDS').includes(String(userId))) return true;
+    return !!member?.roles?.cache?.some?.(r => r.name === nombreRolStaff());
+}
+
+// El rol de staff del server (lo crea si no existe). Sin permisos propios: solo marca quien es staff.
+async function rolStaff(guild) {
+    const nombre = nombreRolStaff();
+    const existente = guild.roles.cache.find(r => r.name === nombre);
+    if (existente) return existente;
+    return await guild.roles.create({ name: nombre, permissions: [], mentionable: false, reason: 'Monitor Pokemon: community staff' })
+        .catch(e => { console.error('DEBUG: no se pudo crear el rol de staff:', e?.message || e); return null; });
 }
 
 // Comandos que existen en el server de comunidad (los de los canales prioritarios + /setup para
@@ -71,15 +90,15 @@ function gruposSync(guildId, grupos) {
     ];
 }
 
-// Permisos de una categoria privada: nadie la ve salvo el bot y el staff.
-function permisosPrivados(guild) {
+// Permisos de una categoria privada: nadie la ve salvo el bot y el staff (fijo y con el rol).
+async function permisosPrivados(guild) {
+    const rol = await rolStaff(guild);
+    const verYEscribir = [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory];
     return [
+        ...(rol ? [{ id: rol.id, type: OverwriteType.Role, allow: verYEscribir }] : []),
         { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
         { id: guild.members.me.id, allow: [PermissionsBitField.Flags.Administrator, PermissionsBitField.Flags.ViewChannel] },
-        ...lista('COMMUNITY_STAFF_IDS').map(id => ({
-            id, type: OverwriteType.Member,
-            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory]
-        }))
+        ...lista('COMMUNITY_STAFF_IDS').map(id => ({ id, type: OverwriteType.Member, allow: verYEscribir }))
     ];
 }
 
@@ -95,7 +114,7 @@ function permisosPublicos(guild) {
 
 // Guardia al principio de interactionCreate. Devuelve true si la interaccion se corto aca.
 async function bloquearSiHaceFalta(interaction) {
-    if (!esComunidad(interaction.guildId) || esStaff(interaction.user?.id)) return false;
+    if (!esComunidad(interaction.guildId) || esStaff(interaction.user?.id, interaction.member)) return false;
     if (interaction.isChatInputCommand?.() && ABIERTOS_A_TODOS.has(interaction.commandName)) return false;
     // Botones y ventana de /link (vincular y elegir carpeta): para cualquier miembro.
     if ((interaction.isButton?.() || interaction.isModalSubmit?.()) && ['link_nueva_clave', 'link_poner_carpeta', 'link_modal_carpeta', 'link_mi_carpeta', 'link_todas_rutas'].includes(interaction.customId)) return false;
