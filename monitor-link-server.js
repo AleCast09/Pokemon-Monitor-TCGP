@@ -102,6 +102,19 @@ async function publicarDireccion(urlPublica) {
 // encuentra la direccion nueva en la libreta y vuelve a mandar el suyo solo.
 const CLAVE_AGENTES = process.env.ML_AGENTES_KEY || 'ml:agentes';
 
+// Ultima version publicada de Monitor Link.ahk ({ version, url }), de zenith:release (lo anota
+// scripts/publicar-host.js). Cacheada 10 min para no gastar consultas en cada ping.
+let _ahk = { ts: 0, valor: null };
+async function ultimoAhk() {
+    if (Date.now() - _ahk.ts < 10 * 60 * 1000) return _ahk.valor;
+    _ahk.ts = Date.now();
+    try {
+        const r = JSON.parse(await redisLibreta('GET', 'zenith:release') || 'null');
+        _ahk.valor = r?.ahk?.version && r.ahk.url ? r.ahk : null;
+    } catch (e) { /* sin libreta: sin actualizacion automatica */ }
+    return _ahk.valor;
+}
+
 async function redisLibreta(...comando) {
     const url = process.env.LINK_REDIS_URL, token = process.env.LINK_REDIS_TOKEN;
     if (!url || !token) return null;
@@ -280,7 +293,7 @@ function registrar(app, dependencias) {
                 await db.run(`UPDATE link_agentes SET carpeta_pedida = NULL, carpeta_error = NULL WHERE discord_id = ?`, [agente.discord_id]);
                 pedido.carpeta_pedida = null;
             }
-            res.json({ ok: true, user: (await nombreUsuario(agente.discord_id)) || agente.discord_id, folder: pedido?.carpeta_pedida || null });
+            res.json({ ok: true, user: (await nombreUsuario(agente.discord_id)) || agente.discord_id, folder: pedido?.carpeta_pedida || null, ahk: await ultimoAhk() });
         } catch (e) {
             res.status(500).json({ error: 'server_error' });
         }

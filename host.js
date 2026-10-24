@@ -13,4 +13,11 @@ if (!process.env.DISCORD_BOT_TOKEN || !process.env.COMMUNITY_GUILD_IDS || !proce
     console.error('❌ This host is not set up: DISCORD_BOT_TOKEN, COMMUNITY_GUILD_IDS and LINK_REDIS_* are required (run node host-setup.js).');
     process.exit(1);
 }
+const actualizador = require('./host-updater.js');
+actualizador.instalarDependenciasPendientes();
 require('./bot.js');
+// Actualizaciones que publica Ale: se instalan solas cuando no hay ningun ⚡ corriendo (si tenia el
+// turno, al volver lo recupera enseguida: el turno va por el nombre de la PC).
+actualizador.iniciar({
+    libre: () => !require('./community-host.js').esActivo() || !require('./fast-transfer.js').ocupado()
+});

@@ -1046,4 +1046,7 @@ async function manejarInteraccion(interaction) {
     return true;
 }
 
-module.exports = { init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };
+// Hay algun ⚡ corriendo o en fila (para no reiniciar el host en medio, ver host-updater.js).
+const ocupado = () => enCola > 0 || corridas.size > 0;
+
+module.exports = { ocupado, init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };

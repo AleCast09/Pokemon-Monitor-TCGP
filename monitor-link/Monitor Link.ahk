@@ -17,7 +17,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.0.0"
+global VERSION := "ahk-1.1.0"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -316,6 +316,7 @@ Ping:
         EnLinea := true
         PintarEstado()
     }
+    ActualizarSiHayVersion(r.text)
     if RegExMatch(r.text, """folder""\s*:\s*""((?:[^""\\]|\\.)*)""", mp) {
         pedida := JsonUnesc(mp1)
         if (pedida != Ruta) {
@@ -420,6 +421,30 @@ ArmarIndiceXml() {
     saved := CarpetaPadre(CarpetaPadre(CarpetaJson)) . "\Saved"
     Loop, Files, %saved%\*.xml, R
         IndiceXml[A_LoopFileName] := A_LoopFileFullPath
+}
+
+; ---------------------------------------------------------------- self-update
+; The bot tells (in the ping) the latest published version. If it's different, download it, check it
+; is really Monitor Link, replace this file and restart. The link and the window stay the same.
+ActualizarSiHayVersion(texto) {
+    if !RegExMatch(texto, """ahk""\s*:\s*\{[^}]*""version""\s*:\s*""([^""]+)""[^}]*""url""\s*:\s*""([^""]+)""", ma)
+        return
+    if (ma1 = VERSION || !RegExMatch(ma2, "^https://github\.com/"))
+        return
+    nuevo := A_Temp . "\MonitorLink_update.ahk"
+    UrlDownloadToFile, %ma2%, %nuevo%
+    if (ErrorLevel)
+        return
+    FileRead, contenido, %nuevo%
+    if (!InStr(contenido, "global VERSION := """ . ma1 . """") || !InStr(contenido, "MONITOR LINK")) {
+        FileDelete, %nuevo%
+        return
+    }
+    FileCopy, %nuevo%, %A_ScriptFullPath%, 1
+    FileDelete, %nuevo%
+    TrayTip, Monitor Link, Updated to %ma1% - restarting., 3, 1
+    Sleep, 1500
+    Reload
 }
 
 ; ---------------------------------------------------------------- folders
