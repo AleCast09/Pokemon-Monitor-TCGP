@@ -1,0 +1,491 @@
+; Monitor Link (AutoHotkey v1) -- same job as monitor-link.js, but it runs with the AutoHotkey that
+; PTCGPB already uses: no unknown .exe, no Windows SmartScreen warning, and anyone can open this file
+; in Notepad and read exactly what it does.
+;
+; What it sends to the Zenith Rise bot:
+;   - a summary of your cards: which cards each account has, how many copies, its Shinedust,
+;     and the card ids of your wishlist. Never passwords.
+;   - ONE account's .xml only when YOU use something in Discord that needs it (Fast Share/Trade/
+;     Farm/Refresh, Extract XML). The bot uses it and deletes it.
+;
+; Put this file inside your PTCGPB folder (next to PTCGPB.ahk) and double-click it.
+
+#NoEnv
+#SingleInstance, force
+#Persistent
+SetBatchLines, -1
+FileEncoding, UTF-8
+SetWorkingDir, %A_ScriptDir%
+
+global VERSION := "ahk-1.0.0"
+global CFG_DIR := A_AppData . "\MonitorLink"
+global CFG := CFG_DIR . "\monitor-link-ahk.ini"
+global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
+global UltimaHuella := "", UltimoEnvio := "", CuentasEnviadas := 0, EnLinea := false, UltimoError := ""
+global JobsReq := "", JobsReintento := 0, IndiceXml := "", IndiceDe := ""
+global Status, Info, Clave, BtnLink, Inicio, LinkBox
+
+CargarConfig()
+CrearVentana()
+if (Token = "") {
+    MostrarVinculo(true)
+} else {
+    MostrarVinculo(false)
+    Arrancar()
+}
+return
+
+; ---------------------------------------------------------------- config
+CargarConfig() {
+    IniRead, ServerUrl, %CFG%, link, server, %A_Space%
+    IniRead, Token, %CFG%, link, token, %A_Space%
+    IniRead, UserName, %CFG%, link, user, %A_Space%
+    IniRead, LibUrl, %CFG%, link, libUrl, %A_Space%
+    IniRead, LibToken, %CFG%, link, libToken, %A_Space%
+    IniRead, Ruta, %CFG%, folder, mainPath, %A_Space%
+    CarpetaJson := CarpetaJsonDe(Ruta)
+    if (CarpetaJson = "") {
+        ; Inside the PTCGPB folder it already knows the Main Path.
+        CarpetaJson := CarpetaJsonDe(A_ScriptDir)
+        Ruta := CarpetaJson != "" ? A_ScriptDir : ""
+    }
+}
+
+GuardarConfig() {
+    FileCreateDir, %CFG_DIR%
+    IniWrite, %ServerUrl%, %CFG%, link, server
+    IniWrite, %Token%, %CFG%, link, token
+    IniWrite, %UserName%, %CFG%, link, user
+    IniWrite, %LibUrl%, %CFG%, link, libUrl
+    IniWrite, %LibToken%, %CFG%, link, libToken
+    IniWrite, %Ruta%, %CFG%, folder, mainPath
+}
+
+; ---------------------------------------------------------------- window
+CrearVentana() {
+    Menu, Tray, NoStandard
+    Menu, Tray, Add, Open Monitor Link, AbrirVentana
+    Menu, Tray, Add, Exit, Salir
+    Menu, Tray, Default, Open Monitor Link
+    Menu, Tray, Tip, Monitor Link
+
+    Gui, Margin, 20, 14
+    logo := A_ScriptDir . "\GUI\Images\zenith-rise-logo.png"
+    if FileExist(logo)
+        Gui, Add, Picture, x150 y14 w100 h100, %logo%
+    Gui, Font, s16 Bold, Segoe UI
+    Gui, Add, Text, xm y+8 w360 Center, MONITOR LINK
+    Gui, Font, s9 Norm cGray, Segoe UI
+    Gui, Add, Text, xm y+0 w360 Center, Zenith Rise - connects your PC with the Discord bot
+    Gui, Font, s11 Bold, Segoe UI
+    Gui, Add, Text, xm y+14 w360 Center vStatus, ...
+    Gui, Font, s9 Norm cBlack, Segoe UI
+    Gui, Add, Text, xm y+6 w360 r4 vInfo,
+    Gui, Add, GroupBox, xm y+6 w360 h92 vLinkBox, Link this PC
+    Gui, Add, Text, xp+12 yp+22 w336, In Discord, type /link in Zenith Rise and paste the key here:
+    Gui, Add, Edit, xp y+6 w250 vClave
+    Gui, Add, Button, x+8 yp-1 w78 h24 gVincular vBtnLink, Link
+    Gui, Add, Button, xm y+28 w116 h30 gCambiarCarpeta, Change folder
+    Gui, Add, Button, x+6 yp w116 h30 gSincronizar, Sync now
+    Gui, Add, Button, x+6 yp w116 h30 gOcultar, Hide
+    Gui, Add, Checkbox, xm y+12 vInicio gCambiarInicio, Start with Windows
+    GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
+    Gui, Show, AutoSize, Monitor Link
+}
+
+MostrarVinculo(mostrar) {
+    for _, ctl in ["LinkBox", "Clave", "BtnLink"]
+        GuiControl, % mostrar ? "Enable" : "Disable", %ctl%
+    PintarEstado()
+}
+
+PintarEstado() {
+    if (Token = "") {
+        Gui, Font, s11 Bold cDA7B00, Segoe UI
+        GuiControl, Font, Status
+        GuiControl,, Status, Not linked yet
+    } else if (EnLinea) {
+        Gui, Font, s11 Bold c1E8E3E, Segoe UI
+        GuiControl, Font, Status
+        GuiControl,, Status, Connected
+    } else {
+        Gui, Font, s11 Bold cC62828, Segoe UI
+        GuiControl, Font, Status
+        GuiControl,, Status, Can't reach the bot - retrying
+    }
+    texto := (UserName != "" ? "Discord user: " . UserName . "`n" : "")
+        . "Folder: " . (Ruta != "" ? Ruta : "(not chosen yet - press Change folder)") . "`n"
+        . (UltimoEnvio != "" ? "Cards summary: " . CuentasEnviadas . " accounts, sent at " . UltimoEnvio : "Cards summary: not sent yet")
+        . (UltimoError != "" ? "`n" . UltimoError : "")
+    GuiControl,, Info, %texto%
+    Menu, Tray, Tip, % "Monitor Link - " . (Token = "" ? "not linked" : EnLinea ? "connected" : "offline")
+}
+
+AbrirVentana:
+    Gui, Show
+return
+
+Ocultar:
+GuiClose:
+GuiEscape:
+    Gui, Hide
+    TrayTip, Monitor Link, Still running here next to the clock. Right-click the icon to exit., 5, 1
+return
+
+Salir:
+    ExitApp
+return
+
+CambiarInicio:
+    Gui, Submit, NoHide
+    acceso := A_Startup . "\Monitor Link.lnk"
+    if (Inicio)
+        FileCreateShortcut, %A_AhkPath%, %acceso%, %A_ScriptDir%, "%A_ScriptFullPath%", Monitor Link
+    else
+        FileDelete, %acceso%
+return
+
+CambiarCarpeta:
+    FileSelectFolder, elegida, *%Ruta%, 0, Pick your PTCGPB folder (the Main Path, with Accounts inside)
+    if (ErrorLevel || elegida = "")
+        return
+    json := CarpetaJsonDe(elegida)
+    if (json = "") {
+        MsgBox, 48, Monitor Link, No accounts found there.`n`nPick the PTCGPB folder that has Accounts\Cards\accounts inside.
+        return
+    }
+    Ruta := elegida, CarpetaJson := json, IndiceXml := ""
+    GuardarConfig()
+    SubirResumen(true)
+return
+
+Sincronizar:
+    SubirResumen(true)
+return
+
+; ---------------------------------------------------------------- linking (/link)
+Vincular:
+    Gui, Submit, NoHide
+    clave := Trim(Clave)
+    if !RegExMatch(clave, "^ML([12])-([A-Za-z0-9_-]+)$", m) {
+        MsgBox, 48, Monitor Link, That doesn't look like a link key (it starts with ML2-).`n`nType /link in Zenith Rise and copy the whole key.
+        return
+    }
+    partes := StrSplit(Base64UrlDecode(m2), "|")
+    if (partes.Length() < 2) {
+        MsgBox, 48, Monitor Link, That key is damaged. Type /link again for a new one.
+        return
+    }
+    url := RTrim(partes[1], "/")
+    GuiControl, Disable, BtnLink
+    try {
+        r := Http("POST", url . "/link/claim", "{""code"":""" . JsonEsc(partes[2]) . """,""version"":""" . VERSION . """}", "application/json; charset=utf-8")
+    } catch e {
+        GuiControl, Enable, BtnLink
+        MsgBox, 48, Monitor Link, Could not reach the bot. Is the bot's PC on? Try again.
+        return
+    }
+    GuiControl, Enable, BtnLink
+    if (r.status != 200) {
+        MsgBox, 48, Monitor Link, % InStr(r.text, "invalid_or_expired_code") ? "That key is invalid or expired (it lasts 10 minutes and works once).`n`nType /link again and press Get a new key." : "Could not link (" . r.status . "). Try again."
+        return
+    }
+    RegExMatch(r.text, """token""\s*:\s*""([0-9a-f]+)""", t)
+    RegExMatch(r.text, """user""\s*:\s*""((?:[^""\\]|\\.)*)""", u)
+    ServerUrl := url, Token := t1, UserName := JsonUnesc(u1)
+    LibUrl := partes.Length() >= 4 ? partes[3] : "", LibToken := partes.Length() >= 4 ? partes[4] : ""
+    GuardarConfig()
+    GuiControl,, Clave,
+    MostrarVinculo(false)
+    if (CarpetaJson = "")
+        Gosub, CambiarCarpeta
+    Arrancar()
+return
+
+Arrancar() {
+    EnLinea := true
+    SubirResumen(true)
+    SetTimer, Ping, 60000
+    SetTimer, ResumenPeriodico, 600000
+    SetTimer, RevisarTrabajos, 300
+}
+
+NoVinculado() {
+    SetTimer, Ping, Off
+    SetTimer, ResumenPeriodico, Off
+    SetTimer, RevisarTrabajos, Off
+    Token := "", JobsReq := "", EnLinea := false
+    GuardarConfig()
+    MostrarVinculo(true)
+    Gui, Show
+    MsgBox, 48, Monitor Link, This PC is no longer linked.`n`nType /link in Zenith Rise and paste the new key.
+}
+
+; ---------------------------------------------------------------- cards summary (no passwords)
+ResumenPeriodico:
+    SubirResumen(false)
+return
+
+SubirResumen(forzar, folderError := "") {
+    if (Token = "" || CarpetaJson = "")
+        return
+    huella := Huella()
+    if (!forzar && folderError = "" && huella = UltimaHuella)
+        return
+    GuiControl,, Status, Reading your accounts...
+    cuentas := 0
+    body := "{""version"":""" . VERSION . """,""folder"":""" . JsonEsc(Ruta) . """,""accounts"":["
+    Loop, Files, %CarpetaJson%\*.json
+    {
+        FileRead, t, %A_LoopFileFullPath%
+        pos := InStr(t, """pulls""")
+        if (!pos)
+            continue
+        f := RegExMatch(t, """fileName""\s*:\s*""((?:[^""\\]|\\.)*)""", mf) ? mf1 : A_LoopFileName
+        n := RegExMatch(t, """accountName""\s*:\s*""((?:[^""\\]|\\.)*)""", mn) ? mn1 : f
+        d := RegExMatch(t, """shinedust""\s*:\s*\{\s*""value""\s*:\s*(-?\d+)", md) ? md1 : "null"
+        cartas := {}
+        while (pos := RegExMatch(t, """([A-Z]+_\d+_\d+_\d+)""", mc, pos)) {
+            cartas[mc1] := (cartas.HasKey(mc1) ? cartas[mc1] : 0) + 1
+            pos += StrLen(mc)
+        }
+        c := ""
+        for id, k in cartas
+            c .= (c = "" ? "" : ",") . """" . id . """:" . k
+        body .= (cuentas ? "," : "") . "{""f"":""" . f . """,""n"":""" . n . """,""d"":" . d . ",""c"":{" . c . "}}"
+        cuentas++
+    }
+    body .= "]"
+    ; Wishlist: Accounts\Cards\wishlist.json, next to Cards\accounts. Only the card ids.
+    FileRead, w, % CarpetaPadre(CarpetaJson) . "\wishlist.json"
+    if (!ErrorLevel) {
+        ids := "", pos := 1
+        while (pos := RegExMatch(w, """id""\s*:\s*""([A-Za-z0-9_]+)""", mw, pos)) {
+            ids .= (ids = "" ? "" : ",") . """" . mw1 . """"
+            pos += StrLen(mw)
+        }
+        body .= ",""wishlist"":[" . ids . "]"
+    }
+    if (folderError != "")
+        body .= ",""folderError"":""" . JsonEsc(folderError) . """"
+    body .= "}"
+    try {
+        r := Http("POST", ServerUrl . "/link/summary", body, "text/plain; charset=utf-8", Token, 120)
+    } catch e {
+        SinConexion()
+        return
+    }
+    if (r.status = 401)
+        return NoVinculado()
+    if (r.status != 200) {
+        UltimoError := "Summary not accepted (" . r.status . ")"
+        PintarEstado()
+        return
+    }
+    UltimaHuella := huella, CuentasEnviadas := cuentas, EnLinea := true, UltimoError := ""
+    FormatTime, UltimoEnvio,, HH:mm
+    PintarEstado()
+}
+
+; Cheap fingerprint (names, sizes and dates) so the full summary is only re-sent when something changed.
+Huella() {
+    h := Ruta
+    Loop, Files, %CarpetaJson%\*.json
+        h .= "|" . A_LoopFileName . A_LoopFileSize . A_LoopFileTimeModified
+    FileGetTime, tw, % CarpetaPadre(CarpetaJson) . "\wishlist.json"
+    return h . "|" . tw
+}
+
+; ---------------------------------------------------------------- ping and Set My Folder from Discord
+Ping:
+    try {
+        r := Http("GET", ServerUrl . "/link/ping", "", "", Token, 20)
+    } catch e {
+        SinConexion()
+        return
+    }
+    if (r.status = 401) {
+        NoVinculado()
+        return
+    }
+    if (r.status != 200) {
+        SinConexion()
+        return
+    }
+    if (!EnLinea) {
+        EnLinea := true
+        PintarEstado()
+    }
+    if RegExMatch(r.text, """folder""\s*:\s*""((?:[^""\\]|\\.)*)""", mp) {
+        pedida := JsonUnesc(mp1)
+        if (pedida != Ruta) {
+            json := CarpetaJsonDe(pedida)
+            if (json != "") {
+                Ruta := pedida, CarpetaJson := json, IndiceXml := ""
+                GuardarConfig()
+                SubirResumen(true)
+            } else {
+                SubirResumen(true, "No Accounts\Cards\accounts inside " . pedida . " on this PC")
+            }
+        }
+    }
+return
+
+; The bot's address changes when it restarts: look it up in the address book.
+SinConexion() {
+    EnLinea := false
+    if (LibUrl != "" && LibToken != "") {
+        try {
+            r := Http("GET", LibUrl . "/get/monitor_link:url", "", "", LibToken, 15)
+            if (RegExMatch(r.text, """result""\s*:\s*""([^""]+)""", ml) && RTrim(ml1, "/") != ServerUrl) {
+                ServerUrl := RTrim(ml1, "/"), JobsReq := ""
+                GuardarConfig()
+                SubirResumen(true)
+                return
+            }
+        }
+    }
+    PintarEstado()
+}
+
+; ---------------------------------------------------------------- account .xml on request
+; The bot keeps a request open (up to 25 s) and answers as soon as you use something in Discord that
+; needs one of your accounts. Only the files it asks for, by name, are sent.
+RevisarTrabajos:
+    if (Token = "" || A_TickCount < JobsReintento)
+        return
+    if (!IsObject(JobsReq)) {
+        try {
+            JobsReq := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+            JobsReq.SetTimeouts(5000, 10000, 30000, 40000)
+            JobsReq.Open("GET", ServerUrl . "/link/jobs", true)
+            JobsReq.SetRequestHeader("Authorization", "Bearer " . Token)
+            JobsReq.Send()
+        } catch e {
+            JobsReq := "", JobsReintento := A_TickCount + 10000
+        }
+        return
+    }
+    try {
+        listo := JobsReq.WaitForResponse(0)
+    } catch e {
+        JobsReq := "", JobsReintento := A_TickCount + 10000
+        return
+    }
+    if (!listo)
+        return
+    estado := JobsReq.Status, texto := JobsReq.ResponseText, JobsReq := ""
+    if (estado != 200) {
+        JobsReintento := A_TickCount + 10000
+        return
+    }
+    pos := 1
+    while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""files""\s*:\s*\[(.*?)\]", mj, pos)) {
+        pos += StrLen(mj)
+        AtenderTrabajo(mj1, mj2)
+    }
+return
+
+AtenderTrabajo(id, lista) {
+    archivos := "", faltan := "", enviados := 0, p := 1
+    while (p := RegExMatch(lista, """((?:[^""\\]|\\.)*)""", mn, p)) {
+        p += StrLen(mn)
+        nombre := JsonUnesc(mn1)
+        ruta := RutaDeXml(nombre)
+        contenido := ""
+        if (ruta != "")
+            FileRead, contenido, %ruta%
+        if (contenido != "") {
+            archivos .= (archivos = "" ? "" : ",") . """" . JsonEsc(nombre) . """:""" . JsonEsc(contenido) . """"
+            enviados++
+        } else {
+            faltan .= (faltan = "" ? "" : ",") . """" . JsonEsc(nombre) . """"
+        }
+    }
+    body := "{""id"":""" . id . """,""files"":{" . archivos . "},""missing"":[" . faltan . "]}"
+    try Http("POST", ServerUrl . "/link/xml", body, "text/plain; charset=utf-8", Token, 60)
+    TrayTip, Monitor Link, % "Sent " . enviados . " account file(s) you asked for in Discord.", 3, 1
+}
+
+; The .xml files live in Accounts\Saved (numbered subfolders), next to Accounts\Cards.
+RutaDeXml(nombre) {
+    clave := RegExMatch(nombre, "i)\.xml$") ? nombre : nombre . ".xml"
+    if (!IsObject(IndiceXml) || IndiceDe != CarpetaJson || !IndiceXml.HasKey(clave))
+        ArmarIndiceXml()
+    return IndiceXml.HasKey(clave) ? IndiceXml[clave] : ""
+}
+
+ArmarIndiceXml() {
+    IndiceXml := {}, IndiceDe := CarpetaJson
+    saved := CarpetaPadre(CarpetaPadre(CarpetaJson)) . "\Saved"
+    Loop, Files, %saved%\*.xml, R
+        IndiceXml[A_LoopFileName] := A_LoopFileFullPath
+}
+
+; ---------------------------------------------------------------- folders
+; Accepts the Main Path (the PTCGPB folder), Accounts, Accounts\Cards or Accounts\Cards\accounts.
+CarpetaJsonDe(ruta) {
+    ruta := RTrim(Trim(ruta, " `t"""), "\/")
+    if (ruta = "")
+        return ""
+    for _, c in [ruta, ruta . "\accounts", ruta . "\Cards\accounts", ruta . "\Accounts\Cards\accounts"]
+        if (HayCuentas(c))
+            return c
+    return ""
+}
+
+HayCuentas(dir) {
+    Loop, Files, %dir%\*.json
+    {
+        FileRead, t, %A_LoopFileFullPath%
+        return InStr(t, """pulls""") ? true : false
+    }
+    return false
+}
+
+CarpetaPadre(ruta) {
+    SplitPath, ruta,, padre
+    return padre
+}
+
+; ---------------------------------------------------------------- helpers
+Http(metodo, url, body := "", tipo := "", bearer := "", segundos := 30) {
+    req := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+    req.SetTimeouts(5000, 10000, 30000, segundos * 1000)
+    req.Open(metodo, url, false)
+    if (tipo != "")
+        req.SetRequestHeader("Content-Type", tipo)
+    if (bearer != "")
+        req.SetRequestHeader("Authorization", "Bearer " . bearer)
+    if (body != "")
+        req.Send(body)
+    else
+        req.Send()
+    return {status: req.Status, text: req.ResponseText}
+}
+
+JsonEsc(s) {
+    s := StrReplace(s, "\", "\\")
+    s := StrReplace(s, """", "\""")
+    s := StrReplace(s, "`r", "\r")
+    s := StrReplace(s, "`n", "\n")
+    return StrReplace(s, "`t", "\t")
+}
+
+JsonUnesc(s) {
+    s := StrReplace(s, "\\", Chr(1))
+    s := StrReplace(s, "\""", """")
+    s := StrReplace(s, "\/", "/")
+    return StrReplace(s, Chr(1), "\")
+}
+
+Base64UrlDecode(s) {
+    s := StrReplace(StrReplace(s, "-", "+"), "_", "/")
+    while (Mod(StrLen(s), 4))
+        s .= "="
+    n := 0
+    DllCall("Crypt32\CryptStringToBinary", "Str", s, "UInt", 0, "UInt", 1, "Ptr", 0, "UInt*", n, "Ptr", 0, "Ptr", 0)
+    VarSetCapacity(buf, n, 0)
+    DllCall("Crypt32\CryptStringToBinary", "Str", s, "UInt", 0, "UInt", 1, "Ptr", &buf, "UInt*", n, "Ptr", 0, "Ptr", 0)
+    return StrGet(&buf, n, "UTF-8")
+}
