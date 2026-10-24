@@ -319,6 +319,11 @@ async function precargar(discordId) {
     return true;
 }
 
+// Momento del ultimo resumen cargado (para que las caches por usuario se renueven cuando cambia).
+function resumenTs(discordId) {
+    return cache.get(String(discordId))?.ts || 0;
+}
+
 // Ids de la wishlist del miembro, o null si su Monitor Link no la mando.
 function wishlistDe(discordId) {
     return cache.get(String(discordId))?.wishlist || null;
@@ -362,4 +367,4 @@ async function estadoAgente(discordId) {
     return { vinculado: true, enLinea: Date.now() - (fila.ultimo || 0) < 3 * 60 * 1000, ultimo: fila.ultimo };
 }
 
-module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, cuentasDe, wishlistDe, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };

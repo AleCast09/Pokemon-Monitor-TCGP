@@ -1416,7 +1416,10 @@ async function obtenerCartasGoldCacheadas(discordId) {
 
     const umbral = await obtenerUmbralGold(discordId);
     const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-    const claveCache = `${rutaMasterPath}::${rutaJsonCfg?.webhook_url || ''}::${umbral}`;
+    // En la comunidad cada miembro tiene SUS cartas: la cache va por usuario (antes era una sola y
+    // un miembro podia ver las Gold Cards del que busco primero).
+    const usuarioGold = comunidad.usuarioActual();
+    const claveCache = `${rutaMasterPath}::${rutaJsonCfg?.webhook_url || ''}::${umbral}::${usuarioGold || ''}::${usuarioGold ? monitorLink.resumenTs?.(usuarioGold) : ''}`;
     if (!_cartasGoldCacheBot || _cartasGoldCacheBot.clave !== claveCache) {
         const mapaCopias = construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url);
         const cartasGold = mapaCopias ? cartas.filter(c => cuentasGoldParaCarta(mapaCopias, c.id, umbral).length > 0) : [];
@@ -2228,9 +2231,13 @@ async function construirEmbedElementosPorCategoria(cartas, expansion, categoria,
 // Se llama SIEMPRE despues de deferUpdate()/deferReply(), nunca antes.
 async function avisarCargandoCartas(interaction) {
     try {
+        // Si otra persona esta cargando sus cartas, se avisa que hay que esperar el turno.
+        const antes = _collagesEnCurso;
         await interaction.editReply({
             embeds: [new EmbedBuilder()
-                .setDescription('⏳ **Please wait a few seconds — loading your data...**')
+                .setDescription(antes > 0
+                    ? `⏳ **Someone else is loading their cards — you're #${antes + 1} in line.** It starts by itself, please wait...`
+                    : '⏳ **Please wait a few seconds — loading your data...**')
                 .setColor(0xE91E63)],
             components: [],
             files: [],
@@ -3506,7 +3513,19 @@ function maxCopiasCarta(mapaCopias, cartaId) {
 // sin red) -- una miniatura chica no necesita HD, y bajar HD de hasta 25
 // cartas por cada pantalla seria lento y gastaria disco de mas sin necesidad.
 // Las cartas sin imagen local encontrada se saltean (no hay nada que dibujar).
-async function generarCollageCartas(items, rutaMasterPath, mapaCopias, esGoldCards = false, colsFijo = null) {
+// Fila de collages (2026-10-24, pedido de Ale): con dos personas buscando a la vez, los dos collages
+// se armaban intercalados en esta PC y uno quedaba en "loading" mientras el otro avanzaba. Ahora se
+// arman de a uno; el que llega segundo espera su turno (avisarCargandoCartas le muestra su lugar).
+let _colaCollage = Promise.resolve();
+let _collagesEnCurso = 0;
+function generarCollageCartas(...args) {
+    _collagesEnCurso++;
+    const turno = _colaCollage.then(() => generarCollageCartasAhora(...args));
+    _colaCollage = turno.catch(() => {}).finally(() => { _collagesEnCurso = Math.max(0, _collagesEnCurso - 1); });
+    return turno;
+}
+
+async function generarCollageCartasAhora(items, rutaMasterPath, mapaCopias, esGoldCards = false, colsFijo = null) {
     if (!items?.length || !rutaMasterPath) return null;
     const cardMap = cargarCardMap(rutaMasterPath);
     // Celdas agrandadas de nuevo (2026-08-30, a pedido explicito del usuario, repetido):
@@ -14497,6 +14516,7 @@ async function manejarInteraccionPrincipal(interaction) {
                 opcionesLista.mapaCopias = mapaCopias;
             }
             const payload = await construirEmbedListaCartas(cartas, pagina, opcionesLista);
+            if (prefijo === 'wishlist') payload.content = `<@${interaction.user.id}>, here's your wishlist! 💖`;
             return await interaction.editReply(payload);
         }
 
