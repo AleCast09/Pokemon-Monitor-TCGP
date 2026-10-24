@@ -10846,7 +10846,48 @@ async function generarPanelBuildEmbed(userId, guild = null) {
     };
 }
 
+// Panel de /setup del server de comunidad (pedido de Ale): sin S4T, Heartbeat, Auto-Close,
+// Configuration, Tutorial ni Add Friend -- son de la PC host. Agrega 📂 All Main Paths (las carpetas
+// que vinculo cada miembro con Monitor Link) y 📁 My Folder (la del que pulsa).
+async function construirPanelComunidad() {
+    const driveHdRegularOn = await driveHdRegularHabilitado();
+    const embed = new EmbedBuilder()
+        .setTitle(' 👑  Pokemon Home PTCGPB!  👑​')
+        .setDescription(
+            `Hello! This is the **community** version of Monitor Pokémon — every member works with **their own** cards, linked from their PC with **Monitor Link**.\n\n` +
+            `• 🖼️ **Normal Cards in HD:** \`${driveHdRegularOn ? '🟢 ON' : '🔴 OFF'}\`\n` +
+            `-# OFF: normal cards stay low quality, Gold cards always HD. ON: normal cards also HD, but uses more disk space over time.\n\n` +
+            `**🎴 Available Features:**\n` +
+            `• 🔗 **/link** — link Monitor Link on your PC (once).\n` +
+            `• ⚡ **All Cards** — your cards and copies, from your own accounts.\n` +
+            `• 🏆 **Gold Cards** and 🍬 **Shinedust** — your own accounts.\n` +
+            `• 🔄 **Trade** / 🃏 **Share** — ⚡ to your Main, or 🎁 gift to a member.\n` +
+            `• 🎫 **Farm Shop Tickets** — for your Main, or 🎁 gift to a member.\n\n` +
+            `*Press the buttons to interact with the bot's ecosystem.*`
+        )
+        .setColor(0x9B59B6)
+        .setFooter({ text: 'Monitor Pokémon · Community' })
+        .setTimestamp();
+    const fila1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('btn_crear_canales_menu').setLabel('🏗️ Sync Channels').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('toggle_drive_hd_regular').setLabel('🖼️ Normal Cards HD On/Off').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('btn_status').setLabel('📊 Status').setStyle(ButtonStyle.Secondary)
+    );
+    const fila2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('link_todas_rutas').setLabel('📂 All Main Paths').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('link_mi_carpeta').setLabel('📁 My Folder').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('btn_check_updates').setLabel('🔄 Check for Updates').setStyle(ButtonStyle.Secondary)
+    );
+    const archivos = [];
+    if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+        embed.setThumbnail('attachment://symbol.png');
+        archivos.push({ ruta: SYMBOL_EMBEDS_PATH, filename: 'symbol.png' });
+    }
+    return { embeds: [embed], components: [fila1, fila2], archivos };
+}
+
 async function generarPanelControl(guildId) {
+    if (comunidad.esComunidad(guildId)) return await construirPanelComunidad();
     let estadoS4T = await verificarEstadoPM2('trading', 's4t.js');
     let estadoHB = await verificarEstadoPM2('heartbeat', 'heartbeat.js');
 
@@ -11042,6 +11083,29 @@ async function manejarInteraccionPrincipal(interaction) {
     }
     // /link (Monitor Link, solo en comunidad): clave de un solo uso para vincular el programa de la PC
     // del miembro con su usuario de Discord.
+    // 📂 All Main Paths / 📁 My Folder (panel de comunidad): carpetas vinculadas con Monitor Link.
+    if (interaction.isButton() && (interaction.customId === 'link_todas_rutas' || interaction.customId === 'link_mi_carpeta')) {
+        await interaction.deferReply({ ephemeral: true });
+        const todos = await monitorLink.vinculados();
+        const lista = interaction.customId === 'link_mi_carpeta' ? todos.filter(v => v.discordId === interaction.user.id) : todos;
+        if (!lista.length) {
+            return await interaction.editReply({ content: interaction.customId === 'link_mi_carpeta'
+                ? '🔗 You haven\'t linked your PC yet — type **/link** and paste the key in Monitor Link.'
+                : 'Nobody has linked Monitor Link yet.' });
+        }
+        const lineas = [];
+        for (const v of lista.slice(0, 30)) {
+            const nombre = (await client.users.fetch(v.discordId).catch(() => null))?.username || v.discordId;
+            lineas.push(`${v.enLinea ? '🟢' : '🔴'} **${nombre}** — 📦 ${v.cuentas} accounts` +
+                (v.ts ? ` · updated <t:${Math.floor(v.ts / 1000)}:R>` : '') +
+                `\n　📁 \`${v.carpeta || 'folder not sent yet'}\``);
+        }
+        const embed = new EmbedBuilder().setColor(0x5865F2)
+            .setTitle(interaction.customId === 'link_mi_carpeta' ? '📁 My Folder' : `📂 All Main Paths · ${todos.length} linked`)
+            .setDescription(lineas.join('\n\n').slice(0, 4000) + (lista.length > 30 ? `\n\n…and ${lista.length - 30} more` : ''))
+            .setFooter({ text: '🟢 Monitor Link online · 🔴 PC off or Monitor Link closed' });
+        return await interaction.editReply({ embeds: [embed] });
+    }
     if ((interaction.isChatInputCommand() && interaction.commandName === 'link')
         || (interaction.isButton() && interaction.customId === 'link_nueva_clave')) {
         if (interaction.isButton()) await interaction.deferUpdate();

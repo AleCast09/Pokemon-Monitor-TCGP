@@ -27,6 +27,22 @@ async function asegurarTablas() {
         token_hash TEXT PRIMARY KEY, discord_id TEXT, guild_id TEXT, creado INTEGER, ultimo INTEGER, version TEXT)`);
     await db.run(`CREATE TABLE IF NOT EXISTS link_resumen (
         discord_id TEXT PRIMARY KEY, guild_id TEXT, datos TEXT, cuentas INTEGER, ts INTEGER)`);
+    // Carpeta elegida en Monitor Link (para 📂 All Main Paths / 📁 My Folder). Columna agregada despues.
+    if (!asegurarTablas.carpeta) {
+        try { await db.run(`ALTER TABLE link_resumen ADD COLUMN carpeta TEXT`); } catch (e) { /* ya existe */ }
+        asegurarTablas.carpeta = true;
+    }
+}
+
+// Todos los vinculados, para 📂 All Main Paths: carpeta, cuentas, ultimo resumen y si esta en linea.
+async function vinculados() {
+    await asegurarTablas();
+    const filas = await db.all(`SELECT a.discord_id, a.ultimo, r.carpeta, r.cuentas, r.ts
+        FROM link_agentes a LEFT JOIN link_resumen r ON r.discord_id = a.discord_id ORDER BY r.cuentas DESC`);
+    return (filas || []).map(f => ({
+        discordId: f.discord_id, carpeta: f.carpeta || null, cuentas: f.cuentas || 0, ts: f.ts || null,
+        enLinea: Date.now() - (f.ultimo || 0) < 3 * 60 * 1000
+    }));
 }
 
 // Codigo de un solo uso para /link. Un usuario solo tiene un codigo vivo a la vez.
@@ -140,9 +156,9 @@ function registrar(app, dependencias) {
                     .filter(([id, n]) => /^[A-Za-z0-9_]{5,40}$/.test(id) && Number.isInteger(n) && n > 0 && n < 100000))
             })).filter(c => c.f);
             await db.run(
-                `INSERT INTO link_resumen (discord_id, guild_id, datos, cuentas, ts) VALUES (?, ?, ?, ?, ?)
-                 ON CONFLICT(discord_id) DO UPDATE SET guild_id = excluded.guild_id, datos = excluded.datos, cuentas = excluded.cuentas, ts = excluded.ts`,
-                [agente.discord_id, agente.guild_id, JSON.stringify(limpias), limpias.length, Date.now()]);
+                `INSERT INTO link_resumen (discord_id, guild_id, datos, cuentas, ts, carpeta) VALUES (?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(discord_id) DO UPDATE SET guild_id = excluded.guild_id, datos = excluded.datos, cuentas = excluded.cuentas, ts = excluded.ts, carpeta = excluded.carpeta`,
+                [agente.discord_id, agente.guild_id, JSON.stringify(limpias), limpias.length, Date.now(), String(datos.folder || "").slice(0, 300) || null]);
             res.json({ ok: true, accounts: limpias.length });
         } catch (e) {
             console.error('DEBUG: Monitor Link /summary:', e?.message || e);
@@ -204,4 +220,4 @@ async function estadoAgente(discordId) {
     return { vinculado: true, enLinea: Date.now() - (fila.ultimo || 0) < 3 * 60 * 1000, ultimo: fila.ultimo };
 }
 
-module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };

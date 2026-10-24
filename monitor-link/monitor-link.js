@@ -182,7 +182,7 @@ function armarResumen(carpeta) {
             c
         });
     }
-    return { version: VERSION, accounts: cuentas };
+    return { version: VERSION, folder: carpeta, accounts: cuentas };
 }
 
 async function subirResumen(cfg, forzar = false) {
