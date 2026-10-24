@@ -16,7 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const CARPETA_CONFIG = path.join(process.env.APPDATA || os.homedir(), 'MonitorLink');
 const RUTA_CONFIG = path.join(CARPETA_CONFIG, 'config.json');
 const CADA_PING_MS = 60 * 1000;
@@ -120,6 +120,20 @@ function contarJsonDeCuentas(dir) {
     } catch (e) { return 0; }
 }
 
+// La carpeta que se pide es la Main Path de siempre (ej. C:\PTCGPB). Se acepta tambien Accounts,
+// Accounts\Cards o la ruta larga de Cards\accounts, para no romper a los que ya la pusieron. Devuelve
+// la carpeta de los JSON (Accounts\Cards\accounts) o null; de ahi salen las XML (Accounts\Saved) y la
+// wishlist (Accounts\Cards\wishlist.json).
+function carpetaJsonDe(ruta) {
+    if (!ruta) return null;
+    const base = String(ruta).trim().replace(/^"|"$/g, '').replace(/[\\/]+$/, '');
+    for (const c of [base, path.join(base, 'accounts'), path.join(base, 'Cards', 'accounts'), path.join(base, 'Accounts', 'Cards', 'accounts')]) {
+        if (contarJsonDeCuentas(c)) return c;
+    }
+    return null;
+}
+const mainDe = (carpetaJson) => path.resolve(carpetaJson, '..', '..', '..');
+
 function buscarCarpetas() {
     const encontradas = [];
     const recorrer = (dir, prof) => {
@@ -131,7 +145,7 @@ function buscarCarpetas() {
             const completo = path.join(dir, e.name);
             if (e.name.toLowerCase() === 'accounts' && path.basename(dir).toLowerCase() === 'cards') {
                 const n = contarJsonDeCuentas(completo);
-                if (n) encontradas.push({ ruta: completo, cuentas: n });
+                if (n) encontradas.push({ ruta: mainDe(completo), cuentas: n });
                 continue;
             }
             recorrer(completo, prof + 1);
@@ -145,22 +159,24 @@ function buscarCarpetas() {
 }
 
 async function elegirCarpeta(cfg) {
-    console.log('Looking for your accounts folder (Accounts\\Cards\\accounts)...');
+    console.log('Looking for your bot folder (Main Path, the one with Accounts inside)...');
     const opciones = buscarCarpetas();
     opciones.forEach((o, i) => console.log(`  ${i + 1}. ${o.ruta}  (${o.cuentas} accounts)`));
     while (true) {
         const resp = await preguntar(opciones.length
             ? `Pick a number (1-${opciones.length}) or paste another folder path: `
-            : 'Could not find it. Paste the path of your Accounts\\Cards\\accounts folder: ');
+            : 'Could not find it. Paste your Main Path (the bot folder with Accounts inside): ');
         const n = parseInt(resp, 10);
         const ruta = (n >= 1 && n <= opciones.length) ? opciones[n - 1].ruta : resp.replace(/^"|"$/g, '');
-        if (ruta && contarJsonDeCuentas(ruta)) {
-            cfg.carpetaJson = ruta;
+        const json = carpetaJsonDe(ruta);
+        if (json) {
+            cfg.carpetaJson = json;
+            cfg.ruta = ruta;
             guardarConfig(cfg);
             console.log(`✅ Using ${ruta}\n`);
             return;
         }
-        console.log('That folder has no account files. Try again.');
+        console.log('No accounts found there (it needs Accounts\\Cards\\accounts inside). Try again.');
     }
 }
 
@@ -193,7 +209,7 @@ function armarResumen(carpeta) {
 }
 
 async function subirResumen(cfg, forzar = false, extra = {}) {
-    const resumen = { ...armarResumen(cfg.carpetaJson), ...extra };
+    const resumen = { ...armarResumen(cfg.carpetaJson), folder: cfg.ruta || cfg.carpetaJson, ...extra };
     const texto = JSON.stringify(resumen);
     const huella = crypto.createHash('sha256').update(texto).digest('hex');
     if (!forzar && huella === cfg.ultimaHuella) return;
@@ -304,15 +320,17 @@ async function main() {
             if (!r.ok && r.status !== 401 && await actualizarDireccion(cfg)) ciclo(true);
             // 📁 Set My Folder desde Discord: si pidio otra carpeta, se cambia (si existe en esta PC).
             const pedida = r.ok ? (await r.json().catch(() => ({}))).folder : null;
-            if (pedida && pedida.toLowerCase() !== String(cfg.carpetaJson).toLowerCase()) {
-                if (contarJsonDeCuentas(pedida)) {
-                    cfg.carpetaJson = pedida;
+            if (pedida && pedida.toLowerCase() !== String(cfg.ruta || cfg.carpetaJson).toLowerCase()) {
+                const json = carpetaJsonDe(pedida);
+                if (json) {
+                    cfg.carpetaJson = json;
+                    cfg.ruta = pedida;
                     guardarConfig(cfg);
                     log(`📁 Folder changed from Discord: ${pedida}`);
                     await subirResumen(cfg, true);
                 } else {
                     log(`⚠️ Discord asked for ${pedida}, but there are no account files there. Keeping the current folder.`);
-                    await subirResumen(cfg, true, { folderError: `No account files in ${pedida} on this PC` });
+                    await subirResumen(cfg, true, { folderError: `No Accounts\\Cards\\accounts inside ${pedida} on this PC` });
                 }
             }
         } catch (e) {

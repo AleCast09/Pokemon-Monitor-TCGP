@@ -11130,8 +11130,8 @@ async function manejarInteraccionPrincipal(interaction) {
         const actual = (await monitorLink.vinculados()).find(v => v.discordId === interaction.user.id)?.carpeta || '';
         const modal = new ModalBuilder().setCustomId('link_modal_carpeta').setTitle('📁 Set My Folder')
             .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
-                .setCustomId('ruta').setLabel('Your Accounts\\Cards\\accounts folder').setStyle(TextInputStyle.Short)
-                .setPlaceholder('C:\\PTCGPB\\Accounts\\Cards\\accounts').setValue(actual.slice(0, 300)).setRequired(true)));
+                .setCustomId('ruta').setLabel('Your Main Path (bot folder)').setStyle(TextInputStyle.Short)
+                .setPlaceholder('C:\\PTCGPB').setValue(actual.slice(0, 300)).setRequired(true)));
         return await interaction.showModal(modal);
     }
     if (interaction.isModalSubmit() && interaction.customId === 'link_modal_carpeta') {
