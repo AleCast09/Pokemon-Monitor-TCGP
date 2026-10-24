@@ -11118,6 +11118,16 @@ client.on('interactionCreate', (interaction) => comunidad.contexto.run(
 async function manejarInteraccionPrincipal(interaction) {
     // Modo comunidad: fuera del staff, nadie usa el bot ahi todavia (nunca ve datos de esta PC).
     if (await comunidad.bloquearSiHaceFalta(interaction)) return;
+    // Comunidad: los botones y menus de un mensaje que abrio otra persona (su wishlist, su carta, su
+    // ⚡) solo los puede usar ella -- con todo a la vista, si no cualquiera le cambiaba la pagina o
+    // le abria otra carta. Los paneles de los canales (webhooks) no tienen dueño y siguen abiertos.
+    if (comunidad.esComunidad(interaction.guildId) && interaction.isMessageComponent?.()) {
+        const dueno = interaction.message?.interactionMetadata?.user?.id || interaction.message?.interaction?.user?.id;
+        if (dueno && dueno !== interaction.user.id) {
+            return await interaction.reply({ ephemeral: true,
+                content: `🔒 This belongs to <@${dueno}> — only they can use these buttons. Open your own with **📋 View my Wishlist** or **/card**.` }).catch(() => {});
+        }
+    }
     // Comunidad + Monitor Link: las cartas salen del resumen que subio el programa de ESTE usuario.
     if (comunidad.esComunidad(interaction.guildId) && interaction.user) {
         const vinculado = await monitorLink.precargar(interaction.user.id).catch(() => false);
@@ -14487,10 +14497,11 @@ async function manejarInteraccionPrincipal(interaction) {
             // no se responde nada. Ahora se difiere ANTES de cualquier trabajo pesado, publico
             // (mismo motivo que ya usa allcards_ver_expansiones) para que la navegacion
             // encadenada de despues siga funcionando igual.
-            // Comunidad: cada uno ve SUS cartas, asi que la respuesta es privada (igual que /card).
+            // Comunidad: All/Gold Cards en privado; la wishlist queda a la vista de todos (pedido de
+            // Ale), pero sus botones solo los usa quien la abrio (ver guardia de dueño mas arriba).
             const enComunidadCartas = comunidad.esComunidad(interaction.guildId);
             if (esPrimeraVez) {
-                await interaction.deferReply({ ephemeral: enComunidadCartas });
+                await interaction.deferReply({ ephemeral: enComunidadCartas && prefijo !== 'wishlist' });
             } else {
                 await interaction.deferUpdate();
             }
