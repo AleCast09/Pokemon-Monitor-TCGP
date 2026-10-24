@@ -51,7 +51,7 @@ where winget >nul 2>nul
 if not errorlevel 1 (
     winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
 ) else (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$v = (Invoke-RestMethod https://nodejs.org/dist/index.json | Where-Object { $_.lts -and [int]($_.version.TrimStart('v').Split('.')[0]) -ge 22 } | Select-Object -First 1).version; $msi = Join-Path $env:TEMP ('node-' + $v + '-x64.msi'); Invoke-WebRequest ('https://nodejs.org/dist/' + $v + '/node-' + $v + '-x64.msi') -OutFile $msi; Start-Process msiexec -ArgumentList '/i', $msi, '/passive' -Wait"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$l = Invoke-RestMethod https://nodejs.org/dist/index.json; $v = ($l | Where-Object { $_.lts -and [int]($_.version.TrimStart('v').Split('.')[0]) -ge 22 } | Select-Object -First 1).version; $msi = Join-Path $env:TEMP ('node-' + $v + '-x64.msi'); Invoke-WebRequest ('https://nodejs.org/dist/' + $v + '/node-' + $v + '-x64.msi') -OutFile $msi; Start-Process msiexec -ArgumentList '/i', $msi, '/passive' -Wait"
 )
 rem La consola no ve el PATH nuevo hasta reabrirse: se agrega a mano.
 set "PATH=%PATH%;%ProgramFiles%\nodejs;%APPDATA%\npm"
