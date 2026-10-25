@@ -60,6 +60,11 @@ fastTransfer.init({
         return { tipo, rara: !!tipo && !tipo.endsWith('-diamond'), tradeable: RAREZAS_TRADEABLES.includes(tipo), nombre: (info?.Name && cache.en[info.Name]) || cartaId };
     },
     destinosTrade: async (interaction) => amigosParaInteraccion(interaction, (await obtenerRutasInject(interaction.guildId)).rutaIni),
+    // ⚡ Gold trade: cuentas con muchas copias de una carta (mismo umbral que Gold Cards).
+    cuentasGoldDe: async (userId, cartaId) => {
+        const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(userId);
+        return mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral).map(r => ({ fileName: r.fileName, cantidad: r.cantidad })) : [];
+    },
     cuentasMiembro: (discordId) => monitorLink.cuentasDe(discordId),
     auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
     // ⚡ Fast Farm: mismas reglas y tablas que el Farm Tickets con MuMu.
@@ -4094,6 +4099,11 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     );
 
     const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
+    // ⚡ Gold trade (2026-10-24): varias copias de esta carta en un solo login, sin MuMu.
+    if (datosGold && tradeable && fastTransfer.habilitado(guild?.id)) {
+        payload.components.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`fast_gold::${cartaId}`.slice(0, 100)).setLabel('⚡ Gold trade').setStyle(ButtonStyle.Success)));
+    }
     // Comunidad: fuera los botones que usan la PC host (XML, Info Accounts, Wishlist, Shinedust por
     // OCR, Extract XML, Inject). Quedan Home, Trade y Share.
     comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::', 'card_extract::', 'goldcards_extract::']);
