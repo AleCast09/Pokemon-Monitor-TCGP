@@ -467,6 +467,13 @@ function shinedustDe(discordId) {
         .sort((a, b) => b.valor - a.valor);
 }
 
+// Cartas {id: copias} de una cuenta del miembro (de su resumen), para 📦 Bulk trade.
+function cartasDeCuentaMiembro(discordId, fileName) {
+    const sin = (n) => String(n || '').replace(/\.xml$/i, '').toLowerCase();
+    const c = (cache.get(String(discordId))?.cuentas || []).find(x => sin(x.f) === sin(fileName));
+    return c ? { ...(c.c || {}) } : null;
+}
+
 // Todas las cuentas del resumen, con la forma de cuentasJson de fast-transfer.js.
 function cuentasDe(discordId) {
     return (cache.get(String(discordId))?.cuentas || []).map(c => ({
@@ -489,4 +496,4 @@ async function estadoAgente(discordId) {
     return { vinculado: true, enLinea: Date.now() - (fila.ultimo || 0) < 3 * 60 * 1000, ultimo: fila.ultimo };
 }
 
-module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };

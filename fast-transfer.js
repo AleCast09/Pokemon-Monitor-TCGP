@@ -1079,9 +1079,178 @@ async function correrLoteDust(interaction, pendientes, titulo, paginaVolver = 0,
     }
 }
 
+// ======================== 📦 Bulk trade (2026-10-24, god packs) ========================
+// Elegir una cuenta (las que tienen mas cartas raras primero), marcar varias cartas raras y el
+// destino: un solo login y una sola amistad, y las cartas se tradean una tras otra (cada trade lo
+// acepta la Main en el juego, ofreciendo una carta a cambio).
+const bulkPendientes = new Map();   // clave -> { userId, fileName, cartas, ts }
+
+function cartasDeCuenta(miembro, rutaJson, fileNameXml) {
+    if (miembro) return deps.cartasMiembro(miembro, fileNameXml) || {};
+    const c = cuentasJson(rutaJson).find(x => String(x.fileNameXml).toLowerCase() === String(fileNameXml).toLowerCase());
+    const data = c ? leerJson(path.join(rutaJson, c.archivoJson)) : null;
+    const copias = {};
+    for (const p of data?.pulls || []) for (const id of p.cards || []) copias[id] = (copias[id] || 0) + 1;
+    return copias;
+}
+
+function rarasTradeables(miembro, rutaJson, rutaMaster, fileNameXml) {
+    return Object.entries(cartasDeCuenta(miembro, rutaJson, fileNameXml))
+        .map(([id, n]) => ({ id, n, ...deps.infoCartaBulk(id, rutaMaster) }))
+        .filter(c => c.rara && c.tradeable);
+}
+
+async function manejarBulk(interaction) {
+    const id = interaction.customId;
+    const miembro = deps.usuarioComunidad?.() || null;
+    const rutaJson = (await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`))?.webhook_url;
+    const rutaMaster = deps.rutaMaster ? await deps.rutaMaster() : null;
+
+    // 1. Cuenta: las que tienen mas cartas raras tradeables primero (los god packs arriba).
+    if (interaction.isButton() && id === 'fast_bulk') {
+        await interaction.deferReply({ ephemeral: true });
+        const cuentas = cuentasPara(miembro, rutaJson)
+            .map(c => ({ c, raras: rarasTradeables(miembro, rutaJson, rutaMaster, c.fileNameXml).length }))
+            .filter(x => x.raras > 0)
+            .sort((a, b) => b.raras - a.raras)
+            .slice(0, 25);
+        if (!cuentas.length) {
+            await interaction.editReply({ content: '❌ No account has rare tradeable cards (1★ or more).' });
+            return true;
+        }
+        const menu = new StringSelectMenuBuilder().setCustomId('fast_bulk_cuenta').setPlaceholder('Which account? (most rare cards first)')
+            .addOptions(cuentas.map(x => ({ label: x.c.nombreCuenta.slice(0, 100), description: `${x.raras} rare tradeable card(s)`, value: x.c.fileNameXml.slice(0, 100) })));
+        await interaction.editReply({ content: '📦 **Bulk trade** — pick the account:', components: [new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sub_volver').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary))] });
+        return true;
+    }
+
+    // 2. Cartas (varias)
+    if (interaction.isStringSelectMenu() && id === 'fast_bulk_cuenta') {
+        const fileName = interaction.values[0];
+        const raras = rarasTradeables(miembro, rutaJson, rutaMaster, fileName).slice(0, 25);
+        const clave = `${interaction.user.id}:${Date.now().toString(36)}`;
+        bulkPendientes.set(clave, { userId: interaction.user.id, fileName, cartas: [], ts: Date.now() });
+        const menu = new StringSelectMenuBuilder().setCustomId(`fast_bulk_cartas::${clave}`).setPlaceholder('Which cards? (you can pick several)')
+            .setMinValues(1).setMaxValues(raras.length)
+            .addOptions(raras.map(c => ({ label: `${c.nombre}`.slice(0, 100), description: `${c.tipo} · x${c.n}`.slice(0, 100), value: c.id })));
+        await interaction.update({ content: `📦 **${fileName}** — pick the cards to trade:`, components: [new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sub_volver').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary))] });
+        return true;
+    }
+
+    // 3. Destino
+    if (interaction.isStringSelectMenu() && id.startsWith('fast_bulk_cartas::')) {
+        const clave = id.split('::')[1];
+        const p = bulkPendientes.get(clave);
+        if (!p) { await interaction.update({ content: '⏱️ This expired — start again.', components: [] }); return true; }
+        p.cartas = interaction.values;
+        const destinos = (await deps.destinosTrade(interaction)) || [];
+        if (!destinos.length) {
+            await interaction.update({ content: interaction._sinDestinosMsg || '❌ No destination found (register your Main first).', components: [] });
+            return true;
+        }
+        const menu = new StringSelectMenuBuilder().setCustomId(`fast_bulk_destino::${clave}`).setPlaceholder('Trade them to…')
+            .addOptions(destinos.slice(0, 25).map(d => ({ label: `${d.label || d.id}`.slice(0, 100), description: String(d.id).slice(0, 100), value: String(d.id) })));
+        await interaction.update({ content: `📦 **${p.cartas.length}** card(s) from **${p.fileName}** — who receives them?`, components: [new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sub_volver').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary))] });
+        return true;
+    }
+
+    // 4. A correr
+    if (interaction.isStringSelectMenu() && id.startsWith('fast_bulk_destino::')) {
+        const clave = id.split('::')[1];
+        const p = bulkPendientes.get(clave);
+        bulkPendientes.delete(clave);
+        if (!p) { await interaction.update({ content: '⏱️ This expired — start again.', components: [] }); return true; }
+        await interaction.update({ content: '▶️ Starting the bulk trade…', components: [] });
+        await ejecutarBulk(interaction, { fileName: p.fileName, cartas: p.cartas, friendId: interaction.values[0], miembro, rutaMaster });
+        return true;
+    }
+    return false;
+}
+
+async function ejecutarBulk(interaction, { fileName, cartas, friendId, miembro, rutaMaster }) {
+    const runId = `${interaction.id}`;
+    const mapa = (await deps.obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))) || {};
+    const stopFile = path.join(os.tmpdir(), `fast_transfer_stop_${runId}`);
+    try { fs.unlinkSync(stopFile); } catch (e) { /* no existia */ }
+    corridas.set(runId, { hijo: null, detenido: false, stopFile });
+    const nombre = (id) => deps.infoCartaBulk(id, rutaMaster).nombre;
+    const estados = Object.fromEntries(cartas.map(c => [c, { icono: '⏳', msg: '' }]));
+    let paso = 'Logging in…';
+    let final = null;
+    const filaCancel = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`fast_stop::${runId}`).setLabel('✖️ Cancel').setStyle(ButtonStyle.Danger));
+    const pintar = () => {
+        const lineas = cartas.map(c => `${estados[c].icono} **${nombre(c)}**${estados[c].msg ? ` — ${estados[c].msg}` : ''}`);
+        const ok = cartas.filter(c => estados[c].icono === icono('ok', mapa)).length;
+        const embed = new EmbedBuilder().setTitle(`📦 Bulk trade — ${fileName}`).setColor(final ? (ok ? 0x2ECC71 : 0xE74C3C) : 0xF0A93A)
+            .setDescription([...lineas, '', final || `👉 ${paso}`].join('\n').slice(0, 4000));
+        return interaction.editReply({ content: '', embeds: [embed], components: final ? [] : [filaCancel] }).catch(() => {});
+    };
+    enCola++;
+    if (enCola > 1) { paso = `🕒 Queued — position #${enCola - 1}`; await pintar(); }
+    const limpiezas = [];
+    const turno = cola.then(async () => {
+        if (corridas.get(runId).detenido) { final = '🚫 Cancelled'; return; }
+        paso = miembro ? 'Getting the account from your Monitor Link…' : 'Logging in…';
+        await pintar();
+        const xmls = await prepararXmls(miembro, [fileName], runId);
+        limpiezas.push(xmls.limpiar);
+        const rutaXml = rutaXmlDe(xmls.mapa, fileName);
+        if (!rutaXml) { final = `${icono('error', mapa)} ${xmls.error || `${fileName} not found`}`; return; }
+        if (!(await puertoAbierto(PUERTO_TUNEL)) && !(await asegurarTunel())) { final = `${icono('error', mapa)} Could not start the tunnel (port 9090)`; return; }
+        const args = ['--engine-dir', rutaMotor(), '--xml', rutaXml, '--card-ids', cartas.join(','), '--target', friendId, '--mode', 'trade', '--stop-file', stopFile];
+        if (process.env.FAST_TRANSFER_PROXY_FILE) args.push('--proxy-file', process.env.FAST_TRANSFER_PROXY_FILE);
+        let actual = null;
+        let edicion = Promise.resolve();
+        const { resultado } = await correrMotor(runId, args, ev => {
+            if (ev.step === 'card') {
+                const [c] = String(ev.msg || '').split('|');
+                if (ev.state === 'start') { actual = c; if (estados[c]) estados[c].icono = '🔄'; }
+                else if (estados[c]) estados[c].icono = icono(ev.state === 'ok' ? 'ok' : 'error', mapa);
+            } else if (ev.state === 'error') {
+                if (actual && estados[actual]) estados[actual].msg = ev.msg || 'failed';
+                else paso = ev.msg || 'failed';
+            } else if (ev.msg) {
+                paso = ev.msg;
+            } else if (ev.step === 'friend_request' && ev.state === 'start') {
+                paso = 'Sending the friend request…';
+            }
+            edicion = edicion.then(pintar);
+        });
+        await edicion;
+        for (const r of resultado?.results || []) {
+            if (r.ok) await deps.registrarTransferenciaCarta(fileName, r.card, 'main', interaction.user.id, friendId).catch(() => {});
+        }
+        const ok = (resultado?.results || []).filter(r => r.ok).length;
+        if (cartas.length === 1 && resultado?.success && estados[cartas[0]]) estados[cartas[0]].icono = icono('ok', mapa);
+        final = corridas.get(runId)?.detenido ? `🚫 Cancelled — ${ok} traded` : `🎉 Done — **${ok}/${cartas.length}** traded`;
+    }).catch(e => {
+        console.error('DEBUG: Bulk trade error:', e);
+        final = `${icono('error', mapa)} Something went wrong`;
+    }).finally(async () => {
+        enCola = Math.max(0, enCola - 1);
+        corridas.delete(runId);
+        limpiezas.forEach(f => f());
+        try { fs.unlinkSync(stopFile); } catch (e) { /* nada */ }
+        await pintar();
+    });
+    cola = turno;
+    return turno;
+}
+
 // Devuelve true si la interaccion era de Fast Transfer (bot.js deja de procesarla).
 async function manejarInteraccion(interaction) {
     const id = interaction.customId || '';
+    if (id.startsWith('fast_bulk')) {
+        if (!habilitado(interaction.guildId)) {
+            await interaction.reply({ content: '❌ Bulk trade is not available here.', ephemeral: true });
+            return true;
+        }
+        return await manejarBulk(interaction);
+    }
     if (id.startsWith('fast_dust')) {
         if (!habilitado(interaction.guildId)) {
             await interaction.reply({ content: '❌ Fast Shinedust is not available here.', ephemeral: true });

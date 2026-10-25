@@ -31,6 +31,7 @@ iniciarAutoSyncCardTypes();
 // Fast Share/Trade sin MuMu (2026-10-23): todo en fast-transfer.js, apagado salvo que el .env
 // tenga FAST_TRANSFER_ENGINE_DIR y sea el servidor propio.
 const fastTransfer = require('./fast-transfer.js');
+const infoCartaBulkCache = { ruta: null, ts: 0, cm: null, en: null };
 // Modo comunidad (community.js): solo para los servers de COMMUNITY_GUILD_IDS del .env.
 const comunidad = require('./community.js');
 // Monitor Link: el programa de cada miembro sube el resumen de SUS cartas (monitor-link-server.js).
@@ -43,6 +44,22 @@ fastTransfer.init({
     usuarioComunidad: () => comunidad.usuarioActual(),
     pedirXml: (discordId, nombres) => monitorLink.pedirXml(discordId, nombres),
     pedirAccion: (discordId, accion, timeoutMs) => monitorLink.pedirAccion(discordId, accion, timeoutMs),
+    // 📦 Bulk trade
+    cartasMiembro: (discordId, fileName) => monitorLink.cartasDeCuentaMiembro(discordId, fileName),
+    // Catalogo leido una vez cada 10 min (se consulta por cada carta de cada cuenta).
+    infoCartaBulk: (cartaId, rutaMasterPath) => {
+        const cache = infoCartaBulkCache;
+        if (!cache.cm || cache.ruta !== rutaMasterPath || Date.now() - cache.ts > 10 * 60 * 1000) {
+            cache.ruta = rutaMasterPath;
+            cache.ts = Date.now();
+            cache.cm = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json')) || {} : {};
+            cache.en = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'en_US.json')) || {} : {};
+        }
+        const info = cache.cm[cartaId];
+        const tipo = tipoRarezaDesdeInfo(info);
+        return { tipo, rara: !!tipo && !tipo.endsWith('-diamond'), tradeable: RAREZAS_TRADEABLES.includes(tipo), nombre: (info?.Name && cache.en[info.Name]) || cartaId };
+    },
+    destinosTrade: async (interaction) => amigosParaInteraccion(interaction, (await obtenerRutasInject(interaction.guildId)).rutaIni),
     cuentasMiembro: (discordId) => monitorLink.cuentasDe(discordId),
     auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
     // ⚡ Fast Farm: mismas reglas y tablas que el Farm Tickets con MuMu.
