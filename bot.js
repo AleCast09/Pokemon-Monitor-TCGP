@@ -4079,7 +4079,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     // Comunidad: fuera los botones que usan la PC host (XML, Info Accounts, Wishlist, Shinedust por
     // OCR, Extract XML, Inject). Quedan Home, Trade y Share.
     comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::',
-        'card_wishlist_add::', 'card_shinedust::', 'goldcards_shinedust::', 'card_inject::', 'goldcards_inject::']);
+        'card_shinedust::', 'goldcards_shinedust::', 'card_inject::', 'goldcards_inject::']);
     const archivosPayload = [];
     if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
@@ -15328,6 +15328,19 @@ async function manejarInteraccionPrincipal(interaction) {
             const rutaWishlistCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_wishlist'`);
             const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
             const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+            // Comunidad: la wishlist esta en la PC del miembro; se la escribe su Monitor Link.
+            const miembroWishlist = comunidad.usuarioActual();
+            if (miembroWishlist) {
+                try {
+                    const r = await monitorLink.pedirAccion(miembroWishlist, { action: 'wishlist_add', card: cartaId, name: nombreCarta });
+                    if (!r.ok) return await interaction.editReply({ content: `❌ Your Monitor Link could not save it${r.error ? ` (${r.error})` : ''}.` });
+                    return await interaction.editReply({ content: r.already ? `💖 \`${nombreCarta}\` was already in your wishlist.` : `💖 \`${nombreCarta}\` added to your wishlist!` });
+                } catch (e) {
+                    return await interaction.editReply({ content: e.message === 'offline'
+                        ? '🔗 Your **Monitor Link** is not running — open it on your PC and try again.'
+                        : '⏱️ Your **Monitor Link** didn\'t answer — it may be an old version. Close it and open it again (it updates by itself).' });
+                }
+            }
             const resultado = agregarCartaAWishlist(rutaWishlistCfg, cartaId, nombreCarta);
             if (!resultado.ok) {
                 return await interaction.editReply({ content: '❌ Could not find the configured **Wishlist Path**. Check it in the panel/`/setup`.' });

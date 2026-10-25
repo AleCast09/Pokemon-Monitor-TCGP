@@ -17,7 +17,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.1.0"
+global VERSION := "ahk-1.2.0"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -385,6 +385,11 @@ RevisarTrabajos:
         pos += StrLen(mj)
         AtenderTrabajo(mj1, mj2)
     }
+    pos := 1
+    while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""wishlist_add""\s*,\s*""card""\s*:\s*""([A-Za-z0-9_]+)""\s*,\s*""name""\s*:\s*""((?:[^""\\]|\\.)*)""", mw, pos)) {
+        pos += StrLen(mw)
+        AgregarAWishlist(mw1, mw2, mw3)
+    }
 return
 
 AtenderTrabajo(id, lista) {
@@ -406,6 +411,50 @@ AtenderTrabajo(id, lista) {
     body := "{""id"":""" . id . """,""files"":{" . archivos . "},""missing"":[" . faltan . "]}"
     try Http("POST", ServerUrl . "/link/xml", body, "text/plain; charset=utf-8", Token, 60)
     TrayTip, Monitor Link, % "Sent " . enviados . " account file(s) you asked for in Discord.", 3, 1
+}
+
+; Wishlist button in Discord: adds the card to YOUR Accounts\Cards\wishlist.json (the same file the
+; bot of Kevin/Leanny and its Card Database use), then sends the updated summary.
+AgregarAWishlist(id, carta, nombreJson) {
+    archivo := CarpetaPadre(CarpetaJson) . "\wishlist.json"
+    ok := "true", ya := "false", error := ""
+    FormatTime, ahora,, yyyy-MM-ddTHH:mm:ss
+    item := "{""id"": """ . carta . """, ""name"": """ . nombreJson . """}"
+    if (CarpetaJson = "") {
+        ok := "false", error := "no folder"
+    } else if !FileExist(archivo) {
+        texto := "{""version"": 1, ""updatedAt"": """ . ahora . """, ""cards"": [" . item . "]}"
+    } else {
+        FileRead, texto, %archivo%
+        if InStr(texto, """" . carta . """") {
+            ya := "true"
+        } else {
+            abre := InStr(texto, "[", false, InStr(texto, """cards"""))
+            cierra := InStr(texto, "]", false, abre)
+            if (!abre || !cierra) {
+                ok := "false", error := "wishlist.json has an unexpected format"
+            } else {
+                hayCartas := InStr(SubStr(texto, abre, cierra - abre), "{")
+                texto := SubStr(texto, 1, cierra - 1) . (hayCartas ? ", " : "") . item . SubStr(texto, cierra)
+                texto := RegExReplace(texto, """updatedAt""\s*:\s*""[^""]*""", """updatedAt"": """ . ahora . """", , 1)
+            }
+        }
+    }
+    if (ok = "true" && ya = "false") {
+        f := FileOpen(archivo, "w", "UTF-8-RAW")
+        if (!IsObject(f)) {
+            ok := "false", error := "could not write wishlist.json"
+        } else {
+            f.Write(texto)
+            f.Close()
+        }
+    }
+    body := "{""id"":""" . id . """,""ok"":" . ok . ",""already"":" . ya . (error != "" ? ",""error"":""" . JsonEsc(error) . """" : "") . "}"
+    try Http("POST", ServerUrl . "/link/xml", body, "text/plain; charset=utf-8", Token, 30)
+    if (ok = "true" && ya = "false") {
+        TrayTip, Monitor Link, % "Added to your wishlist: " . JsonUnesc(nombreJson), 3, 1
+        SubirResumen(false)
+    }
 }
 
 ; The .xml files live in Accounts\Saved (numbered subfolders), next to Accounts\Cards.

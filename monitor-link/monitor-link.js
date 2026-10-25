@@ -16,7 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const CARPETA_CONFIG = path.join(process.env.APPDATA || os.homedir(), 'MonitorLink');
 const RUTA_CONFIG = path.join(CARPETA_CONFIG, 'config.json');
 const CADA_PING_MS = 60 * 1000;
@@ -253,7 +253,36 @@ function rutaDeXml(cfg, nombre) {
     return indice.get(clave) || null;
 }
 
+// Boton de wishlist en Discord: agrega la carta a SU Accounts\Cards\wishlist.json y manda el resumen nuevo.
+async function agregarAWishlist(cfg, trabajo) {
+    const archivo = path.resolve(cfg.carpetaJson, '..', 'wishlist.json');
+    const respuesta = { id: trabajo.id, ok: true, already: false };
+    try {
+        let data = { version: 1, cards: [] };
+        if (fs.existsSync(archivo)) data = JSON.parse(fs.readFileSync(archivo, 'utf8').replace(/^\uFEFF/, ''));
+        if (!Array.isArray(data.cards)) data.cards = [];
+        if (data.cards.some(c => (c?.id || c?.code) === trabajo.card)) {
+            respuesta.already = true;
+        } else {
+            data.cards.push({ id: trabajo.card, name: trabajo.name });
+            data.updatedAt = new Date().toISOString();
+            fs.writeFileSync(archivo, JSON.stringify(data, null, 2));
+        }
+    } catch (e) {
+        respuesta.ok = false;
+        respuesta.error = e.message;
+    }
+    await fetch(`${cfg.serverUrl}/link/xml`, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain', Authorization: `Bearer ${cfg.token}` }, body: JSON.stringify(respuesta)
+    });
+    if (respuesta.ok && !respuesta.already) {
+        log(`💖 Added to your wishlist: ${trabajo.name}`);
+        await subirResumen(cfg, false).catch(() => {});
+    }
+}
+
 async function atenderTrabajo(cfg, trabajo) {
+    if (trabajo.action === 'wishlist_add') return agregarAWishlist(cfg, trabajo);
     const files = {};
     const missing = [];
     for (const nombre of trabajo.files || []) {

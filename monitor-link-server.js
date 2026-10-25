@@ -267,6 +267,10 @@ function registrar(app, dependencias) {
             if (!trabajo) return res.json({ ok: false, error: 'unknown_job' });
             clearTimeout(trabajo.timer);
             trabajos.set(agente.discord_id, lista.filter(t => t !== trabajo));
+            if (trabajo.accion) {
+                trabajo.resolver({ ok: !!datos.ok, already: !!datos.already, error: datos.error ? String(datos.error).slice(0, 200) : null });
+                return res.json({ ok: true });
+            }
             // Solo lo pedido y con forma de XML de cuenta.
             const archivos = {};
             for (const nombre of trabajo.archivos) {
@@ -359,7 +363,27 @@ function despacharTrabajos(discordId) {
     clearTimeout(espera.timer);
     esperas.delete(discordId);
     pendientes.forEach(t => { t.entregado = true; });
-    espera.res.json({ jobs: pendientes.map(t => ({ id: t.id, files: t.archivos })) });
+    espera.res.json({ jobs: pendientes.map(t => t.accion ? { id: t.id, ...t.accion } : { id: t.id, files: t.archivos }) });
+}
+
+// Accion en la PC del miembro (2026-10-24): por ahora "wishlist_add" (💖 Wishlist en una carta: la
+// agrega a SU Accounts\Cards\wishlist.json). Devuelve { ok, already, error }.
+// Errores: 'offline' o 'timeout' (un Monitor Link viejo no conoce la accion y no contesta).
+async function pedirAccion(discordId, accion, timeoutMs = 20000) {
+    discordId = String(discordId);
+    const fila = await db.get(`SELECT ultimo FROM link_agentes WHERE discord_id = ?`, [discordId]);
+    if (!fila) throw new Error('offline');
+    for (let i = 0; i < 10 && !esperas.has(discordId); i++) await new Promise(r => setTimeout(r, 500));
+    if (!esperas.has(discordId)) throw new Error('offline');
+    return await new Promise((resolver, rechazar) => {
+        const trabajo = { id: crypto.randomBytes(8).toString('hex'), accion, entregado: false, resolver };
+        trabajo.timer = setTimeout(() => {
+            trabajos.set(discordId, (trabajos.get(discordId) || []).filter(t => t !== trabajo));
+            rechazar(new Error('timeout'));
+        }, timeoutMs);
+        trabajos.set(discordId, [...(trabajos.get(discordId) || []), trabajo]);
+        despacharTrabajos(discordId);
+    });
 }
 
 // Pide XML por nombre de archivo al Monitor Link del usuario. Devuelve { nombre: contenido }.
@@ -455,4 +479,4 @@ async function estadoAgente(discordId) {
     return { vinculado: true, enLinea: Date.now() - (fila.ultimo || 0) < 3 * 60 * 1000, ultimo: fila.ultimo };
 }
 
-module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
