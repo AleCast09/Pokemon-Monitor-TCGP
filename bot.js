@@ -16694,5 +16694,16 @@ client.on('guildCreate', async (guild) => {
 // Solo intenta loguearse si de verdad hay un token guardado -- ver comentario completo arriba
 // de "if (!TOKEN)". Sin esto, discord.js tira un error al recibir undefined/'' como token.
 if (TOKEN) {
-    client.login(TOKEN);
+    // Motivos comunes con un aviso claro en el registro (caso real 2026-10-24: el bot de un host nuevo sin
+    // Message Content Intent quedaba offline y solo se veia en el log como "Used disallowed intents").
+    client.login(TOKEN).catch(e => {
+        const m = String(e?.message || e);
+        if (/disallowed intents/i.test(m)) {
+            console.error('❌ Discord rejected the bot: turn on MESSAGE CONTENT INTENT (Developer Portal → your bot → Bot → Privileged Gateway Intents → Save), then restart.');
+        } else if (/invalid token/i.test(m)) {
+            console.error('❌ Discord rejected the bot token: reset it in the Developer Portal and put the new one in the setup.');
+        } else {
+            console.error('❌ Could not log in to Discord:', m);
+        }
+    });
 }
