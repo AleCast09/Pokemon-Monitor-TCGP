@@ -12450,6 +12450,7 @@ async function manejarInteraccionPrincipal(interaction) {
         const payloadSd = comunidad.quitarComponentes(interaction.guildId, construirEmbedShinedust(resultados, 0), ['shinedust_track_select::']);
         const filaSd = fastTransfer.filaBotonesDust(interaction.guildId, 0);
         if (filaSd && payloadSd.components) payloadSd.components.push(filaSd);
+        payloadSd.content = `<@${interaction.user.id}>, here's your Shinedust list! 🍬`;
         return await interaction.editReply(payloadSd);
     }
 
@@ -12461,6 +12462,7 @@ async function manejarInteraccionPrincipal(interaction) {
         const payloadSd = comunidad.quitarComponentes(interaction.guildId, construirEmbedShinedust(resultados, pagina), ['shinedust_track_select::']);
         const filaSd = fastTransfer.filaBotonesDust(interaction.guildId, Math.max(0, pagina));
         if (filaSd && payloadSd.components) payloadSd.components.push(filaSd);
+        payloadSd.content = `<@${interaction.user.id}>, here's your Shinedust list! 🍬`;
         return await interaction.editReply(payloadSd);
     }
 
@@ -14698,7 +14700,9 @@ async function manejarInteraccionPrincipal(interaction) {
                 opcionesLista.mapaCopias = mapaCopias;
             }
             const payload = await construirEmbedListaCartas(cartas, pagina, opcionesLista);
-            if (prefijo === 'wishlist') payload.content = `<@${interaction._duenoLista || interaction.user.id}>, here's your wishlist! 💖`;
+            // Saludo en todas las listas (pedido de Ale: "esta es tu lista @usuario").
+            const saludos = { wishlist: "here's your wishlist! 💖", goldcards: "here are your Gold Cards! 🏆", allcards: "here are all the cards! ⚡" };
+            if (saludos[prefijo]) payload.content = `<@${interaction._duenoLista || interaction.user.id}>, ${saludos[prefijo]}`;
             return await interaction.editReply(payload);
         }
 

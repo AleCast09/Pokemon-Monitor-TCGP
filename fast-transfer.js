@@ -851,7 +851,14 @@ async function manejarDust(interaction, idForzado = null) {
         } else {
             texto = `${icono('error', mapa)} **${cuenta.nombreCuenta}** — ${estado.errores[0] || 'failed'}`;
         }
-        await interaction.editReply({ content: texto, components: [] });
+        // El resultado queda a la vista de todos en el canal (pedido de Ale); la lista y los menus
+        // siguen privados. Si fallo, el aviso queda solo para quien lo pidio.
+        if (estado.ok) {
+            const publicado = await interaction.followUp({ content: `<@${interaction.user.id}>, here's your account! 🍬\n${texto}`, allowedMentions: { users: [interaction.user.id] } }).catch(() => null);
+            await interaction.editReply({ content: publicado ? '✅ Posted in the channel.' : texto, components: [] });
+        } else {
+            await interaction.editReply({ content: texto, components: [] });
+        }
         return true;
     }
 
