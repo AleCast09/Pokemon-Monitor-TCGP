@@ -9,9 +9,9 @@
 // .env:
 //   COMMUNITY_GUILD_IDS=123...,456...   servers en modo comunidad
 //   COMMUNITY_STAFF_IDS=111...,222...   staff fijo (Ale y wr98): nunca pierden el acceso
-//   COMMUNITY_STAFF_ROLE=Bot Staff      opcional, nombre del rol de staff (por defecto "Bot Staff")
+//   COMMUNITY_STAFF_ROLE=Staff          opcional, nombre del rol de staff (por defecto "Staff")
 //
-// Para sumar staff no hace falta tocar el .env: quien tenga el rol "Bot Staff" en el server es staff
+// Para sumar staff no hace falta tocar el .env: quien tenga el rol "Staff" en el server es staff
 // (pedido de Ale: que wr98 pueda sumar gente desde Discord, sin depender de la PC de Ale). Sync
 // Channels crea el rol si no existe y le da acceso a la categoria 🔒 STAFF.
 //
@@ -51,7 +51,8 @@ function esComunidad(guildId) {
     return !!guildId && lista('COMMUNITY_GUILD_IDS').includes(String(guildId));
 }
 
-const nombreRolStaff = () => (process.env.COMMUNITY_STAFF_ROLE || 'Bot Staff').trim();
+// "Staff" (2026-10-24, pedido de Ale; antes "Bot Staff", que se renombra solo la primera vez).
+const nombreRolStaff = () => (process.env.COMMUNITY_STAFF_ROLE || 'Staff').trim();
 
 // member (opcional): el GuildMember de la interaccion, para mirar si tiene el rol de staff.
 function esStaff(userId, member = null) {
@@ -65,6 +66,8 @@ async function rolStaff(guild) {
     const nombre = nombreRolStaff();
     const existente = guild.roles.cache.find(r => r.name === nombre);
     if (existente) return existente;
+    const viejo = guild.roles.cache.find(r => r.name === 'Bot Staff');
+    if (viejo) return await viejo.setName(nombre, 'Monitor Pokemon: staff role renamed').catch(() => viejo);
     return await guild.roles.create({ name: nombre, permissions: [], mentionable: false, reason: 'Monitor Pokemon: community staff' })
         .catch(e => { console.error('DEBUG: no se pudo crear el rol de staff:', e?.message || e); return null; });
 }
