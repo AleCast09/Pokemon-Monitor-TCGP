@@ -197,6 +197,12 @@ Vincular:
     GuardarConfig()
     GuiControl,, Clave,
     MostrarVinculo(false)
+    ; Starts with Windows by default once linked (the member can untick it), so a PC restart
+    ; never leaves it closed without them noticing.
+    acceso := A_Startup . "\Monitor Link.lnk"
+    if !FileExist(acceso)
+        FileCreateShortcut, %A_AhkPath%, %acceso%, %A_ScriptDir%, "%A_ScriptFullPath%", Monitor Link
+    GuiControl,, Inicio, 1
     if (CarpetaJson = "")
         Gosub, CambiarCarpeta
     Arrancar()
