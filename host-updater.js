@@ -3,7 +3,7 @@
 //
 // Ale publica con scripts/publicar-host.js: sube el paquete a GitHub (pre-release, el bot publico no
 // lo ve) y anota en Upstash (zenith:release) la version y el link. Cada host (host.js) revisa cada
-// 30 min; si hay una version nueva la baja y la instala encima de esta carpeta, y se reinicia (PM2 lo
+// 2 min; si hay una version nueva la baja y la instala encima de esta carpeta, y se reinicia (PM2 lo
 // vuelve a levantar). Nunca en medio de un ⚡: espera a que no haya ninguno corriendo.
 // Su .env, su token y su base viven en otra carpeta (MonitorPokemonHost), asi que no se tocan.
 'use strict';
@@ -16,7 +16,9 @@ const { execFileSync } = require('child_process');
 const RAIZ = __dirname;
 const ARCHIVO_VERSION = path.join(RAIZ, 'host-version.txt');
 const MARCA_DEPENDENCIAS = path.join(RAIZ, '.reinstalar-dependencias');
-const CADA_MS = 30 * 60 * 1000;
+// Cada 2 min (2026-10-25, pedido de Ale: no esperar media hora). Es un GET a Upstash: ~22k consultas al
+// mes por host, dentro de la cuota gratis.
+const CADA_MS = 2 * 60 * 1000;
 
 const versionLocal = () => { try { return fs.readFileSync(ARCHIVO_VERSION, 'utf8').trim(); } catch (e) { return ''; } };
 const huellaDependencias = () => {

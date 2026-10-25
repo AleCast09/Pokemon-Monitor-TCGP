@@ -60,6 +60,6 @@ const release = { version, url: `${base}/MonitorPokemon-Host.zip`, ahk: { versio
         body: JSON.stringify(['SET', 'zenith:release', JSON.stringify(release)])
     });
     if (!r.ok) throw new Error(`Upstash ${r.status}`);
-    console.log(`✅ Published. Hosts update within 30 min; Monitor Link within a minute.`);
+    console.log(`✅ Published. Hosts update within 2 min; Monitor Link within a minute.`);
     console.log(`   Monitor Link download (fixed link): ${release.ahk.fija}`);
 })().catch(e => { console.error('❌', e.message); process.exit(1); });
