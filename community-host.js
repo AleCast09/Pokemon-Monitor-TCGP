@@ -73,6 +73,8 @@ async function ciclo() {
     } else if (!mio && !iniciado) {
         const actual = await redis('GET', CLAVE).catch(() => null);
         console.log(`⏸️ Community standby — ${actual || 'another host'} has the turn.`);
+        // Comandos que quedaron de antes (se apago sin soltarlos): fuera, asi no aparecen repetidos.
+        await alSoltar().catch(() => {});
     }
     iniciado = true;
     // Estado cada 60 s y panel cada 2 min (la cuota gratis de Upstash es de 500k consultas al mes).
@@ -145,6 +147,9 @@ async function iniciar(opciones) {
     alPanel = opciones.panel || alPanel;
     process.on('SIGINT', salir);
     process.on('SIGTERM', salir);
+    // En Windows pm2 stop no manda SIGINT: con --shutdown-with-message manda este aviso (2026-10-25,
+    // bug real: tras pm2 stop los comandos del bot quedaban y no respondian).
+    process.on('message', (m) => { if (m === 'shutdown') salir(); });
     await ciclo();
     setInterval(ciclo, CADA_MS);
 }

@@ -184,7 +184,7 @@ async function instalarHost() {
         execSync(`pm2 delete zenith`, { stdio: 'ignore' });
     } catch (e) { /* no estaba */ }
     try {
-        execSync(`pm2 start "${path.join(RAIZ, 'host.js')}" --name zenith --cwd "${CARPETA_HOST}"`, { stdio: 'inherit' });
+        execSync(`pm2 start "${path.join(RAIZ, 'host.js')}" --name zenith --cwd "${CARPETA_HOST}" --shutdown-with-message --kill-timeout 8000`, { stdio: 'inherit' });
         execSync('pm2 save', { stdio: 'inherit' });
         // En Windows PM2 no vuelve solo despues de reiniciar la PC: un acceso en Inicio lo levanta
         // (oculto, sin ventana) con lo guardado por "pm2 save".
