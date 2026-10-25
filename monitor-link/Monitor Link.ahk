@@ -19,12 +19,15 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.7.2"
+global VERSION := "ahk-1.8.0"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
 global UltimaHuella := "", UltimoEnvio := "", CuentasEnviadas := 0, EnLinea := false, UltimoError := ""
 global JobsReq := "", JobsReintento := 0, IndiceXml := "", IndiceDe := ""
+; The other community hosts (the ping lists them): they get the same summary, so whichever takes over
+; already has your accounts -- even if this PC is off by then.
+global Espejos := []
 global Status, Info, Clave, BtnLink, Inicio, LinkBox
 
 CargarConfig()
@@ -295,6 +298,8 @@ SubirResumen(forzar, folderError := "") {
         PintarEstado()
         return
     }
+    for _, espejo in Espejos
+        try Http("POST", espejo . "/link/summary", body, "text/plain; charset=utf-8", Token, 120)
     UltimaHuella := huella, CuentasEnviadas := cuentas, EnLinea := true, UltimoError := ""
     FormatTime, UltimoEnvio,, HH:mm
     PintarEstado()
@@ -331,6 +336,19 @@ Ping:
         PintarEstado()
     }
     ActualizarSiHayVersion(r.text)
+    ; A host appeared (or changed address): it gets the summary right away.
+    nuevos := [], antes := "", ahora := "", pm := 1
+    if RegExMatch(r.text, """mirrors""\s*:\s*\[([^\]]*)\]", mm)
+        while (pm := RegExMatch(mm1, """(https://[^""]+)""", mu, pm)) {
+            nuevos.Push(RTrim(mu1, "/")), ahora .= RTrim(mu1, "/") . "|"
+            pm += StrLen(mu)
+        }
+    for _, espejo in Espejos
+        antes .= espejo . "|"
+    if (antes != ahora) {
+        Espejos := nuevos
+        SubirResumen(true)
+    }
     if RegExMatch(r.text, """folder""\s*:\s*""((?:[^""\\]|\\.)*)""", mp) {
         pedida := JsonUnesc(mp1)
         if (pedida != Ruta) {

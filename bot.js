@@ -889,7 +889,9 @@ async function construirPanelFarmTickets(discordId, userId = null) {
         .setColor(0xF0A93A);
 
     if (!pool.length) {
-        embed.setDescription('❌ No accounts found. Set the **XML accounts folder** in the setup panel first.');
+        embed.setDescription(comunidad.usuarioActual()
+            ? '❌ Your accounts haven\'t reached the bot yet. Open **Monitor Link** on your PC (it sends them within a minute) — if you never linked it, type **/link**.'
+            : '❌ No accounts found. Set the **XML accounts folder** in the setup panel first.');
         return { embeds: [embed], components: [] };
     }
 
@@ -9471,6 +9473,10 @@ function matarCloudflaredPrevios(rutaCloudflared) {
 }
 
 let DASHBOARD_PUBLIC_URL = null;
+// La direccion de este host en monitor_link:hosts se renueva (las de mas de 15 min se ignoran: PC apagada).
+setInterval(() => {
+    if (DASHBOARD_PUBLIC_URL && comunidad.hayComunidad()) monitorLink.anotarHost(hostComunidad.nombre(), DASHBOARD_PUBLIC_URL);
+}, 5 * 60 * 1000);
 async function iniciarTunelDashboard(puerto) {
     const resultado = await asegurarCloudflaredBot();
     if (!resultado) {
@@ -9494,6 +9500,8 @@ async function iniciarTunelDashboard(puerto) {
                 if (match && !DASHBOARD_PUBLIC_URL) {
                     DASHBOARD_PUBLIC_URL = match[0];
                     if (comunidad.hayComunidad() && hostComunidad.esActivo()) monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL); // libreta de Monitor Link
+                    // Activo o en espera, este host recibe los resumenes de todos (ver monitorLink.anotarHost).
+                    if (comunidad.hayComunidad()) monitorLink.anotarHost(hostComunidad.nombre(), DASHBOARD_PUBLIC_URL);
                     console.log(`🌐 Tunel publico Info Accounts: ${DASHBOARD_PUBLIC_URL}`);
                 }
             };

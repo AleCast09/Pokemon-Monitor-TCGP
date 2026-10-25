@@ -97,12 +97,42 @@ async function publicarDireccion(urlPublica) {
     }
 }
 
+// ---- Todos los hosts reciben los resumenes (2026-10-25, bug real: al apagarse la PC de Ale el host
+// de wr98 tomo el turno con la base vacia y "desaparecio la info de todos") ----
+// Cada host, activo o en espera, anota su direccion en monitor_link:hosts. El ping le pasa a cada
+// Monitor Link las de los demas ("mirrors") y el resumen se manda tambien ahi, asi el host que toma el
+// turno ya tiene las cuentas de todos -- tambien las de un Monitor Link que se apago con la otra PC.
+const CLAVE_HOSTS = 'monitor_link:hosts';
+let _miDireccion = null;
+async function anotarHost(nombre, urlPublica) {
+    if (!hayLibreta() || !nombre || !urlPublica) return;
+    _miDireccion = urlPublica;
+    await redisLibreta('HSET', CLAVE_HOSTS, String(nombre), JSON.stringify({ u: urlPublica, ts: Date.now() }))
+        .catch(e => console.error('DEBUG: Monitor Link no pudo anotar este host:', e?.message || e));
+}
+let _espejos = { ts: 0, lista: [] };
+async function espejos() {
+    if (!hayLibreta()) return [];
+    if (Date.now() - _espejos.ts > 60 * 1000) {
+        _espejos.ts = Date.now();
+        try {
+            const plano = await redisLibreta('HGETALL', CLAVE_HOSTS) || [];
+            const lista = [];
+            for (let i = 0; i + 1 < plano.length; i += 2) {
+                try { const h = JSON.parse(plano[i + 1]); if (h.u && Date.now() - (h.ts || 0) < 15 * 60 * 1000) lista.push(h.u); } catch (e) { /* entrada rota */ }
+            }
+            _espejos.lista = lista;
+        } catch (e) { /* se queda con la lista anterior */ }
+    }
+    return _espejos.lista.filter(u => u !== _miDireccion).sort();
+}
+
 // ---- Vinculaciones compartidas entre hosts (2026-10-24, Zenith Bot con varios hosts) ----
 // Quien esta vinculado (hash del token -> usuario) vive en Upstash (hash ml:agentes), para que
 // cualquier host activo reconozca el Monitor Link de cada miembro. La tabla link_agentes de cada host
 // es una copia local: se sincroniza al arrancar y cada 10 min, y si llega un token que no conoce lo
-// busca ahi. Los resumenes de cartas NO se comparten: cuando cambia el host, cada Monitor Link
-// encuentra la direccion nueva en la libreta y vuelve a mandar el suyo solo.
+// busca ahi. Los resumenes de cartas no pasan por Upstash (pesan MB): cada Monitor Link los manda a
+// todos los hosts (ver anotarHost / espejos).
 const CLAVE_AGENTES = process.env.ML_AGENTES_KEY || 'ml:agentes';
 
 // Ultima version publicada de Monitor Link.ahk ({ version, url }), de zenith:release (lo anota
@@ -201,7 +231,8 @@ function registrar(app, dependencias) {
     // Host en espera (community-host.js): no atiende a ningun Monitor Link; al recibir 503 cada uno
     // busca en la libreta la direccion del host que tiene el turno.
     const activo = dependencias.activo || (() => true);
-    app.use('/link', (req, res, next) => (activo() ? next() : res.status(503).json({ error: 'standby' })));
+    // Excepcion: el resumen se recibe igual en espera (ver anotarHost / espejos).
+    app.use('/link', (req, res, next) => (activo() || (req.method === 'POST' && req.path === '/summary') ? next() : res.status(503).json({ error: 'standby' })));
     sincronizarAgentes();
     setInterval(sincronizarAgentes, 10 * 60 * 1000);
     const nombreUsuario = dependencias.nombreUsuario || (async () => null);
@@ -311,7 +342,8 @@ function registrar(app, dependencias) {
                 await db.run(`UPDATE link_agentes SET carpeta_pedida = NULL, carpeta_error = NULL WHERE discord_id = ?`, [agente.discord_id]);
                 pedido.carpeta_pedida = null;
             }
-            res.json({ ok: true, user: (await nombreUsuario(agente.discord_id)) || agente.discord_id, folder: pedido?.carpeta_pedida || null, ahk: await ultimoAhk() });
+            res.json({ ok: true, user: (await nombreUsuario(agente.discord_id)) || agente.discord_id, folder: pedido?.carpeta_pedida || null, ahk: await ultimoAhk(),
+                mirrors: await espejos() });
         } catch (e) {
             res.status(500).json({ error: 'server_error' });
         }
@@ -578,4 +610,4 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { ultimoMonitorLink, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+module.exports = { ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };

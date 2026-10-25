@@ -16,7 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 const CARPETA_CONFIG = path.join(process.env.APPDATA || os.homedir(), 'MonitorLink');
 const RUTA_CONFIG = path.join(CARPETA_CONFIG, 'config.json');
 const CADA_PING_MS = 60 * 1000;
@@ -212,6 +212,9 @@ function armarResumen(carpeta) {
     return { version: VERSION, folder: carpeta, accounts: cuentas, wishlist, adjust };
 }
 
+// Otros hosts de la comunidad (los lista el ping).
+let espejos = [];
+
 async function subirResumen(cfg, forzar = false, extra = {}) {
     const resumen = { ...armarResumen(cfg.carpetaJson), folder: cfg.ruta || cfg.carpetaJson, ...extra };
     const texto = JSON.stringify(resumen);
@@ -223,6 +226,13 @@ async function subirResumen(cfg, forzar = false, extra = {}) {
     if (r.status === 401) throw Object.assign(new Error('not_linked'), { noVinculado: true });
     if (!r.ok) throw new Error(`summary ${r.status}`);
     const j = await r.json();
+    // Los demas hosts de la comunidad reciben lo mismo (el que tome el turno ya tiene estas cuentas).
+    for (const espejo of espejos) {
+        await fetch(`${espejo}/link/summary`, {
+            method: 'POST', headers: { 'Content-Type': 'text/plain', Authorization: `Bearer ${cfg.token}` }, body: texto,
+            signal: AbortSignal.timeout(120000)
+        }).catch(() => {});
+    }
     cfg.ultimaHuella = huella;
     guardarConfig(cfg);
     log(`📤 Sent your cards summary (${j.accounts} accounts).`);
@@ -413,8 +423,15 @@ async function main() {
         try {
             const r = await fetch(`${cfg.serverUrl}/link/ping`, { headers: { Authorization: `Bearer ${cfg.token}` } });
             if (!r.ok && r.status !== 401 && await actualizarDireccion(cfg)) ciclo(true);
+            const datosPing = r.ok ? await r.json().catch(() => ({})) : {};
+            // Aparecio (o cambio) otro host: recibe el resumen ya.
+            const nuevos = (Array.isArray(datosPing.mirrors) ? datosPing.mirrors : []).map(u => String(u).replace(/\/+$/, '')).sort();
+            if (r.ok && nuevos.join('|') !== espejos.join('|')) {
+                espejos = nuevos;
+                await subirResumen(cfg, true);
+            }
             // 📁 Set My Folder desde Discord: si pidio otra carpeta, se cambia (si existe en esta PC).
-            const pedida = r.ok ? (await r.json().catch(() => ({}))).folder : null;
+            const pedida = datosPing.folder || null;
             if (pedida && pedida.toLowerCase() !== String(cfg.ruta || cfg.carpetaJson).toLowerCase()) {
                 const json = carpetaJsonDe(pedida);
                 if (json) {
