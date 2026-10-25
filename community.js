@@ -71,7 +71,10 @@ async function rolStaff(guild) {
 
 // Comandos que existen en el server de comunidad (los de los canales prioritarios + /setup para
 // el staff). Todo lo demas (/embed, /webhook, /run, /feedback, ...) no se registra ahi.
-const COMANDOS_COMUNIDAD = new Set(['setup', 'card', 'wishlist', 'goldcards', 'extract', 'shinedust', 'farmtickets', 'transfers', 'link']);
+// Sin /extract (2026-10-24, pedido de Ale: Extract XML esta de mas en la comunidad).
+const COMANDOS_COMUNIDAD = new Set(['setup', 'card', 'wishlist', 'goldcards', 'shinedust', 'farmtickets', 'transfers', 'link']);
+// Canales de las categorias de siempre que en la comunidad no van (Sync los borra si ya existen).
+const CANALES_FUERA_DE_COMUNIDAD = new Set(['cmd_extract_xlm']);
 // Comandos que SOLO existen en comunidad (en el server propio y en los del release no aparecen).
 const SOLO_COMUNIDAD = new Set(['link']);
 // Comandos que cualquier miembro puede usar aunque el server este en prueba (solo staff).
@@ -90,7 +93,8 @@ const CATEGORIAS_COMUNIDAD = new Set(['manager_categoria', 'run_mumu_categoria']
 function gruposSync(guildId, grupos) {
     if (!esComunidad(guildId)) return grupos;
     return [
-        ...grupos.filter(g => CATEGORIAS_COMUNIDAD.has(g.tipoCategoria)),
+        ...grupos.filter(g => CATEGORIAS_COMUNIDAD.has(g.tipoCategoria))
+            .map(g => ({ ...g, canales: g.canales.filter(c => !CANALES_FUERA_DE_COMUNIDAD.has(c.tipo)) })),
         {
             categoria: '🔒 STAFF 🔒',
             tipoCategoria: 'staff_categoria',
@@ -266,4 +270,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual };
+module.exports = { CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual };
