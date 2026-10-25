@@ -7508,7 +7508,28 @@ async function generarPdfCatalogoCartas(cartas, expansion, opciones = {}) {
 // (ngrok, Cloudflare Tunnel, etc.), no incluido.
 const DASHBOARD_PORT_BASE = Number(process.env.DASHBOARD_PORT) || 3005;
 const dashboardApp = express();
-const _dashboardTokens = new Map();
+// Links de las paginas de cuenta (Info Accounts): vencen a las 24 h aunque el bot no se reinicie
+// (2026-10-24, pedido de Ale: la pagina no pide login, asi que el link no puede durar para siempre).
+// Junto con el link se borra el JSON temporal que arma la comunidad para esa pagina.
+const VIDA_LINK_CUENTA_MS = 24 * 60 * 60 * 1000;
+class TokensConVencimiento extends Map {
+    set(token, datos) { return super.set(token, { ...datos, _creado: Date.now() }); }
+    get(token) {
+        const d = super.get(token);
+        if (d && Date.now() - d._creado > VIDA_LINK_CUENTA_MS) { this.vencer(token, d); return undefined; }
+        return d;
+    }
+    vencer(token, d) {
+        super.delete(token);
+        if (d?.archivoJson && d.archivoJson.includes('monitor_link_info')) fs.rm(d.archivoJson, { force: true }, () => {});
+    }
+}
+const _dashboardTokens = new TokensConVencimiento();
+setInterval(() => {
+    for (const [token, d] of Map.prototype.entries.call(_dashboardTokens)) {
+        if (Date.now() - d._creado > VIDA_LINK_CUENTA_MS) _dashboardTokens.vencer(token, d);
+    }
+}, 60 * 60 * 1000);
 // Sesiones de trade en vivo desde la pagina web (2026-08-08, a pedido explicito del usuario:
 // log en vivo con check/cruz por paso, en vez de solo un mensaje de texto fijo). En memoria
 // (se pierde en un reinicio, igual que _dashboardTokens) -- sesionId -> { pasos: [{paso,
@@ -9550,6 +9571,15 @@ async function resolverImagenReferenciaCartaBot(cartaId, rutaMasterPath) {
     return encontrarImagenPorIllustration(rutaMasterPath, illustrationId)
         || (await obtenerImagenRepoCartasBot(rutaMasterPath, illustrationId))
         || null;
+}
+
+// La XML que se le mando al miembro (Extract XML en la comunidad) se borra sola a los 5 minutos: es la
+// llave de su cuenta y no conviene que quede en Discord (2026-10-24, pedido de Ale).
+function borrarXmlEnviada(interaction) {
+    setTimeout(() => {
+        interaction.editReply({ content: '🗑️ The XML was deleted for safety. Use Extract XML again if you need it.', files: [], attachments: [], components: [] })
+            .catch(() => {});
+    }, 5 * 60 * 1000);
 }
 
 // Extract XML en la comunidad: la XML se le pide al Monitor Link del miembro y se le manda SOLO a el,
@@ -12831,7 +12861,9 @@ async function manejarInteraccionPrincipal(interaction) {
             const miembroExtract = comunidad.usuarioActual();
             if (miembroExtract) {
                 const { archivo, error } = await xmlDeMiembro(miembroExtract, nombreBuscado.trim());
-                return await interaction.editReply(error ? { content: error } : { content: `✅ Found: \`${archivo.name}\` — only you can see this.`, files: [archivo] });
+                if (error) return await interaction.editReply({ content: error });
+                await interaction.editReply({ content: `✅ Found: \`${archivo.name}\` — only you can see this. It deletes itself in 5 minutes, save it now.`, files: [archivo] });
+                return borrarXmlEnviada(interaction);
             }
             const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
             const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, nombreBuscado);
@@ -13546,7 +13578,8 @@ async function manejarInteraccionPrincipal(interaction) {
             const { archivo, error } = await xmlDeMiembro(miembroExtract, fileName);
             return await interaction.editReply(error
                 ? { content: error, components: [] }
-                : { content: `📄 \`${fileName}\` — only you can see this.`, files: [archivo], components: [] });
+                : { content: `📄 \`${fileName}\` — only you can see this. It deletes itself in 5 minutes, save it now.`, files: [archivo], components: [] })
+                .then(() => { if (!error) borrarXmlEnviada(interaction); });
         }
 
         try {
@@ -13677,7 +13710,7 @@ async function manejarInteraccionPrincipal(interaction) {
                 .setColor(0xE91E63);
             if (typeof cuenta.d === 'number') embed.addFields({ name: `${emojiTag(mapaEmojisInventario, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: cuenta.d.toLocaleString('en-US'), inline: true });
             if (DASHBOARD_PUBLIC_URL) embed.addFields({ name: '🔗 All its cards', value: `🌐 [Open the page](${DASHBOARD_PUBLIC_URL}/account/${token})` });
-            embed.setFooter({ text: 'The link stops working if the bot restarts.' });
+            embed.setFooter({ text: 'The link works for 24 hours.' });
             return await interaction.followUp({ embeds: [embed], ephemeral: true });
         }
         // followUp en vez de editReply en TODA esta funcion (2026-08-03, bug real reportado

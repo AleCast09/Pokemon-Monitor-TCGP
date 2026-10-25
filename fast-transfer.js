@@ -95,8 +95,10 @@ async function asegurarTunel() {
     const exe = path.join(dirProxy, 'takasho-proxy.exe');
     if (!fs.existsSync(exe)) return false;
     fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
-    const out = fs.openSync(path.join(dir, 'logs', 'proxy_stdout.log'), 'a');
-    const err = fs.openSync(path.join(dir, 'logs', 'proxy_stderr.log'), 'a');
+    // 'w' y no 'a' (2026-10-24): el registro del tunel se empieza de cero en cada arranque. Solo anota
+    // que pedido se hizo al juego (sin cuentas ni claves), pero sumando sin fin llego a pesar 460 MB.
+    const out = fs.openSync(path.join(dir, 'logs', 'proxy_stdout.log'), 'w');
+    const err = fs.openSync(path.join(dir, 'logs', 'proxy_stderr.log'), 'w');
     try {
         const hijo = spawn(exe, [], { cwd: dirProxy, detached: true, windowsHide: true, stdio: ['ignore', out, err] });
         hijo.on('error', () => {});
