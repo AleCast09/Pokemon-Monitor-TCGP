@@ -4079,6 +4079,21 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     // Comunidad: fuera los botones que usan la PC host (XML, Info Accounts, Wishlist, Shinedust por
     // OCR, Extract XML, Inject). Quedan Home, Trade y Share.
     comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::', 'card_extract::', 'goldcards_extract::']);
+    // Comunidad: en vez de botones, una lista desplegable con las mismas opciones (pedido de Ale).
+    // Cada opcion lleva el customId del boton de siempre; 'card_menu' lo despacha igual que el boton.
+    if (comunidad.esComunidad(guild?.id)) {
+        const opciones = [];
+        for (const fila of payload.components || []) {
+            for (const b of (fila.components || [])) {
+                const d = b.data || b;
+                if (!d.custom_id || d.disabled) continue;
+                opciones.push({ label: String(d.label || d.custom_id).slice(0, 100), value: d.custom_id.slice(0, 100) });
+            }
+        }
+        payload.components = opciones.length ? [new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder().setCustomId('card_menu').setPlaceholder('Choose what to do with this card…').addOptions(opciones.slice(0, 25))
+        )] : [];
+    }
     const archivosPayload = [];
     if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
@@ -9521,6 +9536,10 @@ const XML_SELECT_POR_PAGINA = 25;
 // hace el dropdown de Trade (2026-09-15, a pedido explicito del usuario: "no sale al
 // lado la cantidad como en trade" en el dropdown de Inject). El value en ambos casos
 // sigue siendo solo el fileName, para no romper ningun handler que ya lo consume.
+// Listas de cuenta que se abren en un mensaje aparte de la carta: llevan "⬅️ Back" (cierra ese
+// mensaje y deja la carta como estaba).
+const PREFIJOS_CON_VOLVER = new Set(['card_shinedust_cuenta', 'card_inject_cuenta', 'card_info_accounts_cuenta', 'card_extract_cuenta']);
+
 function construirSelectXmlPaginado(fileNames, cartaId, pagina, prefix) {
     const totalPaginas = Math.max(1, Math.ceil(fileNames.length / XML_SELECT_POR_PAGINA));
     const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
@@ -9542,6 +9561,10 @@ function construirSelectXmlPaginado(fileNames, cartaId, pagina, prefix) {
             new ButtonBuilder().setCustomId(`${prefix}_pag::${cartaId}::${paginaSegura - 1}`.slice(0, 100)).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
             new ButtonBuilder().setCustomId(`${prefix}_pag::${cartaId}::${paginaSegura + 1}`.slice(0, 100)).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
         ));
+    }
+    if (PREFIJOS_CON_VOLVER.has(prefix)) {
+        componentes.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('sub_volver').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)));
     }
     return { content: `Which account? (${fileNames.length} found)`, components: componentes };
 }
@@ -11178,6 +11201,13 @@ client.on('interactionCreate', (interaction) => comunidad.contexto.run(
 async function manejarInteraccionPrincipal(interaction) {
     if (comunidad.soloComunidad() && !comunidad.esComunidad(interaction.guildId)) return;
     if (comunidad.esComunidad(interaction.guildId) && !hostComunidad.esActivo()) return;
+    // Lista desplegable de la carta (comunidad): la opcion elegida se atiende igual que su boton.
+    if (interaction.isStringSelectMenu() && interaction.customId === 'card_menu') {
+        interaction.customId = interaction.values[0];
+        interaction.isButton = () => true;
+        interaction.isStringSelectMenu = () => false;
+        interaction.isAnySelectMenu = () => false;
+    }
     // Modo comunidad: fuera del staff, nadie usa el bot ahi todavia (nunca ve datos de esta PC).
     if (await comunidad.bloquearSiHaceFalta(interaction)) return;
     // Comunidad: los botones y menus de un mensaje que abrio otra persona (su wishlist, su carta, su
@@ -13591,7 +13621,13 @@ async function manejarInteraccionPrincipal(interaction) {
             .addOptions([...r.instances].sort((a, b) => Number(a.index) - Number(b.index)).slice(0, 25).map(i => ({
                 label: `${i.index}. ${i.name}`.slice(0, 100), description: i.on ? 'On' : 'Off', value: `${i.index}::${i.name}`.slice(0, 100)
             })));
-        return await interaction.editReply({ content: `Which instance on **your PC** should open \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu)] });
+        return await interaction.editReply({ content: `Which instance on **your PC** should open \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sub_volver').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary))] });
+    }
+
+    if (interaction.isButton() && interaction.customId === 'sub_volver') {
+        await interaction.deferUpdate();
+        return await interaction.deleteReply().catch(() => interaction.editReply({ content: '↩️ Closed.', components: [] }).catch(() => {}));
     }
 
     if (interaction.isButton() && interaction.customId.startsWith('ia_archivos::')) {

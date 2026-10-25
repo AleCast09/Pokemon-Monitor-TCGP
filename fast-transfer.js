@@ -853,7 +853,17 @@ async function manejarDust(interaction, idForzado = null) {
         }
         // El resultado queda a la vista de todos en el canal (pedido de Ale); la lista y los menus
         // siguen privados. Si fallo, el aviso queda solo para quien lo pidio.
-        if (estado.ok) {
+        if (estado.ok && interaction._shinedustAlHistorial) {
+            // Desde una carta: el resultado se ve aca (como antes) y queda de historial en el canal
+            // 🍬 Shinedust, a la vista de todos.
+            await interaction.editReply({ content: texto, components: [] });
+            const canal = await deps.obtenerCanalComando(interaction.guildId, 'shinedust');
+            if (canal?.webhook_url) {
+                await new WebhookClient({ url: canal.webhook_url }).send({
+                    content: `<@${interaction.user.id}>, here's your account! 🍬\n${texto}`, allowedMentions: { users: [interaction.user.id] }
+                }).catch(e => console.error('DEBUG: historial de Shinedust:', e?.message || e));
+            }
+        } else if (estado.ok) {
             const publicado = await interaction.followUp({ content: `<@${interaction.user.id}>, here's your account! 🍬\n${texto}`, allowedMentions: { users: [interaction.user.id] } }).catch(() => null);
             await interaction.editReply({ content: publicado ? '✅ Posted in the channel.' : texto, components: [] });
         } else {
@@ -1061,7 +1071,10 @@ const ocupado = () => enCola > 0 || corridas.size > 0;
 
 // 👛 Shinedust de una carta en la comunidad: la cuenta elegida se refresca con ⚡ (directo del juego,
 // sin MuMu de nadie). El select trae el nombre de la XML de la cuenta.
-const refrescarCuentaElegida = (interaction) => manejarDust(interaction, 'fast_dust_pick');
+const refrescarCuentaElegida = (interaction) => {
+    interaction._shinedustAlHistorial = true;
+    return manejarDust(interaction, 'fast_dust_pick');
+};
 
 // 📋 Info Accounts en la comunidad: lee en vivo (⚡, sin MuMu) el inventario de una cuenta del miembro.
 // Devuelve { datos: { nombre, dust, tickets, inv } } o { error }.
