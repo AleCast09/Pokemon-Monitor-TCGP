@@ -307,6 +307,8 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
             return;
         }
         ctx.final = 'error';
+        // Para revisar despues que paso (pm2 logs bot): las ultimas lineas del motor, sin datos de la cuenta.
+        console.error(`DEBUG: ⚡ ${fast} failed (${cartaId}):\n  ` + ultimas.slice(-15).join('\n  '));
         // Si el motor se cayo sin marcar el paso, se muestra la ultima linea de su log.
         if (!Object.values(ctx.estados).includes('error')) {
             const pendiente = PASOS[fast].find(([clave]) => ctx.estados[clave] !== 'ok');

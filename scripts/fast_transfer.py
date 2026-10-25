@@ -177,13 +177,18 @@ def main():
 
     # run_trade() informa todo con print(): se intercepta para convertir sus lineas en pasos.
     print_real = print
-    estado_trade = {"esperando": False}
+    # "motivo": la ultima linea de error que imprimio run_trade (no lo devuelve; solo lo imprime).
+    estado_trade = {"esperando": False, "motivo": ""}
 
     def print_trade(*args, **kw):
         linea = " ".join(str(x) for x in args)
         print_real(linea, flush=True)
         if ESTADO["limpiando"]:
             return
+        if "[Trade]" in linea and any(x in linea for x in ("✗", "⚠", "error", "Error", "failed", "Failed", "not enough", "insufficient")):
+            estado_trade["motivo"] = linea.split("[Trade]", 1)[-1].replace("✗", "").replace("⚠", "").strip()[:200]
+        if "requires" in linea and "shiny dust" in linea:
+            estado_trade["costo"] = linea.split("[Trade]", 1)[-1].strip()[:120]
         if "No trade power" in linea:
             ESTADO["sin_energia"] = True
             emitir("offer", "error", "This account has no trade energy left (1 per day, max 5)")
@@ -329,6 +334,8 @@ def main():
                     emitir("card", "start", card_id)
                 ok_carta = False
                 recibida = ""
+                estado_trade["motivo"] = ""
+                estado_trade["costo"] = ""
                 emitir("offer", "start")
                 try:
                     outcome = at.run_trade(sess, pid, card_info)
@@ -348,9 +355,13 @@ def main():
                         except Exception:
                             pass
                     elif estado_trade["esperando"]:
-                        emitir("confirm", "error", "Trade did not complete")
+                        emitir("confirm", "error", estado_trade["motivo"] or "Trade did not complete")
                     else:
-                        emitir("offer", "error", "Could not send the trade offer")
+                        # El motivo real del motor (por ejemplo, sin Shinedust para el costo del trade).
+                        motivo = estado_trade["motivo"] or "Could not send the trade offer"
+                        if estado_trade.get("costo") and "dust" not in motivo.lower():
+                            motivo += f" ({estado_trade['costo']})"
+                        emitir("offer", "error", motivo)
                 except Cancelado:
                     raise
                 except Exception as e:
