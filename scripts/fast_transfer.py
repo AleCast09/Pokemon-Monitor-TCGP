@@ -118,11 +118,50 @@ def deshacer(at, sess, pid):
     emitir("cancel", "ok", ", ".join(hecho) or "nothing to undo")
 
 
+LIMITE_AMIGOS = 90  # el juego deja 99; con margen para la solicitud a la Main
+
+
+def _pids(items):
+    """player_id de cada amigo / solicitud (como fr_cleanup.py del bot de Miguel)."""
+    out = set()
+    for it in items or []:
+        pid = getattr(it, "player_id", "") or ""
+        if not pid:
+            inner = getattr(it, "player", None)
+            pid = getattr(inner, "player_id", "") or ""
+        if pid:
+            out.add(pid)
+    return out
+
+
+def limpiar_amigos_si_hace_falta(sess, pid_main):
+    """Limpiar amigos (2026-10-24): si la cuenta esta casi llena de amigos y solicitudes enviadas,
+    se borran (menos la Main) antes de mandar la solicitud, para que el trade no falle por el limite."""
+    try:
+        fl = sess.get_friend_list()
+        if not fl.get("success"):
+            return
+        amigos = _pids(fl.get("friends")) - {pid_main}
+        enviadas = _pids(fl.get("sent_requests")) - {pid_main}
+        if len(amigos) + len(enviadas) < LIMITE_AMIGOS:
+            return
+        if enviadas:
+            sess.cancel_sent_friend_requests(sorted(enviadas))
+        if amigos:
+            sess.delete_friends(sorted(amigos))
+        emitir("friend_request", "start", f"cleaned {len(amigos)} friends and {len(enviadas)} pending requests")
+    except Exception:
+        pass  # si no se puede limpiar, se intenta igual
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--engine-dir", required=True)
     p.add_argument("--xml", required=True)
-    p.add_argument("--card-id", required=True)
+    p.add_argument("--card-id", default="")
+    # Trades masivos (2026-10-24, god packs): varias cartas separadas por coma, un solo login y una
+    # sola amistad; cada trade igual lo acepta la Main en el juego.
+    p.add_argument("--card-ids", default="")
     p.add_argument("--target", required=True)
     p.add_argument("--mode", choices=["share", "trade"], required=True)
     p.add_argument("--proxy-file", default="")
@@ -146,6 +185,7 @@ def main():
         if ESTADO["limpiando"]:
             return
         if "No trade power" in linea:
+            ESTADO["sin_energia"] = True
             emitir("offer", "error", "This account has no trade energy left (1 per day, max 5)")
         elif "not in tradeable friends" in linea:
             emitir("offer", "error", "Your Main is not in this account's tradeable friends list")
@@ -167,15 +207,24 @@ def main():
 
     # Carta: nombre, rareza y costo de Shinedust desde la base del motor.
     db = at.load_card_database()
-    info = next((c for c in db if at.extract_card_id(c.get("image", "")) == a.card_id), None)
-    rareza = ((info or {}).get("rarity", "") or "").upper()
-    card_info = {
-        "card_id": a.card_id,
-        "name": (info or {}).get("name", a.card_id),
-        "set": (info or {}).get("set", ""),
-        "rarity": rareza or "?",
-        "trade_price": at.get_trade_price(rareza) if rareza else 0,
-    }
+
+    def info_carta(card_id):
+        info = next((c for c in db if at.extract_card_id(c.get("image", "")) == card_id), None)
+        rar = ((info or {}).get("rarity", "") or "").upper()
+        return {
+            "card_id": card_id,
+            "name": (info or {}).get("name", card_id),
+            "set": (info or {}).get("set", ""),
+            "rarity": rar or "?",
+            "trade_price": at.get_trade_price(rar) if rar else 0,
+        }
+
+    cartas = [c.strip() for c in (a.card_ids or a.card_id).split(",") if c.strip()]
+    if not cartas:
+        emitir("login", "error", "No card given")
+        return 1
+    card_info = info_carta(cartas[0])
+    rareza = card_info["rarity"] if card_info["rarity"] != "?" else ""
     if a.mode == "share" and rareza and not at.is_shareable(rareza):
         emitir("login", "error", f"Rarity {rareza} can't be shared (only 1◇–4◇)")
         return 1
@@ -225,6 +274,7 @@ def main():
                 emitir("friend_request", "ok", "already friends")
                 emitir("accept", "ok")
             else:
+                limpiar_amigos_si_hace_falta(sess, pid)
                 sess.send_friend_requests([pid])
                 emitir("friend_request", "ok")
                 emitir("accept", "wait", "Accept the friend request on your Main")
@@ -269,32 +319,49 @@ def main():
             except Exception as e:
                 emitir("share", "error", error_legible(e))
         else:
-            emitir("offer", "start")
-            try:
-                outcome = at.run_trade(sess, pid, card_info)
-                exito = bool(outcome and outcome.get("success"))
-                if exito:
-                    try:
-                        resp = outcome.get("response")
-                        recibida = getattr(resp.outcome, "card_id", "") or "" if resp and resp.outcome else ""
-                    except Exception:
-                        recibida = ""
-                    emitir("confirm", "ok", recibida)
-                    try:
-                        dormir(2)
-                        at.send_thanks(sess, pid)
-                    except Cancelado:
-                        pass  # el trade ya se hizo: no hay nada que deshacer
-                    except Exception:
-                        pass
-                elif estado_trade["esperando"]:
-                    emitir("confirm", "error", "Trade did not complete")
-                else:
-                    emitir("offer", "error", "Could not send the trade offer")
-            except Cancelado:
-                raise
-            except Exception as e:
-                emitir("offer", "error", error_legible(e))
+            resultados = []
+            for n, card_id in enumerate(cartas):
+                card_info = info_carta(card_id)
+                estado_trade["esperando"] = False
+                if len(cartas) > 1:
+                    if n > 0:
+                        dormir(5)
+                    emitir("card", "start", card_id)
+                ok_carta = False
+                recibida = ""
+                emitir("offer", "start")
+                try:
+                    outcome = at.run_trade(sess, pid, card_info)
+                    ok_carta = bool(outcome and outcome.get("success"))
+                    if ok_carta:
+                        try:
+                            resp = outcome.get("response")
+                            recibida = getattr(resp.outcome, "card_id", "") or "" if resp and resp.outcome else ""
+                        except Exception:
+                            recibida = ""
+                        emitir("confirm", "ok", recibida)
+                        try:
+                            dormir(2)
+                            at.send_thanks(sess, pid)
+                        except Cancelado:
+                            pass  # el trade ya se hizo: no hay nada que deshacer
+                        except Exception:
+                            pass
+                    elif estado_trade["esperando"]:
+                        emitir("confirm", "error", "Trade did not complete")
+                    else:
+                        emitir("offer", "error", "Could not send the trade offer")
+                except Cancelado:
+                    raise
+                except Exception as e:
+                    emitir("offer", "error", error_legible(e))
+                resultados.append({"card": card_id, "ok": ok_carta, "received": recibida})
+                if len(cartas) > 1:
+                    emitir("card", "ok" if ok_carta else "error", f"{card_id}|{recibida}")
+                if not ok_carta and ESTADO.get("sin_energia"):
+                    break  # sin energia de trade no tiene sentido seguir con las demas
+            exito = any(r["ok"] for r in resultados)
+            ESTADO["resultados"] = resultados
     except Cancelado:
         deshacer(at, sess, pid)
         print_real("@@FT_RESULT " + json.dumps({"success": False, "cancelled": True}), flush=True)
@@ -310,7 +377,7 @@ def main():
     except Exception as e:
         emitir("unfriend", "error", error_legible(e))
 
-    print_real("@@FT_RESULT " + json.dumps({"success": exito, "received": recibida}), flush=True)
+    print_real("@@FT_RESULT " + json.dumps({"success": exito, "received": recibida, "results": ESTADO.get("resultados", [])}), flush=True)
     return 0 if exito else 1
 
 

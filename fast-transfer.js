@@ -563,11 +563,19 @@ async function asegurarTablaDust() {
     )`);
     // Inventario completo menos Poke Gold (JSON), agregado despues: la tabla puede venir sin la columna.
     try { await deps.db.run(`ALTER TABLE shinedust_fast ADD COLUMN inventario TEXT`); } catch (e) { /* ya existe */ }
+    // Regalos pendientes del buzon y estado ('ok' / 'login_failed': la cuenta no pudo entrar al juego,
+    // por ejemplo baneada o borrada), 2026-10-24.
+    if (!asegurarTablaDust.estado) {
+        try { await deps.db.run(`ALTER TABLE shinedust_fast ADD COLUMN regalos INTEGER`); } catch (e) { /* ya existe */ }
+        try { await deps.db.run(`ALTER TABLE shinedust_fast ADD COLUMN estado TEXT`); } catch (e) { /* ya existe */ }
+        try { await deps.db.run(`ALTER TABLE shinedust_fast ADD COLUMN error TEXT`); } catch (e) { /* ya existe */ }
+        asegurarTablaDust.estado = true;
+    }
 }
 
 async function filasDust() {
     await asegurarTablaDust();
-    const filas = await deps.db.all(`SELECT archivo_json, valor, tickets, ts, valor_json FROM shinedust_fast`);
+    const filas = await deps.db.all(`SELECT archivo_json, valor, tickets, ts, valor_json, regalos, estado, error FROM shinedust_fast`);
     const mapa = new Map();
     for (const f of filas || []) mapa.set(f.archivo_json, f);
     return mapa;
@@ -670,11 +678,17 @@ async function mezclarShinedust(resultados, rutaJson) {
     for (const c of cuentasPara(miembro, rutaJson)) {
         const f = filas.get(claveDust(miembro, c.archivoJson));
         if (!f) continue;
+        let r = porArchivo.get(c.archivoJson);
+        if (!r && (f.valor !== null || f.estado === 'login_failed')) {
+            r = { nombreCuenta: c.nombreCuenta, valor: f.valor ?? c.valorJson ?? 0, fileNameXml: c.fileNameXml, archivoJson: c.archivoJson };
+            porArchivo.set(c.archivoJson, r);
+        }
+        if (!r) continue;
+        r.regalos = f.regalos || 0;
+        r.estado = f.estado || null;
+        r.error = f.error || null;
         const kevinCambio = c.valorJson !== null && f.valor_json !== null && c.valorJson !== f.valor_json;
-        if (kevinCambio) continue;
-        const r = porArchivo.get(c.archivoJson);
-        if (r) r.valor = f.valor;
-        else porArchivo.set(c.archivoJson, { nombreCuenta: c.nombreCuenta, valor: f.valor, fileNameXml: c.fileNameXml, archivoJson: c.archivoJson });
+        if (!kevinCambio && f.valor !== null) r.valor = f.valor;
     }
     return [...porArchivo.values()].sort((a, b) => b.valor - a.valor);
 }
@@ -684,18 +698,21 @@ function filaBotonesDust(guildId, pagina) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`fast_dust_one::${pagina}`).setLabel('⚡ Refresh one').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(`fast_dust_page::${pagina}`).setLabel('⚡ Refresh this page').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('fast_dust_all').setLabel('⚡ Refresh all').setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('fast_dust_all').setLabel('⚡ Refresh all').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`fast_dust_claim::${pagina}`).setLabel('🎁 Claim this page').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('fast_bulk').setLabel('📦 Bulk trade').setStyle(ButtonStyle.Primary)
     );
 }
 
-function correrDust(runId, cuentas, alEvento) {
+function correrDust(runId, cuentas, alEvento, cobrar = false) {
     return new Promise(resolve => {
         const archivoCuentas = path.join(os.tmpdir(), `fast_dust_${runId}.json`);
         fs.writeFileSync(archivoCuentas, JSON.stringify(cuentas));
         const python = process.env.FAST_TRANSFER_PYTHON || 'python';
         const corrida = corridas.get(runId);
         const hijo = spawn(python, ['-X', 'utf8', RUTA_SCRIPT_DUST, '--engine-dir', rutaMotor(),
-            '--accounts-file', archivoCuentas, '--delay', String(DUST_DELAY_S), '--stop-file', corrida.stopFile, '--with-cards'], {
+            '--accounts-file', archivoCuentas, '--delay', String(DUST_DELAY_S), '--stop-file', corrida.stopFile, '--with-cards', '--with-gifts',
+            ...(cobrar ? ['--claim'] : [])], {
             cwd: rutaMotor(), windowsHide: true,
             env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8' }
         });
@@ -773,16 +790,27 @@ async function actualizarColeccion(cuenta, ev, miembro, rutaJson) {
 
 async function guardarDust(cuenta, ev, miembro = null) {
     await deps.db.run(
-        `INSERT INTO shinedust_fast (archivo_json, valor, tickets, ts, valor_json, inventario) VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(archivo_json) DO UPDATE SET valor = excluded.valor, tickets = excluded.tickets, ts = excluded.ts, valor_json = excluded.valor_json, inventario = excluded.inventario`,
-        [claveDust(miembro, cuenta.archivoJson), ev.dust, ev.tickets, Date.now(), cuenta.valorJson, JSON.stringify(ev.inv || {})]
+        `INSERT INTO shinedust_fast (archivo_json, valor, tickets, ts, valor_json, inventario, regalos, estado, error) VALUES (?, ?, ?, ?, ?, ?, ?, 'ok', NULL)
+         ON CONFLICT(archivo_json) DO UPDATE SET valor = excluded.valor, tickets = excluded.tickets, ts = excluded.ts, valor_json = excluded.valor_json,
+            inventario = excluded.inventario, regalos = excluded.regalos, estado = 'ok', error = NULL`,
+        [claveDust(miembro, cuenta.archivoJson), ev.dust, ev.tickets, Date.now(), cuenta.valorJson, JSON.stringify(ev.inv || {}),
+            typeof ev.gifts === 'number' ? ev.gifts : null]
+    );
+}
+
+async function marcarSinEntrar(cuenta, motivo, miembro = null) {
+    await deps.db.run(
+        `INSERT INTO shinedust_fast (archivo_json, ts, valor_json, estado, error) VALUES (?, ?, ?, 'login_failed', ?)
+         ON CONFLICT(archivo_json) DO UPDATE SET ts = excluded.ts, estado = 'login_failed', error = excluded.error`,
+        [claveDust(miembro, cuenta.archivoJson), Date.now(), cuenta.valorJson, String(motivo || '').slice(0, 200)]
     );
 }
 
 // Corre el refresco de una lista de cuentas en la cola compartida. alProgreso recibe el estado.
-async function refrescarDust(runId, cuentas, alProgreso, miembro = null) {
+async function refrescarDust(runId, cuentas, alProgreso, miembro = null, opciones = {}) {
     await asegurarTablaDust();
-    const estado = { total: cuentas.length, hechas: 0, ok: 0, fallas: 0, ultimo: null, errores: [], inicio: Date.now() };
+    const estado = { total: cuentas.length, hechas: 0, ok: 0, fallas: 0, ultimo: null, errores: [], inicio: Date.now(),
+        cobrados: { gifts: 0, missions: 0 }, sinEntrar: 0 };
     let limpiar = () => {};
     enCola++;
     const turno = cola.then(async () => {
@@ -808,6 +836,7 @@ async function refrescarDust(runId, cuentas, alProgreso, miembro = null) {
         }
         let edicion = Promise.resolve();
         await correrDust(runId, lista, ev => {
+            if (ev.claimed) { estado.cobrados.gifts += ev.claimed.gifts || 0; estado.cobrados.missions += ev.claimed.missions || 0; }
             if (!ev.key) return;
             const cuenta = porClave.get(ev.key);
             estado.hechas++;
@@ -823,9 +852,14 @@ async function refrescarDust(runId, cuentas, alProgreso, miembro = null) {
             } else {
                 estado.fallas++;
                 if (estado.errores.length < 30) estado.errores.push(`${cuenta?.nombreCuenta || ev.key}: ${ev.msg || 'failed'}`);
+                // No pudo entrar al juego y no es algo pasajero (hora, IP, tunel, red): queda marcada ⛔.
+                if (cuenta && ev.transient === false) {
+                    estado.sinEntrar++;
+                    edicion = edicion.then(() => marcarSinEntrar(cuenta, ev.msg, miembro)).catch(() => {});
+                }
             }
             alProgreso(estado, false);
-        });
+        }, !!opciones.cobrar);
         await edicion;
     }).catch(e => {
         console.error('DEBUG: Fast Shinedust error:', e);
@@ -969,6 +1003,21 @@ async function manejarDust(interaction, idForzado = null) {
         return true;
     }
 
+    // 🎁 Claim this page: refresca las cuentas de la pagina cobrando regalos y misiones.
+    if (interaction.isButton() && id.startsWith('fast_dust_claim::')) {
+        const pagina = parseInt(id.split('::')[1], 10) || 0;
+        const lista = await mezclarShinedust(deps.buscarShinedustTodasCuentas(rutaJson), rutaJson);
+        const claves = new Set((lista || []).slice(pagina * 25, pagina * 25 + 25).map(r => r.archivoJson));
+        const cuentas = cuentasPara(miembro, rutaJson).filter(c => claves.has(c.archivoJson));
+        if (!cuentas.length) {
+            await interaction.reply({ content: '❌ No accounts on this page.', ephemeral: true });
+            return true;
+        }
+        await interaction.reply({ content: `🎁 Claiming gifts and missions on page ${pagina + 1} (${cuentas.length} accounts) — the progress is in the channel.`, ephemeral: true });
+        await correrLoteDust(interaction, cuentas, `🎁 claim page ${pagina + 1}`, pagina, { cobrar: true });
+        return true;
+    }
+
     if (interaction.isButton() && id.startsWith('fast_dust_stop::')) {
         const corrida = corridas.get(id.replace('fast_dust_stop::', ''));
         if (corrida) {
@@ -982,7 +1031,7 @@ async function manejarDust(interaction, idForzado = null) {
 }
 
 // Lote de cuentas (todas o una pagina) con un mensaje de progreso en el canal y Cancel.
-async function correrLoteDust(interaction, pendientes, titulo, paginaVolver = 0) {
+async function correrLoteDust(interaction, pendientes, titulo, paginaVolver = 0, opciones = {}) {
     {
         const runId = `${interaction.id}`;
         const stopFile = path.join(os.tmpdir(), `fast_dust_stop_${runId}`);
@@ -1001,6 +1050,10 @@ async function correrLoteDust(interaction, pendientes, titulo, paginaVolver = 0)
                 `${icono('ok', mapa)} ${estado.ok}   ${icono('error', mapa)} ${estado.fallas}` + (!final && resta !== null ? `   ⏱️ ~${resta} min left` : '')
             ];
             if (estado.ultimo) lineas.push('', `Last: **${estado.ultimo.nombre}** — ${polvo} ${estado.ultimo.dust.toLocaleString('en-US')}`);
+            if (estado.cobrados && (estado.cobrados.gifts || estado.cobrados.missions)) {
+                lineas.push(`🎁 Claimed: **${estado.cobrados.gifts}** gift(s) · **${estado.cobrados.missions}** mission(s)`);
+            }
+            if (estado.sinEntrar) lineas.push(`⛔ **${estado.sinEntrar}** account(s) could not log in (banned or deleted?)`);
             if (final) {
                 lineas.push('', estado.detenido ? `🚫 Cancelled — ${estado.ok} account(s) were refreshed and saved.` : `🎉 Done in ${Math.round(seg / 60)} min.`);
                 if (estado.errores.length) lineas.push('', '**Failed:**', ...estado.errores.slice(0, 10).map(e => `• ${e}`));
@@ -1017,7 +1070,7 @@ async function correrLoteDust(interaction, pendientes, titulo, paginaVolver = 0)
             if (Date.now() - ultimaEdicion < 4000) return; // Discord limita la frecuencia de ediciones
             ultimaEdicion = Date.now();
             msg.edit({ embeds: [armar(est, false)], components: [filaCancel] }).catch(() => {});
-        }, miembro);
+        }, miembro, opciones);
         corridas.delete(runId);
         try { fs.unlinkSync(stopFile); } catch (e) { /* nada */ }
         await msg.edit({ embeds: [armar(estado, true)], components: [new ActionRowBuilder().addComponents(

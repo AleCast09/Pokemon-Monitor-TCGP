@@ -17,6 +17,12 @@ vacio aunque haya 3), asi que solo sirve para saber cuales tiene; bot.js corrige
 tocar las cantidades. scan_account() deja sync_v1_page_*.json con los datos de la cuenta en la
 carpeta del motor (modo depuracion de Miguel): se borran enseguida.
 
+--with-gifts: cuenta los regalos pendientes del buzon ("gifts": N en el evento).
+--claim: antes de leer, cobra los regalos del buzon y las misiones conocidas por el bot de Miguel
+(principiante, especiales, decks de alquiler); "claimed": {gifts, missions}.
+Errores: "transient": true si es pasajero (hora de la PC, IP, tunel, red); si no, la cuenta no
+pudo entrar al juego (bot.js la marca con ⛔).
+
 Uso:
     python -X utf8 fast_dust.py --engine-dir <ptcgp-capturedeluxe>
         --accounts-file cuentas.json [--delay 2] [--stop-file <ruta>]
@@ -42,6 +48,59 @@ def leer_credenciales(xml_path):
     if not cuenta or not clave:
         raise ValueError("deviceAccount/devicePassword not found in the XML")
     return cuenta.group(1).strip(), clave.group(1).strip()
+
+
+def es_transitorio(err):
+    s = str(err or "")
+    return any(x in s for x in ("datetime is out of alignment", "PERMISSION_DENIED", "403", "Connection refused", "9090",
+                                "UNAVAILABLE", "DEADLINE_EXCEEDED", "timed out", "Timeout", "RESOURCE_EXHAUSTED", "502", "503"))
+
+
+def contar_regalos(sess):
+    from engine.takasho.schema.lettuce_server.player_api import present_box_list_v1_pb2
+    total, token = 0, ""
+    for _ in range(20):
+        resp = sess._call("/takasho.schema.lettuce_server.player_api.PresentBox/ListV1",
+                          present_box_list_v1_pb2.PresentBoxListV1.Types.Request(page_token=token),
+                          present_box_list_v1_pb2.PresentBoxListV1.Types.Response)
+        total += len(resp.presents)
+        token = resp.next_page_token
+        if not token:
+            break
+    return total
+
+
+def misiones_conocidas():
+    """IDs de misiones que conoce el flujo del bot de Miguel (no incluye las diarias)."""
+    try:
+        from scripts.full_flow_v2 import INITIAL_MISSION_ORDER, BEGINNER_DAILY_ORDER, SPECIAL_ORDER, RENTAL_ORDER
+        return list(INITIAL_MISSION_ORDER) + list(BEGINNER_DAILY_ORDER) + list(SPECIAL_ORDER) + list(RENTAL_ORDER)
+    except Exception:
+        return []
+
+
+def cobrar(sess):
+    """Cobra el buzon de regalos y las misiones conocidas que esten completas."""
+    regalos = 0
+    r = sess.claim_presents()
+    if r and r.get("success"):
+        regalos = int(r.get("claimed_count", 0) or 0)
+    misiones = 0
+    ids = misiones_conocidas()
+    if ids:
+        try:
+            from engine.takasho.schema.lettuce_server.player_api import mission_is_completed_v1_pb2
+            req = mission_is_completed_v1_pb2.MissionIsCompletedV1.Types.Request()
+            req.mission_ids.extend(ids)
+            resp = sess._call("/takasho.schema.lettuce_server.player_api.Mission/IsCompletedV1", req,
+                              mission_is_completed_v1_pb2.MissionIsCompletedV1.Types.Response)
+            for mid in [m.mission_id for m in resp.completed_missions]:
+                rc = sess.complete_missions([mid])  # de a una: las ya cobradas fallan sin cortar el resto
+                if rc and rc.get("success"):
+                    misiones += 1
+        except Exception:
+            pass
+    return {"gifts": regalos, "missions": misiones}
 
 
 def error_legible(err):
@@ -91,6 +150,8 @@ def main():
     p.add_argument("--delay", type=float, default=2.0)
     p.add_argument("--stop-file", default="")
     p.add_argument("--with-cards", action="store_true")
+    p.add_argument("--with-gifts", action="store_true")
+    p.add_argument("--claim", action="store_true")
     a = p.parse_args()
 
     cuentas = json.load(open(a.accounts_file, encoding="utf-8"))
@@ -110,6 +171,7 @@ def main():
         try:
             usuario, clave = leer_credenciales(c["xml"])
             sess = at.login_bot(usuario, clave)
+            cobrado = cobrar(sess) if a.claim else None
             inv = leer_inventario(sess)
             cartas = None
             if a.with_cards:
@@ -125,9 +187,16 @@ def main():
                             os.remove(basura)
                         except OSError:
                             pass
-            emitir(key=c["key"], state="ok", dust=inv["dust"], tickets=inv["shopticket"], inv=inv, cards=cartas)
+            regalos = None
+            if a.with_gifts or a.claim:
+                try:
+                    regalos = contar_regalos(sess)
+                except Exception:
+                    regalos = None
+            emitir(key=c["key"], state="ok", dust=inv["dust"], tickets=inv["shopticket"], inv=inv, cards=cartas,
+                   gifts=regalos, claimed=cobrado)
         except Exception as e:
-            emitir(key=c["key"], state="error", msg=error_legible(e))
+            emitir(key=c["key"], state="error", msg=error_legible(e), transient=es_transitorio(e))
         finally:
             try:
                 if sess is not None and hasattr(sess, "close"):
