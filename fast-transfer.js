@@ -349,6 +349,9 @@ async function registrarYResumir(interaction, ctx, modo, recibida) {
     try { antes = await deps.auditarStockCarta(fileName, cartaId); } catch (e) { /* sin stock, sigue */ }
     try {
         await deps.registrarTransferenciaCarta(fileName, cartaId, fast === 'share' ? 'share' : modo === 'friend' ? 'friend' : 'main', interaction.user.id, friendId);
+        // Comunidad: lo transferido queda en los ajustes del miembro (en su PC), asi cualquier host lo sabe.
+        const miembroAj = deps.usuarioComunidad?.();
+        if (miembroAj) await deps.anotarAjusteMiembro(miembroAj, fileName, { tipo: 'traded', card: cartaId, n: 1 }).catch(e => console.error('DEBUG: ajuste de trade:', e?.message || e));
     } catch (e) {
         console.error('DEBUG: Fast Transfer no pudo guardar el historial:', e?.message || e);
     }
@@ -739,53 +742,37 @@ function correrDust(runId, cuentas, alEvento, cobrar = false) {
 }
 
 // ---- Sincronizar cartas (2026-10-24, a partir del sync_cards.py del bot de Miguel) ----
-// El juego dice QUE cartas tiene la cuenta pero no cuantas copias (card_amount llega vacio aunque
-// haya 3), asi que no se reescribe la coleccion como hace Miguel (dejaria todo en 1 copia y romperia
-// Gold Cards). Se corrige sin perder cantidades: lo que el juego ya no tiene (tradeado/regalado) se
-// saca, lo que tiene y el JSON no conocia se agrega con 1 copia, y el resto queda con sus copias.
-// Se respetan metadata, tradedCards, etc.; el Shinedust tambien se actualiza. Antes de escribir
-// queda un respaldo <archivo>.json.bak. Devuelve null si no hay nada que cambiar.
-function aplicarColeccion(data, ev) {
-    const ahora = new Date();
-    const dos = (n) => String(n).padStart(2, '0');
-    const sello = `${ahora.getFullYear()}-${dos(ahora.getMonth() + 1)}-${dos(ahora.getDate())} ${dos(ahora.getHours())}:${dos(ahora.getMinutes())}:${dos(ahora.getSeconds())}`;
-    const enJuego = new Set(ev.cards);
-    const copias = {};
-    for (const p of data.pulls || []) for (const id of p.cards || []) copias[id] = (copias[id] || 0) + 1;
-    const quitadas = Object.keys(copias).filter(id => !enJuego.has(id));
-    const nuevas = [...enJuego].filter(id => !copias[id]);
-    const dustCambio = typeof ev.dust === 'number' && data.metadata?.shinedust?.value !== ev.dust;
-    if (!quitadas.length && !nuevas.length && !dustCambio) return null;
-    for (const id of quitadas) delete copias[id];
-    for (const id of nuevas) copias[id] = 1;
-    data.pulls = [{ timestamp: sello, pack: '_synced', cards: Object.entries(copias).flatMap(([id, n]) => Array(n).fill(id)) }];
-    data.metadata = data.metadata || {};
-    if (typeof ev.dust === 'number') data.metadata.shinedust = { ...(data.metadata.shinedust || {}), value: ev.dust };
-    data.metadata.lastSynced = ahora.toISOString();
-    return data;
+// Los JSON del bot de Kevin/Leanny NO se tocan nunca (pedido de Ale: Leanny puede reconstruirlos
+// desde cero, como le paso a wr98, y una edicion nuestra se mezclaria o se perderia). Lo que el juego
+// dice que la cuenta tiene se guarda como AJUSTE aparte:
+//   notOwned = cartas del JSON que la cuenta ya no tiene (se tradearon/regalaron fuera del bot)
+//   extra    = cartas que tiene en el juego y el JSON no conoce (recibidas en trades)
+// Comunidad: en el archivo propio de Monitor Link en la PC del miembro (monitor_link.json).
+// Servidor propio: en la base de esta PC (tabla ajustes_cuentas). Las copias que se muestran son las
+// del JSON + estos ajustes - lo ya transferido. (El juego no manda cuantas copias hay, solo cuales.)
+function diferenciaColeccion(copiasJson, cartasJuego) {
+    const enJuego = new Set(cartasJuego);
+    return {
+        notOwned: Object.keys(copiasJson).filter(id => !enJuego.has(id)),
+        extra: [...enJuego].filter(id => !copiasJson[id])
+    };
 }
 
 let rutaJsonActual = null;  // la de esta PC (servidor propio); se fija en manejarDust
 
 async function actualizarColeccion(cuenta, ev, miembro, rutaJson) {
     if (miembro) {
-        // Comunidad: el JSON esta en la PC del miembro; se lo pide, se arma y se lo devuelve su Monitor Link.
-        const r = await deps.pedirAccion(miembro, { action: 'account_json', file: cuenta.fileNameXml }, 60000);
-        if (!r.ok || !r.json) return;
-        const datos = aplicarColeccion(JSON.parse(r.json.replace(/^\uFEFF/, '')), ev);
-        if (!datos) return;
-        const nuevo = JSON.stringify(datos, null, 2);
-        await deps.pedirAccion(miembro, { action: 'write_json', file: cuenta.fileNameXml, content: Buffer.from(nuevo, 'utf8').toString('base64') }, 60000);
+        const copias = deps.cartasCrudasMiembro(miembro, cuenta.fileNameXml);
+        if (!copias) return;
+        await deps.anotarAjusteMiembro(miembro, cuenta.fileNameXml, { tipo: 'sync', ...diferenciaColeccion(copias, ev.cards) });
         return;
     }
     if (!rutaJson) return;
-    const archivo = path.join(rutaJson, cuenta.archivoJson);
-    if (!fs.existsSync(archivo)) return;
-    const texto = fs.readFileSync(archivo, 'utf8');
-    const datos = aplicarColeccion(JSON.parse(texto.replace(/^\uFEFF/, '')), ev);
-    if (!datos) return;
-    fs.writeFileSync(`${archivo}.bak`, texto);
-    fs.writeFileSync(archivo, JSON.stringify(datos, null, 2));
+    const data = leerJson(path.join(rutaJson, cuenta.archivoJson));
+    if (!data) return;
+    const copias = {};
+    for (const p of data.pulls || []) for (const id of p.cards || []) copias[id] = (copias[id] || 0) + 1;
+    await deps.guardarAjusteLocal(cuenta.fileNameXml, diferenciaColeccion(copias, ev.cards));
 }
 
 async function guardarDust(cuenta, ev, miembro = null) {
@@ -1272,7 +1259,9 @@ async function ejecutarBulk(interaction, { fileName, cartas, friendId, miembro, 
         });
         await edicion;
         for (const r of resultado?.results || []) {
-            if (r.ok) await deps.registrarTransferenciaCarta(fileName, r.card, 'main', interaction.user.id, friendId).catch(() => {});
+            if (!r.ok) continue;
+            await deps.registrarTransferenciaCarta(fileName, r.card, 'main', interaction.user.id, friendId).catch(() => {});
+            if (miembro) await deps.anotarAjusteMiembro(miembro, fileName, { tipo: 'traded', card: r.card, n: 1 }).catch(e => console.error('DEBUG: ajuste de trade:', e?.message || e));
         }
         const ok = (resultado?.results || []).filter(r => r.ok).length;
         if (cartas.length === 1 && estados[0]) estados[0].icono = icono(resultado?.success ? 'ok' : 'error', mapa);

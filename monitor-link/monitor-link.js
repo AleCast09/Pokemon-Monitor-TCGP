@@ -16,7 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 const CARPETA_CONFIG = path.join(process.env.APPDATA || os.homedir(), 'MonitorLink');
 const RUTA_CONFIG = path.join(CARPETA_CONFIG, 'config.json');
 const CADA_PING_MS = 60 * 1000;
@@ -205,7 +205,11 @@ function armarResumen(carpeta) {
         const w = JSON.parse(fs.readFileSync(path.join(carpeta, '..', 'wishlist.json'), 'utf8').replace(/^\uFEFF/, ''));
         if (Array.isArray(w?.cards)) wishlist = w.cards.map(c => c?.id || c?.code || c?.cardId || c?.cardID).filter(Boolean);
     } catch (e) { /* sin wishlist */ }
-    return { version: VERSION, folder: carpeta, accounts: cuentas, wishlist };
+    // Archivo propio de ajustes (lo tradeado por el bot + lo que corrigio la sincronizacion con el juego).
+    // Los JSON de Kevin/Leanny no se escriben nunca.
+    let adjust;
+    try { adjust = JSON.parse(fs.readFileSync(path.join(carpeta, '..', 'monitor_link.json'), 'utf8')); } catch (e) { /* todavia no hay */ }
+    return { version: VERSION, folder: carpeta, accounts: cuentas, wishlist, adjust };
 }
 
 async function subirResumen(cfg, forzar = false, extra = {}) {
@@ -324,7 +328,21 @@ async function escribirJsonCuenta(cfg, trabajo) {
     if (respuesta.ok) await subirResumen(cfg, false).catch(() => {});
 }
 
+async function guardarAjustes(cfg, trabajo) {
+    const respuesta = { id: trabajo.id, ok: false, error: 'bad content' };
+    const contenido = Buffer.from(String(trabajo.content || ''), 'base64').toString('utf8');
+    try {
+        JSON.parse(contenido);
+        fs.writeFileSync(path.resolve(cfg.carpetaJson, '..', 'monitor_link.json'), contenido);
+        Object.assign(respuesta, { ok: true, error: undefined });
+    } catch (e) { respuesta.error = e.message; }
+    await fetch(`${cfg.serverUrl}/link/xml`, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain', Authorization: `Bearer ${cfg.token}` }, body: JSON.stringify(respuesta)
+    });
+}
+
 async function atenderTrabajo(cfg, trabajo) {
+    if (trabajo.action === 'ml_file_write') return guardarAjustes(cfg, trabajo);
     if (trabajo.action === 'wishlist_add') return agregarAWishlist(cfg, trabajo);
     if (trabajo.action === 'write_json') return escribirJsonCuenta(cfg, trabajo);
     if (trabajo.action === 'account_json') return mandarJsonCuenta(cfg, trabajo);

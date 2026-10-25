@@ -44,6 +44,10 @@ fastTransfer.init({
     usuarioComunidad: () => comunidad.usuarioActual(),
     pedirXml: (discordId, nombres) => monitorLink.pedirXml(discordId, nombres),
     pedirAccion: (discordId, accion, timeoutMs) => monitorLink.pedirAccion(discordId, accion, timeoutMs),
+    // Ajustes de copias (sincronizacion con el juego + lo tradeado), sin tocar los JSON de Kevin/Leanny.
+    cartasCrudasMiembro: (discordId, fileName) => monitorLink.cartasCrudasMiembro(discordId, fileName),
+    anotarAjusteMiembro: (discordId, fileName, cambio) => monitorLink.anotarAjusteMiembro(discordId, fileName, cambio),
+    guardarAjusteLocal: (fileName, diferencia) => guardarAjusteLocal(fileName, diferencia),
     // 📦 Bulk trade
     cartasMiembro: (discordId, fileName) => monitorLink.cartasDeCuentaMiembro(discordId, fileName),
     // Catalogo leido una vez cada 10 min (se consulta por cada carta de cada cuenta).
@@ -66,7 +70,7 @@ fastTransfer.init({
     cuentasGoldDe: async (userId, cartaId) => {
         const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(userId);
         if (!mapaCopias) return [];
-        const transferidas = await transferenciasPorCuenta(cartaId);
+        const transferidas = comunidad.usuarioActual() ? {} : await transferenciasPorCuenta(cartaId);
         return (mapaCopias[cartaId] || [])
             .map(r => {
                 const ya = transferidas[normalizarCuentaTransferencia(r.fileName)] || 0;
@@ -674,7 +678,7 @@ async function transferenciasPorCuenta(cartaId) {
 async function auditarStockCarta(fileName, cartaId) {
     const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
     const mapaCopias = construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url);
-    const transferidasPorCuenta = await transferenciasPorCuenta(cartaId);
+    const transferidasPorCuenta = comunidad.usuarioActual() ? {} : await transferenciasPorCuenta(cartaId);
     const cuenta = normalizarCuentaTransferencia(fileName);
     const registros = (mapaCopias?.[cartaId] || []).map(r => {
         const clave = normalizarCuentaTransferencia(r.fileName);
@@ -3483,6 +3487,28 @@ function construirMapaCopiasPorCartaCacheado(rutaJsonCuentas) {
     _mapaCopiasCacheBot = { ruta: rutaJsonCuentas, mapa, ts: Date.now() };
     return mapa;
 }
+// Ajustes de la sincronizacion con el juego en esta PC (2026-10-24): por cuenta, las cartas que ya no
+// tiene (notOwned) y las nuevas que su JSON no conoce (extra). Los JSON de Kevin/Leanny no se tocan:
+// el ajuste se aplica al leerlos. En memoria para construirMapaCopiasPorCarta (que es sincronica).
+const ajustesLocales = new Map();   // fileName en minusculas sin .xml -> { notOwned, extra }
+const claveAjuste = (f) => String(f || '').replace(/\.xml$/i, '').toLowerCase();
+async function cargarAjustesLocales() {
+    await db.run(`CREATE TABLE IF NOT EXISTS ajustes_cuentas (cuenta TEXT PRIMARY KEY, not_owned TEXT, extra TEXT, ts INTEGER)`);
+    for (const f of (await db.all(`SELECT cuenta, not_owned, extra FROM ajustes_cuentas`)) || []) {
+        try { ajustesLocales.set(f.cuenta, { notOwned: JSON.parse(f.not_owned || '[]'), extra: JSON.parse(f.extra || '[]') }); } catch (e) { /* fila rota */ }
+    }
+}
+cargarAjustesLocales().catch(e => console.error('DEBUG: ajustes de cuentas:', e?.message || e));
+async function guardarAjusteLocal(fileName, { notOwned = [], extra = [] }) {
+    const clave = claveAjuste(fileName);
+    await db.run(`INSERT INTO ajustes_cuentas (cuenta, not_owned, extra, ts) VALUES (?, ?, ?, ?)
+        ON CONFLICT(cuenta) DO UPDATE SET not_owned = excluded.not_owned, extra = excluded.extra, ts = excluded.ts`,
+        [clave, JSON.stringify(notOwned), JSON.stringify(extra), Date.now()]);
+    ajustesLocales.set(clave, { notOwned, extra });
+    _mapaCopiasCacheBot = null;
+    _cartasGoldCacheBot = null;
+}
+
 function construirMapaCopiasPorCarta(rutaJsonCuentas) {
     if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
     const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
@@ -3501,6 +3527,11 @@ function construirMapaCopiasPorCarta(rutaJsonCuentas) {
         }
 
         const fileName = data.metadata?.fileName || archivo;
+        const aj = ajustesLocales.get(claveAjuste(fileName));
+        if (aj) {
+            for (const id of aj.notOwned) delete conteoPorCarta[id];
+            for (const id of aj.extra) if (!conteoPorCarta[id]) conteoPorCarta[id] = 1;
+        }
         for (const [cartaId, cantidad] of Object.entries(conteoPorCarta)) {
             if (!mapa[cartaId]) mapa[cartaId] = [];
             mapa[cartaId].push({ fileName, cantidad });

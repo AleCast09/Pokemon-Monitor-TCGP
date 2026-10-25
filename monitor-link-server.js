@@ -36,6 +36,9 @@ async function asegurarTablas() {
         try { await db.run(`ALTER TABLE link_agentes ADD COLUMN carpeta_error TEXT`); } catch (e) { /* ya existe */ }
         // Wishlist del miembro (ids de cartas de su Cards\wishlist.json), para /wishlist.
         try { await db.run(`ALTER TABLE link_resumen ADD COLUMN wishlist TEXT`); } catch (e) { /* ya existe */ }
+        // Ajustes del miembro (monitor_link.json de su PC): lo tradeado por el bot y lo que corrigio la
+        // sincronizacion con el juego. Los JSON de Kevin/Leanny nunca se tocan.
+        try { await db.run(`ALTER TABLE link_resumen ADD COLUMN ajustes TEXT`); } catch (e) { /* ya existe */ }
         asegurarTablas.carpeta = true;
     }
 }
@@ -330,14 +333,17 @@ function registrar(app, dependencias) {
                 c: Object.fromEntries(Object.entries(c.c || {})
                     .filter(([id, n]) => /^[A-Za-z0-9_]{5,40}$/.test(id) && Number.isInteger(n) && n > 0 && n < 100000))
             })).filter(c => c.f);
+            const ajustes = limpiarAjustes(datos.adjust);
             // null = ese Monitor Link no manda wishlist (version vieja o no tiene el archivo).
             const wishlist = Array.isArray(datos.wishlist)
                 ? JSON.stringify(datos.wishlist.map(String).filter(id => /^[A-Za-z0-9_]{5,40}$/.test(id)).slice(0, 5000))
                 : null;
             await db.run(
-                `INSERT INTO link_resumen (discord_id, guild_id, datos, cuentas, ts, carpeta, wishlist) VALUES (?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(discord_id) DO UPDATE SET guild_id = excluded.guild_id, datos = excluded.datos, cuentas = excluded.cuentas, ts = excluded.ts, carpeta = excluded.carpeta, wishlist = excluded.wishlist`,
-                [agente.discord_id, agente.guild_id, JSON.stringify(limpias), limpias.length, Date.now(), String(datos.folder || "").slice(0, 300) || null, wishlist]);
+                `INSERT INTO link_resumen (discord_id, guild_id, datos, cuentas, ts, carpeta, wishlist, ajustes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(discord_id) DO UPDATE SET guild_id = excluded.guild_id, datos = excluded.datos, cuentas = excluded.cuentas, ts = excluded.ts,
+                    carpeta = excluded.carpeta, wishlist = excluded.wishlist, ajustes = COALESCE(excluded.ajustes, link_resumen.ajustes)`,
+                [agente.discord_id, agente.guild_id, JSON.stringify(limpias), limpias.length, Date.now(), String(datos.folder || "").slice(0, 300) || null, wishlist,
+                    ajustes ? JSON.stringify(ajustes) : null]);
             // Respuesta al 📁 Set My Folder: si ya se esta usando la carpeta pedida, o si en esa PC no
             // existe (folderError), el pedido se cierra.
             const pedido = await db.get(`SELECT carpeta_pedida FROM link_agentes WHERE discord_id = ?`, [agente.discord_id]);
@@ -432,12 +438,14 @@ async function precargar(discordId) {
     if (c && c.ts === fila.ts) return true;
     const r = await resumenDe(discordId);
     if (!r) return false;
+    const crudas = r.cuentas;
+    r.cuentas = crudas.map(cuenta => ({ ...cuenta, c: aplicarAjuste(cuenta.c, r.ajustes?.accounts?.[claveCuenta(cuenta.f)]) }));
     const mapaCopias = {};
     for (const cuenta of r.cuentas) {
         for (const [id, n] of Object.entries(cuenta.c || {})) (mapaCopias[id] ||= []).push({ fileName: cuenta.f, cantidad: n });
     }
     for (const id of Object.keys(mapaCopias)) mapaCopias[id].sort((a, b) => b.cantidad - a.cantidad);
-    cache.set(String(discordId), { ts: fila.ts, cuentas: r.cuentas, mapaCopias, wishlist: r.wishlist });
+    cache.set(String(discordId), { ts: fila.ts, cuentas: r.cuentas, crudas, ajustes: r.ajustes, mapaCopias, wishlist: r.wishlist });
     return true;
 }
 
@@ -467,6 +475,71 @@ function shinedustDe(discordId) {
         .sort((a, b) => b.valor - a.valor);
 }
 
+// ---- Ajustes del miembro (monitor_link.json en su PC) ----
+const claveCuenta = (f) => String(f || '').replace(/\.xml$/i, '').toLowerCase();
+const ID_CARTA = /^[A-Za-z0-9_]{5,40}$/;
+
+function limpiarAjustes(a) {
+    if (!a || typeof a !== 'object' || typeof a.accounts !== 'object') return null;
+    const accounts = {};
+    for (const [k, v] of Object.entries(a.accounts).slice(0, 5000)) {
+        if (!v || typeof v !== 'object') continue;
+        const traded = {};
+        for (const [id, n] of Object.entries(v.traded || {})) if (ID_CARTA.test(id) && Number.isInteger(n) && n > 0 && n < 100000) traded[id] = n;
+        const lista = (x) => (Array.isArray(x) ? x : []).map(String).filter(id => ID_CARTA.test(id)).slice(0, 5000);
+        accounts[claveCuenta(k)] = { traded, notOwned: lista(v.notOwned), extra: lista(v.extra), syncedAt: v.syncedAt ? String(v.syncedAt).slice(0, 40) : null };
+    }
+    return { version: 1, accounts };
+}
+
+// Copias de una cuenta con sus ajustes: JSON - cartas que ya no tiene + las nuevas - lo ya tradeado.
+function aplicarAjuste(c, aj) {
+    const out = { ...(c || {}) };
+    if (!aj) return out;
+    for (const id of aj.notOwned || []) delete out[id];
+    for (const id of aj.extra || []) if (!out[id]) out[id] = 1;
+    for (const [id, n] of Object.entries(aj.traded || {})) {
+        if (out[id] === undefined) continue;
+        out[id] -= n;
+        if (out[id] <= 0) delete out[id];
+    }
+    return out;
+}
+
+// Anota un cambio en los ajustes del miembro y se lo manda a su Monitor Link para que lo guarde.
+//   { tipo: 'traded', card, n }               una copia (o n) que el bot transfirio
+//   { tipo: 'sync', notOwned: [], extra: [] }  lo que dijo el juego en la ultima sincronizacion
+async function anotarAjusteMiembro(discordId, fileName, cambio) {
+    discordId = String(discordId);
+    await precargar(discordId);
+    const actual = cache.get(discordId)?.ajustes || { version: 1, accounts: {} };
+    const ajustes = JSON.parse(JSON.stringify(actual));
+    const k = claveCuenta(fileName);
+    const cuenta = ajustes.accounts[k] || (ajustes.accounts[k] = { traded: {}, notOwned: [], extra: [] });
+    if (cambio.tipo === 'traded') {
+        cuenta.traded[cambio.card] = (cuenta.traded[cambio.card] || 0) + (cambio.n || 1);
+    } else if (cambio.tipo === 'sync') {
+        cuenta.notOwned = cambio.notOwned || [];
+        cuenta.extra = cambio.extra || [];
+        cuenta.syncedAt = new Date().toISOString();
+        // Lo tradeado de cartas que ya no estan en el juego ya no hace falta restarlo.
+        for (const id of cuenta.notOwned) delete cuenta.traded[id];
+    }
+    const contenido = JSON.stringify(limpiarAjustes(ajustes), null, 2);
+    const r = await pedirAccion(discordId, { action: 'ml_file_write', content: Buffer.from(contenido, 'utf8').toString('base64') }, 30000);
+    if (!r.ok) throw new Error(r.error || 'could not save');
+    await db.run(`UPDATE link_resumen SET ajustes = ? WHERE discord_id = ?`, [contenido, discordId]);
+    cache.delete(discordId);
+    await precargar(discordId);
+    return true;
+}
+
+// Copias SIN ajustes (las del JSON de Kevin/Leanny tal cual), para calcular la sincronizacion.
+function cartasCrudasMiembro(discordId, fileName) {
+    const c = (cache.get(String(discordId))?.crudas || []).find(x => claveCuenta(x.f) === claveCuenta(fileName));
+    return c ? { ...(c.c || {}) } : null;
+}
+
 // Cartas {id: copias} de una cuenta del miembro (de su resumen), para 📦 Bulk trade.
 function cartasDeCuentaMiembro(discordId, fileName) {
     const sin = (n) => String(n || '').replace(/\.xml$/i, '').toLowerCase();
@@ -484,9 +557,12 @@ function cuentasDe(discordId) {
 // Para los comandos: resumen subido por un usuario (o null) y si su Monitor Link esta en linea.
 async function resumenDe(discordId) {
     await asegurarTablas();
-    const fila = await db.get(`SELECT datos, cuentas, ts, wishlist FROM link_resumen WHERE discord_id = ?`, [String(discordId)]);
+    const fila = await db.get(`SELECT datos, cuentas, ts, wishlist, ajustes FROM link_resumen WHERE discord_id = ?`, [String(discordId)]);
     if (!fila) return null;
-    try { return { cuentas: JSON.parse(fila.datos), total: fila.cuentas, ts: fila.ts, wishlist: fila.wishlist ? JSON.parse(fila.wishlist) : null }; } catch (e) { return null; }
+    try {
+        return { cuentas: JSON.parse(fila.datos), total: fila.cuentas, ts: fila.ts, wishlist: fila.wishlist ? JSON.parse(fila.wishlist) : null,
+            ajustes: fila.ajustes ? JSON.parse(fila.ajustes) : null };
+    } catch (e) { return null; }
 }
 
 async function estadoAgente(discordId) {
@@ -496,4 +572,4 @@ async function estadoAgente(discordId) {
     return { vinculado: true, enLinea: Date.now() - (fila.ultimo || 0) < 3 * 60 * 1000, ultimo: fila.ultimo };
 }
 
-module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };

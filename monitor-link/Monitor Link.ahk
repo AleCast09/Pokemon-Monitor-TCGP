@@ -17,7 +17,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.6.0"
+global VERSION := "ahk-1.7.0"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -272,6 +272,11 @@ SubirResumen(forzar, folderError := "") {
         }
         body .= ",""wishlist"":[" . ids . "]"
     }
+    ; Own adjustments file (what the bot already traded + what the game sync corrected). The files of
+    ; Kevin/Leanny's bot are never written.
+    FileRead, aj, % CarpetaPadre(CarpetaJson) . "\monitor_link.json"
+    if (!ErrorLevel && SubStr(LTrim(aj, " `t`r`n"), 1, 1) = "{")
+        body .= ",""adjust"":" . aj
     if (folderError != "")
         body .= ",""folderError"":""" . JsonEsc(folderError) . """"
     body .= "}"
@@ -299,7 +304,8 @@ Huella() {
     Loop, Files, %CarpetaJson%\*.json
         h .= "|" . A_LoopFileName . A_LoopFileSize . A_LoopFileTimeModified
     FileGetTime, tw, % CarpetaPadre(CarpetaJson) . "\wishlist.json"
-    return h . "|" . tw
+    FileGetTime, ta, % CarpetaPadre(CarpetaJson) . "\monitor_link.json"
+    return h . "|" . tw . "|" . ta
 }
 
 ; ---------------------------------------------------------------- ping and Set My Folder from Discord
@@ -419,6 +425,11 @@ RevisarTrabajos:
         pos += StrLen(mwj)
         EscribirJsonCuenta(mwj1, JsonUnesc(mwj2), mwj3)
     }
+    pos := 1
+    while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""ml_file_write""\s*,\s*""content""\s*:\s*""([A-Za-z0-9+/=]+)""", mfw, pos)) {
+        pos += StrLen(mfw)
+        GuardarAjustes(mfw1, mfw2)
+    }
 return
 
 AtenderTrabajo(id, lista) {
@@ -502,6 +513,19 @@ MandarJsonCuenta(id, archivo) {
     if (encontrado = "")
         return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""account file not found""}")
     ResponderAccion("{""id"":""" . id . """,""ok"":true,""jsonName"":""" . JsonEsc(nombre) . """,""json"":""" . JsonEsc(encontrado) . """}")
+}
+
+; Adjustments (Accounts\Cards\monitor_link.json): this program's own file, next to Kevin/Leanny's.
+GuardarAjustes(id, base64) {
+    contenido := Base64UrlDecode(base64)
+    if (CarpetaJson = "" || SubStr(contenido, 1, 1) != "{")
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""bad content""}")
+    f := FileOpen(CarpetaPadre(CarpetaJson) . "\monitor_link.json", "w", "UTF-8-RAW")
+    if (!IsObject(f))
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""could not write monitor_link.json""}")
+    f.Write(contenido)
+    f.Close()
+    ResponderAccion("{""id"":""" . id . """,""ok"":true}")
 }
 
 ; Card sync: the bot corrects this account's card file with what the game says it has (cards that
