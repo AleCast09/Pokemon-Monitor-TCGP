@@ -16448,6 +16448,7 @@ async function tomarTurnoComunidad() {
         await paso('channels', () => sincronizarCanales({ guild, guildId: guild.id, user: dueno, client, editReply: async () => {} }));
         await paso('Monitor role', async () => { for (const v of await monitorLink.vinculados()) await darRolMonitor(guild.id, v.discordId); });
         await paso('old panels', () => limpiarPanelesDeOtrosBots(guild));
+        await paso('own panels', () => anotarPanelesPropios(guild, dueno.id));
         console.log(`✅ Community turn: commands and panels published in ${guild.name}`);
     }
 }
@@ -16517,6 +16518,18 @@ async function soltarTurnoComunidad() {
 // borran al tomar el turno. SOLO los paneles anotados en Upstash -- nunca el historial (2026-10-25,
 // bug real: antes se borraba todo mensaje con botones de otro bot y se fueron los resultados de
 // /card, Shinedust, Fast Farm... de todos los canales).
+// Los paneles que ya estaban (con su webhook vivo, el Sync no los vuelve a mandar) tambien se anotan:
+// su id esta en configs_extras (interfaz_msg_<clave>) y el canal en configs_canales.
+async function anotarPanelesPropios(guild, duenoId) {
+    const TIPO_DE_CLAVE = { card_wishlist: 'cmd_card_wishlist', card_all: 'cmd_card_all', extract_xlm: 'cmd_extract_xlm', run_instance: 'cmd_run_instance', setup: 'cmd_setup' };
+    const filas = await db.all(`SELECT tipo, estado FROM configs_extras WHERE discord_id = ? AND tipo LIKE 'interfaz_msg_%' AND estado IS NOT NULL`, [String(duenoId)]) || [];
+    for (const f of filas) {
+        const clave = f.tipo.slice('interfaz_msg_'.length);
+        const canal = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [guild.id, TIPO_DE_CLAVE[clave] || clave]);
+        if (canal?.canal_id) await hostComunidad.anotarPanel(f.estado, canal.canal_id, client.user.id);
+    }
+}
+
 async function limpiarPanelesDeOtrosBots(guild) {
     for (const p of await hostComunidad.panelesDeOtros(client.user.id)) {
         const canal = guild.channels.cache.get(p.canal);
