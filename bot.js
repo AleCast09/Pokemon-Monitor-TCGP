@@ -16400,6 +16400,50 @@ async function tomarTurnoComunidad() {
     if (DASHBOARD_PUBLIC_URL) monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL);
 }
 
+// Estado de esta PC para el panel de hosts: bot, version, bot de Miguel y Monitor Links en linea.
+async function estadoDeEsteHost() {
+    let version = 'dev';
+    try { version = fs.readFileSync(path.join(__dirname, 'host-version.txt'), 'utf8').trim() || version; } catch (e) {
+        try { version = execSync('git rev-parse --short HEAD', { cwd: __dirname, windowsHide: true }).toString().trim(); } catch (e2) { /* sin git */ }
+    }
+    const motor = process.env.FAST_TRANSFER_ENGINE_DIR || '';
+    let links = null;
+    if (hostComunidad.esActivo() && comunidad.hayComunidad()) {
+        try { links = (await monitorLink.vinculados()).filter(v => v.enLinea).length; } catch (e) { /* sin tablas */ }
+    }
+    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), links };
+}
+
+// Panel de hosts en el canal 🔒-hosts (lo arma y lo mantiene el host que tiene el turno).
+async function actualizarPanelHosts(hosts) {
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
+        const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+        if (!canal) continue;
+        const hace = (ts) => `<t:${Math.floor((ts || 0) / 1000)}:R>`;
+        const lineas = hosts.map(h => {
+            const estado = !h.enLinea ? `🔴 **${h.nombre}** — offline since ${hace(h.ts)}`
+                : h.turno ? `👑🟢 **${h.nombre}** — **has the turn**` : `⏸️🟢 **${h.nombre}** — standby, ready to take over`;
+            const detalles = [h.bot && `bot ${h.bot}`, h.version && `v${h.version}`, h.enLinea ? `Miguel's bot ${h.motor ? '✅' : '❌'}` : null,
+                h.enLinea && h.turno && typeof h.links === 'number' ? `${h.links} Monitor Link(s) online` : null].filter(Boolean).join(' · ');
+            return `${estado}\n　${detalles}`;
+        });
+        const embed = new EmbedBuilder().setTitle('🖥️ Community hosts').setColor(0x5865F2)
+            .setDescription((lineas.join('\n\n') || 'No hosts yet.').slice(0, 4000))
+            .setFooter({ text: '👑 has the turn · ⏸️ standby · 🟢 PC on · 🔴 PC off · updates every 2 min' }).setTimestamp();
+        const guardado = await hostComunidad.panelGuardado();
+        if (guardado?.canal === canal.id && guardado.bot === client.user.id) {
+            const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
+            if (msg) { await msg.edit({ embeds: [embed] }).catch(() => {}); continue; }
+        }
+        // Era de otro bot (otro host) o no existe: se borra el viejo y se publica uno propio.
+        if (guardado?.canal === canal.id && guardado.msg) await canal.messages.delete(guardado.msg).catch(() => {});
+        const nuevo = await canal.send({ embeds: [embed] }).catch(() => null);
+        if (nuevo) await hostComunidad.guardarPanel({ canal: canal.id, msg: nuevo.id, bot: client.user.id });
+    }
+}
+
 async function soltarTurnoComunidad() {
     const applicationId = CLIENT_ID || client.user?.id;
     const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -16426,7 +16470,7 @@ async function limpiarPanelesDeOtrosBots(guild) {
 
 client.once('ready', async () => {
     try {
-        await hostComunidad.iniciar({ alTomar: tomarTurnoComunidad, alSoltar: soltarTurnoComunidad });
+        await hostComunidad.iniciar({ alTomar: tomarTurnoComunidad, alSoltar: soltarTurnoComunidad, estado: estadoDeEsteHost, panel: actualizarPanelHosts });
         await registrarSlashCommands();
         console.log(`🤖 Bot ready as ${client.user.tag}`);
 

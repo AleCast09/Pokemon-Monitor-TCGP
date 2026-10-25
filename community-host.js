@@ -27,6 +27,13 @@ let activo = false;
 let iniciado = false;
 let alTomar = async () => {};
 let alSoltar = async () => {};
+let vueltas = 0;
+let estadoPropio = async () => ({});
+let alPanel = async () => {};
+
+// Panel de hosts (2026-10-24, pedido de Ale: saber que PC host esta prendida y cual atiende): cada host
+// anota su estado en Upstash (hash zenith:hosts) en cada ciclo; el que tiene el turno arma el panel.
+const CLAVE_HOSTS = 'zenith:hosts';
 
 const configurado = () => comunidad.hayComunidad() && !!process.env.LINK_REDIS_URL && !!process.env.LINK_REDIS_TOKEN;
 
@@ -68,7 +75,39 @@ async function ciclo() {
         console.log(`⏸️ Community standby — ${actual || 'another host'} has the turn.`);
     }
     iniciado = true;
+    // Estado cada 60 s y panel cada 2 min (la cuota gratis de Upstash es de 500k consultas al mes).
+    vueltas++;
+    if (vueltas % 2 !== 1) return;
+    try {
+        const estado = await estadoPropio();
+        await redis('HSET', CLAVE_HOSTS, YO, JSON.stringify({ ...estado, nombre: YO, turno: activo, ts: Date.now() }));
+    } catch (e) { /* el panel no es critico */ }
+    if (activo && vueltas % 4 === 1) {
+        try { await alPanel(await hostsConocidos()); } catch (e) { console.error('DEBUG: panel de hosts:', e?.message || e); }
+    }
 }
+
+// Hosts que alguna vez se anotaron (los que no aparecen hace mas de 30 dias se olvidan).
+async function hostsConocidos() {
+    const plano = await redis('HGETALL', CLAVE_HOSTS) || [];
+    const lista = [];
+    for (let i = 0; i + 1 < plano.length; i += 2) {
+        try {
+            const h = JSON.parse(plano[i + 1]);
+            if (Date.now() - (h.ts || 0) > 30 * 24 * 60 * 60 * 1000) { redis('HDEL', CLAVE_HOSTS, plano[i]).catch(() => {}); continue; }
+            lista.push({ ...h, enLinea: Date.now() - (h.ts || 0) < 2 * VIDA_MS });
+        } catch (e) { /* entrada rota */ }
+    }
+    return lista.sort((a, b) => (b.turno && b.enLinea) - (a.turno && a.enLinea) || b.enLinea - a.enLinea || (b.ts || 0) - (a.ts || 0));
+}
+
+// El mensaje del panel lo puede haber dejado otro bot: se guarda donde esta para borrarlo al cambiar.
+let _panel;   // undefined = todavia no se leyo de Upstash
+const panelGuardado = async () => {
+    if (_panel === undefined) { try { _panel = JSON.parse(await redis('GET', 'zenith:hosts_msg') || 'null'); } catch (e) { return null; } }
+    return _panel;
+};
+const guardarPanel = (dato) => { _panel = dato; return redis('SET', 'zenith:hosts_msg', JSON.stringify(dato)).catch(() => {}); };
 
 // Al apagarse bien (pm2 stop, cerrar), borra sus comandos y suelta el turno para que otro lo tome ya.
 async function salir() {
@@ -84,10 +123,12 @@ async function iniciar(opciones) {
     if (!configurado()) return;
     alTomar = opciones.alTomar || alTomar;
     alSoltar = opciones.alSoltar || alSoltar;
+    estadoPropio = opciones.estado || estadoPropio;
+    alPanel = opciones.panel || alPanel;
     process.on('SIGINT', salir);
     process.on('SIGTERM', salir);
     await ciclo();
     setInterval(ciclo, CADA_MS);
 }
 
-module.exports = { iniciar, esActivo, nombre: () => YO };
+module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel };
