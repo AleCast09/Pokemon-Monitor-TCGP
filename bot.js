@@ -60,10 +60,20 @@ fastTransfer.init({
         return { tipo, rara: !!tipo && !tipo.endsWith('-diamond'), tradeable: RAREZAS_TRADEABLES.includes(tipo), nombre: (info?.Name && cache.en[info.Name]) || cartaId };
     },
     destinosTrade: async (interaction) => amigosParaInteraccion(interaction, (await obtenerRutasInject(interaction.guildId)).rutaIni),
-    // ⚡ Gold trade: cuentas con muchas copias de una carta (mismo umbral que Gold Cards).
+    // ⚡ Gold trade: cuentas con muchas copias de una carta (mismo umbral que Gold Cards). Las copias
+    // son las DISPONIBLES: las del JSON menos las que el bot ya transfirio (registro de /transfers), asi
+    // una cuenta que ya mando copias no ofrece de mas aunque su JSON todavia no se haya enterado.
     cuentasGoldDe: async (userId, cartaId) => {
         const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(userId);
-        return mapaCopias ? cuentasGoldParaCarta(mapaCopias, cartaId, umbral).map(r => ({ fileName: r.fileName, cantidad: r.cantidad })) : [];
+        if (!mapaCopias) return [];
+        const transferidas = await transferenciasPorCuenta(cartaId);
+        return (mapaCopias[cartaId] || [])
+            .map(r => {
+                const ya = transferidas[normalizarCuentaTransferencia(r.fileName)] || 0;
+                return { fileName: r.fileName, enJson: r.cantidad, transferidas: ya, cantidad: Math.max(0, r.cantidad - ya) };
+            })
+            .filter(r => r.cantidad >= umbral)
+            .sort((a, b) => b.cantidad - a.cantidad);
     },
     cuentasMiembro: (discordId) => monitorLink.cuentasDe(discordId),
     auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,

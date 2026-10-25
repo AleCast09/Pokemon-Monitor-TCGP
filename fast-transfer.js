@@ -1168,7 +1168,9 @@ async function manejarBulk(interaction) {
             return true;
         }
         const menu = new StringSelectMenuBuilder().setCustomId(`fast_gold_cuenta::${cartaId}`.slice(0, 100)).setPlaceholder('From which account?')
-            .addOptions(cuentas.slice(0, 25).map(c => ({ label: c.fileName.slice(0, 100), description: `x${c.cantidad} copies`, value: `${c.fileName}::${c.cantidad}`.slice(0, 100) })));
+            .addOptions(cuentas.slice(0, 25).map(c => ({ label: c.fileName.slice(0, 100),
+                description: (`x${c.cantidad} available` + (c.transferidas ? ` (${c.transferidas} already traded)` : '')).slice(0, 100),
+                value: `${c.fileName}::${c.cantidad}`.slice(0, 100) })));
         await interaction.editReply({ content: `⚡ **Gold trade** — ${deps.infoCartaBulk(cartaId, rutaMaster).nombre}: pick the account:`, components: [new ActionRowBuilder().addComponents(menu),
             new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sub_volver').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary))] });
         return true;
