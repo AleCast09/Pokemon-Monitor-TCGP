@@ -1056,4 +1056,18 @@ const ocupado = () => enCola > 0 || corridas.size > 0;
 // sin MuMu de nadie). El select trae el nombre de la XML de la cuenta.
 const refrescarCuentaElegida = (interaction) => manejarDust(interaction, 'fast_dust_pick');
 
-module.exports = { ocupado, refrescarCuentaElegida, init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };
+// 📋 Info Accounts en la comunidad: lee en vivo (⚡, sin MuMu) el inventario de una cuenta del miembro.
+// Devuelve { datos: { nombre, dust, tickets, inv } } o { error }.
+async function leerInventarioCuenta(miembro, nombreXml) {
+    await asegurarTablaDust();
+    const sinXml = (n) => String(n || '').replace(/\.xml$/i, '').toLowerCase();
+    const cuenta = cuentasPara(miembro, null).find(c => sinXml(c.fileNameXml) === sinXml(nombreXml));
+    if (!cuenta) return { error: 'account not found in your Monitor Link summary' };
+    const runId = `info_${Date.now()}`;
+    corridas.set(runId, { hijo: null, detenido: false, stopFile: path.join(os.tmpdir(), `fast_dust_stop_${runId}`) });
+    const estado = await refrescarDust(runId, [cuenta], () => {}, miembro);
+    corridas.delete(runId);
+    return estado.ok ? { datos: estado.ultimo } : { error: estado.errores[0] || 'could not read the account' };
+}
+
+module.exports = { ocupado, refrescarCuentaElegida, leerInventarioCuenta, init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };

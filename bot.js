@@ -13744,21 +13744,59 @@ async function manejarInteraccionPrincipal(interaction) {
             fs.mkdirSync(dirInfo, { recursive: true });
             const archivoJsonMl = path.join(dirInfo, `${miembroInfo}_${crypto.createHash('sha1').update(clave).digest('hex').slice(0, 12)}.json`);
             fs.writeFileSync(archivoJsonMl, JSON.stringify({ metadata: { fileName: cuenta.f, accountName: cuenta.n }, pulls }));
+            // Datos en vivo de la cuenta (Shinedust, tickets, relojes, nivel), leidos con ⚡ directo del
+            // juego como hace 👛 Shinedust -- sin MuMu. Si no se puede, sale igual con lo del resumen.
+            let vivo = null;
+            let motivoSinVivo = null;
+            if (fastTransfer.habilitado(interaction.guildId)) {
+                await interaction.editReply({ content: `⏳ Reading \`${cuenta.n || cuenta.f}\` live from the game…`, embeds: [], components: [] }).catch(() => {});
+                const r = await fastTransfer.leerInventarioCuenta(miembroInfo, cuenta.f);
+                vivo = r.datos || null;
+                motivoSinVivo = r.error || null;
+                await interaction.editReply({ content: `📋 \`${cuenta.n || cuenta.f}\``, embeds: [], components: [] }).catch(() => {});
+            }
+            if (vivo && !datosInventario) {
+                datosInventario = { shinedust: vivo.dust.toLocaleString('en-US') };
+                for (const [clave, valor] of Object.entries(vivo.inv || {})) {
+                    if (typeof valor === 'number') datosInventario[clave] = valor.toLocaleString('en-US');
+                }
+            }
             const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
             const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJsonMl, datosInventario, interaction.guildId, fileName);
             const mapaEmojisInventario = await obtenerMapaEmojisGuild(interaction.guild);
+            // Mismo embed que Info Accounts de siempre (campos y orden), con lo de esta cuenta.
             const embed = new EmbedBuilder()
                 .setTitle('📋 Info Accounts')
-                .setDescription(`**${cuenta.n || cuenta.f}** — from your Monitor Link summary.`)
+                .setDescription(`Hi <@${interaction.user.id}>, here's **${cuenta.n || cuenta.f}**!` + (vivo?.inv?.level ? ` (Lv. ${vivo.inv.level})` : ''))
                 .addFields(
-                    { name: '💠 Account', value: `\`${cuenta.f}\``, inline: true },
+                    { name: '💠 Data XML', value: `\`${cuenta.f}\``, inline: true },
                     { name: `${emojiTag(mapaEmojisInventario, 'Card_Back_TCGP')} Total Cards`.trim(), value: `${pulls[0].cards.length}`, inline: true }
                 )
                 .setColor(0xE91E63);
-            if (typeof cuenta.d === 'number') embed.addFields({ name: `${emojiTag(mapaEmojisInventario, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: cuenta.d.toLocaleString('en-US'), inline: true });
-            if (DASHBOARD_PUBLIC_URL) embed.addFields({ name: '🔗 All its cards', value: `🌐 [Open the page](${DASHBOARD_PUBLIC_URL}/account/${token})` });
-            embed.setFooter({ text: 'The link works for 24 hours.' });
-            return await interaction.followUp({ embeds: [embed], ephemeral: true });
+            if (datosInventario) {
+                embed.addFields({ name: `${emojiTag(mapaEmojisInventario, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: `${datosInventario.shinedust}`, inline: true });
+                embed.addFields(...camposInventarioEmbed(datosInventario, mapaEmojisInventario));
+            } else if (typeof cuenta.d === 'number') {
+                embed.addFields({ name: `${emojiTag(mapaEmojisInventario, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: cuenta.d.toLocaleString('en-US'), inline: true });
+            }
+            if (DASHBOARD_PUBLIC_URL) embed.addFields({ name: '🔗 Pages we mentioned', value: `🌐 [From any network](${DASHBOARD_PUBLIC_URL}/account/${token})` });
+            embed.setFooter({ text: vivo ? 'Live from the game · the link works for 24 hours.' : `Saved data${motivoSinVivo ? ` (live read failed: ${motivoSinVivo})` : ''} · the link works for 24 hours.`.slice(0, 2000) });
+            const archivosEmbed = [];
+            if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+                embed.setThumbnail('attachment://symbol.png');
+                archivosEmbed.push(new AttachmentBuilder(SYMBOL_EMBEDS_PATH, { name: 'symbol.png' }));
+            }
+            // Al canal de Info Accounts, como el Info Accounts de siempre (pedido de Ale). Sin canal, en privado.
+            const canalInfoMl = await obtenerCanalComando(interaction.guildId, 'info_accounts');
+            if (canalInfoMl?.webhook_url) {
+                try {
+                    await new WebhookClient({ url: canalInfoMl.webhook_url }).send({ embeds: [embed], files: archivosEmbed });
+                    return await interaction.followUp({ content: `✅ Sent to <#${canalInfoMl.canal_id}>.`, ephemeral: true });
+                } catch (e) {
+                    console.error('DEBUG: Info Accounts (comunidad) al canal:', e?.message || e);
+                }
+            }
+            return await interaction.followUp({ embeds: [embed], files: archivosEmbed, ephemeral: true });
         }
         // followUp en vez de editReply en TODA esta funcion (2026-08-03, bug real reportado
         // por el usuario): cuando se llama desde el boton de un resultado de Shinedust
