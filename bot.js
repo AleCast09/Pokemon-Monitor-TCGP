@@ -9572,6 +9572,23 @@ async function resolverImagenReferenciaCartaBot(cartaId, rutaMasterPath) {
         || null;
 }
 
+// Info Accounts en la comunidad: la XML y el JSON de esa cuenta, solo para quien la pidio (mensaje
+// privado que se borra a los 5 minutos). Los dos salen de su PC por Monitor Link.
+async function mandarArchivosCuentaPrivado(interaction, miembro, fileName) {
+    const archivos = [];
+    const { archivo: xml } = await xmlDeMiembro(miembro, fileName);
+    if (xml) archivos.push(xml);
+    try {
+        const r = await monitorLink.pedirAccion(miembro, { action: 'account_json', file: fileName }, 60000);
+        if (r.ok && r.json) archivos.push(new AttachmentBuilder(Buffer.from(r.json, 'utf8'), { name: r.jsonName || `${fileName.replace(/\.xml$/i, '')}.json` }));
+    } catch (e) { /* Monitor Link viejo o apagado: se manda lo que haya */ }
+    if (!archivos.length) {
+        return await interaction.followUp({ content: '⚠️ Could not get the XML/JSON from your Monitor Link (is it running and up to date?).', ephemeral: true }).catch(() => {});
+    }
+    const mensaje = await interaction.followUp({ content: `🔐 Your account files — only you can see this. They delete themselves in 5 minutes, save them now.`, files: archivos, ephemeral: true }).catch(() => null);
+    if (mensaje) setTimeout(() => interaction.webhook.deleteMessage(mensaje.id).catch(() => {}), 5 * 60 * 1000);
+}
+
 // La XML que se le mando al miembro (Extract XML en la comunidad) se borra sola a los 5 minutos: es la
 // llave de su cuenta y no conviene que quede en Discord (2026-10-24, pedido de Ale).
 function borrarXmlEnviada(interaction) {
@@ -13791,12 +13808,14 @@ async function manejarInteraccionPrincipal(interaction) {
             if (canalInfoMl?.webhook_url) {
                 try {
                     await new WebhookClient({ url: canalInfoMl.webhook_url }).send({ embeds: [embed], files: archivosEmbed });
-                    return await interaction.followUp({ content: `✅ Sent to <#${canalInfoMl.canal_id}>.`, ephemeral: true });
+                    await interaction.followUp({ content: `✅ Sent to <#${canalInfoMl.canal_id}>.`, ephemeral: true });
+                    return await mandarArchivosCuentaPrivado(interaction, miembroInfo, cuenta.f);
                 } catch (e) {
                     console.error('DEBUG: Info Accounts (comunidad) al canal:', e?.message || e);
                 }
             }
-            return await interaction.followUp({ embeds: [embed], files: archivosEmbed, ephemeral: true });
+            await interaction.followUp({ embeds: [embed], files: archivosEmbed, ephemeral: true });
+            return await mandarArchivosCuentaPrivado(interaction, miembroInfo, cuenta.f);
         }
         // followUp en vez de editReply en TODA esta funcion (2026-08-03, bug real reportado
         // por el usuario): cuando se llama desde el boton de un resultado de Shinedust

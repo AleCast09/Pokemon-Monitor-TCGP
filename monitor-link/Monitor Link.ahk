@@ -17,7 +17,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.4.0"
+global VERSION := "ahk-1.5.0"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -409,6 +409,11 @@ RevisarTrabajos:
         pos += StrLen(mi)
         InyectarEnMuMu(mi1, JsonUnesc(mi2), mi3, JsonUnesc(mi4))
     }
+    pos := 1
+    while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""account_json""\s*,\s*""file""\s*:\s*""((?:[^""\\]|\\.)*)""", mjs, pos)) {
+        pos += StrLen(mjs)
+        MandarJsonCuenta(mjs1, JsonUnesc(mjs2))
+    }
 return
 
 AtenderTrabajo(id, lista) {
@@ -474,6 +479,24 @@ AgregarAWishlist(id, carta, nombreJson) {
         TrayTip, Monitor Link, % "Added to your wishlist: " . JsonUnesc(nombreJson), 3, 1
         SubirResumen(false)
     }
+}
+
+; Info Accounts in Discord: the account's card file (Cards\accounts\<id>.json, the one whose
+; fileName is this .xml) goes ONLY to its owner, in a private message.
+MandarJsonCuenta(id, archivo) {
+    buscado := RegExReplace(archivo, "i)\.xml$", "")
+    encontrado := "", nombre := ""
+    Loop, Files, %CarpetaJson%\*.json
+    {
+        FileRead, t, %A_LoopFileFullPath%
+        if (RegExMatch(t, """fileName""\s*:\s*""([^""]*)""", mf) && RegExReplace(mf1, "i)\.xml$", "") = buscado) {
+            encontrado := t, nombre := A_LoopFileName
+            break
+        }
+    }
+    if (encontrado = "")
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""account file not found""}")
+    ResponderAccion("{""id"":""" . id . """,""ok"":true,""jsonName"":""" . JsonEsc(nombre) . """,""json"":""" . JsonEsc(encontrado) . """}")
 }
 
 ; ---------------------------------------------------------------- Inject (MuMu of THIS PC)

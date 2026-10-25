@@ -16,7 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const CARPETA_CONFIG = path.join(process.env.APPDATA || os.homedir(), 'MonitorLink');
 const RUTA_CONFIG = path.join(CARPETA_CONFIG, 'config.json');
 const CADA_PING_MS = 60 * 1000;
@@ -281,8 +281,27 @@ async function agregarAWishlist(cfg, trabajo) {
     }
 }
 
+// Info Accounts en Discord: el JSON de cartas de esa cuenta, solo para su dueño (mensaje privado).
+async function mandarJsonCuenta(cfg, trabajo) {
+    const buscado = String(trabajo.file || '').replace(/\.xml$/i, '').toLowerCase();
+    const respuesta = { id: trabajo.id, ok: false, error: 'account file not found' };
+    for (const archivo of fs.readdirSync(cfg.carpetaJson)) {
+        if (!archivo.toLowerCase().endsWith('.json')) continue;
+        const texto = fs.readFileSync(path.join(cfg.carpetaJson, archivo), 'utf8');
+        const f = /"fileName"\s*:\s*"([^"]*)"/.exec(texto)?.[1];
+        if (f && f.replace(/\.xml$/i, '').toLowerCase() === buscado) {
+            Object.assign(respuesta, { ok: true, error: undefined, jsonName: archivo, json: texto });
+            break;
+        }
+    }
+    await fetch(`${cfg.serverUrl}/link/xml`, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain', Authorization: `Bearer ${cfg.token}` }, body: JSON.stringify(respuesta)
+    });
+}
+
 async function atenderTrabajo(cfg, trabajo) {
     if (trabajo.action === 'wishlist_add') return agregarAWishlist(cfg, trabajo);
+    if (trabajo.action === 'account_json') return mandarJsonCuenta(cfg, trabajo);
     const files = {};
     const missing = [];
     for (const nombre of trabajo.files || []) {

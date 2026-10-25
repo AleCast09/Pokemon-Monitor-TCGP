@@ -270,6 +270,9 @@ function registrar(app, dependencias) {
             if (trabajo.accion) {
                 trabajo.resolver({
                     ok: !!datos.ok, already: !!datos.already, error: datos.error ? String(datos.error).slice(0, 200) : null,
+                    // account_json: el JSON de cartas de una cuenta (Info Accounts lo adjunta en privado).
+                    json: typeof datos.json === 'string' && datos.json.length < 10 * 1024 * 1024 ? datos.json : undefined,
+                    jsonName: typeof datos.jsonName === 'string' ? datos.jsonName.slice(0, 120) : undefined,
                     // mumu_list: instancias de MuMu de la PC del miembro.
                     instances: Array.isArray(datos.instances) ? datos.instances.slice(0, 50).map(i => ({
                         index: String(i.index).slice(0, 10), name: String(i.name || i.index).slice(0, 60), on: !!i.on
