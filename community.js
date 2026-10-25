@@ -96,8 +96,10 @@ const CATEGORIAS_COMUNIDAD = new Set(['manager_categoria', 'run_mumu_categoria']
 function gruposSync(guildId, grupos) {
     if (!esComunidad(guildId)) return grupos;
     return [
+        // Bienvenida: la ve todo el server; ahi se usa /link (al vincular llega el rol Monitor).
+        { categoria: '👋 START 👋', tipoCategoria: 'start_categoria', acceso: 'todos', canales: [{ tipo: 'start_here', name: '🔗-start-here' }] },
         ...grupos.filter(g => CATEGORIAS_COMUNIDAD.has(g.tipoCategoria))
-            .map(g => ({ ...g, canales: g.canales.filter(c => !CANALES_FUERA_DE_COMUNIDAD.has(c.tipo)) })),
+            .map(g => ({ ...g, acceso: 'monitor', canales: g.canales.filter(c => !CANALES_FUERA_DE_COMUNIDAD.has(c.tipo)) })),
         {
             categoria: '🔒 STAFF 🔒',
             tipoCategoria: 'staff_categoria',
@@ -120,6 +122,38 @@ async function permisosPrivados(guild) {
         { id: guild.members.me.id, allow: [PermissionsBitField.Flags.Administrator, PermissionsBitField.Flags.ViewChannel] },
         ...lista('COMMUNITY_STAFF_IDS').map(id => ({ id, type: OverwriteType.Member, allow: verYEscribir }))
     ];
+}
+
+// Rol "Monitor" (2026-10-24, pedido de Ale): lo da el bot solo cuando el miembro vincula su PC con
+// /link. Solo con ese rol se ven MANAGER y RUN MUMU PLAYER. Sin permisos propios.
+async function rolMonitor(guild) {
+    const existente = guild.roles.cache.find(r => r.name === 'Monitor');
+    if (existente) return existente;
+    return await guild.roles.create({ name: 'Monitor', permissions: [], mentionable: false, reason: 'Monitor Pokemon: members who linked their PC' })
+        .catch(e => { console.error('DEBUG: no se pudo crear el rol Monitor:', e?.message || e); return null; });
+}
+
+// Permisos de las categorias de la comunidad (los canales los heredan). Los miembros solo pueden ver,
+// leer y usar los comandos del bot: no escriben, no reaccionan, no crean hilos ni suben archivos, y
+// gestionar canales/mensajes nunca se les da (nadie puede borrar ni editar nada del bot).
+//   'todos'   -> @everyone (bienvenida)       'monitor' -> rol Monitor + Staff
+async function permisosCategoria(guild, acceso) {
+    const F = PermissionsBitField.Flags;
+    const usar = [F.ViewChannel, F.ReadMessageHistory, F.UseApplicationCommands, F.UseExternalEmojis];
+    const nada = [F.SendMessages, F.SendMessagesInThreads, F.CreatePublicThreads, F.CreatePrivateThreads, F.AddReactions,
+        F.AttachFiles, F.EmbedLinks, F.MentionEveryone, F.ManageMessages, F.ManageThreads, F.ManageChannels, F.ManageWebhooks];
+    const salida = [{ id: guild.members.me.id, allow: [F.Administrator, F.ViewChannel] }];
+    if (acceso === 'todos') {
+        salida.push({ id: guild.roles.everyone.id, allow: usar, deny: nada });
+    } else {
+        salida.push({ id: guild.roles.everyone.id, allow: [F.UseExternalEmojis], deny: [F.ViewChannel, ...nada] });
+        const monitor = await rolMonitor(guild);
+        if (monitor) salida.push({ id: monitor.id, type: OverwriteType.Role, allow: usar, deny: nada });
+    }
+    const staff = await rolStaff(guild);
+    if (staff) salida.push({ id: staff.id, type: OverwriteType.Role, allow: usar });
+    for (const id of lista('COMMUNITY_STAFF_IDS')) salida.push({ id, type: OverwriteType.Member, allow: usar });
+    return salida;
 }
 
 // Permisos de una categoria publica en comunidad: el bot con Administrador, y @everyone con
@@ -273,4 +307,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual };
+module.exports = { rolMonitor, permisosCategoria, CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual };

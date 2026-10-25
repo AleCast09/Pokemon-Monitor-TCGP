@@ -197,6 +197,7 @@ async function agenteDe(req) {
 
 function registrar(app, dependencias) {
     db = dependencias.db;
+    const alVincular = dependencias.alVincular || (async () => {});
     // Host en espera (community-host.js): no atiende a ningun Monitor Link; al recibir 503 cada uno
     // busca en la libreta la direccion del host que tiene el turno.
     const activo = dependencias.activo || (() => true);
@@ -229,6 +230,7 @@ function registrar(app, dependencias) {
             await db.run(`INSERT INTO link_agentes (token_hash, discord_id, guild_id, creado, ultimo, version) VALUES (?, ?, ?, ?, ?, ?)`,
                 [hash(token), nuevo.discord_id, nuevo.guild_id, nuevo.creado, Date.now(), nuevo.version]);
             await guardarAgenteCompartido(hash(token), nuevo);
+            alVincular(fila.discord_id, fila.guild_id).catch(e => console.error('DEBUG: rol al vincular:', e?.message || e));
             res.json({ token, user: (await nombreUsuario(fila.discord_id)) || fila.discord_id });
         } catch (e) {
             console.error('DEBUG: Monitor Link /claim:', e?.message || e);
@@ -572,4 +574,7 @@ async function estadoAgente(discordId) {
     return { vinculado: true, enLinea: Date.now() - (fila.ultimo || 0) < 3 * 60 * 1000, ultimo: fila.ultimo };
 }
 
-module.exports = { registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+// Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
+const ultimoMonitorLink = () => ultimoAhk();
+
+module.exports = { ultimoMonitorLink, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };

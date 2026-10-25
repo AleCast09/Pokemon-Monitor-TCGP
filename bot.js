@@ -7636,6 +7636,7 @@ dashboardApp.use('/tutorial-img', express.static(path.join(__dirname, 'assets', 
 // del express.json global porque /link/summary manda varios MB como texto.
 if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
     db,
+    alVincular: (discordId, guildId) => darRolMonitor(guildId, discordId),
     activo: () => hostComunidad.esActivo(),
     nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null
 });
@@ -16206,13 +16207,13 @@ async function sincronizarCanales(interaction) {
                 cmd_run_instance: 'run_instance'
             };
 
-            const crearCategoriaSiNoExiste = async (nombreCategoria, privada = false) => {
+            const crearCategoriaSiNoExiste = async (nombreCategoria, privada = false, acceso = 'monitor') => {
                 let categoria = interaction.guild.channels.cache.find(c => c.name === nombreCategoria && c.type === ChannelType.GuildCategory);
                 // Categoria privada del modo comunidad (🔒 STAFF): solo el bot y el staff la ven.
                 // Se reaplica en cada Sync por si alguien toco los permisos a mano.
                 const enComunidad = comunidad.esComunidad(interaction.guildId);
                 const permisos = privada ? await comunidad.permisosPrivados(interaction.guild)
-                    : enComunidad ? comunidad.permisosPublicos(interaction.guild)
+                    : enComunidad ? await comunidad.permisosCategoria(interaction.guild, acceso)
                     : [{
                         id: interaction.guild.members.me.id,
                         allow: [PermissionsBitField.Flags.Administrator]
@@ -16300,6 +16301,23 @@ async function sincronizarCanales(interaction) {
                     const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.guildId);
                     await enviarOEditarInterfaz(interaction.user.id, 'setup', webhook.url, panel, archivosPanel || [], false, interaction.guild);
                 } else {
+                    // Bienvenida de la comunidad: como vincular la PC (con el ultimo Monitor Link publicado).
+                    if (tipo === 'start_here') {
+                        const ml = await monitorLink.ultimoMonitorLink().catch(() => null);
+                        EMBEDS_BIENVENIDA_POR_TIPO.start_here = {
+                            title: '🔗 Start here — link your PC',
+                            description: [
+                                'To use the bot with **your own accounts**, link your PC once:',
+                                '',
+                                `**1.** Download **Monitor Link**: ${ml?.url ? `[MonitorLink.ahk](${ml.url})` : 'ask staff for the link'}`,
+                                '**2.** Put it **inside your PTCGPB folder** (next to PTCGPB.ahk) and double-click it.',
+                                '**3.** Type **/link** here, copy the key and paste it in Monitor Link → **Link**.',
+                                '',
+                                '✅ You get the **Monitor** role and the bot channels appear.',
+                                '🔒 It only sends which cards your accounts have — never your passwords.'
+                            ].join('\n')
+                        };
+                    }
                     const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
                     if (embedBienvenida) {
                         const payloadBienvenida = { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] };
@@ -16349,13 +16367,15 @@ async function sincronizarCanales(interaction) {
             const gruposSync = comunidad.gruposSync(interaction.guildId, grupos);
             for (let i = 0; i < gruposSync.length; i++) {
                 const grupo = gruposSync[i];
-                const categoria = await crearCategoriaSiNoExiste(grupo.categoria, !!grupo.privado);
+                const categoria = await crearCategoriaSiNoExiste(grupo.categoria, !!grupo.privado, grupo.acceso || 'monitor');
                 categoriasGestionadas.push(categoria);
                 await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, grupo.tipoCategoria]);
                 await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, 'N/A')`, [interaction.guildId, grupo.tipoCategoria, categoria.id]);
 
                 for (const c of grupo.canales) {
                     const canal = await crearCanalSincronizado(categoria, c.tipo, c.name);
+                    // Comunidad: cada canal con los permisos de su categoria (por si alguien los toco).
+                    if (comunidad.esComunidad(interaction.guildId)) await canal.lockPermissions().catch(() => {});
                     reportePartes.push(`🔹 <#${canal.id}>`);
                 }
             }
@@ -16394,6 +16414,7 @@ async function tomarTurnoComunidad() {
         await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: comandosDeGuild(guild.id, construirSlashCommands()) });
         const dueno = await guild.fetchOwner().then(m => m.user).catch(() => client.user);
         await sincronizarCanales({ guild, guildId: guild.id, user: dueno, client, editReply: async () => {} });
+        for (const v of await monitorLink.vinculados().catch(() => [])) await darRolMonitor(guild.id, v.discordId);
         await limpiarPanelesDeOtrosBots(guild);
         console.log(`✅ Community turn: commands and panels published in ${guild.name}`);
     }
@@ -16442,6 +16463,15 @@ async function actualizarPanelHosts(hosts) {
         const nuevo = await canal.send({ embeds: [embed] }).catch(() => null);
         if (nuevo) await hostComunidad.guardarPanel({ canal: canal.id, msg: nuevo.id, bot: client.user.id });
     }
+}
+
+// Rol Monitor: se da al vincular la PC con /link (y al tomar el turno, a todos los ya vinculados).
+async function darRolMonitor(guildId, discordId) {
+    const guild = client.guilds.cache.get(String(guildId));
+    if (!guild || !comunidad.esComunidad(guild.id)) return;
+    const rol = await comunidad.rolMonitor(guild);
+    const miembro = rol ? await guild.members.fetch(String(discordId)).catch(() => null) : null;
+    if (miembro && !miembro.roles.cache.has(rol.id)) await miembro.roles.add(rol, 'Linked Monitor Link').catch(() => {});
 }
 
 async function soltarTurnoComunidad() {
