@@ -30,6 +30,7 @@ let alSoltar = async () => {};
 let vueltas = 0;
 let estadoPropio = async () => ({});
 let alPanel = async () => {};
+let alControl = async () => {};
 
 // Panel de hosts (2026-10-24, pedido de Ale: saber que PC host esta prendida y cual atiende): cada host
 // anota su estado en Upstash (hash zenith:hosts) en cada ciclo; el que tiene el turno arma el panel.
@@ -66,10 +67,12 @@ async function ciclo() {
         activo = true;
         console.log(`👑 ${YO} has the community turn — publishing commands and panels.`);
         await alTomar().catch(e => console.error('❌ Taking the community turn:', e?.message || e));
+        refrescarControl();
     } else if (!mio && activo) {
         activo = false;
         console.log(`🔁 Another host has the community turn — ${YO} goes on standby.`);
         await alSoltar().catch(e => console.error('❌ Leaving the community turn:', e?.message || e));
+        refrescarControl();
     } else if (!mio && !iniciado) {
         const actual = await redis('GET', CLAVE).catch(() => null);
         console.log(`⏸️ Community standby — ${actual || 'another host'} has the turn.`);
@@ -87,7 +90,34 @@ async function ciclo() {
     if (activo && vueltas % 4 === 1) {
         try { await alPanel(await hostsConocidos()); } catch (e) { console.error('DEBUG: panel de hosts:', e?.message || e); }
     }
+    if (vueltas % 4 === 1) refrescarControl();
 }
+
+// ---- Cambio de host a mano (2026-10-25, pedido de Ale: "si se va la luz, que el otro pueda tomar el rol
+// con un click"). Cada host tiene su propio mensaje con botones en el canal de hosts (lo publica SU bot,
+// asi funciona aunque el otro este apagado): en espera "Take the turn", con el turno "Hand over to X".
+function refrescarControl() {
+    hostsConocidos().then(h => alControl(h, activo)).catch(e => console.error('DEBUG: control de host:', e?.message || e));
+}
+
+// Tomar el turno ya, sin esperar a que venza el del otro. Si el otro sigue prendido, en su proximo
+// ciclo (<= 30 s) ve que ya no es suyo y se pasa a espera solo.
+async function tomarTurnoYa() {
+    await redis('SET', CLAVE, YO, 'PX', String(VIDA_MS));
+    ciclo().catch(() => {});
+}
+
+// Ceder el turno a otro host prendido: el candado pasa a su nombre y lo toma en su proximo ciclo.
+async function cederTurnoA(nombre) {
+    if (!activo || !nombre || nombre === YO) return false;
+    await redis('SET', CLAVE, String(nombre), 'PX', String(VIDA_MS));
+    ciclo().catch(() => {});
+    return true;
+}
+
+// Donde esta el mensaje de control de cada host (hash zenith:hosts_ctrl, campo = nombre del host).
+const controlGuardado = async () => { try { return JSON.parse(await redis('HGET', 'zenith:hosts_ctrl', YO) || 'null'); } catch (e) { return null; } };
+const guardarControl = (dato) => redis('HSET', 'zenith:hosts_ctrl', YO, JSON.stringify(dato)).catch(() => {});
 
 // Hosts que alguna vez se anotaron (los que no aparecen hace mas de 30 dias se olvidan).
 async function hostsConocidos() {
@@ -145,6 +175,7 @@ async function iniciar(opciones) {
     alSoltar = opciones.alSoltar || alSoltar;
     estadoPropio = opciones.estado || estadoPropio;
     alPanel = opciones.panel || alPanel;
+    alControl = opciones.control || alControl;
     process.on('SIGINT', salir);
     process.on('SIGTERM', salir);
     // En Windows pm2 stop no manda SIGINT: con --shutdown-with-message manda este aviso (2026-10-25,
@@ -154,4 +185,5 @@ async function iniciar(opciones) {
     setInterval(ciclo, CADA_MS);
 }
 
-module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel };
+module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
+    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl };

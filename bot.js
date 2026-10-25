@@ -10133,7 +10133,7 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
     // busca en el historial reciente del canal un mensaje de webhook con el mismo titulo de
     // embed -- si aparece, se adopta su ID (se guarda para la proxima) y se edita ESE en vez
     // de crear uno nuevo.
-    if (!msgId && guild) {
+    if (guild && !forzarReubicar) {
         try {
             const infoWebhook = await axios.get(webhookUrl, { timeout: 8000 });
             const canalId = infoWebhook.data?.channel_id;
@@ -10152,7 +10152,13 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
                             [userId, claveMsg, String(existente.id), String(existente.id)]
                         );
                         return;
-                    } catch (e) { /* el mensaje encontrado no le pertenece a ESTE webhook -> se sigue abajo */ }
+                    } catch (e) {
+                        // Es de otro webhook. Comunidad con varios hosts (2026-10-25, pedido de Ale: "lo veo
+                        // innecesario"): si es un mensaje solo informativo (sin botones), sirve igual aunque lo
+                        // haya mandado el bot del otro host -- no se duplica. Con botones si hace falta uno propio.
+                        const sinBotones = !(payloadJson.components || []).length && !existente.components?.length;
+                        if (sinBotones && comunidad.esComunidad(guild.id)) return;
+                    }
                 }
             }
         } catch (e) { /* si falla la busqueda, se sigue con el post normal de abajo -- mejor un duplicado ocasional que nunca mandar el mensaje */ }
@@ -11306,6 +11312,9 @@ client.on('interactionCreate', (interaction) => comunidad.contexto.run(
 ));
 async function manejarInteraccionPrincipal(interaction) {
     if (comunidad.soloComunidad() && !comunidad.esComunidad(interaction.guildId)) return;
+    if (interaction.isButton() && comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_tomar' || interaction.customId.startsWith('host_ceder::'))) {
+        return await manejarBotonHost(interaction);
+    }
     if (comunidad.esComunidad(interaction.guildId) && !hostComunidad.esActivo()) return;
     // Lista desplegable de la carta (comunidad): la opcion elegida se atiende igual que su boton.
     if (interaction.isStringSelectMenu() && interaction.customId === 'card_menu') {
@@ -16233,6 +16242,9 @@ async function sincronizarCanales(interaction) {
             // cmd_build_embed/cmd_build_webhooks/cmd_feedback quedan afuera porque
             // esos comandos responden de forma efímera (o abren un modal), así que no
             // hay nada persistente que publicar en el canal sin una interacción real.
+            for (const e of Object.values(EMBEDS_BIENVENIDA_POR_TIPO)) TITULOS_BIENVENIDA.add(e.title);
+            TITULOS_BIENVENIDA.add('🔗 Start here — link your PC');
+
             const COMANDOS_REALES_POR_TIPO = {
                 cmd_card_wishlist: 'card_wishlist',
                 cmd_card_all: 'card_all',
@@ -16456,6 +16468,7 @@ async function tomarTurnoComunidad() {
         await paso('channels', () => sincronizarCanales({ guild, guildId: guild.id, user: dueno, client, editReply: async () => {} }));
         await paso('Monitor role', async () => { for (const v of await monitorLink.vinculados()) await darRolMonitor(guild.id, v.discordId); });
         await paso('old panels', () => limpiarPanelesDeOtrosBots(guild));
+        await paso('duplicated welcomes', () => limpiarBienvenidasDuplicadas(guild));
         await paso('own panels', () => anotarPanelesPropios(guild, dueno.id));
         console.log(`✅ Community turn: commands and panels published in ${guild.name}`);
     }
@@ -16505,6 +16518,55 @@ async function actualizarPanelHosts(hosts) {
     }
 }
 
+// Mensaje de control de ESTE host en el canal de hosts (lo publica y lo atiende su propio bot, activo o en
+// espera): en espera "👑 Take the turn"; con el turno, "🔁 Hand over to X" por cada otro host prendido.
+async function actualizarControlHost(hosts, conTurno) {
+    const yo = hostComunidad.nombre();
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
+        const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+        if (!canal) continue;
+        const otros = hosts.filter(h => h.nombre !== yo && h.enLinea).slice(0, 5);
+        const embed = new EmbedBuilder().setColor(conTurno ? 0xF0A93A : 0x5865F2)
+            .setTitle(`🖥️ ${yo}${conTurno ? ' — 👑 has the turn' : ' — ⏸️ standby'}`)
+            .setDescription(conTurno
+                ? (otros.length ? 'Hand the turn over to another PC that is on:' : 'No other host is on right now.')
+                : 'If the host PC turned off (or you want this PC to serve the community), take the turn here. Staff only.')
+            .setFooter({ text: `bot ${client.user.tag}` }).setTimestamp();
+        const botones = conTurno
+            ? otros.map(h => new ButtonBuilder().setCustomId(`host_ceder::${h.nombre}`.slice(0, 100)).setLabel(`🔁 Hand over to ${h.nombre}`.slice(0, 80)).setStyle(ButtonStyle.Secondary))
+            : [new ButtonBuilder().setCustomId('host_tomar').setLabel('👑 Take the turn').setStyle(ButtonStyle.Success)];
+        const payload = { embeds: [embed], components: botones.length ? [new ActionRowBuilder().addComponents(botones)] : [] };
+        const guardado = await hostComunidad.controlGuardado();
+        if (guardado?.canal === canal.id) {
+            const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
+            if (msg && msg.author.id === client.user.id) { await msg.edit(payload).catch(() => {}); continue; }
+        }
+        const nuevo = await canal.send(payload).catch(() => null);
+        if (nuevo) await hostComunidad.guardarControl({ canal: canal.id, msg: nuevo.id });
+    }
+}
+
+// Botones de control de host. Se atienden ANTES del filtro de "solo el host activo contesta": el que
+// esta en espera tiene que poder tomar el turno.
+async function manejarBotonHost(interaction) {
+    if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
+        return await interaction.reply({ content: '🔒 Only staff can change the host.', ephemeral: true });
+    }
+    await interaction.deferReply({ ephemeral: true });
+    if (interaction.customId === 'host_tomar') {
+        await hostComunidad.tomarTurnoYa();
+        await interaction.editReply({ content: `👑 **${hostComunidad.nombre()}** is taking the turn — commands and panels are being published (≈1 min). If the other host is still on, it steps back by itself within 30 s.` });
+    } else {
+        const destino = interaction.customId.slice('host_ceder::'.length);
+        const ok = await hostComunidad.cederTurnoA(destino);
+        await interaction.editReply({ content: ok
+            ? `🔁 Turn handed over to **${destino}** — it takes over within 30 s.`
+            : '⚠️ This host doesn\'t have the turn anymore.' });
+    }
+}
+
 // Rol Monitor: se da al vincular la PC con /link (y al tomar el turno, a todos los ya vinculados).
 async function darRolMonitor(guildId, discordId) {
     const guild = client.guilds.cache.get(String(guildId));
@@ -16538,6 +16600,28 @@ async function anotarPanelesPropios(guild, duenoId) {
     }
 }
 
+// Bienvenidas informativas (sin botones) repetidas porque cada host publico la suya: queda una sola.
+// Solo los titulos de bienvenida de Sync (TITULOS_BIENVENIDA, se llena en sincronizarCanales) -- nunca el
+// historial; los paneles con botones los maneja limpiarPanelesDeOtrosBots.
+const TITULOS_BIENVENIDA = new Set();
+async function limpiarBienvenidasDuplicadas(guild) {
+    const filas = await db.all(`SELECT DISTINCT canal_id FROM configs_canales WHERE discord_id = ? AND canal_id IS NOT NULL AND webhook_url != 'N/A'`, [guild.id]) || [];
+    for (const { canal_id } of filas) {
+        const canal = guild.channels.cache.get(canal_id);
+        if (!canal?.isTextBased?.()) continue;
+        const mensajes = await canal.messages.fetch({ limit: 30 }).catch(() => null);
+        if (!mensajes) continue;
+        const vistos = new Map();
+        // De mas viejo a mas nuevo: se queda el primero, se borran las copias de otros bots.
+        for (const m of [...mensajes.values()].reverse()) {
+            const titulo = m.webhookId && !m.components?.length ? m.embeds?.[0]?.title : null;
+            if (!titulo || !TITULOS_BIENVENIDA.has(titulo)) continue;
+            if (!vistos.has(titulo)) { vistos.set(titulo, m); continue; }
+            await m.delete().catch(() => {});
+        }
+    }
+}
+
 async function limpiarPanelesDeOtrosBots(guild) {
     for (const p of await hostComunidad.panelesDeOtros(client.user.id)) {
         const canal = guild.channels.cache.get(p.canal);
@@ -16550,7 +16634,7 @@ async function limpiarPanelesDeOtrosBots(guild) {
 
 client.once('ready', async () => {
     try {
-        await hostComunidad.iniciar({ alTomar: tomarTurnoComunidad, alSoltar: soltarTurnoComunidad, estado: estadoDeEsteHost, panel: actualizarPanelHosts });
+        await hostComunidad.iniciar({ alTomar: tomarTurnoComunidad, alSoltar: soltarTurnoComunidad, estado: estadoDeEsteHost, panel: actualizarPanelHosts, control: actualizarControlHost });
         await registrarSlashCommands();
         console.log(`🤖 Bot ready as ${client.user.tag}`);
 
