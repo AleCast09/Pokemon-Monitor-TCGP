@@ -9574,7 +9574,7 @@ async function resolverImagenReferenciaCartaBot(cartaId, rutaMasterPath) {
 
 // Info Accounts en la comunidad: la XML y el JSON de esa cuenta, solo para quien la pidio (mensaje
 // privado que se borra a los 5 minutos). Los dos salen de su PC por Monitor Link.
-async function mandarArchivosCuentaPrivado(interaction, miembro, fileName) {
+async function mandarArchivosCuentaPrivado(interaction, miembro, fileName, comoRespuesta = false) {
     const archivos = [];
     const { archivo: xml } = await xmlDeMiembro(miembro, fileName);
     if (xml) archivos.push(xml);
@@ -9582,11 +9582,14 @@ async function mandarArchivosCuentaPrivado(interaction, miembro, fileName) {
         const r = await monitorLink.pedirAccion(miembro, { action: 'account_json', file: fileName }, 60000);
         if (r.ok && r.json) archivos.push(new AttachmentBuilder(Buffer.from(r.json, 'utf8'), { name: r.jsonName || `${fileName.replace(/\.xml$/i, '')}.json` }));
     } catch (e) { /* Monitor Link viejo o apagado: se manda lo que haya */ }
+    const enviar = (payload) => comoRespuesta ? interaction.editReply(payload) : interaction.followUp({ ...payload, ephemeral: true });
     if (!archivos.length) {
-        return await interaction.followUp({ content: '⚠️ Could not get the XML/JSON from your Monitor Link (is it running and up to date?).', ephemeral: true }).catch(() => {});
+        return await enviar({ content: '⚠️ Could not get the XML/JSON from your Monitor Link (is it running and up to date?).' }).catch(() => {});
     }
-    const mensaje = await interaction.followUp({ content: `🔐 Your account files — only you can see this. They delete themselves in 5 minutes, save them now.`, files: archivos, ephemeral: true }).catch(() => null);
-    if (mensaje) setTimeout(() => interaction.webhook.deleteMessage(mensaje.id).catch(() => {}), 5 * 60 * 1000);
+    const mensaje = await enviar({ content: `🔐 Your account files — only you can see this. They delete themselves in 5 minutes, save them now.`, files: archivos }).catch(() => null);
+    if (mensaje) {
+        setTimeout(() => (comoRespuesta ? interaction.deleteReply() : interaction.webhook.deleteMessage(mensaje.id)).catch(() => {}), 5 * 60 * 1000);
+    }
 }
 
 // La XML que se le mando al miembro (Extract XML en la comunidad) se borra sola a los 5 minutos: es la
@@ -13589,6 +13592,16 @@ async function manejarInteraccionPrincipal(interaction) {
         return await interaction.editReply({ content: `Which instance on **your PC** should open \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
+    if (interaction.isButton() && interaction.customId.startsWith('ia_archivos::')) {
+        const [, dueno, ...resto] = interaction.customId.split('::');
+        const fileName = resto.join('::');
+        if (interaction.user.id !== dueno) {
+            return await interaction.reply({ content: `🔒 Only <@${dueno}> can get these files.`, ephemeral: true });
+        }
+        await interaction.deferReply({ ephemeral: true });
+        return await mandarArchivosCuentaPrivado(interaction, dueno, fileName, true);
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('inject_ml::')) {
         const [, , fileName] = interaction.customId.split('::');
         const [index, ...resto] = interaction.values[0].split('::');
@@ -13807,9 +13820,11 @@ async function manejarInteraccionPrincipal(interaction) {
             const canalInfoMl = await obtenerCanalComando(interaction.guildId, 'info_accounts');
             if (canalInfoMl?.webhook_url) {
                 try {
-                    await new WebhookClient({ url: canalInfoMl.webhook_url }).send({ embeds: [embed], files: archivosEmbed });
-                    await interaction.followUp({ content: `✅ Sent to <#${canalInfoMl.canal_id}>.`, ephemeral: true });
-                    return await mandarArchivosCuentaPrivado(interaction, miembroInfo, cuenta.f);
+                    // Boton para que SOLO el dueño baje su XML y su JSON, en privado y en ese mismo canal.
+                    const filaArchivos = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`ia_archivos::${miembroInfo}::${cuenta.f}`.slice(0, 100)).setLabel('🔐 My XML & JSON').setStyle(ButtonStyle.Secondary));
+                    await new WebhookClient({ url: canalInfoMl.webhook_url }).send({ embeds: [embed], files: archivosEmbed, components: [filaArchivos] });
+                    return await interaction.followUp({ content: `✅ Sent to <#${canalInfoMl.canal_id}> — your XML & JSON are in the 🔐 button there (only you can use it).`, ephemeral: true });
                 } catch (e) {
                     console.error('DEBUG: Info Accounts (comunidad) al canal:', e?.message || e);
                 }
