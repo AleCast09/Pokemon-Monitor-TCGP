@@ -538,6 +538,17 @@ async function ejecutarFarm(interaction, friendId) {
             `${ticket} **${conseguidos}** ticket(s) claimed now` + (hoy !== null ? ` · **${hoy}/${maximo}** today` : '')
         ].filter(Boolean).join('\n');
         await pintar(pie);
+        // Historial (pedido de Ale): el resultado queda publicado en el canal de Farm Shop Tickets.
+        try {
+            const canal = await deps.obtenerCanalComando(interaction.guildId, 'farm-shop-tickets');
+            if (canal?.webhook_url && lineas.length) {
+                const embed = new EmbedBuilder().setTitle(`🎟️ ⚡ Fast Farm — ${alias}`).setColor(conseguidos > 0 ? 0x57F287 : 0xE74C3C)
+                    .setDescription([...lineas, '', pie].join('\n').slice(0, 4000)).setTimestamp();
+                await new WebhookClient({ url: canal.webhook_url }).send({
+                    content: `<@${interaction.user.id}>`, embeds: [embed], allowedMentions: { users: [interaction.user.id] }
+                });
+            }
+        } catch (e) { console.error('DEBUG: historial de Fast Farm:', e?.message || e); }
     }).finally(() => {
         enCola = Math.max(0, enCola - 1);
         corridas.delete(runId);
