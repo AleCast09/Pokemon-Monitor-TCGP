@@ -109,6 +109,24 @@ const panelGuardado = async () => {
 };
 const guardarPanel = (dato) => { _panel = dato; return redis('SET', 'zenith:hosts_msg', JSON.stringify(dato)).catch(() => {}); };
 
+// Paneles publicados (2026-10-25, bug real: al cambiar de host se borro el historial de los canales).
+// Antes se borraba todo mensaje con botones de otro bot en los ultimos 50 de cada canal, y eso incluia
+// los resultados de /card, Shinedust, Fast Farm... Ahora cada host anota aca SUS paneles (los mensajes
+// de interfaz que mantiene) y al tomar el turno se borran solo esos, los del otro bot.
+const CLAVE_PANELES = 'zenith:paneles';
+const anotarPanel = (msgId, canalId, botId) => configurado() && msgId && canalId
+    ? redis('HSET', CLAVE_PANELES, String(msgId), JSON.stringify({ c: String(canalId), b: String(botId) })).catch(() => {}) : Promise.resolve();
+async function panelesDeOtros(botId) {
+    if (!configurado()) return [];
+    const plano = await redis('HGETALL', CLAVE_PANELES).catch(() => []) || [];
+    const lista = [];
+    for (let i = 0; i + 1 < plano.length; i += 2) {
+        try { const p = JSON.parse(plano[i + 1]); if (p.b !== String(botId)) lista.push({ msg: plano[i], canal: p.c }); } catch (e) { /* entrada rota */ }
+    }
+    return lista;
+}
+const olvidarPanel = (msgId) => configurado() ? redis('HDEL', CLAVE_PANELES, String(msgId)).catch(() => {}) : Promise.resolve();
+
 // Al apagarse bien (pm2 stop, cerrar), borra sus comandos y suelta el turno para que otro lo tome ya.
 async function salir() {
     if (activo) {
@@ -131,4 +149,4 @@ async function iniciar(opciones) {
     setInterval(ciclo, CADA_MS);
 }
 
-module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel };
+module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel };

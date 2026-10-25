@@ -10102,10 +10102,14 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
         return { data: form, headers: form.getHeaders() };
     };
 
+    // Comunidad: el panel queda anotado como de este bot (ver hostComunidad.anotarPanel).
+    const anotarPanel = (m) => hostComunidad.anotarPanel(m?.id, m?.channel_id, client.user?.id);
+
     if (msgId && !forzarReubicar) {
         try {
             const { data, headers } = construirRequest();
-            await axios.patch(`${webhookUrl}/messages/${msgId}`, data, { headers, timeout: 15000 });
+            const r = await axios.patch(`${webhookUrl}/messages/${msgId}`, data, { headers, timeout: 15000 });
+            await anotarPanel(r.data);
             return;
         } catch (e) {
             // el mensaje ya no existe (borrado a mano) -> se crea uno nuevo abajo
@@ -10133,7 +10137,8 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
                 if (existente) {
                     try {
                         const { data, headers } = construirRequest();
-                        await axios.patch(`${webhookUrl}/messages/${existente.id}`, data, { headers, timeout: 15000 });
+                        const r = await axios.patch(`${webhookUrl}/messages/${existente.id}`, data, { headers, timeout: 15000 });
+                        await anotarPanel(r.data);
                         await db.run(
                             `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, ?, ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
                             [userId, claveMsg, String(existente.id), String(existente.id)]
@@ -10147,6 +10152,7 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
 
     const { data, headers } = construirRequest();
     const resp = await axios.post(`${webhookUrl}?wait=true`, data, { headers, timeout: 15000 });
+    await anotarPanel(resp.data);
     await db.run(
         `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, ?, ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
         [userId, claveMsg, String(resp.data.id), String(resp.data.id)]
@@ -16298,9 +16304,12 @@ async function sincronizarCanales(interaction) {
                 // sumaba uno nuevo hasta el tope de 15 por canal. Los webhooks de otros
                 // bots o creados a mano (ej. los del bot de Kevin) no se tocan.
                 const idBot = interaction.client.user.id;
+                // Comunidad con varios hosts (2026-10-25, bug real): los webhooks de los otros bots se
+                // llaman igual ("Bot tipo") -- por nombre se borraban los del otro host. Ahi solo los propios.
+                const porNombre = !comunidad.esComunidad(interaction.guildId);
                 const existingHooks = webhooks.filter(w =>
                     w.owner?.id === idBot || w.applicationId === idBot
-                    || w.name === `Bot ${tipo}` || w.name === nombreDefaultWebhook(tipo));
+                    || (porNombre && (w.name === `Bot ${tipo}` || w.name === nombreDefaultWebhook(tipo))));
                 for (const oldWebhook of existingHooks.values()) {
                     await oldWebhook.delete('Recreating invalid webhook').catch(console.error);
                 }
@@ -16426,18 +16435,21 @@ async function sincronizarCanales(interaction) {
 // Toma del turno en la comunidad: comandos propios, canales/paneles con sus webhooks (Sync), fuera los
 // paneles del bot anterior, y la direccion de Monitor Link en la libreta.
 async function tomarTurnoComunidad() {
+    // Primero la direccion: los Monitor Link se pasan a este host y mandan su resumen ya. Cada paso
+    // por separado (2026-10-25, bug real al cambiar de host): un error en uno cortaba todos los demas.
+    if (DASHBOARD_PUBLIC_URL) await monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL);
     const applicationId = CLIENT_ID || client.user?.id;
     const rest = new REST({ version: '10' }).setToken(TOKEN);
+    const paso = async (nombre, fn) => { try { await fn(); } catch (e) { console.error(`❌ Community turn — ${nombre}:`, e?.rawError?.message || e?.message || e); } };
     for (const guild of client.guilds.cache.values()) {
         if (!comunidad.esComunidad(guild.id)) continue;
-        await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: comandosDeGuild(guild.id, construirSlashCommands()) });
+        await paso('commands', () => rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: comandosDeGuild(guild.id, construirSlashCommands()) }));
         const dueno = await guild.fetchOwner().then(m => m.user).catch(() => client.user);
-        await sincronizarCanales({ guild, guildId: guild.id, user: dueno, client, editReply: async () => {} });
-        for (const v of await monitorLink.vinculados().catch(() => [])) await darRolMonitor(guild.id, v.discordId);
-        await limpiarPanelesDeOtrosBots(guild);
+        await paso('channels', () => sincronizarCanales({ guild, guildId: guild.id, user: dueno, client, editReply: async () => {} }));
+        await paso('Monitor role', async () => { for (const v of await monitorLink.vinculados()) await darRolMonitor(guild.id, v.discordId); });
+        await paso('old panels', () => limpiarPanelesDeOtrosBots(guild));
         console.log(`✅ Community turn: commands and panels published in ${guild.name}`);
     }
-    if (DASHBOARD_PUBLIC_URL) monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL);
 }
 
 // Estado de esta PC para el panel de hosts: bot, version, bot de Miguel y Monitor Links en linea.
@@ -16501,19 +16513,17 @@ async function soltarTurnoComunidad() {
     }
 }
 
-// Paneles (mensajes de webhook con botones) que publico el bot de OTRO host en los canales del bot:
-// sus botones solo los atiende ese otro bot, asi que se borran al tomar el turno.
+// Paneles que publico el bot de OTRO host: sus botones solo los atiende ese otro bot, asi que se
+// borran al tomar el turno. SOLO los paneles anotados en Upstash -- nunca el historial (2026-10-25,
+// bug real: antes se borraba todo mensaje con botones de otro bot y se fueron los resultados de
+// /card, Shinedust, Fast Farm... de todos los canales).
 async function limpiarPanelesDeOtrosBots(guild) {
-    const filas = await db.all(`SELECT DISTINCT canal_id FROM configs_canales WHERE discord_id = ? AND canal_id IS NOT NULL`, [guild.id]) || [];
-    for (const { canal_id } of filas) {
-        const canal = guild.channels.cache.get(canal_id);
-        if (!canal?.isTextBased?.() || canal.type === ChannelType.GuildCategory) continue;
-        const mensajes = await canal.messages.fetch({ limit: 50 }).catch(() => null);
-        for (const m of (mensajes?.values() || [])) {
-            if (m.webhookId && m.applicationId && m.applicationId !== client.user.id && m.components?.length) {
-                await m.delete().catch(() => {});
-            }
-        }
+    for (const p of await hostComunidad.panelesDeOtros(client.user.id)) {
+        const canal = guild.channels.cache.get(p.canal);
+        if (!canal?.isTextBased?.()) continue;
+        const m = await canal.messages.fetch(p.msg).catch(() => null);
+        if (m && m.author?.id !== client.user.id && m.applicationId !== client.user.id) await m.delete().catch(() => {});
+        await hostComunidad.olvidarPanel(p.msg);
     }
 }
 
