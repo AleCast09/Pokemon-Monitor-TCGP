@@ -169,17 +169,20 @@ function permisosPublicos(guild) {
 }
 
 // Guardia al principio de interactionCreate. Devuelve true si la interaccion se corto aca.
+// Bot abierto a los miembros (2026-10-24, pedido de Ale): cualquiera usa los comandos con SUS cuentas
+// (los que necesitan cartas piden /link primero, ver bot.js). Solo queda del staff lo que cambia la
+// configuracion del bot: /setup y los botones del panel de ajustes (Sync, HD, actualizaciones).
+const SOLO_STAFF_COMANDOS = new Set(['setup']);
+const SOLO_STAFF_BOTONES = ['btn_', 'toggle_', 'cfg_', 'modal_webhook', 'modal_ruta', 'modal_config'];
+
 async function bloquearSiHaceFalta(interaction) {
     if (!esComunidad(interaction.guildId) || esStaff(interaction.user?.id, interaction.member)) return false;
-    if (interaction.isChatInputCommand?.() && ABIERTOS_A_TODOS.has(interaction.commandName)) return false;
-    // Botones y ventana de /link (vincular y elegir carpeta): para cualquier miembro.
-    if ((interaction.isButton?.() || interaction.isModalSubmit?.()) && ['link_nueva_clave', 'link_poner_carpeta', 'link_modal_carpeta', 'link_mi_carpeta', 'link_todas_rutas'].includes(interaction.customId)) return false;
-    if (interaction.isAutocomplete()) {
-        await interaction.respond([]).catch(() => {});
-        return true;
-    }
-    const aviso = '🔒 This bot is in private testing here.\n' +
-        'Soon you\'ll be able to link **your own accounts** from your PC — until then only staff can use it.';
+    const comando = interaction.isChatInputCommand?.() && SOLO_STAFF_COMANDOS.has(interaction.commandName);
+    const id = interaction.customId || '';
+    const boton = (interaction.isButton?.() || interaction.isModalSubmit?.() || interaction.isStringSelectMenu?.())
+        && SOLO_STAFF_BOTONES.some(prefijo => id.startsWith(prefijo));
+    if (!comando && !boton) return false;
+    const aviso = '🔒 Only staff can change the bot\'s settings.';
     try {
         if (interaction.deferred || interaction.replied) await interaction.followUp({ content: aviso, ephemeral: true });
         else await interaction.reply({ content: aviso, ephemeral: true });
