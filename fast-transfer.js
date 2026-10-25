@@ -1180,7 +1180,8 @@ async function manejarBulk(interaction) {
         const cantidad = Math.max(1, parseInt(cantidadTxt, 10) || 1);
         const clave = `${interaction.user.id}:${Date.now().toString(36)}`;
         bulkPendientes.set(clave, { userId: interaction.user.id, fileName, cartaId, cartas: [], ts: Date.now() });
-        const opciones = Array.from({ length: Math.min(cantidad, 25) }, (_, i) => i + 1)
+        // De mayor a menor: la primera opcion es mandarlas todas (las que pidio el umbral de Gold Cards).
+        const opciones = Array.from({ length: Math.min(cantidad, 25) }, (_, i) => Math.min(cantidad, 25) - i)
             .map(n => ({ label: `${n} ${n === 1 ? 'copy' : 'copies'}`, description: n === cantidad ? 'all of them' : `keeps ${cantidad - n}`, value: String(n) }));
         const menu = new StringSelectMenuBuilder().setCustomId(`fast_gold_copias::${clave}`).setPlaceholder('How many copies?').addOptions(opciones);
         await interaction.update({ content: `⚡ **${fileName}** has **x${cantidad}** — how many copies to trade?`, components: [new ActionRowBuilder().addComponents(menu),
