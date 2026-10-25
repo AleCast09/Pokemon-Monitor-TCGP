@@ -307,7 +307,10 @@ async function esperarTrabajos(cfg) {
             const { jobs } = await r.json();
             for (const t of jobs || []) await atenderTrabajo(cfg, t).catch(e => log(`⚠️ Could not send an account file (${e.message}).`));
         } catch (e) {
-            await new Promise(r => setTimeout(r, 10000));
+            // El bot se reinicio (cambia de direccion) o no tiene el turno: se busca la direccion
+            // actual en la libreta al momento, asi no queda un minuto sin poder atender pedidos.
+            if (await actualizarDireccion(cfg)) { subirResumen(cfg, true).catch(() => {}); continue; }
+            await new Promise(r => setTimeout(r, 5000));
         }
     }
 }

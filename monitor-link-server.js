@@ -379,7 +379,7 @@ async function pedirAccion(discordId, accion, timeoutMs = 20000) {
     discordId = String(discordId);
     const fila = await db.get(`SELECT ultimo FROM link_agentes WHERE discord_id = ?`, [discordId]);
     if (!fila) throw new Error('offline');
-    for (let i = 0; i < 10 && !esperas.has(discordId); i++) await new Promise(r => setTimeout(r, 500));
+    for (let i = 0; i < 40 && !esperas.has(discordId); i++) await new Promise(r => setTimeout(r, 500));
     if (!esperas.has(discordId)) throw new Error('offline');
     return await new Promise((resolver, rechazar) => {
         const trabajo = { id: crypto.randomBytes(8).toString('hex'), accion, entregado: false, resolver };
@@ -399,8 +399,9 @@ async function pedirXml(discordId, nombres, timeoutMs = 45000) {
     const fila = await db.get(`SELECT ultimo FROM link_agentes WHERE discord_id = ?`, [discordId]);
     if (!fila) throw new Error('offline');
     // Un Monitor Link abierto siempre tiene una consulta larga esperando (salvo el instante entre
-    // una y la siguiente): si en 5 s no aparece ninguna, esta cerrado.
-    for (let i = 0; i < 10 && !esperas.has(discordId); i++) await new Promise(r => setTimeout(r, 500));
+    // una y la siguiente, o unos segundos despues de que el bot se reinicia y cambia de direccion):
+    // si en 20 s no aparece ninguna, esta cerrado.
+    for (let i = 0; i < 40 && !esperas.has(discordId); i++) await new Promise(r => setTimeout(r, 500));
     if (!esperas.has(discordId)) throw new Error('offline');
     return await new Promise((resolver, rechazar) => {
         const trabajo = { id: crypto.randomBytes(8).toString('hex'), archivos: [...new Set(nombres.map(String))].slice(0, 2000), entregado: false };

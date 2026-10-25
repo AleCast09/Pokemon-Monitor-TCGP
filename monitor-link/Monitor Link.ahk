@@ -17,7 +17,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.3.0"
+global VERSION := "ahk-1.4.0"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -369,21 +369,24 @@ RevisarTrabajos:
             JobsReq.SetRequestHeader("Authorization", "Bearer " . Token)
             JobsReq.Send()
         } catch e {
-            JobsReq := "", JobsReintento := A_TickCount + 10000
+            JobsReq := "", JobsReintento := A_TickCount + 5000
+            SinConexion()
         }
         return
     }
     try {
         listo := JobsReq.WaitForResponse(0)
     } catch e {
-        JobsReq := "", JobsReintento := A_TickCount + 10000
+        JobsReq := "", JobsReintento := A_TickCount + 5000
+        SinConexion()
         return
     }
     if (!listo)
         return
     estado := JobsReq.Status, texto := JobsReq.ResponseText, JobsReq := ""
     if (estado != 200) {
-        JobsReintento := A_TickCount + 10000
+        JobsReintento := A_TickCount + 5000
+        SinConexion()
         return
     }
     pos := 1
