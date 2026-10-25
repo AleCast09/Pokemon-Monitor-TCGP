@@ -4078,8 +4078,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
     // Comunidad: fuera los botones que usan la PC host (XML, Info Accounts, Wishlist, Shinedust por
     // OCR, Extract XML, Inject). Quedan Home, Trade y Share.
-    comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::',
-        'card_shinedust::', 'goldcards_shinedust::', 'card_inject::', 'goldcards_inject::']);
+    comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::']);
     const archivosPayload = [];
     if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
@@ -13519,6 +13518,13 @@ async function manejarInteraccionPrincipal(interaction) {
         return await mostrarPasoAsignacionAggressive(interaction, sesionId);
     }
 
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_shinedust_cuenta::') && comunidad.usuarioActual()) {
+        if (!fastTransfer.habilitado(interaction.guildId)) {
+            return await interaction.update({ content: '❌ Shinedust is not available right now.', components: [] });
+        }
+        return await fastTransfer.refrescarCuentaElegida(interaction);
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_shinedust_cuenta::')) {
         const [, cartaId] = interaction.customId.split('::');
         const fileName = interaction.values[0];
@@ -13540,6 +13546,47 @@ async function manejarInteraccionPrincipal(interaction) {
                 value: `${i.index}::${i.name}`
             })));
         return await interaction.update({ content: `Which instance do you want to run the check on for \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_inject_cuenta::') && comunidad.usuarioActual()) {
+        const [, cartaId] = interaction.customId.split('::');
+        const fileName = interaction.values[0];
+        await interaction.update({ content: '⏳ Asking your PC for its MuMu instances…', components: [] });
+        let r;
+        try {
+            r = await monitorLink.pedirAccion(comunidad.usuarioActual(), { action: 'mumu_list' }, 30000);
+        } catch (e) {
+            return await interaction.editReply({ content: e.message === 'offline'
+                ? '🔗 Your **Monitor Link** is not running — open it on your PC and try again.'
+                : '⏱️ Your **Monitor Link** didn\'t answer — it may be an old version. Close it and open it again (it updates by itself).' });
+        }
+        if (!r.ok || !r.instances?.length) {
+            return await interaction.editReply({ content: `❌ ${r.error || 'No MuMuPlayer instances found on your PC.'}` });
+        }
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`inject_ml::${cartaId}::${fileName}`.slice(0, 100))
+            .setPlaceholder('Select an instance on your PC')
+            .addOptions([...r.instances].sort((a, b) => Number(a.index) - Number(b.index)).slice(0, 25).map(i => ({
+                label: `${i.index}. ${i.name}`.slice(0, 100), description: i.on ? 'On' : 'Off', value: `${i.index}::${i.name}`.slice(0, 100)
+            })));
+        return await interaction.editReply({ content: `Which instance on **your PC** should open \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('inject_ml::')) {
+        const [, , fileName] = interaction.customId.split('::');
+        const [index, ...resto] = interaction.values[0].split('::');
+        const nombreInstancia = resto.join('::');
+        await interaction.update({ content: `💉 Opening \`${fileName}\` on instance **${nombreInstancia}** of your PC… (turning it on and injecting can take up to 3 minutes)`, components: [] });
+        try {
+            const r = await monitorLink.pedirAccion(comunidad.usuarioActual(), { action: 'inject', file: fileName, index, name: nombreInstancia }, 5 * 60 * 1000);
+            return await interaction.editReply({ content: r.ok
+                ? `✅ \`${fileName}\` is open on instance **${nombreInstancia}** of your PC.`
+                : `❌ Could not inject on your PC: ${r.error || 'unknown error'}.` });
+        } catch (e) {
+            return await interaction.editReply({ content: e.message === 'offline'
+                ? '🔗 Your **Monitor Link** is not running — open it on your PC and try again.'
+                : '⏱️ Your PC didn\'t finish in time — check the instance; it may still be loading.' });
+        }
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_inject_cuenta::')) {

@@ -268,7 +268,13 @@ function registrar(app, dependencias) {
             clearTimeout(trabajo.timer);
             trabajos.set(agente.discord_id, lista.filter(t => t !== trabajo));
             if (trabajo.accion) {
-                trabajo.resolver({ ok: !!datos.ok, already: !!datos.already, error: datos.error ? String(datos.error).slice(0, 200) : null });
+                trabajo.resolver({
+                    ok: !!datos.ok, already: !!datos.already, error: datos.error ? String(datos.error).slice(0, 200) : null,
+                    // mumu_list: instancias de MuMu de la PC del miembro.
+                    instances: Array.isArray(datos.instances) ? datos.instances.slice(0, 50).map(i => ({
+                        index: String(i.index).slice(0, 10), name: String(i.name || i.index).slice(0, 60), on: !!i.on
+                    })) : undefined
+                });
                 return res.json({ ok: true });
             }
             // Solo lo pedido y con forma de XML de cuenta.

@@ -17,7 +17,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.2.0"
+global VERSION := "ahk-1.3.0"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -390,6 +390,16 @@ RevisarTrabajos:
         pos += StrLen(mw)
         AgregarAWishlist(mw1, mw2, mw3)
     }
+    pos := 1
+    while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""mumu_list""", mm, pos)) {
+        pos += StrLen(mm)
+        ListarMuMu(mm1)
+    }
+    pos := 1
+    while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""inject""\s*,\s*""file""\s*:\s*""((?:[^""\\]|\\.)*)""\s*,\s*""index""\s*:\s*""(\d+)""\s*,\s*""name""\s*:\s*""((?:[^""\\]|\\.)*)""", mi, pos)) {
+        pos += StrLen(mi)
+        InyectarEnMuMu(mi1, JsonUnesc(mi2), mi3, JsonUnesc(mi4))
+    }
 return
 
 AtenderTrabajo(id, lista) {
@@ -455,6 +465,116 @@ AgregarAWishlist(id, carta, nombreJson) {
         TrayTip, Monitor Link, % "Added to your wishlist: " . JsonUnesc(nombreJson), 3, 1
         SubirResumen(false)
     }
+}
+
+; ---------------------------------------------------------------- Inject (MuMu of THIS PC)
+; Inject in Discord opens one of your accounts on a MuMu instance of YOUR PC, with the same
+; _InjectAccount.ahk of PTCGPB. The .xml never leaves this PC for this.
+RutaMuMuManager() {
+    for _, disco in StrSplit("CDEFGHIJ")
+        for _, carpeta in ["MuMuPlayer", "MuMuPlayerGlobal-12.0"]
+            for _, sub in ["nx_main", "shell"] {
+                ruta := disco . ":\Program Files\Netease\" . carpeta . "\" . sub . "\MuMuManager.exe"
+                if FileExist(ruta)
+                    return ruta
+            }
+    return ""
+}
+
+InfoMuMu(manager) {
+    salida := A_Temp . "\MonitorLink_mumu.json"
+    FileDelete, %salida%
+    RunWait, %ComSpec% /c ""%manager%" info -v all > "%salida%"",, Hide
+    FileRead, texto, %salida%
+    FileDelete, %salida%
+    return texto
+}
+
+; [{index, name, on}] from MuMuManager (one flat object per instance).
+InstanciasMuMu(texto) {
+    lista := [], pos := 1
+    while (pos := RegExMatch(texto, "\{[^{}]*\}", mo, pos)) {
+        pos += StrLen(mo)
+        if !RegExMatch(mo, """index""\s*:\s*""?(\d+)", mx)
+            continue
+        RegExMatch(mo, """name""\s*:\s*""((?:[^""\\]|\\.)*)""", mn)
+        lista.Push({index: mx1, name: (mn1 != "" ? mn1 : mx1), on: InStr(mo, """is_android_started"": true") ? 1 : 0})
+    }
+    return lista
+}
+
+ResponderAccion(cuerpo) {
+    try Http("POST", ServerUrl . "/link/xml", cuerpo, "text/plain; charset=utf-8", Token, 30)
+}
+
+ListarMuMu(id) {
+    manager := RutaMuMuManager()
+    if (manager = "")
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""MuMuPlayer was not found on this PC""}")
+    items := ""
+    for _, i in InstanciasMuMu(InfoMuMu(manager))
+        if (i.name != "NO TOCAR")
+            items .= (items = "" ? "" : ",") . "{""index"":""" . i.index . """,""name"":""" . i.name . """,""on"":" . (i.on ? "true" : "false") . "}"
+    ResponderAccion("{""id"":""" . id . """,""ok"":true,""instances"":[" . items . "]}")
+}
+
+InyectarEnMuMu(id, archivo, index, nombre) {
+    error := ""
+    xml := RutaDeXml(archivo)
+    cuentasDir := CarpetaPadre(CarpetaPadre(CarpetaJson))
+    script := cuentasDir . "\_InjectAccount.ahk"
+    manager := RutaMuMuManager()
+    if (xml = "")
+        error := archivo . " was not found in your Saved folder"
+    else if !FileExist(script)
+        error := "_InjectAccount.ahk was not found in " . cuentasDir
+    else if (manager = "")
+        error := "MuMuPlayer was not found on this PC"
+    if (error = "") {
+        TrayTip, Monitor Link, % "Injecting " . archivo . " into instance " . nombre . "...", 3, 1
+        ; Turn the instance on (if it is off) and wait until Android is up.
+        encendida := false
+        for _, i in InstanciasMuMu(InfoMuMu(manager))
+            if (i.index = index && i.on)
+                encendida := true
+        if (!encendida) {
+            RunWait, "%manager%" setting -v %index% -k root_permission -val true,, Hide
+            SplitPath, manager,, dirManager
+            SplitPath, dirManager,, baseMuMu
+            exe := baseMuMu . "\shell\MuMuPlayer.exe"
+            if !FileExist(exe)
+                exe := baseMuMu . "\nx_main\MuMuNxMain.exe"
+            if FileExist(exe)
+                Run, "%exe%" -v %index%
+            else
+                Run, "%manager%" control -v %index% launch,, Hide
+            limite := A_TickCount + 120000
+            while (!encendida && A_TickCount < limite) {
+                Sleep, 3000
+                for _, i in InstanciasMuMu(InfoMuMu(manager))
+                    if (i.index = index && i.on)
+                        encendida := true
+            }
+            if (!encendida)
+                error := "the instance did not turn on in 2 minutes"
+            else
+                Sleep, 5000
+        }
+    }
+    if (error = "") {
+        ini := cuentasDir . "\InjectAccount.ini"
+        SplitPath, xml,,,, sinExtension
+        IniWrite, %xml%, %ini%, UserSettings, selectedFilePath
+        IniWrite, %nombre%, %ini%, UserSettings, winTitle
+        IniWrite, %sinExtension%, %ini%, UserSettings, fileName
+        IniWrite, 0, %ini%, UserSettings, sendFriendRequestAfterInject
+        RunWait, "%A_AhkPath%" "%script%" --headless, %cuentasDir%, UseErrorLevel
+        if (ErrorLevel = "ERROR")
+            error := "could not run _InjectAccount.ahk"
+        else if (ErrorLevel != 0)
+            error := "_InjectAccount.ahk ended with code " . ErrorLevel
+    }
+    ResponderAccion("{""id"":""" . id . """,""ok"":" . (error = "" ? "true" : "false") . (error != "" ? ",""error"":""" . JsonEsc(error) . """" : "") . "}")
 }
 
 ; The .xml files live in Accounts\Saved (numbered subfolders), next to Accounts\Cards.

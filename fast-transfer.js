@@ -789,8 +789,8 @@ function barra(hechas, total) {
     return '▰'.repeat(llenos) + '▱'.repeat(15 - llenos);
 }
 
-async function manejarDust(interaction) {
-    const id = interaction.customId;
+async function manejarDust(interaction, idForzado = null) {
+    const id = idForzado || interaction.customId;
     const rutaJson = (await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`))?.webhook_url;
     const miembro = deps.usuarioComunidad?.() || null;
 
@@ -818,7 +818,8 @@ async function manejarDust(interaction) {
 
     if (interaction.isStringSelectMenu() && id === 'fast_dust_pick') {
         const archivo = interaction.values[0];
-        const cuenta = cuentasPara(miembro, rutaJson).find(c => c.archivoJson === archivo);
+        const sinXml = (n) => String(n || '').replace(/\.xml$/i, '').toLowerCase();
+        const cuenta = cuentasPara(miembro, rutaJson).find(c => c.archivoJson === archivo || sinXml(c.fileNameXml) === sinXml(archivo));
         if (!cuenta) {
             await interaction.update({ content: '❌ That account\'s JSON file is gone.', components: [] });
             return true;
@@ -1051,4 +1052,8 @@ async function manejarInteraccion(interaction) {
 // Hay algun ⚡ corriendo o en fila (para no reiniciar el host en medio, ver host-updater.js).
 const ocupado = () => enCola > 0 || corridas.size > 0;
 
-module.exports = { ocupado, init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };
+// 👛 Shinedust de una carta en la comunidad: la cuenta elegida se refresca con ⚡ (directo del juego,
+// sin MuMu de nadie). El select trae el nombre de la XML de la cuenta.
+const refrescarCuentaElegida = (interaction) => manejarDust(interaction, 'fast_dust_pick');
+
+module.exports = { ocupado, refrescarCuentaElegida, init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };
