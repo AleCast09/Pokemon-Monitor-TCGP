@@ -4078,7 +4078,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
     // Comunidad: fuera los botones que usan la PC host (XML, Info Accounts, Wishlist, Shinedust por
     // OCR, Extract XML, Inject). Quedan Home, Trade y Share.
-    comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::']);
+    comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::', 'card_extract::', 'goldcards_extract::']);
     const archivosPayload = [];
     if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
@@ -16148,6 +16148,17 @@ async function sincronizarCanales(interaction) {
 
             const reportePartes = [];
             const categoriasGestionadas = [];
+            // Comunidad: fuera los canales que ahi ya no van (ej. 📄-extract-xml).
+            if (comunidad.esComunidad(interaction.guildId)) {
+                for (const tipo of comunidad.CANALES_FUERA_DE_COMUNIDAD) {
+                    const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
+                    const canalViejo = fila?.canal_id ? interaction.guild.channels.cache.get(fila.canal_id) : null;
+                    if (canalViejo) await canalViejo.delete('Not used in the community').catch(console.error);
+                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
+                }
+                const huerfano = interaction.guild.channels.cache.find(ch => ch.name === '📄-extract-xml');
+                if (huerfano) await huerfano.delete('Not used in the community').catch(console.error);
+            }
             // Modo comunidad: solo MANAGER + RUN MUMU PLAYER + 🔒 STAFF. En cualquier otro
             // server la lista queda igual que siempre.
             const gruposSync = comunidad.gruposSync(interaction.guildId, grupos);
