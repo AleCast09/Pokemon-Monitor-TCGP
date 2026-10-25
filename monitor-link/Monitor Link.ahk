@@ -13,11 +13,13 @@
 #NoEnv
 #SingleInstance, force
 #Persistent
+; The summary is ~10 KB per account: the default 64 MB per variable runs out at ~3000 accounts.
+#MaxMem 4095
 SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.7.1"
+global VERSION := "ahk-1.7.2"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""

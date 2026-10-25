@@ -317,9 +317,9 @@ function registrar(app, dependencias) {
         }
     });
 
-    // El resumen de ~1200 cuentas pesa unos MB: se manda como texto (no pasa por el express.json
-    // global del Dashboard, que corta en 100 KB).
-    app.post('/link/summary', express.text({ type: 'text/plain', limit: '40mb' }), async (req, res) => {
+    // El resumen pesa ~10 KB por cuenta (1200 cuentas = 12 MB): se manda como texto (no pasa por el
+    // express.json global del Dashboard, que corta en 100 KB).
+    app.post('/link/summary', express.text({ type: 'text/plain', limit: '300mb' }), async (req, res) => {
         try {
             await asegurarTablas();
             const agente = await agenteDe(req);
@@ -328,7 +328,7 @@ function registrar(app, dependencias) {
             try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
             const cuentas = Array.isArray(datos.accounts) ? datos.accounts : [];
             // Solo campos esperados: nombre de archivo, nombre visible, cartas {id: copias}, Shinedust.
-            const limpias = cuentas.slice(0, 5000).map(c => ({
+            const limpias = cuentas.slice(0, 20000).map(c => ({
                 f: String(c.f || '').slice(0, 120),
                 n: String(c.n || '').slice(0, 120),
                 d: Number.isFinite(c.d) ? c.d : null,
