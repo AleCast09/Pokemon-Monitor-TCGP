@@ -473,7 +473,7 @@ function cuentasPorCartaDe(discordId, cartaId) {
 function shinedustDe(discordId) {
     return (cache.get(String(discordId))?.cuentas || [])
         .filter(c => typeof c.d === 'number')
-        .map(c => ({ nombreCuenta: c.n || c.f, valor: c.d, fileNameXml: c.f, archivoJson: c.f }))
+        .map(c => ({ nombreCuenta: (c.n && c.n !== '0') ? c.n : c.f, valor: c.d, fileNameXml: c.f, archivoJson: c.f }))
         .sort((a, b) => b.valor - a.valor);
 }
 
@@ -552,7 +552,8 @@ function cartasDeCuentaMiembro(discordId, fileName) {
 // Todas las cuentas del resumen, con la forma de cuentasJson de fast-transfer.js.
 function cuentasDe(discordId) {
     return (cache.get(String(discordId))?.cuentas || []).map(c => ({
-        archivoJson: c.f, fileNameXml: c.f, nombreCuenta: c.n || c.f, valorJson: typeof c.d === 'number' ? c.d : null
+        // Un nombre "0" o vacio en el JSON no sirve para reconocer la cuenta: se usa el del archivo.
+        archivoJson: c.f, fileNameXml: c.f, nombreCuenta: (c.n && c.n !== '0') ? c.n : c.f, valorJson: typeof c.d === 'number' ? c.d : null
     }));
 }
 
