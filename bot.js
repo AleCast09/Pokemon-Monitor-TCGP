@@ -11233,7 +11233,8 @@ async function manejarInteraccionPrincipal(interaction) {
             const cmd = interaction.commandName;
             // Resultados personales en privado (pedido de Ale): solo los ve quien los pidio, con
             // "Dismiss message". Se fuerza ephemeral en las respuestas de estos comandos.
-            if (['card', 'goldcards', 'shinedust', 'farmtickets', 'transfers', 'wishlist', 'extract'].includes(cmd)) {
+            // /card ya no: la carta queda a la vista de todos y su lista de opciones solo la usa quien la abrio.
+            if (['goldcards', 'shinedust', 'farmtickets', 'transfers', 'wishlist', 'extract'].includes(cmd)) {
                 const deferOriginal = interaction.deferReply.bind(interaction);
                 const replyOriginal = interaction.reply.bind(interaction);
                 interaction.deferReply = (opts = {}) => deferOriginal({ ...opts, ephemeral: true });
