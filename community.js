@@ -133,14 +133,16 @@ async function rolMonitor(guild) {
         .catch(e => { console.error('DEBUG: no se pudo crear el rol Monitor:', e?.message || e); return null; });
 }
 
-// Permisos de las categorias de la comunidad (los canales los heredan). Los miembros solo pueden ver,
-// leer y usar los comandos del bot: no escriben, no reaccionan, no crean hilos ni suben archivos, y
-// gestionar canales/mensajes nunca se les da (nadie puede borrar ni editar nada del bot).
+// Permisos de las categorias de la comunidad (los canales los heredan). Los miembros pueden ver, leer y
+// usar los comandos del bot. "Enviar mensajes" queda permitido porque sin eso Discord bloquea toda la
+// barra de escribir y no se puede usar /card; cualquier mensaje normal de un miembro lo borra el bot al
+// instante (bot.js, messageCreate). No reaccionan, no crean hilos ni suben archivos, y gestionar
+// canales/mensajes nunca se les da (nadie puede borrar ni editar nada del bot).
 //   'todos'   -> @everyone (bienvenida)       'monitor' -> rol Monitor + Staff
 async function permisosCategoria(guild, acceso) {
     const F = PermissionsBitField.Flags;
-    const usar = [F.ViewChannel, F.ReadMessageHistory, F.UseApplicationCommands, F.UseExternalEmojis];
-    const nada = [F.SendMessages, F.SendMessagesInThreads, F.CreatePublicThreads, F.CreatePrivateThreads, F.AddReactions,
+    const usar = [F.ViewChannel, F.ReadMessageHistory, F.UseApplicationCommands, F.UseExternalEmojis, F.SendMessages];
+    const nada = [F.SendMessagesInThreads, F.CreatePublicThreads, F.CreatePrivateThreads, F.AddReactions,
         F.AttachFiles, F.EmbedLinks, F.MentionEveryone, F.ManageMessages, F.ManageThreads, F.ManageChannels, F.ManageWebhooks];
     const salida = [{ id: guild.members.me.id, allow: [F.Administrator, F.ViewChannel] }];
     if (acceso === 'todos') {

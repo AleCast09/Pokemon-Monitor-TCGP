@@ -11266,6 +11266,25 @@ function prefijoDeCartas(customId) {
     return customId.startsWith('allcards') ? 'allcards' : 'wishlist';
 }
 
+// Comunidad: en los canales del bot solo publica el bot. Si un miembro escribe un mensaje normal, se
+// borra al instante (los comandos /card, /wishlist... no son mensajes y funcionan igual). El staff puede
+// escribir. Solo el host con el turno lo hace.
+const _canalesDelBot = { ts: 0, ids: new Set() };
+client.on('messageCreate', async (message) => {
+    try {
+        if (!message.guild || message.author?.bot || message.webhookId || message.system) return;
+        if (!comunidad.esComunidad(message.guild.id) || !hostComunidad.esActivo()) return;
+        if (Date.now() - _canalesDelBot.ts > 5 * 60 * 1000) {
+            const filas = await db.all(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND canal_id IS NOT NULL`, [message.guild.id]);
+            _canalesDelBot.ids = new Set((filas || []).map(f => f.canal_id));
+            _canalesDelBot.ts = Date.now();
+        }
+        if (!_canalesDelBot.ids.has(message.channelId)) return;
+        if (comunidad.esStaff(message.author.id, message.member)) return;
+        await message.delete().catch(() => {});
+    } catch (e) { /* nada */ }
+});
+
 // Cada interaccion corre con su usuario en comunidad.contexto (ver community.js / monitor-link-server.js).
 client.on('interactionCreate', (interaction) => comunidad.contexto.run(
     { guildId: interaction.guildId, userId: interaction.user?.id },
