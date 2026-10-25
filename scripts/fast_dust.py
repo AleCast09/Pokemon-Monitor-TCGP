@@ -10,12 +10,20 @@ Si aparece --stop-file, termina la cuenta en curso y corta.
 
 No escribe nada: bot.js guarda los valores en su propia base (los JSON son de Kevin/Leanny).
 
+--with-cards (2026-10-24, sincronizar cartas): ademas baja QUE cartas tiene la cuenta en el juego
+(sess.scan_account(), el mismo que usa sync_cards.py del bot de Miguel) y la manda en el evento
+como "cards": [ids]. OJO: el juego no manda cuantas copias hay de cada una (card_amount viene
+vacio aunque haya 3), asi que solo sirve para saber cuales tiene; bot.js corrige el JSON sin
+tocar las cantidades. scan_account() deja sync_v1_page_*.json con los datos de la cuenta en la
+carpeta del motor (modo depuracion de Miguel): se borran enseguida.
+
 Uso:
     python -X utf8 fast_dust.py --engine-dir <ptcgp-capturedeluxe>
         --accounts-file cuentas.json [--delay 2] [--stop-file <ruta>]
     cuentas.json = [{"key": "<archivo json>", "xml": "<ruta xml>"}, ...]
 """
 import argparse
+import glob
 import json
 import os
 import re
@@ -82,6 +90,7 @@ def main():
     p.add_argument("--accounts-file", required=True)
     p.add_argument("--delay", type=float, default=2.0)
     p.add_argument("--stop-file", default="")
+    p.add_argument("--with-cards", action="store_true")
     a = p.parse_args()
 
     cuentas = json.load(open(a.accounts_file, encoding="utf-8"))
@@ -102,7 +111,21 @@ def main():
             usuario, clave = leer_credenciales(c["xml"])
             sess = at.login_bot(usuario, clave)
             inv = leer_inventario(sess)
-            emitir(key=c["key"], state="ok", dust=inv["dust"], tickets=inv["shopticket"], inv=inv)
+            cartas = None
+            if a.with_cards:
+                try:
+                    scan = sess.scan_account()
+                    if scan and scan.get("success"):
+                        cartas = sorted({x.get("card_id") for x in scan.get("cards") or [] if x.get("card_id")})
+                except Exception:
+                    cartas = None  # el Shinedust igual sirve aunque la coleccion falle
+                finally:
+                    for basura in glob.glob(os.path.join(os.getcwd(), "sync_v1_page_*.json")):
+                        try:
+                            os.remove(basura)
+                        except OSError:
+                            pass
+            emitir(key=c["key"], state="ok", dust=inv["dust"], tickets=inv["shopticket"], inv=inv, cards=cartas)
         except Exception as e:
             emitir(key=c["key"], state="error", msg=error_legible(e))
         finally:

@@ -16,7 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 const CARPETA_CONFIG = path.join(process.env.APPDATA || os.homedir(), 'MonitorLink');
 const RUTA_CONFIG = path.join(CARPETA_CONFIG, 'config.json');
 const CADA_PING_MS = 60 * 1000;
@@ -299,8 +299,34 @@ async function mandarJsonCuenta(cfg, trabajo) {
     });
 }
 
+// Sincronizar cartas: el bot corrige el JSON de la cuenta (lo que ya no tiene sale, lo nuevo entra,
+// las copias se respetan). Queda un respaldo <archivo>.json.bak.
+async function escribirJsonCuenta(cfg, trabajo) {
+    const buscado = String(trabajo.file || '').replace(/\.xml$/i, '').toLowerCase();
+    const respuesta = { id: trabajo.id, ok: false, error: 'account file not found' };
+    const contenido = Buffer.from(String(trabajo.content || ''), 'base64').toString('utf8');
+    for (const archivo of fs.readdirSync(cfg.carpetaJson)) {
+        if (!archivo.toLowerCase().endsWith('.json')) continue;
+        const ruta = path.join(cfg.carpetaJson, archivo);
+        const texto = fs.readFileSync(ruta, 'utf8');
+        const f = /"fileName"\s*:\s*"([^"]*)"/.exec(texto)?.[1];
+        if (f && f.replace(/\.xml$/i, '').toLowerCase() === buscado) {
+            if (!contenido.includes('"pulls"')) { respuesta.error = 'bad content'; break; }
+            fs.writeFileSync(`${ruta}.bak`, texto);
+            fs.writeFileSync(ruta, contenido);
+            Object.assign(respuesta, { ok: true, error: undefined });
+            break;
+        }
+    }
+    await fetch(`${cfg.serverUrl}/link/xml`, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain', Authorization: `Bearer ${cfg.token}` }, body: JSON.stringify(respuesta)
+    });
+    if (respuesta.ok) await subirResumen(cfg, false).catch(() => {});
+}
+
 async function atenderTrabajo(cfg, trabajo) {
     if (trabajo.action === 'wishlist_add') return agregarAWishlist(cfg, trabajo);
+    if (trabajo.action === 'write_json') return escribirJsonCuenta(cfg, trabajo);
     if (trabajo.action === 'account_json') return mandarJsonCuenta(cfg, trabajo);
     const files = {};
     const missing = [];

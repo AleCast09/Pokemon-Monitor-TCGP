@@ -17,7 +17,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.5.1"
+global VERSION := "ahk-1.6.0"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -414,6 +414,11 @@ RevisarTrabajos:
         pos += StrLen(mjs)
         MandarJsonCuenta(mjs1, JsonUnesc(mjs2))
     }
+    pos := 1
+    while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""write_json""\s*,\s*""file""\s*:\s*""((?:[^""\\]|\\.)*)""\s*,\s*""content""\s*:\s*""([A-Za-z0-9+/=]+)""", mwj, pos)) {
+        pos += StrLen(mwj)
+        EscribirJsonCuenta(mwj1, JsonUnesc(mwj2), mwj3)
+    }
 return
 
 AtenderTrabajo(id, lista) {
@@ -497,6 +502,34 @@ MandarJsonCuenta(id, archivo) {
     if (encontrado = "")
         return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""account file not found""}")
     ResponderAccion("{""id"":""" . id . """,""ok"":true,""jsonName"":""" . JsonEsc(nombre) . """,""json"":""" . JsonEsc(encontrado) . """}")
+}
+
+; Card sync: the bot corrects this account's card file with what the game says it has (cards that
+; are no longer there are removed, new ones added, copies kept). A backup <file>.json.bak is kept.
+EscribirJsonCuenta(id, archivo, base64) {
+    buscado := RegExReplace(archivo, "i)\.xml$", "")
+    destino := ""
+    Loop, Files, %CarpetaJson%\*.json
+    {
+        FileRead, t, %A_LoopFileFullPath%
+        if (RegExMatch(t, """fileName""\s*:\s*""([^""]*)""", mf) && RegExReplace(mf1, "i)\.xml$", "") = buscado) {
+            destino := A_LoopFileFullPath
+            break
+        }
+    }
+    if (destino = "")
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""account file not found""}")
+    contenido := Base64UrlDecode(base64)
+    if !InStr(contenido, """pulls""")
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""bad content""}")
+    FileCopy, %destino%, %destino%.bak, 1
+    f := FileOpen(destino, "w", "UTF-8-RAW")
+    if (!IsObject(f))
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""could not write the file""}")
+    f.Write(contenido)
+    f.Close()
+    ResponderAccion("{""id"":""" . id . """,""ok"":true}")
+    SubirResumen(false)
 }
 
 ; ---------------------------------------------------------------- Inject (MuMu of THIS PC)

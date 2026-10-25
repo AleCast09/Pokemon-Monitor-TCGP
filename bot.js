@@ -42,6 +42,7 @@ fastTransfer.init({
     esComunidad: (guildId) => comunidad.esComunidad(guildId),
     usuarioComunidad: () => comunidad.usuarioActual(),
     pedirXml: (discordId, nombres) => monitorLink.pedirXml(discordId, nombres),
+    pedirAccion: (discordId, accion, timeoutMs) => monitorLink.pedirAccion(discordId, accion, timeoutMs),
     cuentasMiembro: (discordId) => monitorLink.cuentasDe(discordId),
     auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
     // ⚡ Fast Farm: mismas reglas y tablas que el Farm Tickets con MuMu.

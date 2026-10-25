@@ -695,7 +695,7 @@ function correrDust(runId, cuentas, alEvento) {
         const python = process.env.FAST_TRANSFER_PYTHON || 'python';
         const corrida = corridas.get(runId);
         const hijo = spawn(python, ['-X', 'utf8', RUTA_SCRIPT_DUST, '--engine-dir', rutaMotor(),
-            '--accounts-file', archivoCuentas, '--delay', String(DUST_DELAY_S), '--stop-file', corrida.stopFile], {
+            '--accounts-file', archivoCuentas, '--delay', String(DUST_DELAY_S), '--stop-file', corrida.stopFile, '--with-cards'], {
             cwd: rutaMotor(), windowsHide: true,
             env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8' }
         });
@@ -719,6 +719,56 @@ function correrDust(runId, cuentas, alEvento) {
             resolve();
         });
     });
+}
+
+// ---- Sincronizar cartas (2026-10-24, a partir del sync_cards.py del bot de Miguel) ----
+// El juego dice QUE cartas tiene la cuenta pero no cuantas copias (card_amount llega vacio aunque
+// haya 3), asi que no se reescribe la coleccion como hace Miguel (dejaria todo en 1 copia y romperia
+// Gold Cards). Se corrige sin perder cantidades: lo que el juego ya no tiene (tradeado/regalado) se
+// saca, lo que tiene y el JSON no conocia se agrega con 1 copia, y el resto queda con sus copias.
+// Se respetan metadata, tradedCards, etc.; el Shinedust tambien se actualiza. Antes de escribir
+// queda un respaldo <archivo>.json.bak. Devuelve null si no hay nada que cambiar.
+function aplicarColeccion(data, ev) {
+    const ahora = new Date();
+    const dos = (n) => String(n).padStart(2, '0');
+    const sello = `${ahora.getFullYear()}-${dos(ahora.getMonth() + 1)}-${dos(ahora.getDate())} ${dos(ahora.getHours())}:${dos(ahora.getMinutes())}:${dos(ahora.getSeconds())}`;
+    const enJuego = new Set(ev.cards);
+    const copias = {};
+    for (const p of data.pulls || []) for (const id of p.cards || []) copias[id] = (copias[id] || 0) + 1;
+    const quitadas = Object.keys(copias).filter(id => !enJuego.has(id));
+    const nuevas = [...enJuego].filter(id => !copias[id]);
+    const dustCambio = typeof ev.dust === 'number' && data.metadata?.shinedust?.value !== ev.dust;
+    if (!quitadas.length && !nuevas.length && !dustCambio) return null;
+    for (const id of quitadas) delete copias[id];
+    for (const id of nuevas) copias[id] = 1;
+    data.pulls = [{ timestamp: sello, pack: '_synced', cards: Object.entries(copias).flatMap(([id, n]) => Array(n).fill(id)) }];
+    data.metadata = data.metadata || {};
+    if (typeof ev.dust === 'number') data.metadata.shinedust = { ...(data.metadata.shinedust || {}), value: ev.dust };
+    data.metadata.lastSynced = ahora.toISOString();
+    return data;
+}
+
+let rutaJsonActual = null;  // la de esta PC (servidor propio); se fija en manejarDust
+
+async function actualizarColeccion(cuenta, ev, miembro, rutaJson) {
+    if (miembro) {
+        // Comunidad: el JSON esta en la PC del miembro; se lo pide, se arma y se lo devuelve su Monitor Link.
+        const r = await deps.pedirAccion(miembro, { action: 'account_json', file: cuenta.fileNameXml }, 60000);
+        if (!r.ok || !r.json) return;
+        const datos = aplicarColeccion(JSON.parse(r.json.replace(/^\uFEFF/, '')), ev);
+        if (!datos) return;
+        const nuevo = JSON.stringify(datos, null, 2);
+        await deps.pedirAccion(miembro, { action: 'write_json', file: cuenta.fileNameXml, content: Buffer.from(nuevo, 'utf8').toString('base64') }, 60000);
+        return;
+    }
+    if (!rutaJson) return;
+    const archivo = path.join(rutaJson, cuenta.archivoJson);
+    if (!fs.existsSync(archivo)) return;
+    const texto = fs.readFileSync(archivo, 'utf8');
+    const datos = aplicarColeccion(JSON.parse(texto.replace(/^\uFEFF/, '')), ev);
+    if (!datos) return;
+    fs.writeFileSync(`${archivo}.bak`, texto);
+    fs.writeFileSync(archivo, JSON.stringify(datos, null, 2));
 }
 
 async function guardarDust(cuenta, ev, miembro = null) {
@@ -765,6 +815,11 @@ async function refrescarDust(runId, cuentas, alProgreso, miembro = null) {
                 estado.ok++;
                 estado.ultimo = { nombre: cuenta?.nombreCuenta || ev.key, antes: cuenta?.valorJson, dust: ev.dust, tickets: ev.tickets, inv: ev.inv || {} };
                 edicion = edicion.then(() => guardarDust(cuenta, ev, miembro)).catch(() => {});
+                // Coleccion real del juego -> JSON de la cuenta (sincronizar cartas).
+                if (Array.isArray(ev.cards) && ev.cards.length) {
+                    edicion = edicion.then(() => actualizarColeccion(cuenta, ev, miembro, rutaJsonActual))
+                        .catch(e => console.error('DEBUG: sincronizar cartas:', e?.message || e));
+                }
             } else {
                 estado.fallas++;
                 if (estado.errores.length < 30) estado.errores.push(`${cuenta?.nombreCuenta || ev.key}: ${ev.msg || 'failed'}`);
@@ -792,6 +847,7 @@ function barra(hechas, total) {
 async function manejarDust(interaction, idForzado = null) {
     const id = idForzado || interaction.customId;
     const rutaJson = (await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`))?.webhook_url;
+    rutaJsonActual = rutaJson;
     const miembro = deps.usuarioComunidad?.() || null;
 
     // Una cuenta: menu con las de la pagina actual del reporte.
