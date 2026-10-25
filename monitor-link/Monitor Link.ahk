@@ -17,7 +17,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.7.0"
+global VERSION := "ahk-1.7.1"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -437,10 +437,11 @@ AtenderTrabajo(id, lista) {
     while (p := RegExMatch(lista, """((?:[^""\\]|\\.)*)""", mn, p)) {
         p += StrLen(mn)
         nombre := JsonUnesc(mn1)
-        ruta := RutaDeXml(nombre)
+        ; Not "ruta": AHK names ignore case, so it would overwrite the global Ruta (Main Path).
+        xml := RutaDeXml(nombre)
         contenido := ""
-        if (ruta != "")
-            FileRead, contenido, %ruta%
+        if (xml != "")
+            FileRead, contenido, %xml%
         if (contenido != "") {
             archivos .= (archivos = "" ? "" : ",") . """" . JsonEsc(nombre) . """:""" . JsonEsc(contenido) . """"
             enviados++
@@ -563,9 +564,9 @@ RutaMuMuManager() {
     for _, disco in StrSplit("CDEFGHIJ")
         for _, carpeta in ["MuMuPlayer", "MuMuPlayerGlobal-12.0"]
             for _, sub in ["nx_main", "shell"] {
-                ruta := disco . ":\Program Files\Netease\" . carpeta . "\" . sub . "\MuMuManager.exe"
-                if FileExist(ruta)
-                    return ruta
+                exe := disco . ":\Program Files\Netease\" . carpeta . "\" . sub . "\MuMuManager.exe"
+                if FileExist(exe)
+                    return exe
             }
     return ""
 }
@@ -668,10 +669,10 @@ InyectarEnMuMu(id, archivo, index, nombre) {
 
 ; The .xml files live in Accounts\Saved (numbered subfolders), next to Accounts\Cards.
 RutaDeXml(nombre) {
-    clave := RegExMatch(nombre, "i)\.xml$") ? nombre : nombre . ".xml"
-    if (!IsObject(IndiceXml) || IndiceDe != CarpetaJson || !IndiceXml.HasKey(clave))
+    archivo := RegExMatch(nombre, "i)\.xml$") ? nombre : nombre . ".xml"
+    if (!IsObject(IndiceXml) || IndiceDe != CarpetaJson || !IndiceXml.HasKey(archivo))
         ArmarIndiceXml()
-    return IndiceXml.HasKey(clave) ? IndiceXml[clave] : ""
+    return IndiceXml.HasKey(archivo) ? IndiceXml[archivo] : ""
 }
 
 ArmarIndiceXml() {
