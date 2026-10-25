@@ -154,6 +154,28 @@ def limpiar_amigos_si_hace_falta(sess, pid_main):
         pass  # si no se puede limpiar, se intenta igual
 
 
+def usar_idioma_de_la_cuenta(at, sess):
+    """Idioma de la carta (2026-10-24): el motor ofrece/comparte siempre en ingles (lang=2) y el
+    juego rechaza el trade (ABORTED 4008) si la cuenta tiene el juego en otro idioma -- las cuentas
+    de creeeder91 fallaban con cualquier carta y las de Ale (EN) no. Se usa el idioma real de la
+    cuenta, sin tocar el motor."""
+    try:
+        lang = int(sess.get_player_settings().get("language_type") or 0)
+    except Exception:
+        return
+    if lang <= 0 or lang == 2:
+        return
+    original = sess.submit_trade_proposal
+
+    def submit_con_idioma(*args, **kw):
+        kw["lang"] = lang
+        return original(*args, **kw)
+
+    sess.submit_trade_proposal = submit_con_idioma
+    at.LANG_ENUM = dict(at.LANG_ENUM, EN=lang)  # run_share_flow pide "EN" fijo
+    print(f"  [Lang] account language {lang} (not EN) — offering cards in that language", flush=True)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--engine-dir", required=True)
@@ -253,6 +275,7 @@ def main():
         emitir("login", "error", error_legible(e))
         return 1
     emitir("login", "ok", getattr(sess, "nickname", "") or "")
+    usar_idioma_de_la_cuenta(at, sess)
 
     pid = None
     try:
