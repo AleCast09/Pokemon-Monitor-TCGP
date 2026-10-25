@@ -17,7 +17,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.5.0"
+global VERSION := "ahk-1.5.1"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -625,12 +625,24 @@ ArmarIndiceXml() {
 }
 
 ; ---------------------------------------------------------------- self-update
+; "ahk-1.10.0" vs "ahk-1.9.2": true if the first one is newer.
+VersionMasNueva(a, b) {
+    a := StrSplit(RegExReplace(a, "[^0-9.]"), "."), b := StrSplit(RegExReplace(b, "[^0-9.]"), ".")
+    Loop, 3 {
+        x := (a[A_Index] = "" ? 0 : a[A_Index]) + 0, y := (b[A_Index] = "" ? 0 : b[A_Index]) + 0
+        if (x != y)
+            return x > y
+    }
+    return false
+}
+
 ; The bot tells (in the ping) the latest published version. If it's different, download it, check it
 ; is really Monitor Link, replace this file and restart. The link and the window stay the same.
 ActualizarSiHayVersion(texto) {
     if !RegExMatch(texto, """ahk""\s*:\s*\{[^}]*""version""\s*:\s*""([^""]+)""[^}]*""url""\s*:\s*""([^""]+)""", ma)
         return
-    if (ma1 = VERSION || !RegExMatch(ma2, "^https://github\.com/"))
+    ; Only to a NEWER version (never back to an older published one).
+    if (!VersionMasNueva(ma1, VERSION) || !RegExMatch(ma2, "^https://github\.com/"))
         return
     nuevo := A_Temp . "\MonitorLink_update.ahk"
     UrlDownloadToFile, %ma2%, %nuevo%
