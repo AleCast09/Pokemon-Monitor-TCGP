@@ -16328,7 +16328,7 @@ async function sincronizarCanales(interaction) {
                             description: [
                                 'To use the bot with **your own accounts**, link your PC once:',
                                 '',
-                                `**1.** Download **Monitor Link**: ${ml?.url ? `[MonitorLink.ahk](${ml.url})` : 'ask staff for the link'}`,
+                                `**1.** Download **Monitor Link**: ${ml?.fija || ml?.url ? `[MonitorLink.ahk](${ml.fija || ml.url})` : 'ask staff for the link'}`,
                                 '**2.** Put it **inside your PTCGPB folder** (next to PTCGPB.ahk) and double-click it.',
                                 '**3.** Type **/link** here, copy the key and paste it in Monitor Link → **Link**.',
                                 '',

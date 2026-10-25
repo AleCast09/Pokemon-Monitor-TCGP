@@ -39,8 +39,21 @@ execFileSync('gh', ['release', 'create', tag, zip, ahk, '--prerelease', '--lates
     '--title', `Community host ${version}`, '--notes', 'Automatic update for the Zenith Rise hosts and Monitor Link. Not an update for Monitor Pokemon.'],
 { cwd: RAIZ, stdio: 'inherit' });
 
+// Link fijo para el canal de bienvenida: el release "monitor-link" siempre tiene el ultimo
+// MonitorLink.ahk (se reemplaza en cada publicacion), asi ese link nunca queda viejo.
+const TAG_FIJO = 'monitor-link';
+try {
+    execFileSync('gh', ['release', 'view', TAG_FIJO], { cwd: RAIZ, stdio: 'ignore' });
+} catch (e) {
+    execFileSync('gh', ['release', 'create', TAG_FIJO, '--prerelease', '--latest=false', '--target', 'main',
+        '--title', 'Monitor Link (always the latest)', '--notes', 'MonitorLink.ahk for Zenith Rise members. This file is replaced with every update.'],
+    { cwd: RAIZ, stdio: 'inherit' });
+}
+execFileSync('gh', ['release', 'upload', TAG_FIJO, ahk, '--clobber'], { cwd: RAIZ, stdio: 'inherit' });
+
 const base = `https://github.com/${repo}/releases/download/${tag}`;
-const release = { version, url: `${base}/MonitorPokemon-Host.zip`, ahk: { version: versionAhk, url: `${base}/MonitorLink.ahk` } };
+const release = { version, url: `${base}/MonitorPokemon-Host.zip`, ahk: { version: versionAhk, url: `${base}/MonitorLink.ahk`,
+    fija: `https://github.com/${repo}/releases/download/${TAG_FIJO}/MonitorLink.ahk` } };
 (async () => {
     const r = await fetch(process.env.LINK_REDIS_URL, {
         method: 'POST', headers: { Authorization: `Bearer ${process.env.LINK_REDIS_TOKEN}` },
@@ -48,5 +61,5 @@ const release = { version, url: `${base}/MonitorPokemon-Host.zip`, ahk: { versio
     });
     if (!r.ok) throw new Error(`Upstash ${r.status}`);
     console.log(`✅ Published. Hosts update within 30 min; Monitor Link within a minute.`);
-    console.log(`   Monitor Link download: ${release.ahk.url}`);
+    console.log(`   Monitor Link download (fixed link): ${release.ahk.fija}`);
 })().catch(e => { console.error('❌', e.message); process.exit(1); });
