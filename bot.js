@@ -3010,8 +3010,19 @@ function coincidenciasReleaseAutocomplete(base, focused) {
     return filtradas.slice(0, 25).map(c => ({ name: `${c} (${mapaCategorias[c].size} expansions)`.slice(0, 100), value: c }));
 }
 
+// Nombres de respaldo (2026-10-25, bug real en el host de wr98: su PTCGPB es otra version y su
+// en_US.json no trae EXPANSION_NAME_*, asi que las expansiones quedaban como "A1", "B2"... y el
+// collage de grupos solo encontraba Promo A). Los del en_US.json del host, si los tiene, mandan.
+let _nombresExpansionRespaldo = null;
+function nombresExpansionRespaldo() {
+    if (!_nombresExpansionRespaldo) {
+        try { _nombresExpansionRespaldo = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'expansion_names.json'), 'utf8')); } catch (e) { _nombresExpansionRespaldo = {}; }
+    }
+    return _nombresExpansionRespaldo;
+}
+
 function construirMapaExpansiones(en_US) {
-    const mapa = {};
+    const mapa = { ...nombresExpansionRespaldo() };
     if (!en_US) return mapa;
     for (const key of Object.keys(en_US)) {
         const match = key.match(/^EXPANSION_NAME_(\d+)$/);
