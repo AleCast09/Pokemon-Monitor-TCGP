@@ -3986,9 +3986,22 @@ function trainerTypeDesdeId(cartaId, rutaMasterPath) {
 // en el detalle de una carta puntual (tipoIngles para Pokémon, TrainerType para
 // Entrenador) — reusado acá para poder agrupar/filtrar la LISTA de cartas, no solo
 // mostrarlo en el detalle de una ya elegida.
+// Tipo por codigo de carta (2026-10-25, bug real en el host de wr98: su PTCGPB es otra version y el
+// nombre que sale de su en_US.json no matchea card_types.json, asi que no salia ningun tipo).
+// assets/card_elements.json se arma con los datos de Ale: { "PK_10_006190_00": "Water", ... }.
+let _elementosPorCodigo = null;
+function elementoPorCodigo(info) {
+    const codigo = (String(info?.IllustrationID || '').match(/^c?(PK_\d+_\d+_\d+)/) || [])[1];
+    if (!codigo) return null;
+    if (!_elementosPorCodigo) {
+        try { _elementosPorCodigo = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'card_elements.json'), 'utf8')); } catch (e) { _elementosPorCodigo = {}; }
+    }
+    return _elementosPorCodigo[codigo] || null;
+}
+
 function elementoDesdeInfo(info, nombreCarta) {
     if (!info) return null;
-    const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombreCarta)];
+    const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombreCarta)] || elementoPorCodigo(info);
     if (tipoIngles) return tipoIngles;
     if (info.TrainerType !== undefined) return TEXTO_POR_TRAINER_TYPE[info.TrainerType] || 'Trainer';
     return null;
@@ -4037,7 +4050,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
             || (await obtenerImagenRepoCartasBot(rutaMasterPath, info?.IllustrationID));
     }
 
-    const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombre)];
+    const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombre)] || elementoPorCodigo(info);
     const trainerType = trainerTypeDesdeId(cartaId, rutaMasterPath);
     let elemento;
     if (tipoIngles) {
