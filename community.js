@@ -138,17 +138,18 @@ async function rolMonitor(guild) {
 // barra de escribir y no se puede usar /card; cualquier mensaje normal de un miembro lo borra el bot al
 // instante (bot.js, messageCreate). No reaccionan, no crean hilos ni suben archivos, y gestionar
 // canales/mensajes nunca se les da (nadie puede borrar ni editar nada del bot).
-//   'todos'   -> @everyone (bienvenida)       'monitor' -> rol Monitor + Staff
+//   'todos'   -> @everyone (bienvenida)       'monitor' -> tambien @everyone + el rol Monitor
+// Canales a la vista de todos (2026-10-26, pedido de Ale: "nadie entra a los canales, nadie descarga el
+// monitor"): cualquiera ve MANAGER / RUN MUMU PLAYER; los comandos y paneles le piden vincularse si no
+// tiene el rol Monitor (bot.js, avisoVincularPrimero). El rol se sigue dando con /link.
 async function permisosCategoria(guild, acceso) {
     const F = PermissionsBitField.Flags;
     const usar = [F.ViewChannel, F.ReadMessageHistory, F.UseApplicationCommands, F.UseExternalEmojis, F.SendMessages];
     const nada = [F.SendMessagesInThreads, F.CreatePublicThreads, F.CreatePrivateThreads, F.AddReactions,
         F.AttachFiles, F.EmbedLinks, F.MentionEveryone, F.ManageMessages, F.ManageThreads, F.ManageChannels, F.ManageWebhooks];
     const salida = [{ id: guild.members.me.id, allow: [F.Administrator, F.ViewChannel] }];
-    if (acceso === 'todos') {
-        salida.push({ id: guild.roles.everyone.id, allow: usar, deny: nada });
-    } else {
-        salida.push({ id: guild.roles.everyone.id, allow: [F.UseExternalEmojis], deny: [F.ViewChannel, ...nada] });
+    salida.push({ id: guild.roles.everyone.id, allow: usar, deny: nada });
+    if (acceso !== 'todos') {
         const monitor = await rolMonitor(guild);
         if (monitor) salida.push({ id: monitor.id, type: OverwriteType.Role, allow: usar, deny: nada });
     }

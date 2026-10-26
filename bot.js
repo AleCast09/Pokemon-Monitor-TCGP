@@ -11365,6 +11365,18 @@ async function manejarInteraccionPrincipal(interaction) {
                 content: `🔒 This belongs to <@${dueno}> — only they can use these buttons. Open your own with **📋 View my Wishlist** or **/card**.` }).catch(() => {});
         }
     }
+    // Canales a la vista de todos (2026-10-26, pedido de Ale): sin el rol Monitor, los comandos (menos
+    // /link) y los paneles de los canales le dicen donde descargar Monitor Link. Lo de un mensaje con
+    // dueño ya lo cubre el guardia de arriba; los tutoriales quedan abiertos.
+    if (comunidad.esComunidad(interaction.guildId) && interaction.member && !comunidad.esStaff(interaction.user.id, interaction.member)) {
+        const esComando = interaction.isChatInputCommand() && interaction.commandName !== 'link';
+        const esPanel = interaction.isMessageComponent?.() && !interaction.message?.interactionMetadata && !interaction.message?.interaction
+            && !interaction.customId.startsWith('tutorial_');
+        if (esComando || esPanel) {
+            const rol = await comunidad.rolMonitor(interaction.guild).catch(() => null);
+            if (rol && !interaction.member.roles.cache.has(rol.id)) return await avisoVincularPrimero(interaction);
+        }
+    }
     // Comunidad + Monitor Link: las cartas salen del resumen que subio el programa de ESTE usuario.
     if (comunidad.esComunidad(interaction.guildId) && interaction.user) {
         const vinculado = await monitorLink.precargar(interaction.user.id).catch(() => false);
@@ -16570,6 +16582,25 @@ async function actualizarControlHost(hosts, conTurno) {
         const nuevo = await canal.send(payload).catch(() => null);
         if (nuevo) await hostComunidad.guardarControl({ canal: canal.id, msg: nuevo.id });
     }
+}
+
+// Aviso privado para quien usa un comando o panel sin haber vinculado su PC (sin rol Monitor).
+async function avisoVincularPrimero(interaction) {
+    const ml = await monitorLink.ultimoMonitorLink().catch(() => null);
+    const descarga = ml?.fija || ml?.url;
+    const inicio = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'start_here'`, [interaction.guildId]).catch(() => null);
+    const embed = new EmbedBuilder().setColor(0xF0A93A).setTitle('🔗 Link your PC to use the bot')
+        .setDescription([
+            'The bot works with **your own accounts** — link your PC once:',
+            '',
+            `**1.** Download **Monitor Link**: ${descarga ? `[MonitorLink.ahk](${descarga})` : 'ask staff for the link'}`,
+            '**2.** Put it **inside your PTCGPB folder** (next to PTCGPB.ahk) and double-click it.',
+            '**3.** Type **/link**, copy the key and paste it in Monitor Link → **Link**.',
+            '',
+            `✅ You get the **Monitor** role and every command works.${inicio?.canal_id ? `\nMore info in <#${inicio.canal_id}>.` : ''}`
+        ].join('\n'));
+    const payload = { embeds: [embed], ephemeral: true };
+    return interaction.deferred || interaction.replied ? interaction.followUp(payload).catch(() => {}) : interaction.reply(payload).catch(() => {});
 }
 
 // Botones de control de host. Se atienden ANTES del filtro de "solo el host activo contesta": el que
