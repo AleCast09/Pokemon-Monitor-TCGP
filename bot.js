@@ -16682,7 +16682,9 @@ async function limpiarPanelesDeOtrosBots(guild) {
         const canal = guild.channels.cache.get(p.canal);
         if (!canal?.isTextBased?.()) continue;
         const m = await canal.messages.fetch(p.msg).catch(() => null);
-        if (m && m.author?.id !== client.user.id && m.applicationId !== client.user.id) await m.delete().catch(() => {});
+        // Solo con botones (2026-10-27, bug real: se borro la bienvenida de Start here -- el bot nuevo no
+        // publica una bienvenida si ya esta la del otro, y aca se la llevaba igual).
+        if (m && m.components?.length && m.author?.id !== client.user.id && m.applicationId !== client.user.id) await m.delete().catch(() => {});
         await hostComunidad.olvidarPanel(p.msg);
     }
 }
