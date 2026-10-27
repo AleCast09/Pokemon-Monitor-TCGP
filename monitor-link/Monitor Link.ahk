@@ -1,4 +1,4 @@
-; Monitor Link (AutoHotkey v1) -- same job as monitor-link.js, but it runs with the AutoHotkey that
+﻿; Monitor Link (AutoHotkey v1) -- same job as monitor-link.js, but it runs with the AutoHotkey that
 ; PTCGPB already uses: no unknown .exe, no Windows SmartScreen warning, and anyone can open this file
 ; in Notepad and read exactly what it does.
 ;
@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.8.0"
+global VERSION := "ahk-1.8.1"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -183,9 +183,23 @@ Vincular:
     }
     url := RTrim(partes[1], "/")
     GuiControl, Disable, BtnLink
-    try {
-        r := Http("POST", url . "/link/claim", "{""code"":""" . JsonEsc(partes[2]) . """,""version"":""" . VERSION . """}", "application/json; charset=utf-8")
-    } catch e {
+    cuerpo := "{""code"":""" . JsonEsc(partes[2]) . """,""version"":""" . VERSION . """}"
+    r := ""
+    try r := Http("POST", url . "/link/claim", cuerpo, "application/json; charset=utf-8")
+    ; The bot's address changes when it restarts: if the one in the key is gone, use the current one
+    ; from the address book (ML2 keys carry it) and try again.
+    if (!IsObject(r) || r.status = 404 && !InStr(r.text, "invalid_or_expired_code") || r.status >= 500) {
+        if (partes.Length() >= 4) {
+            try {
+                lr := Http("GET", partes[3] . "/get/monitor_link:url", "", "", partes[4], 15)
+                if (RegExMatch(lr.text, """result""\s*:\s*""([^""]+)""", ml) && RTrim(ml1, "/") != url) {
+                    url := RTrim(ml1, "/")
+                    try r := Http("POST", url . "/link/claim", cuerpo, "application/json; charset=utf-8")
+                }
+            }
+        }
+    }
+    if (!IsObject(r)) {
         GuiControl, Enable, BtnLink
         MsgBox, 48, Monitor Link, Could not reach the bot. Is the bot's PC on? Try again.
         return
