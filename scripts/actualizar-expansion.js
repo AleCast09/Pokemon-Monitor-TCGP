@@ -20,10 +20,14 @@ const axios = require('axios');
 const sharp = require('sharp');
 
 const RAIZ = path.join(__dirname, '..');
+// En un host de la comunidad (wr98) la base y la carpeta del motor vienen del .env de su carpeta de host
+// (%LOCALAPPDATA%\MonitorPokemonHost); en la PC de Ale, del .env de este repo.
+const ENV_HOST = path.join(process.env.LOCALAPPDATA || os.homedir(), 'MonitorPokemonHost', '.env');
+require('dotenv').config({ path: fs.existsSync(ENV_HOST) ? ENV_HOST : path.join(RAIZ, '.env'), quiet: true });
 const SIMULAR = process.argv.includes('--simular');
 const SIN_PREGUNTAR = process.argv.includes('--si');
 const LEANNY = 'https://leanny.github.io/pocket_tcg_resources';
-const MOTOR = 'C:\\Users\\Ale TCG\\Desktop\\ptcgp-capturedeluxe';
+const MOTOR = process.env.FAST_TRANSFER_ENGINE_DIR || 'C:\\Users\\Ale TCG\\Desktop\\ptcgp-capturedeluxe';
 const REPO_IMAGENES = 'AleCast09/Pokemon-TCGP-Card-Image';
 const DESCARGAS = path.join(os.homedir(), 'Downloads');
 const EXPANSIONS_DIR = path.join(RAIZ, 'assets', 'expansions');
@@ -38,7 +42,7 @@ const pendientes = [];
 function carpetaHelper() {
     try {
         const { DatabaseSync } = require('node:sqlite');
-        const db = new DatabaseSync(path.join(RAIZ, 'database.db'), { readOnly: true });
+        const db = new DatabaseSync(process.env.MONITOR_DB_PATH || path.join(RAIZ, 'database.db'), { readOnly: true });
         const fila = db.prepare(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`).get();
         db.close();
         if (fila?.webhook_url && fs.existsSync(path.join(fila.webhook_url, 'cardmaster.json'))) return fila.webhook_url;
@@ -277,6 +281,11 @@ async function paso6Repo(helper, bajadas) {
     console.log('\n6) Repo de imagenes (respaldo de los otros hosts)');
     if (!bajadas.length) return console.log('   Nada nuevo para subir.');
     if (SIMULAR) return console.log(`   Subiria ${bajadas.length} imagenes.`);
+    // Solo quien puede escribir en el repo (Ale, con gh logueado); en otro host se salta sin preguntar.
+    try {
+        const permiso = execFileSync('gh', ['api', `repos/${REPO_IMAGENES}`, '--jq', '.permissions.push'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+        if (permiso !== 'true') return console.log('   (sin permiso de escritura en el repo, se salta)');
+    } catch (e) { return console.log('   (gh no esta disponible, se salta)'); }
     if (!SIN_PREGUNTAR) {
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
         const resp = await new Promise(r => rl.question(`   ¿Subir ${bajadas.length} imagenes nuevas a ${REPO_IMAGENES}? (s/n) `, r));
