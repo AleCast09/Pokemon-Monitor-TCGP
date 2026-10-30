@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.8.1"
+global VERSION := "ahk-1.8.2"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -27,7 +27,7 @@ global UltimaHuella := "", UltimoEnvio := "", CuentasEnviadas := 0, EnLinea := f
 global JobsReq := "", JobsReintento := 0, IndiceXml := "", IndiceDe := ""
 ; The other community hosts (the ping lists them): they get the same summary, so whichever takes over
 ; already has your accounts -- even if this PC is off by then.
-global Espejos := []
+global Espejos := [], UltimoEspejo := 0
 global Status, Info, Clave, BtnLink, Inicio, LinkBox
 
 CargarConfig()
@@ -312,8 +312,13 @@ SubirResumen(forzar, folderError := "") {
         PintarEstado()
         return
     }
-    for _, espejo in Espejos
-        try Http("POST", espejo . "/link/summary", body, "text/plain; charset=utf-8", Token, 120)
+    ; The other hosts at most every 30 min (or right away when a host appears): while uploading, this
+    ; script can't answer Discord, and the bot said "Monitor Link is not running".
+    if (Espejos.Length() && (forzar || A_TickCount - UltimoEspejo > 1800000 || !UltimoEspejo)) {
+        for _, espejo in Espejos
+            try Http("POST", espejo . "/link/summary", body, "text/plain; charset=utf-8", Token, 120)
+        UltimoEspejo := A_TickCount
+    }
     UltimaHuella := huella, CuentasEnviadas := cuentas, EnLinea := true, UltimoError := ""
     FormatTime, UltimoEnvio,, HH:mm
     PintarEstado()
