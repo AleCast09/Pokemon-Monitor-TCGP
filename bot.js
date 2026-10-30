@@ -10856,7 +10856,7 @@ function buscarCartasPorTexto(cartas, texto) {
         .sort((a, b) => a.nombre.localeCompare(b.nombre) || String(a.expansion).localeCompare(String(b.expansion)));
 }
 
-function construirListaBusquedaCartas(resultados, texto, pagina) {
+function construirListaBusquedaCartas(resultados, texto, pagina, mapaEmojis = {}) {
     const paginas = Math.max(1, Math.ceil(resultados.length / BUSQUEDA_CARTAS_POR_PAGINA));
     pagina = Math.min(Math.max(0, pagina), paginas - 1);
     const inicio = pagina * BUSQUEDA_CARTAS_POR_PAGINA;
@@ -10866,7 +10866,12 @@ function construirListaBusquedaCartas(resultados, texto, pagina) {
     const embed = new EmbedBuilder()
         .setColor(0x3498DB)
         .setTitle(`🔎 Results for "${texto}"`)
-        .setDescription(items.map((c, i) => `**${inicio + i + 1}.** ${c.nombre} — ${c.expansion} (${textoSinEmoji(c.categoria)})`).join('\n').slice(0, 4000))
+        // Con el emoji del tipo y los de la rareza (2026-10-30, a pedido de Ale), como en el resto del bot.
+        .setDescription(items.map((c, i) => {
+            const tipo = tagTipoBot(emojiKeyDesdeElemento(c.elemento), mapaEmojis);
+            const rareza = formatearCategoriaConIcono(c.tipoRareza, mapaEmojis) || textoSinEmoji(c.categoria);
+            return `**${inicio + i + 1}.** ${tipo ? `${tipo} ` : ''}${c.nombre} — ${c.expansion} · ${rareza}`;
+        }).join('\n').slice(0, 4000))
         .setFooter({ text: `${resultados.length} card(s) · Page ${pagina + 1}/${paginas} · Pick one below` });
     const menu = new StringSelectMenuBuilder()
         .setCustomId(`cardsearch_sel::${pagina}::${textoId}`.slice(0, 100))
@@ -10874,7 +10879,8 @@ function construirListaBusquedaCartas(resultados, texto, pagina) {
         .addOptions(items.map((c, i) => ({
             label: `${inicio + i + 1}. ${c.nombre}`.slice(0, 100),
             description: `${c.expansion} (${textoSinEmoji(c.categoria)})`.slice(0, 100),
-            value: c.id
+            value: c.id,
+            ...(emojiOpcionPorElemento(c.elemento, mapaEmojis) ? { emoji: emojiOpcionPorElemento(c.elemento, mapaEmojis) } : {})
         })));
     const componentes = [new ActionRowBuilder().addComponents(menu)];
     if (paginas > 1) {
@@ -11074,7 +11080,7 @@ client.on('interactionCreate', async interaction => {
                 const texto = esBusqueda ? cartaId.slice(PREFIJO_BUSQUEDA_CARTA.length) : cartaId;
                 const resultados = buscarCartasPorTexto(cartas, texto);
                 if (!resultados.length) return await interaction.editReply({ content: `❌ No card found for "${texto}".` });
-                if (resultados.length > 1) return await interaction.editReply(construirListaBusquedaCartas(resultados, texto, 0));
+                if (resultados.length > 1) return await interaction.editReply(construirListaBusquedaCartas(resultados, texto, 0, await obtenerMapaEmojisGuild(interaction.guild)));
                 const unica = resultados[0];
                 return await interaction.editReply(await construirEmbedDetalleCarta(unica.id, unica.nombre, rutaMasterPath, null, interaction.guild));
             }
@@ -11103,7 +11109,7 @@ client.on('interactionCreate', async interaction => {
         const texto = resto.join('::');
         await interaction.deferUpdate();
         const { cartas } = await obtenerTodasLasCartasCacheadas();
-        return await interaction.editReply(construirListaBusquedaCartas(buscarCartasPorTexto(cartas, texto), texto, parseInt(paginaTxt, 10) || 0));
+        return await interaction.editReply(construirListaBusquedaCartas(buscarCartasPorTexto(cartas, texto), texto, parseInt(paginaTxt, 10) || 0, await obtenerMapaEmojisGuild(interaction.guild)));
     }
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('cardsearch_sel::')) {
         await interaction.deferUpdate();
