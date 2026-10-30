@@ -10583,7 +10583,9 @@ function buscarLogoExpansionBot(nombreExpansion) {
 // group do you want to browse?" antes del picker de releases de siempre.
 function grupoDeRelease(cat) {
     const texto = String(cat || '');
-    const m = texto.match(/^([AB])\d/i) || texto.match(/^PROMO-([AB])$/i);
+    // Special Pack (SP1 First Partners) salio con la serie C -> va en el Grupo C.
+    if (/^SP\d/i.test(texto)) return 'C';
+    const m = texto.match(/^([ABC])\d/i) || texto.match(/^PROMO-([ABC])$/i);
     return m ? m[1].toUpperCase() : null;
 }
 
@@ -10713,7 +10715,8 @@ async function construirEmbedGruposSerie(gruposDisponibles, mapaCategorias, tota
     const prefijo = opciones.prefijo || 'allcards';
     const letras = [...gruposDisponibles].sort();
     const letraActual = letras.includes(opciones.grupoActual) ? opciones.grupoActual : letras[0];
-    const otraLetra = letras.find(l => l !== letraActual) || letraActual;
+    // Con 3+ grupos (Serie C desde 2026-10-30) "Next" recorre en ciclo A -> B -> C -> A.
+    const otraLetra = letras[(letras.indexOf(letraActual) + 1) % letras.length];
 
     const categoriasDelGrupo = Object.keys(mapaCategorias).filter(c => grupoDeRelease(c) === letraActual);
     const expansionesDelGrupo = [...new Set(categoriasDelGrupo.flatMap(c => [...mapaCategorias[c]]))].sort((a, b) => a.localeCompare(b));
@@ -10723,7 +10726,7 @@ async function construirEmbedGruposSerie(gruposDisponibles, mapaCategorias, tota
     const embed = new EmbedBuilder()
         .setTitle(`📦 Group ${letraActual}`)
         .setDescription(`🔎 **Select an expansion directly below**, browse the whole group, or check the other one (${totalCartas} total cards):`)
-        .setColor(letraActual === 'A' ? 0x3498DB : 0xE91E63)
+        .setColor({ A: 0x3498DB, B: 0xE91E63, C: 0x9B59B6 }[letraActual] || 0x3498DB)
         .setFooter({ text: `${categoriasDelGrupo.length} release(s) • ${expansionesDelGrupo.length} expansions` });
 
     const archivos = [];
@@ -10748,7 +10751,7 @@ async function construirEmbedGruposSerie(gruposDisponibles, mapaCategorias, tota
         new ButtonBuilder()
             .setCustomId(`${prefijo}_grupo_serie_seleccion::${letraActual}`)
             .setLabel(`🔎 Browse Group ${letraActual}`)
-            .setStyle(letraActual === 'A' ? ButtonStyle.Primary : ButtonStyle.Danger),
+            .setStyle({ A: ButtonStyle.Primary, B: ButtonStyle.Danger, C: ButtonStyle.Success }[letraActual] || ButtonStyle.Primary),
         ...(letras.length > 1 ? [new ButtonBuilder()
             .setCustomId(`${prefijo}_grupo_serie_ver::${otraLetra}`)
             .setLabel(`Group ${otraLetra} ➡️`)
@@ -13252,7 +13255,7 @@ async function manejarInteraccionPrincipal(interaction) {
     // muestra ANTES del picker de release de siempre, cuando hay 2+ grupos distintos. Solo
     // allcards/goldcards pasan por construirEmbedResumenExpansiones -- wishlist ya salta
     // directo al collage+dropdown de cartas, nunca llega a este paso.
-    if (interaction.isButton() && interaction.customId.match(/^(allcards|goldcards)_grupo_serie_seleccion::([AB])$/)) {
+    if (interaction.isButton() && interaction.customId.match(/^(allcards|goldcards)_grupo_serie_seleccion::([ABC])$/)) {
         await interaction.deferUpdate();
         await avisarCargandoCartas(interaction);
         try {
@@ -13271,7 +13274,7 @@ async function manejarInteraccionPrincipal(interaction) {
     // Boton "Next" (2026-08-31, a pedido explicito del usuario: "mejor pongamos solo uno y
     // abajo diga Grupo A / Next") -- alterna que grupo se ve, SIN entrar a explorarlo todavia
     // (a diferencia de _grupo_serie_seleccion, que si avanza de paso).
-    if (interaction.isButton() && interaction.customId.match(/^(allcards|goldcards)_grupo_serie_ver::([AB])$/)) {
+    if (interaction.isButton() && interaction.customId.match(/^(allcards|goldcards)_grupo_serie_ver::([ABC])$/)) {
         await interaction.deferUpdate();
         await avisarCargandoCartas(interaction);
         try {
