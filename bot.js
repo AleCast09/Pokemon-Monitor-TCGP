@@ -3224,12 +3224,25 @@ async function obtenerListadoArchivosDriveBot(subfolderId, apiKey) {
     return archivos;
 }
 
+let _numerosHdOverrideBot = null;
+function numerosHdOverrideBot() {
+    if (!_numerosHdOverrideBot) {
+        try { _numerosHdOverrideBot = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'override_hd_numbers.json'), 'utf8')); } catch (e) { _numerosHdOverrideBot = {}; }
+    }
+    return _numerosHdOverrideBot;
+}
+
 async function obtenerImagenHDBot(cardMap, cartaId, forzar = false) {
     const info = cardMap?.[cartaId];
     if (!info?.ExpansionID || !info?.CollectionNumber || !GOOGLE_DRIVE_API_KEY_BOT || !GOOGLE_DRIVE_HD_ENABLED_BOT) return null;
 
-    const localId = String(info.CollectionNumber).padStart(3, '0');
-    const dirCache = path.join(DRIVE_CACHE_DIR_BOT, info.ExpansionID);
+    // Print original de una reimpresion de Deluxe (2026-10-30, Bombirdier de Pulsing Aura salia en baja
+    // calidad): los datos lo marcan como del Deluxe (B4b), que no tiene carpeta en el Drive; se busca en
+    // su set original con su numero alli (assets/override_hd_numbers.json, armado desde OVERRIDES_EXPANSION).
+    const original = numerosHdOverrideBot()[cartaId];
+    const expansionHd = original ? original.split('-')[0] : info.ExpansionID;
+    const localId = original ? original.split('-')[1] : String(info.CollectionNumber).padStart(3, '0');
+    const dirCache = path.join(DRIVE_CACHE_DIR_BOT, expansionHd);
     const rutaCache = path.join(dirCache, `${localId}.png`);
     // El chequeo del toggle "Normal Cards HD" (y el apagado automatico por fallos
     // seguidos) va DESPUES de mirar la cache en disco (2026-08-21, bug real
@@ -3244,20 +3257,20 @@ async function obtenerImagenHDBot(cardMap, cartaId, forzar = false) {
 
     try {
         let mapaCarpetas = await obtenerMapaCarpetasDriveBot();
-        let subfolderId = mapaCarpetas[info.ExpansionID];
+        let subfolderId = mapaCarpetas[expansionHd];
         if (!subfolderId) {
             mapaCarpetas = await refrescarMapaCarpetasDriveBot();
-            subfolderId = mapaCarpetas[info.ExpansionID];
+            subfolderId = mapaCarpetas[expansionHd];
         }
         if (!subfolderId) {
-            registrarErrorDriveHd('normal', cartaId, 'carpeta_expansion_no_encontrada', info.ExpansionID);
+            registrarErrorDriveHd('normal', cartaId, 'carpeta_expansion_no_encontrada', expansionHd);
             return null;
         }
 
         const listado = await obtenerListadoArchivosDriveBot(subfolderId, GOOGLE_DRIVE_API_KEY_BOT);
-        const archivo = listado.find(f => f.name.includes(`${info.ExpansionID}-${localId}`));
+        const archivo = listado.find(f => f.name.includes(`${expansionHd}-${localId}`));
         if (!archivo) {
-            registrarErrorDriveHd('normal', cartaId, 'archivo_no_encontrado_en_carpeta', `${info.ExpansionID}-${localId}`);
+            registrarErrorDriveHd('normal', cartaId, 'archivo_no_encontrado_en_carpeta', `${expansionHd}-${localId}`);
             return null;
         }
 
