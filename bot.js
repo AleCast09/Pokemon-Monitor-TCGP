@@ -3141,7 +3141,8 @@ function construirMapaExpansiones(en_US) {
         const match = key.match(/^EXPANSION_NAME_(\d+)$/);
         if (match) {
             const codigo = en_US[key];
-            mapa[codigo] = en_US[`EXPANSION_NAME_LONG_${match[1]}`] || codigo;
+            // Sin nombre largo (PROMO-C el 2026-10-30) manda el respaldo, si lo hay.
+            mapa[codigo] = en_US[`EXPANSION_NAME_LONG_${match[1]}`] || mapa[codigo] || codigo;
         }
     }
     return mapa;
