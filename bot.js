@@ -2336,7 +2336,7 @@ async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, el
     const filtroCategoria = categoria && categoria !== CATEGORIA_SIN_FILTRO ? categoria : null;
 
     const filtradas = ordenarCartasParaLista(
-        cartas.filter(c => c.expansion === expansion && (!filtroCategoria || c.categoria === filtroCategoria) && (!filtroElemento || c.elemento === filtroElemento))
+        cartas.filter(c => c.expansion === expansion && (!filtroCategoria || c.categoria === filtroCategoria) && (!filtroElemento || (c.elemento || 'Other') === filtroElemento))
     );
 
     // Bug real: en categorías como "4 Diamonds", cada carta repite el tag de
@@ -2486,10 +2486,11 @@ function cargarCardMap(rutaMaster) {
     ];
     for (const candidato of candidatos) {
         const data = leerJsonSeguroConTimeout(candidato);
-        if (data) return data;
+        if (data) { _ultimoCardMapBot = data; return data; }
     }
     return null;
 }
+let _ultimoCardMapBot = null; // lo usa tipoPorSetYNumero (tipo de cada carta en su propia expansion)
 
 // cardmap.json (dato externo, no lo genera este proyecto -- varia segun la
 // carpeta "ruta_master" de cada usuario, asi que esto NUNCA se corrige
@@ -4000,9 +4001,55 @@ function elementoPorCodigo(info) {
     return _elementosPorCodigo[codigo] || null;
 }
 
+// Tipo de la carta en SU expansion (2026-10-30, a pedido de Ale): un Pokemon puede cambiar de tipo
+// en un set nuevo (Giratina ex: Psychic en A2b, Dragon en C1). Orden: set + numero del repo de
+// tipos (card_types_by_number.json, lo arma card-types-sync.js) -> codigo de carta -> nombre. Si el
+// set de la carta todavia no esta en el repo, queda SIN tipo (no se adivina por nombre) hasta que
+// el repo lo suba y el sync de cada 12 h lo traiga.
+const SET_REPO_POR_EXPANSION = { 'PROMO-A': 'pa', 'PROMO-B': 'pb', 'PROMO-C': 'pc' };
+let _tiposPorNumeroBot = null, _tiposPorNumeroMtime = 0;
+function cargarTiposPorNumeroBot() {
+    const ruta = path.join(__dirname, 'assets', 'card_types_by_number.json');
+    try {
+        const mtime = fs.statSync(ruta).mtimeMs;
+        if (!_tiposPorNumeroBot || mtime !== _tiposPorNumeroMtime) {
+            const data = JSON.parse(fs.readFileSync(ruta, 'utf8'));
+            _tiposPorNumeroBot = { sets: new Set(data.sets || []), tipos: data.tipos || {} };
+            _tiposPorNumeroMtime = mtime;
+        }
+    } catch (e) { return null; }
+    return _tiposPorNumeroBot;
+}
+// IllustrationID -> { ExpansionID, CollectionNumber }, del ultimo cardmap.json que leyo el bot.
+let _cardMapIndexadoBot = null, _indicePorIlustracionBot = null;
+function datosSetDeCarta(info) {
+    const cardMap = _ultimoCardMapBot;
+    if (!cardMap || !info?.IllustrationID) return null;
+    if (_cardMapIndexadoBot !== cardMap) {
+        _indicePorIlustracionBot = new Map();
+        for (const v of Object.values(cardMap)) if (v?.IllustrationID) _indicePorIlustracionBot.set(v.IllustrationID, v);
+        _cardMapIndexadoBot = cardMap;
+    }
+    return _indicePorIlustracionBot.get(info.IllustrationID) || null;
+}
+// undefined = no se sabe (se sigue buscando), null = set aun no publicado (queda sin tipo).
+function tipoPorSetYNumero(info) {
+    const datos = datosSetDeCarta(info);
+    const repo = cargarTiposPorNumeroBot();
+    if (!datos?.ExpansionID || !repo) return undefined;
+    const set = SET_REPO_POR_EXPANSION[datos.ExpansionID] || String(datos.ExpansionID).toLowerCase();
+    if (!repo.sets.has(set)) return null;
+    return repo.tipos[`${set}-${Number(datos.CollectionNumber)}`];
+}
+function tipoPokemonDeCarta(info, nombreCarta) {
+    const porSet = tipoPorSetYNumero(info);
+    if (porSet !== undefined) return porSet || elementoPorCodigo(info);
+    return elementoPorCodigo(info) || cargarCardTypesBot()[clavenormalizadaTipoCarta(nombreCarta)] || null;
+}
+
 function elementoDesdeInfo(info, nombreCarta) {
     if (!info) return null;
-    const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombreCarta)] || elementoPorCodigo(info);
+    const tipoIngles = tipoPokemonDeCarta(info, nombreCarta);
     if (tipoIngles) return tipoIngles;
     if (info.TrainerType !== undefined) return TEXTO_POR_TRAINER_TYPE[info.TrainerType] || 'Trainer';
     return null;
@@ -4051,7 +4098,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
             || (await obtenerImagenRepoCartasBot(rutaMasterPath, info?.IllustrationID));
     }
 
-    const tipoIngles = cargarCardTypesBot()[clavenormalizadaTipoCarta(nombre)] || elementoPorCodigo(info);
+    const tipoIngles = tipoPokemonDeCarta(info, nombre);
     const trainerType = trainerTypeDesdeId(cartaId, rutaMasterPath);
     let elemento;
     if (tipoIngles) {
@@ -7478,7 +7525,7 @@ async function generarPdfCatalogoCartas(cartas, expansion, opciones = {}) {
     const seleccion = ordenarCartasParaLista(
         (cartas || []).filter(c => c.expansion === expansion
             && (!filtroCategoria || c.categoria === filtroCategoria)
-            && (!filtroElemento || c.elemento === filtroElemento))
+            && (!filtroElemento || (c.elemento || 'Other') === filtroElemento))
     );
     if (!seleccion.length) return null;
 
@@ -10781,6 +10828,7 @@ async function construirCandidatosPreview(rutaMaster) {
     let cardmap = {};
     try {
         cardmap = JSON.parse(fs.readFileSync(path.join(rutaMaster, 'cardmap.json'), 'utf8').replace(/^﻿/, ''));
+        _ultimoCardMapBot = cardmap;
     } catch (e) { /* sin cardmap.json no se puede agrupar por expansión, queda vacío */ }
 
     // Mapa ExpansionID ("B3b") -> nombre de expansión ("Everyday Wonders"), a
@@ -10811,7 +10859,7 @@ async function construirCandidatosPreview(rutaMaster) {
         if (!buscarLogoExpansionBot(nombreExpansion)) continue; // sin logo no sirve para la vista previa
 
         const nombre = normalizarNombreExBot(nombres[entry.Name] || entry.Name);
-        const tipoIngles = cardTypes[clavenormalizadaTipoCarta(nombre)];
+        const tipoIngles = tipoPokemonDeCarta(entry, nombre);
         const carta = {
             nombre,
             rarezaClave,
@@ -11534,7 +11582,7 @@ async function manejarInteraccionPrincipal(interaction) {
         // reportado: mostraba nombres de OTROS elementos, ej. eligiendo element:Item igual
         // sugeria nombres de Pokemon comunes que no son Item para nada).
         const elementoElegido = interaction.options.getString('element');
-        const porElemento = elementoElegido ? porExpansion.filter(c => c.elemento === elementoElegido) : porExpansion;
+        const porElemento = elementoElegido ? porExpansion.filter(c => (c.elemento || 'Other') === elementoElegido) : porExpansion;
         // Sin repetir el mismo id (2026-09-26, bug real reportado en vivo por Ale: "me salieron
         // dos nombres, selecciono uno y me muestra la misma foto"). Desde que una carta
         // compartida entre Deluxe y su expansion original genera DOS entradas de catalogo
@@ -11757,7 +11805,7 @@ async function manejarInteraccionPrincipal(interaction) {
         // reportado: mostraba nombres de OTROS elementos, ej. eligiendo element:Item igual
         // sugeria nombres de Pokemon comunes que no son Item para nada).
         const elementoElegido = interaction.options.getString('element');
-        const porElemento = elementoElegido ? porExpansion.filter(c => c.elemento === elementoElegido) : porExpansion;
+        const porElemento = elementoElegido ? porExpansion.filter(c => (c.elemento || 'Other') === elementoElegido) : porExpansion;
         // Sin repetir el mismo id (2026-09-26, bug real reportado en vivo por Ale: "me salieron
         // dos nombres, selecciono uno y me muestra la misma foto"). Desde que una carta
         // compartida entre Deluxe y su expansion original genera DOS entradas de catalogo
@@ -11910,7 +11958,7 @@ async function manejarInteraccionPrincipal(interaction) {
         // reportado: mostraba nombres de OTROS elementos, ej. eligiendo element:Item igual
         // sugeria nombres de Pokemon comunes que no son Item para nada).
         const elementoElegido = interaction.options.getString('element');
-        const porElemento = elementoElegido ? porExpansion.filter(c => c.elemento === elementoElegido) : porExpansion;
+        const porElemento = elementoElegido ? porExpansion.filter(c => (c.elemento || 'Other') === elementoElegido) : porExpansion;
         // Sin repetir el mismo id (2026-09-26, bug real reportado en vivo por Ale: "me salieron
         // dos nombres, selecciono uno y me muestra la misma foto"). Desde que una carta
         // compartida entre Deluxe y su expansion original genera DOS entradas de catalogo

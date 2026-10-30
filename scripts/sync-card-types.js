@@ -2,7 +2,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
-const URL_CARTAS = 'https://raw.githubusercontent.com/chase-mew/pokemon-tcg-pocket-cards/refs/heads/main/v4.json';
+const URL_CARTAS = 'https://raw.githubusercontent.com/chase-mew/pokemon-tcg-pocket-cards/refs/heads/main/data/v4/cards.min.json';
 const DESTINO = path.join(__dirname, '..', 'assets', 'card_types.json');
 
 async function main() {
