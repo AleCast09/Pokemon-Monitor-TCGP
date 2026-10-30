@@ -161,6 +161,10 @@ const olvidarPanel = (msgId) => configurado() ? redis('HDEL', CLAVE_PANELES, Str
 
 // Al apagarse bien (pm2 stop, cerrar), borra sus comandos y suelta el turno para que otro lo tome ya.
 async function salir() {
+    // Tope duro (2026-10-30): si soltar el turno se cuelga (Discord/Upstash lentos), el proceso
+    // quedaba vivo, pm2 no lograba matarlo en Windows y cada restart dejaba una copia vieja del bot
+    // contestando comandos con el codigo anterior. 6 s < kill-timeout de pm2 (8 s).
+    setTimeout(() => process.exit(0), 6000).unref();
     if (activo) {
         await alSoltar().catch(() => {});
         await redis('EVAL', SCRIPT_SOLTAR, '1', CLAVE, YO).catch(() => {});
