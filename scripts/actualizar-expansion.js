@@ -185,6 +185,40 @@ async function paso4Motor(en) {
     pendientes.push('Probar 1 sobre de cada set nuevo en el motor (el product_id es deducido): ' + [...new Set(nuevos.map(([, p]) => p.ExpansionID))].join(', '));
 }
 
+// cards.json del motor (rareza de cada carta: con eso el reroll decide si un sobre es god pack). Se
+// agregan las cartas que falten desde los datos de Leanny; las que ya estaban no se tocan.
+async function paso4bCardsJson(cardmap, en) {
+    console.log('\n4b) cards.json del motor (rarezas para el reroll)');
+    const ruta = path.join(MOTOR, 'statics', 'cards.json');
+    if (!fs.existsSync(ruta)) return console.log('   No esta el motor en esta PC, se salta.');
+    const actual = leerJson(ruta);
+    const conocidas = new Set(actual.map(c => String(c.image || '').replace(/\.\w+$/, '')));
+    const packmaster = (await axios.get(`${LEANNY}/data/packmaster.json`, { timeout: 60000 })).data;
+    const cardmaster = (await axios.get(`${LEANNY}/data/cardmaster.json`, { timeout: 60000 })).data;
+    // Sobres en los que sale cada carta, con el nombre corto del sobre ("Mega Mewtwo X").
+    const sobresDe = {};
+    for (const [packId, p] of Object.entries(packmaster)) {
+        const largo = (en[p.Name] || '').replace(/ booster pack$/i, '');
+        const corto = largo.includes(': ') ? largo.split(': ').pop() : largo;
+        for (const id of p.Packs?.[packId]?.CardIDs || []) (sobresDe[id] ||= new Set()).add(corto || packId);
+    }
+    const nuevas = [];
+    for (const [id, v] of Object.entries(cardmap)) {
+        if (!v.IllustrationID || conocidas.has(v.IllustrationID)) continue;
+        const rareza = (v.IllustrationID.match(/_([A-Z]+)$/) || [])[1];
+        const nombre = en[cardmaster[id]?.Name];
+        if (!rareza || !nombre) continue;
+        nuevas.push({ set: v.ExpansionID, number: v.CollectionNumber, rarity: rareza, name: nombre, image: `${v.IllustrationID}.webp`, packs: [...(sobresDe[id] || [])] });
+    }
+    if (!nuevas.length) return console.log('   Nada nuevo.');
+    const porSet = {};
+    for (const c of nuevas) porSet[c.set] = (porSet[c.set] || 0) + 1;
+    console.log(`   + ${nuevas.length} cartas: ${Object.entries(porSet).map(([s, n]) => `${s} ${n}`).join(', ')}`);
+    if (SIMULAR) return;
+    fs.copyFileSync(ruta, `${ruta}.bak-auto`);
+    fs.writeFileSync(ruta, JSON.stringify([...actual, ...nuevas], null, 2));
+}
+
 // Letra de serie de un set: la de su codigo (C1 -> C); Special Pack va con la serie mas nueva.
 function letraSerie(codigo, letras) {
     const m = String(codigo).match(/^([A-Z])\d/);
@@ -272,6 +306,7 @@ async function main() {
     const bajadas = await paso2Imagenes(helper, cardmap);
     paso3Nombres(en);
     await paso4Motor(en);
+    await paso4bCardsJson(cardmap, en);
     await paso5LogosYSobres(cardmap, en);
     await paso6Repo(helper, bajadas);
 
