@@ -139,7 +139,13 @@ async function paso4Motor(en) {
     let ultimo = Math.max(...[...cat.matchAll(/PC_PS_(\d{4})000_/g)].map(m => Number(m[1])));
     const mesDeSet = {};
     // Mes de los sets que ya estan en el catalogo (un sobre que le falte a uno de ellos usa el mismo).
-    for (const m of cat.matchAll(/"expansion_id":\s*"([^"]+)"[^\n]*?"product_id":\s*"PC_PS_(\d{4})000_/g)) mesDeSet[m[1].toUpperCase()] ??= Number(m[2]);
+    // Y su costo en relojes: sin "hg_cost" en la linea es pago (12), como el resto del catalogo.
+    const costoDeSet = {};
+    for (const m of cat.matchAll(/"expansion_id":\s*"([^"]+)"([^\n]*?)"product_id":\s*"PC_PS_(\d{4})000_([^\n]*)/g)) {
+        const set = m[1].toUpperCase();
+        mesDeSet[set] ??= Number(m[3]);
+        costoDeSet[set] ??= Number((m[4].match(/"hg_cost":\s*(\d+)/) || [])[1] ?? 12);
+    }
     // Orden de sets (A1 < A4a < B1 < C1): solo se deduce el mes de los MAS NUEVOS que el ultimo del catalogo;
     // un set viejo que nunca se cargo (A4a, A4b...) no tiene como saberse, se avisa y se salta.
     const rango = (s) => { const m = String(s).toUpperCase().match(/^([A-Z])(\d+)([A-Z]?)$/); return m ? (m[1].charCodeAt(0) * 1000 + Number(m[2]) * 30 + (m[3] ? m[3].charCodeAt(0) - 64 : 0)) : -1; };
@@ -160,7 +166,7 @@ async function paso4Motor(en) {
         const sku = `${set}_${n}`;
         const nombre = (en[p.Name] || en[`PACK_DESC_${set}_${n}`] || sku).replace(/ booster pack$/i, '').replace(/\n.*/s, '');
         const productId = `PC_PS_${mesDeSet[set]}000_01_${String(n).padStart(2, '0')}_01`;
-        lineas.push(`    {"name": "${nombre}", "expansion_id": "${set.toLowerCase()}", "sku_id": "${sku}", "pack_id": "${id}", "product_id": "${productId}", "hg_cost": 0},  # auto ${new Date().toISOString().slice(0, 10)}: product_id deducido, probar 1 sobre`);
+        lineas.push(`    {"name": "${nombre}", "expansion_id": "${set.toLowerCase()}", "sku_id": "${sku}", "pack_id": "${id}", "product_id": "${productId}", "hg_cost": ${costoDeSet[set] ?? 0}},  # auto ${new Date().toISOString().slice(0, 10)}: product_id deducido, probar 1 sobre`);
         entradasJson.push({ label: `(${set}) ${nombre}`, packId: id, productId: 'SINGLE', setCode: set, setName: set, skuId: sku, assetId: id, iconAssetId: `PACK_ICON_${id}`, featuredCardIds: [] });
         console.log(`   + ${nombre}  ${id}  ${productId}`);
     }
