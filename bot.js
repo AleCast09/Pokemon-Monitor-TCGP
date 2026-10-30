@@ -16521,7 +16521,11 @@ async function estadoDeEsteHost() {
     if (hostComunidad.esActivo() && comunidad.hayComunidad()) {
         try { links = (await monitorLink.vinculados()).filter(v => v.enLinea).length; } catch (e) { /* sin tablas */ }
     }
-    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), links };
+    // Version del juego para la que esta actualizado el motor (2026-10-29, pedido de Ale): sale de
+    // engine\config\current-version.txt, lo escribe scripts\update_bot.py al actualizar con el XAPK.
+    let versionMotor = null;
+    try { versionMotor = fs.readFileSync(path.join(motor, 'engine', 'config', 'current-version.txt'), 'utf8').trim().replace(/^v/i, '') || null; } catch (e) { /* sin motor */ }
+    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), versionMotor, links };
 }
 
 // Panel de hosts en el canal 🔒-hosts (lo arma y lo mantiene el host que tiene el turno).
@@ -16532,10 +16536,15 @@ async function actualizarPanelHosts(hosts) {
         const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
         if (!canal) continue;
         const hace = (ts) => `<t:${Math.floor((ts || 0) / 1000)}:R>`;
+        // El motor mas nuevo entre los hosts: el que tenga uno mas viejo sale con ⚠️ (sus ⚡ fallan con ABORTED).
+        const numVersion = (v) => String(v || '').split('.').map(n => n.padStart(4, '0')).join('.');
+        const motorMasNuevo = hosts.map(h => h.versionMotor).filter(Boolean).sort((a, b) => numVersion(b).localeCompare(numVersion(a)))[0];
+        const textoMotor = (h) => !h.motor ? '❌' : `✅${h.versionMotor ? ` v${h.versionMotor}` : ''}`
+            + (h.versionMotor && motorMasNuevo && numVersion(h.versionMotor) < numVersion(motorMasNuevo) ? ' ⚠️ outdated' : '');
         const lineas = hosts.map(h => {
             const estado = !h.enLinea ? `🔴 **${h.nombre}** — offline since ${hace(h.ts)}`
                 : h.turno ? `👑🟢 **${h.nombre}** — **has the turn**` : `⏸️🟢 **${h.nombre}** — standby, ready to take over`;
-            const detalles = [h.bot && `bot ${h.bot}`, h.version && `v${h.version}`, h.enLinea ? `Miguel's bot ${h.motor ? '✅' : '❌'}` : null,
+            const detalles = [h.bot && `bot ${h.bot}`, h.version && `v${h.version}`, h.enLinea ? `Miguel's bot ${textoMotor(h)}` : null,
                 h.enLinea && h.turno && typeof h.links === 'number' ? `${h.links} Monitor Link(s) online` : null].filter(Boolean).join(' · ');
             return `${estado}\n　${detalles}`;
         });
