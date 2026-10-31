@@ -159,6 +159,34 @@ async function panelesDeOtros(botId) {
 }
 const olvidarPanel = (msgId) => configurado() ? redis('HDEL', CLAVE_PANELES, String(msgId)).catch(() => {}) : Promise.resolve();
 
+// ---- GP farm Online/Offline (2026-10-31, pedido de Ale) ----
+// Cada host marca si esta haciendo reroll (boton en su mensaje de control). Los hosts Online se reparten
+// la bolsa de proxies y las cuentas que prestan los miembros: uno solo se lleva todo, dos mitad y mitad.
+// Hash zenith:reroll, campo = nombre del host, valor { online, ts }. Cuenta solo si la PC esta prendida.
+const CLAVE_REROLL = 'zenith:reroll';
+
+async function marcarReroll(online) {
+    if (online) await redis('HSET', CLAVE_REROLL, YO, JSON.stringify({ online: true, ts: Date.now() }));
+    else await redis('HDEL', CLAVE_REROLL, YO);
+}
+
+// Nombres de los hosts Online para reroll y con la PC prendida, en orden fijo (igual en todos los hosts).
+async function hostsReroll() {
+    if (!configurado()) return [];
+    const plano = await redis('HGETALL', CLAVE_REROLL) || [];
+    const prendidos = new Set((await hostsConocidos()).filter(h => h.enLinea).map(h => h.nombre));
+    const lista = [];
+    for (let i = 0; i + 1 < plano.length; i += 2) if (prendidos.has(plano[i])) lista.push(plano[i]);
+    return lista.sort();
+}
+
+// La parte de ESTE host: { i, n, hosts } (i-esimo de n hosts Online), o null si no esta Online.
+async function parteReroll() {
+    const hosts = await hostsReroll();
+    const i = hosts.indexOf(YO);
+    return i < 0 ? null : { i, n: hosts.length, hosts };
+}
+
 // Al apagarse bien (pm2 stop, cerrar), borra sus comandos y suelta el turno para que otro lo tome ya.
 async function salir() {
     // Tope duro (2026-10-30): si soltar el turno se cuelga (Discord/Upstash lentos), el proceso
@@ -190,4 +218,4 @@ async function iniciar(opciones) {
 }
 
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
-    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl };
+    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll };

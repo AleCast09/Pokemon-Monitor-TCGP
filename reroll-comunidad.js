@@ -1,14 +1,17 @@
 // Reroll de la comunidad (2026-10-31, plan de Ale): los miembros prestan cuentas con 96+ sobres desde
-// Monitor Link ("Share accounts for reroll") y el host que tiene el turno les abre los sobres GRATIS
-// con el motor (inject.py) y la bolsa de proxies. Mismo criterio que ⚡ Fast Share:
+// Monitor Link ("Share accounts for reroll") y los hosts Online para GP farm (boton en el canal de
+// hosts) les abren los sobres GRATIS con el motor (inject.py). Uno solo Online se lleva todas las
+// cuentas y todas las proxies; dos, mitad y mitad (una cuenta nunca la abren dos hosts). Mismo
+// criterio que ⚡ Fast Share:
 //   - la XML se pide al Monitor Link del miembro justo antes de abrir, va a una carpeta temporal y
 //     se borra al terminar (nunca queda guardada en el host);
 //   - el JSON del miembro nunca sale de su PC: el host le devuelve solo las cartas que salieron y
 //     Monitor Link las escribe en su JSON (pulls[], packCount, lastPackPulled);
 //   - nunca se gastan relojes de los miembros (--hg-cost 0: solo los sobres gratis).
+// Los Monitor Link solo hablan con el host del turno: un host Online sin el turno pide las XML (y
+// manda las cartas) a traves de el.
 //
-// Apagado por defecto: corre solo si el .env tiene REROLL_COMUNIDAD=1, hay motor
-// (FAST_TRANSFER_ENGINE_DIR) y este host tiene el turno de la comunidad.
+// Corre solo en un host con motor (FAST_TRANSFER_ENGINE_DIR) y marcado Online para GP farm.
 // Ajustes opcionales del .env: REROLL_CADA_MIN (30), REROLL_COOLDOWN_HORAS (24), REROLL_LOTE (20).
 'use strict';
 const fs = require('fs');
@@ -26,13 +29,19 @@ let expansionDePack = null;   // pack_id -> codigo del set ("CN001_0010_00_000" 
 
 const log = (...a) => console.log('[reroll]', ...a);
 
+// d: { ml (monitor-link-server), fastTransfer, activo() (tiene el turno), parte() ({ i, n } o null) }
 function iniciar(d) {
     deps = d;
-    if (process.env.REROLL_COMUNIDAD !== '1') return;
-    log('Community reroll ON');
+    if (!deps.fastTransfer.rutaMotor()) return;
+    // La parte de proxies cambia cuando otro host entra o sale: se rehace el .txt cada minuto.
+    setInterval(() => deps.ml.escribirProxiesMotor().catch(() => {}), 60 * 1000);
     setTimeout(ciclo, 2 * 60 * 1000);
     setInterval(ciclo, num(process.env.REROLL_CADA_MIN, 30) * 60 * 1000);
 }
+
+// Reparto fijo de cuentas entre los hosts Online: cada cuenta cae siempre en el mismo de n hosts.
+const miCuenta = (discordId, archivo, parte) =>
+    parseInt(crypto.createHash('md5').update(`${discordId}|${archivo}`).digest('hex').slice(0, 8), 16) % parte.n === parte.i;
 
 // Ajustes del panel GP de este host (tools/god_pack_gui/settings.json): pack, collectors, Worker URL,
 // webhooks, demoras... El reroll usa los mismos, salvo carpetas, proxies y relojes.
@@ -40,10 +49,10 @@ function ajustesPanel(motor) {
     try { return JSON.parse(fs.readFileSync(path.join(motor, 'tools', 'god_pack_gui', 'settings.json'), 'utf8')); } catch (e) { return {}; }
 }
 
-// Bolsa de proxies de la comunidad (Share proxies); si todavia esta vacia, la del panel.
+// La parte de la bolsa de proxies de ESTE host (proxies_reroll.txt); si la bolsa esta vacia, la del panel.
 function archivoProxies(motor, s) {
-    const bolsa = path.join(motor, 'proxies_comunidad.txt');
-    try { if (fs.readFileSync(bolsa, 'utf8').trim()) return bolsa; } catch (e) { /* no hay */ }
+    const mia = path.join(motor, 'proxies_reroll.txt');
+    try { if (fs.readFileSync(mia, 'utf8').trim()) return mia; } catch (e) { /* no hay */ }
     return s.proxy_file || path.join(motor, 'proxies.txt');
 }
 
@@ -111,14 +120,24 @@ function correrInject(motor, dirCuentas, s, cantidad) {
     });
 }
 
+// Cartas que quedaron sin entregar: el host del turno se las manda a cada Monitor Link; otro host se las
+// pasa al del turno.
+async function entregarPendientes(idMiembro) {
+    if (!deps.activo()) return deps.ml.pasarSobresAlHostActivo().catch(() => {});
+    const ids = idMiembro ? [idMiembro] : await deps.ml.miembrosConSobresPendientes();
+    for (const id of ids) await deps.ml.entregarSobresReroll(id).catch(() => {});
+}
+
 async function ciclo() {
-    if (corriendo || !deps || !deps.activo()) return;
+    if (corriendo || !deps) return;
     const motor = deps.fastTransfer.rutaMotor();
+    const parte = await deps.parte().catch(() => null);
     if (!motor) return;
     corriendo = true;
     try {
-        // Primero lo que quedo sin entregar (miembro que tenia la PC apagada).
-        for (const id of await deps.ml.miembrosConSobresPendientes()) await deps.ml.entregarSobresReroll(id).catch(() => {});
+        await entregarPendientes();
+        if (!parte) return;   // Offline para GP farm
+        await deps.ml.escribirProxiesMotor().catch(() => {});
 
         const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
         const lote = num(process.env.REROLL_LOTE, 20);
@@ -126,11 +145,16 @@ async function ciclo() {
         const estado = leerEstado(motor);
         for (const m of await deps.ml.cuentasReroll()) {
             const ahora = Date.now();
-            const listas = m.cuentas.filter(c => ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).slice(0, lote);
+            const listas = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte)
+                && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).slice(0, lote);
             if (!listas.length) continue;
             if (!await deps.fastTransfer.asegurarTunel()) { log('tunnel 9090 is down - skipping this cycle'); return; }
             let xmls;
-            try { xmls = await deps.ml.pedirXmlReroll(m.discord_id, listas.map(c => c.f)); } catch (e) { continue; } // PC apagada
+            try {
+                xmls = deps.activo()
+                    ? await deps.ml.pedirXmlReroll(m.discord_id, listas.map(c => c.f))
+                    : await deps.ml.xmlRerollPorHostActivo(m.discord_id, listas.map(c => c.f));
+            } catch (e) { continue; }   // PC del miembro apagada, o el host del turno no contesta
             const nombres = Object.keys(xmls);
             if (!nombres.length) continue;
 
@@ -163,7 +187,7 @@ async function ciclo() {
             } finally {
                 fs.rmSync(dir, { recursive: true, force: true });   // las XML no quedan en el host
             }
-            await deps.ml.entregarSobresReroll(m.discord_id).catch(() => {});
+            await entregarPendientes(m.discord_id);
         }
     } catch (e) {
         log('cycle failed:', e?.message || e);

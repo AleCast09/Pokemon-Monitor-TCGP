@@ -7727,8 +7727,12 @@ if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
     activo: () => hostComunidad.esActivo(),
     nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null
 });
-// Reroll de la comunidad con las cuentas que prestan los miembros (apagado salvo REROLL_COMUNIDAD=1).
-if (comunidad.hayComunidad()) require('./reroll-comunidad.js').iniciar({ ml: monitorLink, fastTransfer, activo: () => hostComunidad.esActivo() });
+// GP farm de la comunidad: los hosts Online (boton en el canal de hosts) se reparten la bolsa de proxies y
+// las cuentas que prestan los miembros (reroll-comunidad.js).
+if (comunidad.hayComunidad()) {
+    monitorLink.usarParteReroll(() => hostComunidad.parteReroll());
+    require('./reroll-comunidad.js').iniciar({ ml: monitorLink, fastTransfer, activo: () => hostComunidad.esActivo(), parte: () => hostComunidad.parteReroll() });
+}
 dashboardApp.use(express.json());
 // Fondos animados de la pantalla de bienvenida de /tutorials (2026-08-08, a pedido
 // explicito del usuario -- reusa el mismo repositorio local de wallpapers ya usado para el
@@ -11411,6 +11415,9 @@ async function manejarInteraccionPrincipal(interaction) {
     if (comunidad.soloComunidad() && !comunidad.esComunidad(interaction.guildId)) return;
     if (interaction.isButton() && comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_tomar' || interaction.customId.startsWith('host_ceder::'))) {
         return await manejarBotonHost(interaction);
+    }
+    if (interaction.isButton() && comunidad.esComunidad(interaction.guildId) && interaction.customId.startsWith('reroll_')) {
+        return await manejarBotonReroll(interaction);
     }
     if (comunidad.esComunidad(interaction.guildId) && !hostComunidad.esActivo()) return;
     // Lista desplegable de la carta (comunidad): la opcion elegida se atiende igual que su boton.
@@ -16598,7 +16605,9 @@ async function estadoDeEsteHost() {
     // engine\config\current-version.txt, lo escribe scripts\update_bot.py al actualizar con el XAPK.
     let versionMotor = null;
     try { versionMotor = fs.readFileSync(path.join(motor, 'engine', 'config', 'current-version.txt'), 'utf8').trim().replace(/^v/i, '') || null; } catch (e) { /* sin motor */ }
-    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), versionMotor, links };
+    // GP farm: cuantas proxies de la bolsa le tocan a este host (null = Offline).
+    const reroll = await hostComunidad.parteReroll().catch(() => null) ? await monitorLink.escribirProxiesMotor().catch(() => 0) : null;
+    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), versionMotor, links, reroll };
 }
 
 // Panel de hosts en el canal 🔒-hosts (lo arma y lo mantiene el host que tiene el turno).
@@ -16618,7 +16627,8 @@ async function actualizarPanelHosts(hosts) {
             const estado = !h.enLinea ? `🔴 **${h.nombre}** — offline since ${hace(h.ts)}`
                 : h.turno ? `👑🟢 **${h.nombre}** — **has the turn**` : `⏸️🟢 **${h.nombre}** — standby, ready to take over`;
             const detalles = [h.bot && `bot ${h.bot}`, h.version && `v${h.version}`, h.enLinea ? `Miguel's bot ${textoMotor(h)}` : null,
-                h.enLinea && h.turno && typeof h.links === 'number' ? `${h.links} Monitor Link(s) online` : null].filter(Boolean).join(' · ');
+                h.enLinea && h.turno && typeof h.links === 'number' ? `${h.links} Monitor Link(s) online` : null,
+                h.enLinea && typeof h.reroll === 'number' ? `🎲 GP farm (${h.reroll} proxies)` : null].filter(Boolean).join(' · ');
             return `${estado}\n　${detalles}`;
         });
         const embed = new EmbedBuilder().setTitle('🖥️ Community hosts').setColor(0x5865F2)
@@ -16646,16 +16656,22 @@ async function actualizarControlHost(hosts, conTurno) {
         const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
         if (!canal) continue;
         const otros = hosts.filter(h => h.nombre !== yo && h.enLinea).slice(0, 5);
+        const reroll = await textoRerollHost();
         const embed = new EmbedBuilder().setColor(conTurno ? 0xF0A93A : 0x5865F2)
             .setTitle(`🖥️ ${yo}${conTurno ? ' — 👑 has the turn' : ' — ⏸️ standby'}`)
-            .setDescription(conTurno
+            .setDescription((conTurno
                 ? (otros.length ? 'Hand the turn over to another PC that is on:' : 'No other host is on right now.')
                 : 'If the host PC turned off (or you want this PC to serve the community), take the turn here. Staff only.')
+                + (reroll ? `\n\n${reroll.texto}` : ''))
             .setFooter({ text: `bot ${client.user.tag}` }).setTimestamp();
         const botones = conTurno
             ? otros.map(h => new ButtonBuilder().setCustomId(`host_ceder::${h.nombre}`.slice(0, 100)).setLabel(`🔁 Hand over to ${h.nombre}`.slice(0, 80)).setStyle(ButtonStyle.Secondary))
             : [new ButtonBuilder().setCustomId('host_tomar').setLabel('👑 Take the turn').setStyle(ButtonStyle.Success)];
-        const payload = { embeds: [embed], components: botones.length ? [new ActionRowBuilder().addComponents(botones)] : [] };
+        const filas = botones.length ? [new ActionRowBuilder().addComponents(botones)] : [];
+        if (reroll) filas.push(new ActionRowBuilder().addComponents(reroll.online
+            ? new ButtonBuilder().setCustomId('reroll_offline').setLabel('🔴 GP farm: go Offline').setStyle(ButtonStyle.Danger)
+            : new ButtonBuilder().setCustomId('reroll_online').setLabel('🎲 GP farm: go Online').setStyle(ButtonStyle.Success)));
+        const payload = { embeds: [embed], components: filas };
         const guardado = await hostComunidad.controlGuardado();
         if (guardado?.canal === canal.id) {
             const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
@@ -16702,6 +16718,49 @@ async function manejarBotonHost(interaction) {
             ? `🔁 Turn handed over to **${destino}** — it takes over within 30 s.`
             : '⚠️ This host doesn\'t have the turn anymore.' });
     }
+}
+
+// ---- GP farm Online/Offline (2026-10-31, pedido de Ale) ----
+// Los hosts Online se reparten la bolsa de proxies y las cuentas que prestan los miembros (ver
+// reroll-comunidad.js): uno solo se lleva todo, dos mitad y mitad. Solo en hosts con el bot de Miguel.
+async function textoRerollHost() {
+    if (!fastTransfer.rutaMotor()) return null;
+    const parte = await hostComunidad.parteReroll().catch(() => null);
+    if (!parte) return { online: false, texto: '🎲 **GP farm: Offline** — this PC is not using the community proxies.' };
+    const proxies = await monitorLink.escribirProxiesMotor().catch(() => 0);
+    const con = parte.hosts.filter(h => h !== hostComunidad.nombre());
+    return { online: true, texto: `🎲 **GP farm: Online** — ${proxies} prox${proxies === 1 ? 'y' : 'ies'} for this PC (\`proxies_reroll.txt\`)`
+        + (con.length ? `, split with **${con.join(', ')}**` : ', all of them (only host online)') + '.' };
+}
+
+async function manejarBotonReroll(interaction) {
+    if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
+        return await interaction.reply({ content: '🔒 Only staff can change the GP farm.', ephemeral: true });
+    }
+    const otros = (await hostComunidad.hostsReroll().catch(() => [])).filter(h => h !== hostComunidad.nombre());
+    // Entrar cuando otro ya esta haciendo GP farm: se pregunta antes de partirle las proxies.
+    if (interaction.customId === 'reroll_online' && otros.length) {
+        return await interaction.reply({
+            ephemeral: true,
+            content: `🎲 **${otros.join(', ')}** ${otros.length === 1 ? 'is' : 'are'} doing GP farm right now.\nSplit the proxies and the lent accounts with ${otros.length === 1 ? 'them' : 'everyone online'} so this PC can do GP farm too?`,
+            components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('reroll_split_yes').setLabel('✅ Yes, split').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('reroll_split_no').setLabel('No').setStyle(ButtonStyle.Secondary))]
+        });
+    }
+    if (interaction.customId === 'reroll_split_no') {
+        return await interaction.update({ content: `👍 Nothing changed — ${otros.join(', ') || 'the other host'} keeps all the proxies.`, components: [] });
+    }
+    const online = interaction.customId !== 'reroll_offline';
+    if (interaction.customId === 'reroll_split_yes') await interaction.update({ content: '⏳ Splitting…', components: [] });
+    else await interaction.deferReply({ ephemeral: true });
+    await hostComunidad.marcarReroll(online);
+    const proxies = await monitorLink.escribirProxiesMotor().catch(() => 0);
+    hostComunidad.refrescarControl();
+    await interaction.editReply({ content: online
+        ? `🎲 **GP farm Online** — this PC now has **${proxies}** prox${proxies === 1 ? 'y' : 'ies'} in \`proxies_reroll.txt\` (use it as *Proxy file* in the God Pack panel) and opens its share of the lent accounts.${otros.length ? ` ${otros.join(', ')} gets the other half within a minute.` : ''}`
+        : `🔴 **GP farm Offline** — this PC stops using the community proxies and lent accounts.${otros.length ? ` ${otros.join(', ')} takes all of them within a minute.` : ''}`,
+        components: [] });
 }
 
 // Rol Monitor: se da al vincular la PC con /link (y al tomar el turno, a todos los ya vinculados).

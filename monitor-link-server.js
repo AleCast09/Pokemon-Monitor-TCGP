@@ -468,6 +468,54 @@ function registrar(app, dependencias) {
             res.status(500).json({ error: 'server_error' });
         }
     });
+
+    // De host a host: XML de cuentas prestadas, pedidas al Monitor Link del miembro (que habla con este
+    // host, el del turno). Solo para otro host con la clave; las XML no se guardan aca.
+    app.post('/link/host/reroll-xml', express.json({ limit: '1mb' }), async (req, res) => {
+        if (!esHost(req)) return res.status(401).json({ error: 'not_a_host' });
+        try {
+            const nombres = (Array.isArray(req.body?.files) ? req.body.files : []).map(String).slice(0, 200);
+            const prestadas = new Set(((await cuentasReroll()).find(m => m.discord_id === String(req.body?.discord_id))?.cuentas || []).map(c => c.f));
+            const files = await pedirXmlReroll(String(req.body?.discord_id || ''), nombres.filter(n => prestadas.has(n)));
+            res.json({ ok: true, files });
+        } catch (e) {
+            res.status(503).json({ error: e.message === 'offline' ? 'offline' : 'timeout' });
+        }
+    });
+
+    // De host a host: cartas que salieron en otro host; quedan aca hasta llegar al JSON del miembro.
+    app.post('/link/host/pulls', express.json({ limit: '1mb' }), async (req, res) => {
+        if (!esHost(req)) return res.status(401).json({ error: 'not_a_host' });
+        try {
+            await asegurarTablas();
+            const { discord_id: id, archivo, datos } = req.body || {};
+            const clave = /"key":"([0-9a-f]+)"/.exec(String(datos || ''))?.[1];
+            if (!id || !archivo || !clave) return res.status(400).json({ error: 'bad_request' });
+            await db.run(`INSERT OR IGNORE INTO link_reroll_pendiente (clave, discord_id, archivo, datos, ts) VALUES (?, ?, ?, ?, ?)`,
+                [clave, String(id), String(archivo), String(datos), Date.now()]);
+            res.json({ ok: true });
+            entregarSobresReroll(String(id)).catch(() => {});
+        } catch (e) {
+            res.status(500).json({ error: 'server_error' });
+        }
+    });
+}
+
+// Para el reroll de un host que NO tiene el turno: las XML se piden por el host del turno.
+async function xmlRerollPorHostActivo(discordId, nombres) {
+    return (await llamarHostActivo('/link/host/reroll-xml', { discord_id: String(discordId), files: nombres })).files || {};
+}
+
+// Cartas pendientes de ESTE host -> al host del turno (que es el que puede hablar con los Monitor Link).
+async function pasarSobresAlHostActivo() {
+    await asegurarTablas();
+    const filas = await db.all(`SELECT clave, discord_id, archivo, datos FROM link_reroll_pendiente ORDER BY ts`) || [];
+    for (const f of filas) {
+        try {
+            await llamarHostActivo('/link/host/pulls', { discord_id: f.discord_id, archivo: f.archivo, datos: f.datos });
+            await db.run(`DELETE FROM link_reroll_pendiente WHERE clave = ?`, [f.clave]);
+        } catch (e) { break; }   // el host del turno no contesta: quedan para la proxima
+    }
 }
 
 // Cuentas prestadas al reroll: [{ discord_id, cuentas: [{ f, p, l }], ts }].
@@ -533,23 +581,57 @@ function normalizarProxy(linea) {
     return null;
 }
 
+// Parte de este host en el GP farm ({ i, n } o null si esta Offline); la pone bot.js (community-host.js).
+let parteReroll = async () => ({ i: 0, n: 1 });
+const usarParteReroll = (fn) => { parteReroll = fn; };
+
 // Junta las proxies de todos en la carpeta del motor (FAST_TRANSFER_ENGINE_DIR, solo hosts):
-//   proxies_comunidad.txt          todas
-//   proxies_comunidad_host1.txt    la primera mitad (Ale)
-//   proxies_comunidad_host2.txt    la segunda mitad (wr98)
-// Las mitades salen iguales en los dos hosts (mismo orden), asi nunca usan la misma IP a la vez.
+//   proxies_comunidad.txt   la bolsa entera
+//   proxies_reroll.txt      la parte de ESTE host: todas si es el unico Online para GP farm, la mitad
+//                           si son dos (mismo orden en todos los hosts: nunca usan la misma IP a la vez),
+//                           vacio si esta Offline. El panel GP y el reroll usan este.
+// Devuelve cuantas proxies le tocan a este host.
 async function escribirProxiesMotor() {
-    const motor = (process.env.FAST_TRANSFER_ENGINE_DIR || '').trim();
-    if (!motor || !require('fs').existsSync(motor)) return;
     const fs = require('fs');
     const path = require('path');
+    const motor = (process.env.FAST_TRANSFER_ENGINE_DIR || '').trim();
+    if (!motor || !fs.existsSync(motor)) return 0;
+    await asegurarTablas();
     const filas = await db.all(`SELECT lista FROM link_proxies ORDER BY discord_id`) || [];
     const todas = [...new Set(filas.flatMap(f => String(f.lista || '').split('\n')).filter(Boolean))];
-    const mitad = Math.ceil(todas.length / 2);
-    const escribir = (nombre, lineas) => fs.writeFileSync(path.join(motor, nombre), lineas.join('\n') + (lineas.length ? '\n' : ''));
+    const parte = await parteReroll().catch(() => null);
+    const mias = parte ? todas.slice(Math.floor(todas.length * parte.i / parte.n), Math.floor(todas.length * (parte.i + 1) / parte.n)) : [];
+    const escribir = (nombre, lineas) => {
+        const texto = lineas.join('\n') + (lineas.length ? '\n' : '');
+        const ruta = path.join(motor, nombre);
+        try { if (fs.readFileSync(ruta, 'utf8') === texto) return; } catch (e) { /* no existia */ }
+        fs.writeFileSync(ruta, texto);
+    };
     escribir('proxies_comunidad.txt', todas);
-    escribir('proxies_comunidad_host1.txt', todas.slice(0, mitad));
-    escribir('proxies_comunidad_host2.txt', todas.slice(mitad));
+    escribir('proxies_reroll.txt', mias);
+    return mias.length;
+}
+
+// ---- De host a host (2026-10-31): los Monitor Link de los miembros solo hablan con el host que tiene
+// el turno. Otro host Online para GP farm le pide a ESE las XML de las cuentas prestadas (y le pasa las
+// cartas que salieron). Clave entre hosts: derivada del token de la libreta, que solo tienen los hosts.
+const claveHosts = () => process.env.LINK_REDIS_TOKEN ? hash(`zenith-hosts|${process.env.LINK_REDIS_TOKEN}`) : null;
+const esHost = (req) => !!claveHosts() && req.headers['x-zenith-host'] === claveHosts();
+
+async function urlHostActivo() {
+    return String(await redisLibreta('GET', CLAVE_LIBRETA).catch(() => null) || '').replace(/\/+$/, '') || null;
+}
+
+async function llamarHostActivo(ruta, cuerpo) {
+    const url = await urlHostActivo();
+    if (!url) throw new Error('offline');
+    const r = await fetch(`${url}${ruta}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Zenith-Host': claveHosts() },
+        body: JSON.stringify(cuerpo), signal: AbortSignal.timeout(90000)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `host ${r.status}`);
+    return j;
 }
 
 // Quien comparte y cuantas (para hosts; nunca muestra las proxies).
@@ -773,4 +855,5 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes };
+module.exports = { ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
+    usarParteReroll, escribirProxiesMotor, xmlRerollPorHostActivo, pasarSobresAlHostActivo };
