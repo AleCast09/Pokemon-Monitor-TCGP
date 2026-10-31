@@ -19,12 +19,12 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.3"
+global VERSION := "ahk-1.9.4"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
 global UltimaHuella := "", UltimoEnvio := "", CuentasEnviadas := 0, EnLinea := false, UltimoError := ""
-global JobsReq := "", JobsReintento := 0, IndiceXml := "", IndiceDe := ""
+global JobsReq := "", JobsReintento := 0, IndiceXml := "", IndiceDe := "", IndiceSinPrefijo := {}, IndiceCuentas := ""
 ; The other community hosts (the ping lists them): they get the same summary, so whichever takes over
 ; already has your accounts -- even if this PC is off by then.
 global Espejos := [], UltimoEspejo := 0
@@ -1170,18 +1170,62 @@ InyectarEnMuMu(id, archivo, index, nombre) {
 }
 
 ; The .xml files live in Accounts\Saved (numbered subfolders), next to Accounts\Cards.
+; The name in the card file can be out of date (real case 2026-10-31: "290P_..." while the bot had
+; already renamed it to "292P_...", or an account renamed by hand), so when the exact name is not
+; there it is looked up without the "290P_" pack prefix and then by the account itself (deviceAccount).
 RutaDeXml(nombre) {
     archivo := RegExMatch(nombre, "i)\.xml$") ? nombre : nombre . ".xml"
     if (!IsObject(IndiceXml) || IndiceDe != CarpetaJson || !IndiceXml.HasKey(archivo))
         ArmarIndiceXml()
-    return IndiceXml.HasKey(archivo) ? IndiceXml[archivo] : ""
+    if IndiceXml.HasKey(archivo)
+        return IndiceXml[archivo]
+    sin := RegExReplace(archivo, "i)^\d+P_", "")
+    if IndiceSinPrefijo.HasKey(sin)
+        return IndiceSinPrefijo[sin]
+    cuenta := CuentaDeArchivo(archivo)
+    if (cuenta != "") {
+        if !IsObject(IndiceCuentas)
+            ArmarIndiceCuentas()
+        if IndiceCuentas.HasKey(cuenta)
+            return IndiceCuentas[cuenta]
+    }
+    return ""
 }
 
 ArmarIndiceXml() {
-    IndiceXml := {}, IndiceDe := CarpetaJson
+    IndiceXml := {}, IndiceSinPrefijo := {}, IndiceCuentas := "", IndiceDe := CarpetaJson
     saved := CarpetaPadre(CarpetaPadre(CarpetaJson)) . "\Saved"
     Loop, Files, %saved%\*.xml, R
+    {
         IndiceXml[A_LoopFileName] := A_LoopFileFullPath
+        IndiceSinPrefijo[RegExReplace(A_LoopFileName, "i)^\d+P_", "")] := A_LoopFileFullPath
+    }
+}
+
+; deviceAccount -> .xml (read once, only when a name could not be found).
+ArmarIndiceCuentas() {
+    IndiceCuentas := {}
+    saved := CarpetaPadre(CarpetaPadre(CarpetaJson)) . "\Saved"
+    Loop, Files, %saved%\*.xml, R
+    {
+        if (Mod(A_Index, 20) = 0)
+            Sleep, -1
+        FileRead, x, %A_LoopFileFullPath%
+        if RegExMatch(x, "name=""deviceAccount"">([^<]+)<", mc)
+            IndiceCuentas[Trim(mc1)] := A_LoopFileFullPath
+    }
+}
+
+; deviceAccount of the account whose card file says fileName = archivo ("" if none).
+CuentaDeArchivo(archivo) {
+    buscado := RegExReplace(archivo, "i)\.xml$", "")
+    Loop, Files, %CarpetaJson%\*.json
+    {
+        FileRead, t, %A_LoopFileFullPath%
+        if (RegExMatch(t, """fileName""\s*:\s*""([^""]*)""", mf) && RegExReplace(mf1, "i)\.xml$", "") = buscado)
+            return RegExMatch(t, """deviceAccount""\s*:\s*""([^""]+)""", md) ? md1 : ""
+    }
+    return ""
 }
 
 ; ---------------------------------------------------------------- self-update
