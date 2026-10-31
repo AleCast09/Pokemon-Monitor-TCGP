@@ -74,6 +74,37 @@ function leanDeMs(ms) {
     return `${d.getFullYear()}${dos(d.getMonth() + 1)}${dos(d.getDate())}${dos(d.getHours())}${dos(d.getMinutes())}${dos(d.getSeconds())}`;
 }
 
+// Para el aviso al S4T del DUEÑO de la cuenta (su server personal): por cada tipo del bot de Lean,
+// cuantas cartas y sus nombres -> "1Star:2:Venusaur (x2);Crown:1:Fuecoco ex". Su Monitor Link arma el
+// mensaje con SUS filtros de S4T (Settings.ini de su PTCGPB) y lo manda a SU s4t. Mismo criterio que
+// scripts/god_pack/s4t_notifier.py del motor.
+let cartasMotor = null;
+function avisoS4t(motor, cards) {
+    if (!cartasMotor) {
+        cartasMotor = {};
+        try {
+            for (const c of JSON.parse(fs.readFileSync(path.join(motor, 'statics', 'cards.json'), 'utf8'))) {
+                const partes = String(c.image || '').replace(/^c/, '').split('_');
+                if (partes.length >= 4) cartasMotor[partes.slice(0, 4).join('_')] = { r: String(c.rarity || ''), n: String(c.name || '') };
+            }
+        } catch (e) { /* sin cards.json: sin aviso */ }
+    }
+    const TIPO = { C: '1Diamond', U: '2Diamond', R: '3Diamond', RR: '4Diamond', AR: '1Star', SAR: 'Rainbow', IM: 'Immersive', UR: 'Crown', S: 'Shiny1Star', SSR: 'Shiny2Star' };
+    const ORDEN = ['1Diamond', '2Diamond', '3Diamond', '4Diamond', '1Star', 'Trainer', 'FullArt', 'Rainbow', 'Immersive', 'Crown', 'Shiny1Star', 'Shiny2Star'];
+    const porTipo = {};
+    for (const id of cards || []) {
+        const c = cartasMotor[id];
+        if (!c) continue;
+        const t = c.r === 'SR' ? (String(id).startsWith('TR_') ? 'Trainer' : 'FullArt') : TIPO[c.r];
+        if (!t) continue;
+        (porTipo[t] ||= new Map()).set(c.n, (porTipo[t].get(c.n) || 0) + 1);
+    }
+    return ORDEN.filter(t => porTipo[t]).map(t => {
+        const nombres = [...porTipo[t]].map(([n, k]) => (k > 1 ? `${n} (x${k})` : n).replace(/[;:"\\]/g, ''));
+        return `${t}:${[...porTipo[t].values()].reduce((a, b) => a + b, 0)}:${nombres.join(', ')}`;
+    }).join(';');
+}
+
 async function codigoSet(packId) {
     if (!expansionDePack) {
         try {
@@ -84,7 +115,7 @@ async function codigoSet(packId) {
     return expansionDePack[packId] || packId;
 }
 
-function correrInject(motor, dirCuentas, s, cantidad) {
+function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
     return new Promise(resolve => {
         const python = process.env.FAST_TRANSFER_PYTHON || 'python';
         const args = [path.join(motor, 'scripts', 'god_pack', 'inject.py'),
@@ -111,7 +142,8 @@ function correrInject(motor, dirCuentas, s, cantidad) {
         if (s.packs_per_min > 0) args.push('--packs-per-min', String(s.packs_per_min));
         const hijo = spawn(python, ['-X', 'utf8', ...args], {
             cwd: motor, windowsHide: true,
-            env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8' }
+            // ZENITH_ACCOUNT_OWNER: el aviso de God Pack en Zenith menciona al dueño de la cuenta prestada.
+            env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8', ZENITH_ACCOUNT_OWNER: String(duenoId || '') }
         });
         hijo.stdout.on('data', () => {});
         hijo.stderr.on('data', () => {});
@@ -168,7 +200,7 @@ async function ciclo() {
                     fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify({ metadata: {}, pulls: [], registeredCards: [] }));
                 }
                 log(`opening ${nombres.length} account(s) lent by ${m.discord_id}`);
-                await correrInject(motor, dir, s, nombres.length);
+                await correrInject(motor, dir, s, nombres.length, m.discord_id);
                 let sobres = 0;
                 for (const nombre of nombres) {
                     const base = path.basename(nombre).replace(/\.xml$/i, '');
@@ -178,7 +210,7 @@ async function ciclo() {
                     if (!pulls.length) continue;
                     // Lean anota el codigo del set ("C1"); toda la corrida abre el mismo sobre.
                     const set = await codigoSet(s.pack_id || 'CN001_0010_00_000');
-                    for (const p of pulls) p.pack = set;
+                    for (const p of pulls) { p.pack = set; p.aviso = avisoS4t(motor, p.cards); }
                     await deps.ml.anotarSobresReroll(m.discord_id, nombre, pulls, leanDeMs(Date.now()));
                     sobres += pulls.length;
                 }

@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.1"
+global VERSION := "ahk-1.9.2"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -481,7 +481,51 @@ AgregarSobres(id, archivo, base64) {
     FormatTime, ahora,, yyyy-MM-dd HH:mm
     FileAppend, % ahora . "  " . n . " pack(s) opened by the host added to " . archivo . "`n", %CFG_REROLL_LOG%, UTF-8
     ResponderAccion("{""id"":""" . id . """,""ok"":true}")
+    AvisarS4T(archivo, contenido, mpc1 + n)
     SubirResumen(false)
+}
+
+; The same notice your PTCGPB sends to its S4T for every pack with valuable cards (your personal
+; server: channels by rarity, wishlist, God Pack alive/dead), with YOUR S4T settings from your
+; Settings.ini. Sent from this PC to your own S4T only; nothing goes to the host's server.
+AvisarS4T(archivo, contenido, packs) {
+    ini := Ruta . "\Settings.ini"
+    IniRead, activo, %ini%, SaveForTrade, s4tEnabled, 0
+    IniRead, url, %ini%, SaveForTrade, s4tDiscordWebhookURL, %A_Space%
+    if (activo != 1 || url = "" || !RegExMatch(contenido, """avisos""\s*:\s*\[(.*?)\]", ma))
+        return
+    sobre := RegExMatch(contenido, """sobre""\s*:\s*""([^""]*)""", ms) ? ms1 : ""
+    llaves := {"1Star": "s4t1Star", "Trainer": "s4tTrainer", "FullArt": "s4tFullArt", "Rainbow": "s4tRainbow"
+        , "Immersive": "s4tImmersive", "Crown": "s4tCrown", "Shiny1Star": "s4tShiny1Star", "Shiny2Star": "s4tShiny2Star"
+        , "3Diamond": "s4t3Dmnd", "4Diamond": "s4t4Dmnd"}
+    etiquetas := {"1Star": "1 Star", "Trainer": "Trainer", "FullArt": "Full Art", "Rainbow": "Rainbow", "Immersive": "Immersive"
+        , "Crown": "Crown", "Shiny1Star": "Shiny 1-Star", "Shiny2Star": "Shiny 2-Star", "3Diamond": "3 Diamond", "4Diamond": "4 Diamond EX"}
+    d := Chr(0x1F539)
+    emojis := {"1Star": Chr(0x2B50), "Trainer": Chr(0x1F393), "FullArt": Chr(0x1F3A8), "Rainbow": Chr(0x1F308)
+        , "Immersive": Chr(0x1F3AC), "Crown": Chr(0x1F451), "Shiny1Star": Chr(0x2728), "Shiny2Star": Chr(0x2728) . Chr(0x2728)
+        , "3Diamond": d . d . d, "4Diamond": d . d . d . d}
+    p := 1
+    while (p := RegExMatch(ma1, """([^""]*)""", mav, p)) {
+        p += StrLen(mav)
+        bloques := ""
+        Loop, Parse, mav1, `;
+        {
+            partes := StrSplit(A_LoopField, ":", , 3)
+            if (partes.Length() < 3 || !llaves.HasKey(partes[1]))
+                continue
+            IniRead, si, %ini%, SaveForTrade, % llaves[partes[1]], 0
+            if (si != 1)
+                continue
+            bloques .= (bloques = "" ? "" : "`n`n") . emojis[partes[1]] . " " . Chr(0x203A) . "  **" . etiquetas[partes[1]] . " (x" . partes[2] . ")**`n" . partes[3]
+        }
+        if (bloques = "")
+            continue
+        texto := Chr(0x1F4E6) . " Pack Opening results " . Chr(0x00B7) . " Instance: 0 (" . packs . " packs " . Chr(0x00B7) . " " . sobre . ")`n`n" . bloques . "`n`nFile name: " . archivo
+        ; Multipart like a Discord webhook (the S4T reads payload_json from a form).
+        borde := "----MonitorLink" . A_TickCount
+        cuerpo := "--" . borde . "`r`nContent-Disposition: form-data; name=""payload_json""`r`n`r`n{""content"":""" . JsonEsc(texto) . """}`r`n--" . borde . "--`r`n"
+        try Http("POST", url, cuerpo, "multipart/form-data; boundary=" . borde . "; charset=utf-8", "", 20)
+    }
 }
 
 ; Position of the "]" that closes the array opening at position abre (skips strings), or 0.

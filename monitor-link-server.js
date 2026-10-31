@@ -531,7 +531,13 @@ async function cuentasReroll() {
 async function anotarSobresReroll(discordId, archivo, sobres, ultimo) {
     await asegurarTablas();
     const clave = crypto.randomBytes(8).toString('hex');
+    // avisos/sobre: para el aviso al S4T del dueño (su server personal), uno por sobre; ver avisoS4t
+    // en reroll-comunidad.js. sobre = nombre de la expansion ("Dual Fusion"): con eso su s4t pone el logo.
+    let nombres = {};
+    try { nombres = require('./assets/expansion_names.json'); } catch (e) { /* sin nombres */ }
     const datos = JSON.stringify({ key: clave, last: ultimo,
+        sobre: String(nombres[sobres[0]?.pack] || sobres[0]?.pack || ''),
+        avisos: sobres.map(s => String(s.aviso || '')),
         pulls: sobres.map(s => ({ timestamp: String(s.timestamp), pack: String(s.pack), cards: (s.cards || []).map(String) })) });
     await db.run(`INSERT INTO link_reroll_pendiente (clave, discord_id, archivo, datos, ts) VALUES (?, ?, ?, ?, ?)`,
         [clave, String(discordId), String(archivo), datos, Date.now()]);
