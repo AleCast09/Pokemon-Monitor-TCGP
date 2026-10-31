@@ -23,11 +23,12 @@ const RAIZ = path.join(__dirname, '..');
 // En un host de la comunidad (wr98) la base y la carpeta del motor vienen del .env de su carpeta de host
 // (%LOCALAPPDATA%\MonitorPokemonHost); en la PC de Ale, del .env de este repo.
 const ENV_HOST = path.join(process.env.LOCALAPPDATA || os.homedir(), 'MonitorPokemonHost', '.env');
-require('dotenv').config({ path: fs.existsSync(ENV_HOST) ? ENV_HOST : path.join(RAIZ, '.env'), quiet: true });
+const ARCHIVO_ENV = fs.existsSync(ENV_HOST) ? ENV_HOST : path.join(RAIZ, '.env');
+require('dotenv').config({ path: ARCHIVO_ENV, quiet: true });
 const SIMULAR = process.argv.includes('--simular');
 const SIN_PREGUNTAR = process.argv.includes('--si');
 const LEANNY = 'https://leanny.github.io/pocket_tcg_resources';
-const MOTOR = process.env.FAST_TRANSFER_ENGINE_DIR || 'C:\\Users\\Ale TCG\\Desktop\\ptcgp-capturedeluxe';
+let MOTOR = process.env.FAST_TRANSFER_ENGINE_DIR || 'C:\\Users\\Ale TCG\\Desktop\\ptcgp-capturedeluxe';
 const REPO_IMAGENES = 'AleCast09/Pokemon-TCGP-Card-Image';
 const DESCARGAS = path.join(os.homedir(), 'Downloads');
 const EXPANSIONS_DIR = path.join(RAIZ, 'assets', 'expansions');
@@ -307,8 +308,35 @@ async function paso6Repo(helper, bajadas) {
     console.log(`   Subidas ${ok} de ${bajadas.length}.`);
 }
 
+// Antes de tocar nada muestra que Headless (bot de Miguel) va a actualizar, y deja cambiarlo: quien
+// tiene dos copias del motor (wr98, 2026-10-31) actualizaba la que no usaba. La ruta nueva queda en
+// el .env (FAST_TRANSFER_ENGINE_DIR), la misma que usan Fast Share/Trade.
+async function confirmarMotor() {
+    const esMotor = (r) => !!r && fs.existsSync(path.join(r, 'auto_trade.py'));
+    if (SIN_PREGUNTAR) return;
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const preguntar = (t) => new Promise(r => rl.question(t, r));
+    console.log(`\nHeadless (bot de Miguel) que se va a actualizar:\n   ${MOTOR}${esMotor(MOTOR) ? '' : '   (NO esta en esta PC)'}`);
+    while (true) {
+        const resp = (await preguntar('Enter para usar ese, o pega la carpeta del Headless que usas: ')).trim().replace(/^"|"$/g, '');
+        if (!resp) break;
+        if (!esMotor(resp)) { console.log('   ❌ Ahi no hay auto_trade.py. Pega la carpeta principal del Headless.'); continue; }
+        MOTOR = resp;
+        if (!SIMULAR) {
+            let env = fs.existsSync(ARCHIVO_ENV) ? fs.readFileSync(ARCHIVO_ENV, 'utf8') : '';
+            const linea = `FAST_TRANSFER_ENGINE_DIR=${resp}`;
+            env = /^FAST_TRANSFER_ENGINE_DIR=.*$/m.test(env) ? env.replace(/^FAST_TRANSFER_ENGINE_DIR=.*$/m, linea) : `${env.replace(/\s*$/, '')}\n${linea}\n`;
+            fs.writeFileSync(ARCHIVO_ENV, env);
+            console.log('   ✅ Guardado. Reinicia el bot (pm2 restart all) para que Fast Share/Trade usen este tambien.');
+        }
+        break;
+    }
+    rl.close();
+}
+
 async function main() {
     console.log(SIMULAR ? '🔎 SIMULACION: no se cambia nada.' : '🔄 Actualizando expansiones...');
+    await confirmarMotor();
     const helper = carpetaHelper();
     console.log(`Carpeta de datos: ${helper}`);
     const { cardmap, en, setsNuevos } = await paso1Datos(helper);
