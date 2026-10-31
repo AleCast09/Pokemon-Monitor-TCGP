@@ -39,6 +39,36 @@ function cargarJson(ruta) {
     return JSON.parse(content);
 }
 
+// Datos de cartas de Leanny de respaldo (2026-10-31, bug real: OMO tenia el bot de Leanny sin los datos
+// de Dual Fusion y TODAS las alertas de cartas nuevas llegaban sin foto -- s4t no sabia que carta era).
+// Se bajan de la misma fuente que usa el bot de Leanny, se guardan en la PC (para cuando no hay internet)
+// y se refrescan cada 6 h. Solo completan lo que la carpeta Helper del usuario no tiene: lo suyo manda.
+const LEANNY_DATA = 'https://leanny.github.io/pocket_tcg_resources/data';
+const CARPETA_LEANNY = path.join(process.env.LOCALAPPDATA || require('os').tmpdir(), 'MonitorPokemon', 'leanny');
+let _leanny = null, _leannyTs = 0;
+async function datosLeanny() {
+    if (_leanny && Date.now() - _leannyTs < 6 * 3600 * 1000) return _leanny;
+    const datos = {};
+    for (const n of ['cardmaster', 'cardmap', 'en_US']) {
+        const ruta = path.join(CARPETA_LEANNY, `${n}.json`);
+        try {
+            const r = await axios.get(`${LEANNY_DATA}/${n}.json`, { timeout: 30000, responseType: 'text', transformResponse: x => x });
+            datos[n] = JSON.parse(String(r.data).trimStart());   // trimStart tambien saca el BOM
+            fs.mkdirSync(CARPETA_LEANNY, { recursive: true });
+            fs.writeFileSync(ruta, r.data);
+        } catch (e) {
+            try { datos[n] = JSON.parse(fs.readFileSync(ruta, 'utf8').trimStart()); } catch (e2) { datos[n] = {}; }
+        }
+    }
+    _leanny = datos;
+    _leannyTs = Date.now();
+    return _leanny;
+}
+function completarConLeanny(master, leanny) {
+    if (!leanny) return master;
+    return { cardmaster: { ...leanny.cardmaster, ...master.cardmaster }, en_US: { ...leanny.en_US, ...master.en_US } };
+}
+
 function obtenerMapa(rutaMaster) {
     try {
         const cardmaster = cargarJson(path.join(rutaMaster, 'cardmaster.json'));
@@ -285,10 +315,16 @@ function resolverExpansionIdPorSobre(sobreTexto, en_US) {
     return null;
 }
 
+// Nombres de sobre del bot de Leanny que no dicen la expansion (2026-10-31, alertas de OMO sin logo):
+// "MegaMewtwoX" es el sobre Mega Mewtwo X de Dual Fusion, y "Latest" es el sobre mas nuevo del juego
+// (hoy Dual Fusion -- cambiarlo cuando salga la proxima expansion).
+const ALIAS_SOBRE_LEANNY = { megamewtwox: 'Dual Fusion', latest: 'Dual Fusion' };
+
 function buscarLogoExpansion(sobreTexto) {
     if (!sobreTexto) return null;
-    const nombreSobre = sobreTexto.replace(/\s*\([^)]*\)\s*$/, '').trim();
+    let nombreSobre = sobreTexto.replace(/\s*\([^)]*\)\s*$/, '').trim();
     if (!nombreSobre) return null;
+    nombreSobre = ALIAS_SOBRE_LEANNY[normalizarNombreExpansion(nombreSobre)] || nombreSobre;
 
     const objetivo = normalizarNombreExpansion(nombreSobre);
     try {
@@ -1418,7 +1454,8 @@ app.post('/', upload.any(), async (req, res) => {
             }
         }
 
-        const masterData = rutaMasterCfg ? cargarMaster(rutaMasterCfg.webhook_url) : { cardmaster: {}, en_US: {} };
+        const masterData = completarConLeanny(
+            rutaMasterCfg ? cargarMaster(rutaMasterCfg.webhook_url) : { cardmaster: {}, en_US: {} }, await datosLeanny());
         // Indice nombre->codigos (2026-09-09, ver comentario completo en buscarPullPorFechaObjetivo):
         // deja cruzar las cartas notables detectadas por texto (solo tienen nombre, no codigo)
         // contra el contenido real de cada pull candidato (que solo tiene codigos), para elegir
@@ -1426,7 +1463,7 @@ app.post('/', upload.any(), async (req, res) => {
         const indiceNombrePorCodigo = construirIndiceNombrePorCodigo(masterData);
         const codigosEsperados = obtenerCodigosEsperados(cartas, indiceNombrePorCodigo);
         const mapa = rutaMasterCfg ? obtenerMapa(rutaMasterCfg.webhook_url) : {};
-        const cardMap = rutaMasterCfg ? cargarCardMap(rutaMasterCfg.webhook_url) : {};
+        const cardMap = { ...((await datosLeanny())?.cardmap || {}), ...(rutaMasterCfg ? cargarCardMap(rutaMasterCfg.webhook_url) : {}) };
         let accountData = null;
         let pullSeleccionado = null;
         const cartasPorCodigo = new Map();
