@@ -352,13 +352,28 @@ GuardarCompartidas:
         MsgBox, 48, Monitor Link, Saved, but could not reach the bot. It will be sent when it shows Connected.
 return
 
-; Names + packs of the shared accounts to every host (the active one and the others).
+; Name, packCount and lastPackPulled of each shared account to every host (the active one and the
+; others): with the last pack time the host never opens an account that already opened recently.
 EnviarCuentasReroll() {
     if (Token = "")
         return false
+    datos := {}
+    if (CarpetaJson != "")
+        Loop, Files, %CarpetaJson%\*.json
+        {
+            FileRead, t, %A_LoopFileFullPath%
+            if !RegExMatch(t, """fileName""\s*:\s*""((?:[^""\\]|\\.)*)""", mf)
+                continue
+            f := JsonUnesc(mf1)
+            if !CuentasReroll.HasKey(f)
+                continue
+            p := RegExMatch(t, """packCount""\s*:\s*(\d+)", mp) ? mp1 : 0
+            l := RegExMatch(t, """lastPackPulled""\s*:\s*""(\d+)""", ml) ? ml1 : ""
+            datos[f] := "{""f"":""" . JsonEsc(f) . """,""p"":" . p . ",""l"":""" . l . """}"
+        }
     items := ""
     for f in CuentasReroll
-        items .= (items = "" ? "" : ",") . """" . JsonEsc(f) . """"
+        items .= (items = "" ? "" : ",") . (datos.HasKey(f) ? datos[f] : """" . JsonEsc(f) . """")
     body := "{""accounts"":[" . items . "]}"
     try {
         r := Http("POST", ServerUrl . "/link/reroll-accounts", body, "text/plain; charset=utf-8", Token, 60)
@@ -403,6 +418,99 @@ AtenderReroll(id, lista) {
     FormatTime, UltimoReroll,, HH:mm
     UltimoReroll .= " (" . enviados . ")"
     PintarEstado()
+}
+
+; The host opened packs on one of your shared accounts: it sends back ONLY the cards that came out,
+; and they are written here into YOUR card file, the way Kevin/Leanny's bot does it (pulls[],
+; packCount, lastPackPulled). Your .json never leaves this PC. A backup <file>.json.bak is kept.
+AgregarSobres(id, archivo, base64) {
+    contenido := Base64UrlDecode(base64)
+    if !RegExMatch(contenido, """key""\s*:\s*""([0-9a-f]+)""", mk)
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""bad content""}")
+    aplicados := CFG_DIR . "\reroll_applied.txt"
+    FileRead, ya, %aplicados%
+    if InStr(ya, mk1)
+        return ResponderAccion("{""id"":""" . id . """,""ok"":true,""already"":true}")
+    buscado := RegExReplace(archivo, "i)\.xml$", "")
+    destino := ""
+    Loop, Files, %CarpetaJson%\*.json
+    {
+        FileRead, t, %A_LoopFileFullPath%
+        if (RegExMatch(t, """fileName""\s*:\s*""([^""]*)""", mf) && RegExReplace(mf1, "i)\.xml$", "") = buscado) {
+            destino := A_LoopFileFullPath
+            break
+        }
+    }
+    if (destino = "")
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""account file not found""}")
+    ; One pulls[] entry per pack, in the same layout as the rest of the file.
+    nuevos := "", n := 0, p := 1
+    while (p := RegExMatch(contenido, "\{""timestamp"":""([^""]*)"",""pack"":""([^""]*)"",""cards"":\[([^\]]*)\]\}", mpk, p)) {
+        p += StrLen(mpk)
+        cartas := "", pc := 1
+        while (pc := RegExMatch(mpk3, """([A-Za-z0-9_]+)""", mc, pc)) {
+            pc += StrLen(mc)
+            cartas .= (cartas = "" ? "" : ",`n") . "        """ . mc1 . """"
+        }
+        nuevos .= (nuevos = "" ? "" : ",`n") . "    {`n      ""timestamp"": """ . mpk1 . """,`n      ""pack"": """ . mpk2 . """,`n      ""cards"": [`n" . cartas . "`n      ]`n    }"
+        n++
+    }
+    ultimo := RegExMatch(contenido, """last""\s*:\s*""(\d{14})""", ml) ? ml1 : ""
+    abre := RegExMatch(t, """pulls""\s*:\s*\[", mpa)
+    if (!n || !abre)
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""bad content""}")
+    abre += StrLen(mpa) - 1
+    cierra := FinDeArreglo(t, abre)
+    if (!cierra)
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""card file has an unexpected format""}")
+    vacio := Trim(SubStr(t, abre + 1, cierra - abre - 1), " `t`r`n") = ""
+    t := RTrim(SubStr(t, 1, cierra - 1), " `t`r`n") . (vacio ? "`n" : ",`n") . nuevos . "`n  " . SubStr(t, cierra)
+    if RegExMatch(t, """packCount""\s*:\s*(\d+)", mpc)
+        t := RegExReplace(t, """packCount""\s*:\s*\d+", """packCount"": " . (mpc1 + n), , 1)
+    if (ultimo != "") {
+        t := RegExReplace(t, """lastPackPulled""\s*:\s*""\d*""", """lastPackPulled"": """ . ultimo . """", , 1)
+        t := RegExReplace(t, """lastLoggedIn""\s*:\s*""\d*""", """lastLoggedIn"": """ . ultimo . """", , 1)
+    }
+    FileCopy, %destino%, %destino%.bak, 1
+    f := FileOpen(destino, "w", "UTF-8-RAW")
+    if (!IsObject(f))
+        return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""could not write the file""}")
+    f.Write(t)
+    f.Close()
+    FileAppend, % mk1 . "`n", %aplicados%
+    FormatTime, ahora,, yyyy-MM-dd HH:mm
+    FileAppend, % ahora . "  " . n . " pack(s) opened by the host added to " . archivo . "`n", %CFG_REROLL_LOG%, UTF-8
+    ResponderAccion("{""id"":""" . id . """,""ok"":true}")
+    SubirResumen(false)
+}
+
+; Position of the "]" that closes the array opening at position abre (skips strings), or 0.
+FinDeArreglo(t, abre) {
+    nivel := 0, enTexto := false, escape := false
+    Loop, % StrLen(t) - abre + 1
+    {
+        i := abre + A_Index - 1
+        c := SubStr(t, i, 1)
+        if (enTexto) {
+            if (escape)
+                escape := false
+            else if (c = "\")
+                escape := true
+            else if (c = """")
+                enTexto := false
+            continue
+        }
+        if (c = """")
+            enTexto := true
+        else if (c = "[" || c = "{")
+            nivel++
+        else if (c = "]" || c = "}") {
+            nivel--
+            if (nivel = 0)
+                return i
+        }
+    }
+    return 0
 }
 
 ; ---------------------------------------------------------------- linking (/link)
@@ -490,6 +598,8 @@ NoVinculado() {
 ResumenPeriodico:
     SubirResumen(false)
     SubirProxies(false)
+    if (CuentasReroll.Count())
+        EnviarCuentasReroll()
 return
 
 SubirResumen(forzar, folderError := "") {
@@ -683,6 +793,11 @@ RevisarTrabajos:
     while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""files""\s*:\s*\[(.*?)\]", mj, pos)) {
         pos += StrLen(mj)
         AtenderTrabajo(mj1, mj2)
+    }
+    pos := 1
+    while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""add_pulls""\s*,\s*""file""\s*:\s*""((?:[^""\\]|\\.)*)""\s*,\s*""content""\s*:\s*""([A-Za-z0-9+/=]+)""", mpl, pos)) {
+        pos += StrLen(mpl)
+        AgregarSobres(mpl1, JsonUnesc(mpl2), mpl3)
     }
     pos := 1
     while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""reroll_xml""\s*,\s*""files""\s*:\s*\[(.*?)\]", mr, pos)) {

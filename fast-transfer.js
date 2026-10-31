@@ -1420,4 +1420,4 @@ async function leerInventarioCuenta(miembro, nombreXml) {
     return estado.ok ? { datos: estado.ultimo } : { error: estado.errores[0] || 'could not read the account' };
 }
 
-module.exports = { ocupado, refrescarCuentaElegida, leerInventarioCuenta, init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };
+module.exports = { rutaMotor, asegurarTunel, ocupado, refrescarCuentaElegida, leerInventarioCuenta, init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };

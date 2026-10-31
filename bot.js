@@ -7727,6 +7727,8 @@ if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
     activo: () => hostComunidad.esActivo(),
     nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null
 });
+// Reroll de la comunidad con las cuentas que prestan los miembros (apagado salvo REROLL_COMUNIDAD=1).
+if (comunidad.hayComunidad()) require('./reroll-comunidad.js').iniciar({ ml: monitorLink, fastTransfer, activo: () => hostComunidad.esActivo() });
 dashboardApp.use(express.json());
 // Fondos animados de la pantalla de bienvenida de /tutorials (2026-08-08, a pedido
 // explicito del usuario -- reusa el mismo repositorio local de wallpapers ya usado para el

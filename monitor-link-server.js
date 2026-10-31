@@ -32,6 +32,9 @@ async function asegurarTablas() {
     // Cuentas que el miembro presta al reroll (solo los nombres de archivo; las XML se piden al momento).
     await db.run(`CREATE TABLE IF NOT EXISTS link_reroll (
         discord_id TEXT PRIMARY KEY, cuentas TEXT, n INTEGER, ts INTEGER)`);
+    // Cartas que salieron en el reroll y todavia no llegaron al JSON del miembro (PC apagada, etc.).
+    await db.run(`CREATE TABLE IF NOT EXISTS link_reroll_pendiente (
+        clave TEXT PRIMARY KEY, discord_id TEXT, archivo TEXT, datos TEXT, ts INTEGER)`);
     // Carpeta elegida en Monitor Link (para 📂 All Main Paths). Columna agregada despues.
     if (!asegurarTablas.carpeta) {
         try { await db.run(`ALTER TABLE link_resumen ADD COLUMN carpeta TEXT`); } catch (e) { /* ya existe */ }
@@ -444,8 +447,14 @@ function registrar(app, dependencias) {
             if (!agente) return res.status(401).json({ error: 'not_linked' });
             let datos;
             try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
-            const cuentas = [...new Set((Array.isArray(datos.accounts) ? datos.accounts : [])
-                .map(f => String(f || '').trim()).filter(f => /^[^\\/:*?"<>|]{1,120}\.xml$/i.test(f)))].slice(0, 20000);
+            // Cada cuenta: "nombre.xml" o { f, p: packCount, l: lastPackPulled "YYYYMMDDHHMMSS" }.
+            const vistas = new Set();
+            const cuentas = (Array.isArray(datos.accounts) ? datos.accounts : []).map(c => {
+                const f = String((typeof c === 'string' ? c : c?.f) || '').trim();
+                if (!/^[^\\/:*?"<>|]{1,120}\.xml$/i.test(f) || vistas.has(f)) return null;
+                vistas.add(f);
+                return { f, p: Number.isInteger(c?.p) ? c.p : null, l: /^\d{14}$/.test(String(c?.l || '')) ? String(c.l) : null };
+            }).filter(Boolean).slice(0, 20000);
             if (cuentas.length) {
                 await db.run(`INSERT INTO link_reroll (discord_id, cuentas, n, ts) VALUES (?, ?, ?, ?)
                      ON CONFLICT(discord_id) DO UPDATE SET cuentas = excluded.cuentas, n = excluded.n, ts = excluded.ts`,
@@ -461,11 +470,48 @@ function registrar(app, dependencias) {
     });
 }
 
-// Cuentas prestadas al reroll: [{ discord_id, cuentas: [fileName.xml], ts }].
+// Cuentas prestadas al reroll: [{ discord_id, cuentas: [{ f, p, l }], ts }].
 async function cuentasReroll() {
     await asegurarTablas();
     const filas = await db.all(`SELECT discord_id, cuentas, ts FROM link_reroll ORDER BY discord_id`) || [];
-    return filas.map(f => ({ discord_id: f.discord_id, cuentas: JSON.parse(f.cuentas || '[]'), ts: f.ts }));
+    return filas.map(f => ({ discord_id: f.discord_id, ts: f.ts,
+        cuentas: JSON.parse(f.cuentas || '[]').map(c => typeof c === 'string' ? { f: c, p: null, l: null } : c) }));
+}
+
+// Lo que salio al abrir sobres en una cuenta prestada: queda pendiente hasta que el Monitor Link del
+// miembro lo escriba en SU JSON (pulls[], packCount, lastPackPulled). sobres = [{ timestamp, pack, cards }].
+async function anotarSobresReroll(discordId, archivo, sobres, ultimo) {
+    await asegurarTablas();
+    const clave = crypto.randomBytes(8).toString('hex');
+    const datos = JSON.stringify({ key: clave, last: ultimo,
+        pulls: sobres.map(s => ({ timestamp: String(s.timestamp), pack: String(s.pack), cards: (s.cards || []).map(String) })) });
+    await db.run(`INSERT INTO link_reroll_pendiente (clave, discord_id, archivo, datos, ts) VALUES (?, ?, ?, ?, ?)`,
+        [clave, String(discordId), String(archivo), datos, Date.now()]);
+}
+
+// Manda al Monitor Link del miembro las cartas pendientes. Devuelve cuantas entregas quedaron hechas.
+// Si su PC esta apagada quedan para la proxima (cada entrega lleva su clave: nunca se escribe dos veces).
+async function entregarSobresReroll(discordId) {
+    await asegurarTablas();
+    const filas = await db.all(`SELECT clave, archivo, datos FROM link_reroll_pendiente WHERE discord_id = ? ORDER BY ts`, [String(discordId)]) || [];
+    let hechas = 0;
+    for (const f of filas) {
+        try {
+            const r = await pedirAccion(discordId, { action: 'add_pulls', file: f.archivo, content: Buffer.from(f.datos).toString('base64') }, 30000);
+            if (r.ok || r.error === 'account file not found') {
+                await db.run(`DELETE FROM link_reroll_pendiente WHERE clave = ?`, [f.clave]);
+                if (r.ok) hechas++;
+            }
+        } catch (e) {
+            break; // offline / timeout: el resto queda para la proxima
+        }
+    }
+    return hechas;
+}
+
+async function miembrosConSobresPendientes() {
+    await asegurarTablas();
+    return (await db.all(`SELECT DISTINCT discord_id FROM link_reroll_pendiente`) || []).map(f => f.discord_id);
 }
 
 // Pide al Monitor Link del miembro las XML de cuentas que presto al reroll. Monitor Link solo entrega
@@ -727,4 +773,4 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll };
+module.exports = { ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes };
