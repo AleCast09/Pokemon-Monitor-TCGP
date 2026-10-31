@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.2"
+global VERSION := "ahk-1.9.3"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -34,7 +34,7 @@ global ProxyFile := "", ProxyHuella := "", ProxiesEnviadas := ""
 ; sent; each .xml is sent when a host is about to open it (like Fast Share) and the host deletes it.
 global CFG_REROLL := CFG_DIR . "\reroll_accounts.txt", CFG_REROLL_LOG := CFG_DIR . "\reroll_log.txt"
 global CuentasReroll := {}, UltimoReroll := ""
-global Status, Info, Clave, BtnLink, Inicio, LinkBox, LVCuentas
+global Status, Info, Clave, BtnLink, Inicio, LinkBox, LVCuentas, Barra
 
 CargarConfig()
 CrearVentana()
@@ -96,6 +96,9 @@ CrearVentana() {
     Gui, Add, Text, xm y+0 w360 Center, Zenith Rise - connects your PC with the Discord bot
     Gui, Font, s11 Bold, Segoe UI
     Gui, Add, Text, xm y+14 w360 Center vStatus, ...
+    ; Progress while reading/sending the accounts (600+ accounts take a while; without it the window
+    ; looked frozen and Windows said "Not responding").
+    Gui, Add, Progress, xm y+4 w360 h10 c1E8E3E vBarra Hidden, 0
     Gui, Font, s9 Norm cBlack, Segoe UI
     Gui, Add, Text, xm y+6 w360 r6 vInfo,
     Gui, Add, GroupBox, xm y+6 w360 h92 vLinkBox, Link this PC
@@ -295,6 +298,8 @@ CompartirCuentas:
     total := 0
     Loop, Files, %CarpetaJson%\*.json
     {
+        if (Mod(A_Index, 20) = 0)
+            Sleep, -1
         FileRead, t, %A_LoopFileFullPath%
         if !RegExMatch(t, """packCount""\s*:\s*(\d+)", mp)
             continue
@@ -361,6 +366,8 @@ EnviarCuentasReroll() {
     if (CarpetaJson != "")
         Loop, Files, %CarpetaJson%\*.json
         {
+            if (Mod(A_Index, 20) = 0)
+                Sleep, -1
             FileRead, t, %A_LoopFileFullPath%
             if !RegExMatch(t, """fileName""\s*:\s*""((?:[^""\\]|\\.)*)""", mf)
                 continue
@@ -647,16 +654,36 @@ ResumenPeriodico:
 return
 
 SubirResumen(forzar, folderError := "") {
-    if (Token = "" || CarpetaJson = "")
+    static Subiendo := false
+    ; While uploading the window keeps running timers: never start a second upload on top.
+    if (Token = "" || CarpetaJson = "" || Subiendo)
         return
+    Subiendo := true
+    SubirResumenAhora(forzar, folderError)
+    Subiendo := false
+}
+
+SubirResumenAhora(forzar, folderError) {
     huella := Huella()
     if (!forzar && folderError = "" && huella = UltimaHuella)
         return
-    GuiControl,, Status, Reading your accounts...
+    total := 0
+    Loop, Files, %CarpetaJson%\*.json
+        total++
+    GuiControl,, Status, Reading your accounts... 0`%
+    GuiControl,, Barra, 0
+    GuiControl, Show, Barra
     cuentas := 0
     body := "{""version"":""" . VERSION . """,""folder"":""" . JsonEsc(Ruta) . """,""accounts"":["
     Loop, Files, %CarpetaJson%\*.json
     {
+        ; Every few files: move the bar and let the window repaint and answer clicks.
+        if (Mod(A_Index, 5) = 0 && total) {
+            pct := Floor(A_Index * 100 / total)
+            GuiControl,, Barra, %pct%
+            GuiControl,, Status, % "Reading your accounts... " . pct . "% (" . A_Index . "/" . total . ")"
+            Sleep, -1
+        }
         FileRead, t, %A_LoopFileFullPath%
         pos := InStr(t, """pulls""")
         if (!pos)
@@ -694,29 +721,56 @@ SubirResumen(forzar, folderError := "") {
     if (folderError != "")
         body .= ",""folderError"":""" . JsonEsc(folderError) . """"
     body .= "}"
+    GuiControl,, Barra, 100
+    GuiControl,, Status, % "Sending your cards summary (" . cuentas . " accounts)..."
     try {
-        r := Http("POST", ServerUrl . "/link/summary", body, "text/plain; charset=utf-8", Token, 120)
+        r := HttpSinTrabar("POST", ServerUrl . "/link/summary", body, "text/plain; charset=utf-8", Token, 120)
     } catch e {
+        GuiControl, Hide, Barra
         SinConexion()
         return
     }
-    if (r.status = 401)
+    if (r.status = 401) {
+        GuiControl, Hide, Barra
         return NoVinculado()
+    }
     if (r.status != 200) {
+        GuiControl, Hide, Barra
         UltimoError := "Summary not accepted (" . r.status . ")"
         PintarEstado()
         return
     }
-    ; The other hosts at most every 30 min (or right away when a host appears): while uploading, this
-    ; script can't answer Discord, and the bot said "Monitor Link is not running".
+    ; The other hosts at most every 30 min (or right away when a host appears).
     if (Espejos.Length() && (forzar || A_TickCount - UltimoEspejo > 1800000 || !UltimoEspejo)) {
+        GuiControl,, Status, Sending to the other hosts...
         for _, espejo in Espejos
-            try Http("POST", espejo . "/link/summary", body, "text/plain; charset=utf-8", Token, 120)
+            try HttpSinTrabar("POST", espejo . "/link/summary", body, "text/plain; charset=utf-8", Token, 120)
         UltimoEspejo := A_TickCount
     }
+    GuiControl, Hide, Barra
     UltimaHuella := huella, CuentasEnviadas := cuentas, EnLinea := true, UltimoError := ""
     FormatTime, UltimoEnvio,, HH:mm
     PintarEstado()
+}
+
+; Like Http() but the window keeps answering while it uploads (big summaries take a while), and Discord
+; requests keep being served meanwhile.
+HttpSinTrabar(metodo, url, body := "", tipo := "", bearer := "", segundos := 30) {
+    req := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+    req.SetTimeouts(5000, 10000, 30000, segundos * 1000)
+    req.Open(metodo, url, true)
+    if (tipo != "")
+        req.SetRequestHeader("Content-Type", tipo)
+    if (bearer != "")
+        req.SetRequestHeader("Authorization", "Bearer " . bearer)
+    req.Send(body)
+    limite := A_TickCount + segundos * 1000
+    while !req.WaitForResponse(0) {
+        if (A_TickCount > limite)
+            throw Exception("timeout")
+        Sleep, 50
+    }
+    return {status: req.Status, text: req.ResponseText}
 }
 
 ; Cheap fingerprint (names, sizes and dates) so the full summary is only re-sent when something changed.
