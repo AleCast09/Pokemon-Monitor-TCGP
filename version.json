@@ -1,7 +1,9 @@
 {
-  "version": "1.6.8",
-  "notesCount": 7,
+  "version": "1.6.9",
+  "notesCount": 2,
   "notes": [
+    "Fixed: S4T alerts for Dual Fusion cards came without the card image (works even if your P BOT card data is older).",
+    "Fixed: missing Dual Fusion logo on alerts from the MegaMewtwoX and Latest packs.",
     "Added: Dual Fusion (C1), Special Pack: First Partners and Promo C in All Cards, in a new Group C with their logos and packs.",
     "Fixed: each card now shows the type of its own set (a Pokemon that changed type in a newer set showed the old one). Cards of a brand-new set show no type until the card data is published, then update on their own.",
     "Fixed: card types stopped updating since August (the data source moved).",
