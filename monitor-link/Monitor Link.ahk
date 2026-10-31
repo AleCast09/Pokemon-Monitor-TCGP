@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.8.2"
+global VERSION := "ahk-1.9.0"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -28,7 +28,13 @@ global JobsReq := "", JobsReintento := 0, IndiceXml := "", IndiceDe := ""
 ; The other community hosts (the ping lists them): they get the same summary, so whichever takes over
 ; already has your accounts -- even if this PC is off by then.
 global Espejos := [], UltimoEspejo := 0
-global Status, Info, Clave, BtnLink, Inicio, LinkBox
+; Share proxies: the member's own proxy list (.txt) for the hosts' reroll. Re-sent when the file changes.
+global ProxyFile := "", ProxyHuella := "", ProxiesEnviadas := ""
+; Share accounts: the accounts (96+ packs) the member lends to the hosts' reroll. Only their NAMES are
+; sent; each .xml is sent when a host is about to open it (like Fast Share) and the host deletes it.
+global CFG_REROLL := CFG_DIR . "\reroll_accounts.txt", CFG_REROLL_LOG := CFG_DIR . "\reroll_log.txt"
+global CuentasReroll := {}, UltimoReroll := ""
+global Status, Info, Clave, BtnLink, Inicio, LinkBox, LVCuentas
 
 CargarConfig()
 CrearVentana()
@@ -48,6 +54,11 @@ CargarConfig() {
     IniRead, LibUrl, %CFG%, link, libUrl, %A_Space%
     IniRead, LibToken, %CFG%, link, libToken, %A_Space%
     IniRead, Ruta, %CFG%, folder, mainPath, %A_Space%
+    IniRead, ProxyFile, %CFG%, proxies, file, %A_Space%
+    CuentasReroll := {}
+    Loop, Read, %CFG_REROLL%
+        if (Trim(A_LoopReadLine) != "")
+            CuentasReroll[Trim(A_LoopReadLine)] := true
     CarpetaJson := CarpetaJsonDe(Ruta)
     if (CarpetaJson = "") {
         ; Inside the PTCGPB folder it already knows the Main Path.
@@ -64,6 +75,7 @@ GuardarConfig() {
     IniWrite, %LibUrl%, %CFG%, link, libUrl
     IniWrite, %LibToken%, %CFG%, link, libToken
     IniWrite, %Ruta%, %CFG%, folder, mainPath
+    IniWrite, %ProxyFile%, %CFG%, proxies, file
 }
 
 ; ---------------------------------------------------------------- window
@@ -85,7 +97,7 @@ CrearVentana() {
     Gui, Font, s11 Bold, Segoe UI
     Gui, Add, Text, xm y+14 w360 Center vStatus, ...
     Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Add, Text, xm y+6 w360 r4 vInfo,
+    Gui, Add, Text, xm y+6 w360 r6 vInfo,
     Gui, Add, GroupBox, xm y+6 w360 h92 vLinkBox, Link this PC
     Gui, Add, Text, xp+12 yp+22 w336, In Discord, type /link in Zenith Rise and paste the key here:
     Gui, Add, Edit, xp y+6 w250 vClave
@@ -93,6 +105,9 @@ CrearVentana() {
     Gui, Add, Button, xm y+28 w116 h30 gCambiarCarpeta, Change folder
     Gui, Add, Button, x+6 yp w116 h30 gSincronizar, Sync now
     Gui, Add, Button, x+6 yp w116 h30 gOcultar, Hide
+    Gui, Add, Button, xm y+6 w177 h30 gCompartirProxies, Share proxies
+    Gui, Add, Button, x+6 yp w177 h30 gDejarProxies, Stop sharing proxies
+    Gui, Add, Button, xm y+6 w360 h30 gCompartirCuentas, Share accounts for reroll (96+ packs)
     Gui, Add, Checkbox, xm y+12 vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
     Gui, Show, AutoSize, Monitor Link
@@ -121,6 +136,8 @@ PintarEstado() {
     texto := (UserName != "" ? "Discord user: " . UserName . "`n" : "")
         . "Folder: " . (Ruta != "" ? Ruta : "(not chosen yet - press Change folder)") . "`n"
         . (UltimoEnvio != "" ? "Cards summary: " . CuentasEnviadas . " accounts, sent at " . UltimoEnvio : "Cards summary: not sent yet")
+        . (ProxyFile != "" ? "`nProxies shared: " . (ProxiesEnviadas != "" ? ProxiesEnviadas : "sending...") : "")
+        . (CuentasReroll.Count() ? "`nAccounts shared for reroll: " . CuentasReroll.Count() . (UltimoReroll != "" ? " - last opened " . UltimoReroll : "") : "")
         . (UltimoError != "" ? "`n" . UltimoError : "")
     GuiControl,, Info, %texto%
     Menu, Tray, Tip, % "Monitor Link - " . (Token = "" ? "not linked" : EnLinea ? "connected" : "offline")
@@ -166,7 +183,227 @@ return
 
 Sincronizar:
     SubirResumen(true)
+    SubirProxies(true)
 return
+
+; ---------------------------------------------------------------- Share proxies (hosts' reroll)
+; Your own proxy list goes ONLY to the community hosts (stored on their PC, never posted in Discord).
+; One per line: user:pass@host:port or host:port:user:pass. Edit the .txt and it is re-sent by itself.
+CompartirProxies:
+    FileSelectFile, elegido, 3, %ProxyFile%, Pick your proxies .txt (one proxy per line), Text files (*.txt)
+    if (ErrorLevel || elegido = "")
+        return
+    FileRead, t, %elegido%
+    n := ContarProxies(t)
+    if (!n) {
+        MsgBox, 48, Monitor Link, No proxies found in that file.`n`nOne per line, like:`nuser:pass@host:port`nor`nhost:port:user:pass
+        return
+    }
+    MsgBox, 36, Monitor Link, % "Share " . n . " prox" . (n = 1 ? "y" : "ies") . " with the Zenith Rise hosts for the reroll?`n`nThey are stored only on the hosts' PCs and never posted in Discord. You can stop sharing anytime."
+    IfMsgBox, No
+        return
+    ProxyFile := elegido, ProxyHuella := ""
+    GuardarConfig()
+    SubirProxies(true)
+return
+
+DejarProxies:
+    if (ProxyFile = "") {
+        MsgBox, 64, Monitor Link, You are not sharing proxies.
+        return
+    }
+    MsgBox, 36, Monitor Link, Stop sharing your proxies? The hosts delete them.
+    IfMsgBox, No
+        return
+    ok := EnviarProxies("")
+    ProxyFile := "", ProxyHuella := "", ProxiesEnviadas := ""
+    GuardarConfig()
+    PintarEstado()
+    if (ok)
+        MsgBox, 64, Monitor Link, Done - your proxies were removed from the hosts.
+    else
+        MsgBox, 48, Monitor Link, Could not reach the bot. Try again when it shows Connected.
+return
+
+ContarProxies(t) {
+    n := 0
+    Loop, Parse, t, `n, `r
+        if RegExMatch(Trim(A_LoopField), "^((https?|socks5h?)://)?([^:@\s]+:[^@\s]+@[A-Za-z0-9.-]+:\d{2,5}|[A-Za-z0-9.-]+:\d{2,5}:[^:@\s]+:[^@\s]+)$")
+            n++
+    return n
+}
+
+; Only when the file changed (or forced); also to the other hosts, so each one has the full list.
+SubirProxies(forzar) {
+    if (Token = "" || ProxyFile = "")
+        return
+    if !FileExist(ProxyFile) {
+        ProxiesEnviadas := "file not found (" . ProxyFile . ")"
+        PintarEstado()
+        return
+    }
+    FileGetTime, tm, %ProxyFile%
+    FileGetSize, tam, %ProxyFile%
+    huella := ProxyFile . "|" . tm . "|" . tam
+    if (!forzar && huella = ProxyHuella)
+        return
+    FileRead, t, %ProxyFile%
+    if EnviarProxies(t) {
+        ProxyHuella := huella
+        FormatTime, hora,, HH:mm
+        ProxiesEnviadas := ContarProxies(t) . " (sent at " . hora . ")"
+    }
+    PintarEstado()
+}
+
+EnviarProxies(texto) {
+    try {
+        r := Http("POST", ServerUrl . "/link/proxies", texto, "text/plain; charset=utf-8", Token, 60)
+    } catch e {
+        return false
+    }
+    if (r.status = 401) {
+        NoVinculado()
+        return false
+    }
+    if (r.status != 200)
+        return false
+    for _, espejo in Espejos
+        try Http("POST", espejo . "/link/proxies", texto, "text/plain; charset=utf-8", Token, 60)
+    return true
+}
+
+; ---------------------------------------------------------------- Share accounts for reroll
+; A God Pack only shows to friends from an account with 96+ packs opened, so the hosts' reroll needs
+; accounts like yours. You pick which ones; only their names go to the hosts. When a host is about to
+; open one, it asks this program for that .xml (same as Fast Share), uses it and deletes it.
+CompartirCuentas:
+    if (CarpetaJson = "") {
+        MsgBox, 48, Monitor Link, Pick your folder first (Change folder).
+        return
+    }
+    Gui, 2:Destroy
+    Gui, 2:+Owner1 +ToolWindow
+    Gui, 2:Margin, 14, 12
+    Gui, 2:Font, s9, Segoe UI
+    Gui, 2:Add, Text, w440, Tick the accounts the hosts can use for the God Pack reroll (only accounts with 96+ packs opened are listed).
+    Gui, 2:Font, s9 Bold cC62828, Segoe UI
+    Gui, 2:Add, Text, w440 y+6, While an account is shared, do NOT open it on your own instances: the same account in two places at once gets errors.
+    Gui, 2:Font, s9 Norm cBlack, Segoe UI
+    Gui, 2:Add, ListView, w440 r16 y+8 Checked Grid -Multi vLVCuentas, Account|Packs
+    Gui, 2:Default
+    total := 0
+    Loop, Files, %CarpetaJson%\*.json
+    {
+        FileRead, t, %A_LoopFileFullPath%
+        if !RegExMatch(t, """packCount""\s*:\s*(\d+)", mp)
+            continue
+        if (mp1 < 96)
+            continue
+        f := RegExMatch(t, """fileName""\s*:\s*""((?:[^""\\]|\\.)*)""", mf) ? JsonUnesc(mf1) : A_LoopFileName
+        LV_Add(CuentasReroll.HasKey(f) ? "Check" : "", f, mp1 + 0)
+        total++
+    }
+    LV_ModifyCol(1, 330), LV_ModifyCol(2, "80 Integer SortDesc")
+    Gui, 2:Add, Text, w440 y+6, % total . " accounts with 96+ packs - " . CuentasReroll.Count() . " shared now."
+    Gui, 2:Add, Button, xm y+8 w100 h28 gMarcarTodas, Tick all
+    Gui, 2:Add, Button, x+6 yp w100 h28 gDesmarcarTodas, Untick all
+    Gui, 2:Add, Button, x+40 yp w188 h28 Default gGuardarCompartidas, Save and share
+    Gui, 1:Default
+    Gui, 2:Show, AutoSize, Share accounts for reroll
+return
+
+MarcarTodas:
+DesmarcarTodas:
+    Gui, 2:Default
+    LV_Modify(0, A_ThisLabel = "MarcarTodas" ? "Check" : "-Check")
+    Gui, 1:Default
+return
+
+2GuiClose:
+2GuiEscape:
+    Gui, 2:Destroy
+return
+
+GuardarCompartidas:
+    Gui, 2:Default
+    nuevas := {}, fila := 0
+    while (fila := LV_GetNext(fila, "Checked")) {
+        LV_GetText(f, fila, 1)
+        nuevas[f] := true
+    }
+    Gui, 1:Default
+    if (nuevas.Count()) {
+        MsgBox, 36, Monitor Link, % "Share " . nuevas.Count() . " account(s) with the Zenith Rise hosts for the God Pack reroll?`n`n- Only the names are sent now. Each .xml goes to a host only when it opens that account, and the host deletes it after.`n- Every time a host opens one, it is written in reroll_log.txt (in " . CFG_DIR . ").`n- Don't open these accounts on your own instances while shared.`n- You can untick them anytime."
+        IfMsgBox, No
+            return
+    }
+    CuentasReroll := nuevas
+    lista := ""
+    for f in CuentasReroll
+        lista .= f . "`n"
+    FileDelete, %CFG_REROLL%
+    if (lista != "")
+        FileAppend, %lista%, %CFG_REROLL%, UTF-8-RAW
+    Gui, 2:Destroy
+    ok := EnviarCuentasReroll()
+    PintarEstado()
+    if (!ok)
+        MsgBox, 48, Monitor Link, Saved, but could not reach the bot. It will be sent when it shows Connected.
+return
+
+; Names + packs of the shared accounts to every host (the active one and the others).
+EnviarCuentasReroll() {
+    if (Token = "")
+        return false
+    items := ""
+    for f in CuentasReroll
+        items .= (items = "" ? "" : ",") . """" . JsonEsc(f) . """"
+    body := "{""accounts"":[" . items . "]}"
+    try {
+        r := Http("POST", ServerUrl . "/link/reroll-accounts", body, "text/plain; charset=utf-8", Token, 60)
+    } catch e {
+        return false
+    }
+    if (r.status = 401) {
+        NoVinculado()
+        return false
+    }
+    for _, espejo in Espejos
+        try Http("POST", espejo . "/link/reroll-accounts", body, "text/plain; charset=utf-8", Token, 60)
+    return r.status = 200
+}
+
+; A host is about to open some of your shared accounts: send ONLY the ones you shared (anything else
+; asked is refused here, on your PC), and write it down in reroll_log.txt.
+AtenderReroll(id, lista) {
+    archivos := "", faltan := "", enviados := 0, rechazados := 0, nombres := "", p := 1
+    while (p := RegExMatch(lista, """((?:[^""\\]|\\.)*)""", mn, p)) {
+        p += StrLen(mn)
+        nombre := JsonUnesc(mn1)
+        if !CuentasReroll.HasKey(nombre) {
+            rechazados++
+            faltan .= (faltan = "" ? "" : ",") . """" . JsonEsc(nombre) . """"
+            continue
+        }
+        xml := RutaDeXml(nombre)
+        contenido := ""
+        if (xml != "")
+            FileRead, contenido, %xml%
+        if (contenido != "") {
+            archivos .= (archivos = "" ? "" : ",") . """" . JsonEsc(nombre) . """:""" . JsonEsc(contenido) . """"
+            enviados++, nombres .= " " . nombre
+        } else {
+            faltan .= (faltan = "" ? "" : ",") . """" . JsonEsc(nombre) . """"
+        }
+    }
+    try Http("POST", ServerUrl . "/link/xml", "{""id"":""" . id . """,""files"":{" . archivos . "},""missing"":[" . faltan . "]}", "text/plain; charset=utf-8", Token, 60)
+    FormatTime, ahora,, yyyy-MM-dd HH:mm
+    FileAppend, % ahora . "  host opened " . enviados . " account(s) for reroll:" . nombres . (rechazados ? "  (refused " . rechazados . " not shared)" : "") . "`n", %CFG_REROLL_LOG%, UTF-8
+    FormatTime, UltimoReroll,, HH:mm
+    UltimoReroll .= " (" . enviados . ")"
+    PintarEstado()
+}
 
 ; ---------------------------------------------------------------- linking (/link)
 Vincular:
@@ -230,6 +467,9 @@ return
 Arrancar() {
     EnLinea := true
     SubirResumen(true)
+    SubirProxies(true)
+    if (CuentasReroll.Count())
+        EnviarCuentasReroll()
     SetTimer, Ping, 60000
     SetTimer, ResumenPeriodico, 600000
     SetTimer, RevisarTrabajos, 300
@@ -249,6 +489,7 @@ NoVinculado() {
 ; ---------------------------------------------------------------- cards summary (no passwords)
 ResumenPeriodico:
     SubirResumen(false)
+    SubirProxies(false)
 return
 
 SubirResumen(forzar, folderError := "") {
@@ -367,6 +608,9 @@ Ping:
     if (antes != ahora) {
         Espejos := nuevos
         SubirResumen(true)
+        SubirProxies(true)
+        if (CuentasReroll.Count())
+            EnviarCuentasReroll()
     }
     if RegExMatch(r.text, """folder""\s*:\s*""((?:[^""\\]|\\.)*)""", mp) {
         pedida := JsonUnesc(mp1)
@@ -393,6 +637,7 @@ SinConexion() {
                 ServerUrl := RTrim(ml1, "/"), JobsReq := ""
                 GuardarConfig()
                 SubirResumen(true)
+                SubirProxies(true)
                 return
             }
         }
@@ -438,6 +683,11 @@ RevisarTrabajos:
     while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""files""\s*:\s*\[(.*?)\]", mj, pos)) {
         pos += StrLen(mj)
         AtenderTrabajo(mj1, mj2)
+    }
+    pos := 1
+    while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""reroll_xml""\s*,\s*""files""\s*:\s*\[(.*?)\]", mr, pos)) {
+        pos += StrLen(mr)
+        AtenderReroll(mr1, mr2)
     }
     pos := 1
     while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""wishlist_add""\s*,\s*""card""\s*:\s*""([A-Za-z0-9_]+)""\s*,\s*""name""\s*:\s*""((?:[^""\\]|\\.)*)""", mw, pos)) {

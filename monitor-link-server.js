@@ -27,6 +27,11 @@ async function asegurarTablas() {
         token_hash TEXT PRIMARY KEY, discord_id TEXT, guild_id TEXT, creado INTEGER, ultimo INTEGER, version TEXT)`);
     await db.run(`CREATE TABLE IF NOT EXISTS link_resumen (
         discord_id TEXT PRIMARY KEY, guild_id TEXT, datos TEXT, cuentas INTEGER, ts INTEGER)`);
+    await db.run(`CREATE TABLE IF NOT EXISTS link_proxies (
+        discord_id TEXT PRIMARY KEY, lista TEXT, n INTEGER, ts INTEGER)`);
+    // Cuentas que el miembro presta al reroll (solo los nombres de archivo; las XML se piden al momento).
+    await db.run(`CREATE TABLE IF NOT EXISTS link_reroll (
+        discord_id TEXT PRIMARY KEY, cuentas TEXT, n INTEGER, ts INTEGER)`);
     // Carpeta elegida en Monitor Link (para 📂 All Main Paths). Columna agregada despues.
     if (!asegurarTablas.carpeta) {
         try { await db.run(`ALTER TABLE link_resumen ADD COLUMN carpeta TEXT`); } catch (e) { /* ya existe */ }
@@ -231,8 +236,8 @@ function registrar(app, dependencias) {
     // Host en espera (community-host.js): no atiende a ningun Monitor Link; al recibir 503 cada uno
     // busca en la libreta la direccion del host que tiene el turno.
     const activo = dependencias.activo || (() => true);
-    // Excepcion: el resumen se recibe igual en espera (ver anotarHost / espejos).
-    app.use('/link', (req, res, next) => (activo() || (req.method === 'POST' && req.path === '/summary') ? next() : res.status(503).json({ error: 'standby' })));
+    // Excepcion: el resumen y las proxies se reciben igual en espera (ver anotarHost / espejos).
+    app.use('/link', (req, res, next) => (activo() || (req.method === 'POST' && ['/summary', '/proxies', '/reroll-accounts'].includes(req.path)) ? next() : res.status(503).json({ error: 'standby' })));
     sincronizarAgentes();
     setInterval(sincronizarAgentes, 10 * 60 * 1000);
     const nombreUsuario = dependencias.nombreUsuario || (async () => null);
@@ -303,6 +308,16 @@ function registrar(app, dependencias) {
             if (!trabajo) return res.json({ ok: false, error: 'unknown_job' });
             clearTimeout(trabajo.timer);
             trabajos.set(agente.discord_id, lista.filter(t => t !== trabajo));
+            // Reroll: contesta con XML como un pedido normal, pero solo de las cuentas pedidas.
+            if (trabajo.accion?.action === 'reroll_xml') {
+                const archivos = {};
+                for (const nombre of trabajo.accion.files) {
+                    const c = datos.files?.[nombre];
+                    if (typeof c === 'string' && c.length < 20000 && /name="deviceAccount"/.test(c)) archivos[nombre] = c;
+                }
+                trabajo.resolver(archivos);
+                return res.json({ ok: true, received: Object.keys(archivos).length });
+            }
             if (trabajo.accion) {
                 trabajo.resolver({
                     ok: !!datos.ok, already: !!datos.already, error: datos.error ? String(datos.error).slice(0, 200) : null,
@@ -395,6 +410,106 @@ function registrar(app, dependencias) {
             res.status(500).json({ error: 'server_error' });
         }
     });
+
+    // 🌐 Share proxies (2026-10-30): el miembro comparte SU lista de proxies para el reroll de los
+    // hosts. Lista vacia = deja de compartir. Se guardan solo en la base del host (nunca en Discord) y
+    // se arma el .txt del motor (ver escribirProxiesMotor).
+    app.post('/link/proxies', express.text({ type: 'text/plain', limit: '2mb' }), async (req, res) => {
+        try {
+            await asegurarTablas();
+            const agente = await agenteDe(req);
+            if (!agente) return res.status(401).json({ error: 'not_linked' });
+            const lista = [...new Set(String(req.body || '').split(/\r?\n/).map(normalizarProxy).filter(Boolean))].slice(0, 5000);
+            if (lista.length) {
+                await db.run(`INSERT INTO link_proxies (discord_id, lista, n, ts) VALUES (?, ?, ?, ?)
+                     ON CONFLICT(discord_id) DO UPDATE SET lista = excluded.lista, n = excluded.n, ts = excluded.ts`,
+                    [agente.discord_id, lista.join('\n'), lista.length, Date.now()]);
+            } else {
+                await db.run(`DELETE FROM link_proxies WHERE discord_id = ?`, [agente.discord_id]);
+            }
+            await escribirProxiesMotor();
+            res.json({ ok: true, proxies: lista.length });
+        } catch (e) {
+            console.error('DEBUG: Monitor Link /proxies:', e?.message || e);
+            res.status(500).json({ error: 'server_error' });
+        }
+    });
+
+    // 🎲 Share accounts for reroll: los nombres de las cuentas (96+ sobres) que el miembro presta.
+    // Lista vacia = deja de prestar. Nunca viajan contraseñas en este paso.
+    app.post('/link/reroll-accounts', express.text({ type: 'text/plain', limit: '2mb' }), async (req, res) => {
+        try {
+            await asegurarTablas();
+            const agente = await agenteDe(req);
+            if (!agente) return res.status(401).json({ error: 'not_linked' });
+            let datos;
+            try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
+            const cuentas = [...new Set((Array.isArray(datos.accounts) ? datos.accounts : [])
+                .map(f => String(f || '').trim()).filter(f => /^[^\\/:*?"<>|]{1,120}\.xml$/i.test(f)))].slice(0, 20000);
+            if (cuentas.length) {
+                await db.run(`INSERT INTO link_reroll (discord_id, cuentas, n, ts) VALUES (?, ?, ?, ?)
+                     ON CONFLICT(discord_id) DO UPDATE SET cuentas = excluded.cuentas, n = excluded.n, ts = excluded.ts`,
+                    [agente.discord_id, JSON.stringify(cuentas), cuentas.length, Date.now()]);
+            } else {
+                await db.run(`DELETE FROM link_reroll WHERE discord_id = ?`, [agente.discord_id]);
+            }
+            res.json({ ok: true, accounts: cuentas.length });
+        } catch (e) {
+            console.error('DEBUG: Monitor Link /reroll-accounts:', e?.message || e);
+            res.status(500).json({ error: 'server_error' });
+        }
+    });
+}
+
+// Cuentas prestadas al reroll: [{ discord_id, cuentas: [fileName.xml], ts }].
+async function cuentasReroll() {
+    await asegurarTablas();
+    const filas = await db.all(`SELECT discord_id, cuentas, ts FROM link_reroll ORDER BY discord_id`) || [];
+    return filas.map(f => ({ discord_id: f.discord_id, cuentas: JSON.parse(f.cuentas || '[]'), ts: f.ts }));
+}
+
+// Pide al Monitor Link del miembro las XML de cuentas que presto al reroll. Monitor Link solo entrega
+// las que el miembro marco (lo demas lo rechaza en su PC) y lo anota en su reroll_log.txt.
+// Devuelve { nombre: contenido }. Errores: 'offline' o 'timeout' (o un Monitor Link viejo).
+async function pedirXmlReroll(discordId, nombres) {
+    return await pedirAccion(discordId, { action: 'reroll_xml', files: nombres.map(String) }, 60000);
+}
+
+// Formatos aceptados: user:pass@host:port, http://user:pass@host:port y host:port:user:pass (el de
+// la mayoria de los planes). Todo sale como user:pass@host:port, el que lee el motor.
+function normalizarProxy(linea) {
+    const l = String(linea).trim().replace(/^(https?|socks5h?):\/\//i, '');
+    if (!l || l.startsWith('#') || /\s/.test(l)) return null;
+    let m = /^([^:@]+):([^@]+)@([A-Za-z0-9.-]+):(\d{2,5})$/.exec(l);
+    if (m) return `${m[1]}:${m[2]}@${m[3]}:${m[4]}`;
+    m = /^([A-Za-z0-9.-]+):(\d{2,5}):([^:@]+):([^@]+)$/.exec(l);
+    if (m) return `${m[3]}:${m[4]}@${m[1]}:${m[2]}`;
+    return null;
+}
+
+// Junta las proxies de todos en la carpeta del motor (FAST_TRANSFER_ENGINE_DIR, solo hosts):
+//   proxies_comunidad.txt          todas
+//   proxies_comunidad_host1.txt    la primera mitad (Ale)
+//   proxies_comunidad_host2.txt    la segunda mitad (wr98)
+// Las mitades salen iguales en los dos hosts (mismo orden), asi nunca usan la misma IP a la vez.
+async function escribirProxiesMotor() {
+    const motor = (process.env.FAST_TRANSFER_ENGINE_DIR || '').trim();
+    if (!motor || !require('fs').existsSync(motor)) return;
+    const fs = require('fs');
+    const path = require('path');
+    const filas = await db.all(`SELECT lista FROM link_proxies ORDER BY discord_id`) || [];
+    const todas = [...new Set(filas.flatMap(f => String(f.lista || '').split('\n')).filter(Boolean))];
+    const mitad = Math.ceil(todas.length / 2);
+    const escribir = (nombre, lineas) => fs.writeFileSync(path.join(motor, nombre), lineas.join('\n') + (lineas.length ? '\n' : ''));
+    escribir('proxies_comunidad.txt', todas);
+    escribir('proxies_comunidad_host1.txt', todas.slice(0, mitad));
+    escribir('proxies_comunidad_host2.txt', todas.slice(mitad));
+}
+
+// Quien comparte y cuantas (para hosts; nunca muestra las proxies).
+async function proxiesCompartidas() {
+    await asegurarTablas();
+    return await db.all(`SELECT discord_id, n, ts FROM link_proxies ORDER BY n DESC`) || [];
 }
 
 // ---- XML a pedido (etapa 3) ----
@@ -612,4 +727,4 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe };
+module.exports = { ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll };
