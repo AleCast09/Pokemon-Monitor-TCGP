@@ -29,6 +29,9 @@ const SIMULAR = process.argv.includes('--simular');
 const SIN_PREGUNTAR = process.argv.includes('--si');
 const LEANNY = 'https://leanny.github.io/pocket_tcg_resources';
 let MOTOR = process.env.FAST_TRANSFER_ENGINE_DIR || 'C:\\Users\\Ale TCG\\Desktop\\ptcgp-capturedeluxe';
+// Host de la comunidad (instalado desde el paquete, sin .git): solo se actualiza su Headless. Datos e
+// imagenes de cartas, nombres, logos y el repo de imagenes son del bot de Discord de Ale (2026-10-31).
+const ES_HOST = !fs.existsSync(path.join(RAIZ, '.git'));
 const REPO_IMAGENES = 'AleCast09/Pokemon-TCGP-Card-Image';
 const DESCARGAS = path.join(os.homedir(), 'Downloads');
 const EXPANSIONS_DIR = path.join(RAIZ, 'assets', 'expansions');
@@ -337,6 +340,16 @@ async function confirmarMotor() {
 async function main() {
     console.log(SIMULAR ? '🔎 SIMULACION: no se cambia nada.' : '🔄 Actualizando expansiones...');
     await confirmarMotor();
+    if (ES_HOST) {
+        // Los datos de Leanny solo se leen (en memoria) para saber que sobres y cartas agregar.
+        console.log('\nHost: solo se actualiza el Headless.');
+        const bajar = async (n) => (await axios.get(`${LEANNY}/data/${n}`, { timeout: 60000 })).data;
+        const [cardmap, en] = [await bajar('cardmap.json'), await bajar('en_US.json')];
+        await paso4Motor(en);
+        await paso4bCardsJson(cardmap, en);
+        console.log('\n' + (pendientes.length ? '📝 Falta a mano:\n' + pendientes.map(p => `   - ${p}`).join('\n') : '✅ Headless al dia.'));
+        return;
+    }
     const helper = carpetaHelper();
     console.log(`Carpeta de datos: ${helper}`);
     const { cardmap, en, setsNuevos } = await paso1Datos(helper);
