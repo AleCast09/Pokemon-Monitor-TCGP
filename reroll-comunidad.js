@@ -115,6 +115,17 @@ async function codigoSet(packId) {
     return expansionDePack[packId] || packId;
 }
 
+// Ticket de compra (product_id) del sobre, sacado de scripts/flow/pack_catalog.py del motor. Sin
+// --product-id, inject.py usa el de Team Rocket y el juego rechaza cualquier otro sobre con
+// PurchaseV2 INTERNAL (2026-11-01: el GP farm nunca abria Dual Fusion por esto; el panel si lo pasa).
+function productoDeSobre(motor, packId) {
+    try {
+        const catalogo = fs.readFileSync(path.join(motor, 'scripts', 'flow', 'pack_catalog.py'), 'utf8');
+        const id = String(packId).replace(/[^A-Za-z0-9_]/g, '');
+        return new RegExp(`"pack_id":\\s*"${id}"[^}]*?"product_id":\\s*"([^"]+)"`).exec(catalogo)?.[1] || '';
+    } catch (e) { return ''; }
+}
+
 function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
     return new Promise(resolve => {
         const python = deps.fastTransfer.pythonMotor();
@@ -140,6 +151,8 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
             '--verify-power', '--shuffle-proxies',
             '--stop-after-fails', String(s.stop_after_fails || 5)];
         if (s.packs_per_min > 0) args.push('--packs-per-min', String(s.packs_per_min));
+        const producto = productoDeSobre(motor, s.pack_id || 'CN001_0010_00_000');
+        if (producto) args.push('--product-id', producto);
         // Lo que dice el motor queda en reports/reroll_comunidad.log (2026-11-01: todas las cuentas daban
         // 0 sobres y no se veia por que). Pasado de 20 MB se rota a .log.1.
         const rutaLog = path.join(motor, 'reports', 'reroll_comunidad.log');
