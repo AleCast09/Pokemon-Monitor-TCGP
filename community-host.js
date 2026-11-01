@@ -217,5 +217,10 @@ async function iniciar(opciones) {
     setInterval(ciclo, CADA_MS);
 }
 
+// Miembros que prestan cuentas al GP farm (2026-11-01): lo escribe el host del turno con cada panel, para
+// LatiasBot (wr98). Clave zenith:miembros = JSON { discordId: { monitorLink, lent, ready, ts } }.
+const anotarMiembros = (registro) => configurado()
+    ? redis('SET', 'zenith:miembros', JSON.stringify(registro)).catch(() => {}) : Promise.resolve();
+
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
-    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll };
+    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros };

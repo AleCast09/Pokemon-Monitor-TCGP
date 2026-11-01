@@ -16666,11 +16666,51 @@ async function estadoDeEsteHost() {
     try { versionMotor = fs.readFileSync(path.join(motor, 'engine', 'config', 'current-version.txt'), 'utf8').trim().replace(/^v/i, '') || null; } catch (e) { /* sin motor */ }
     // GP farm: cuantas proxies de la bolsa le tocan a este host (null = Offline).
     const reroll = await hostComunidad.parteReroll().catch(() => null) ? await monitorLink.escribirProxiesMotor().catch(() => 0) : null;
-    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), versionMotor, links, reroll };
+    // Cuentas prestadas que le tocan a este host (para la seccion "Lent accounts" del panel).
+    const prestadas = reroll === null ? null : await require('./reroll-comunidad.js').resumenPrestadas().catch(() => null);
+    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), versionMotor, links, reroll, prestadas };
+}
+
+// Seccion "Lent accounts" del panel de hosts (2026-11-01, pedido de Ale): por miembro, cuantas cuentas
+// presta, cuantas estan listas para abrir y como se reparten entre los hosts Online del GP farm. Cada host
+// manda su parte en estadoDeEsteHost().prestadas; aca se suma. El estado del Monitor Link (🟢/🔴) lo
+// sabe solo el host del turno. Tambien queda en Upstash (zenith:miembros) para LatiasBot de wr98:
+// quien presta cuentas cuenta como online sin heartbeat propio.
+async function seccionPrestadas(hosts) {
+    const farm = hosts.filter(h => h.enLinea && h.prestadas && typeof h.prestadas === 'object');
+    if (!farm.length) return null;
+    const miembros = {};
+    for (const h of farm) {
+        for (const [id, [total, mias, listas]] of Object.entries(h.prestadas)) {
+            const m = (miembros[id] ||= { total: 0, listas: 0, porHost: [] });
+            m.total = Math.max(m.total, total);
+            m.listas += listas;
+            m.porHost.push(`${h.nombre} ${mias}`);
+        }
+    }
+    const ids = Object.keys(miembros).sort((a, b) => miembros[b].total - miembros[a].total);
+    if (!ids.length) return null;
+    let enLinea = new Map();
+    try { enLinea = new Map((await monitorLink.vinculados()).map(v => [String(v.discordId), v.enLinea])); } catch (e) { /* sin tablas */ }
+    const ahora = Date.now();
+    const registro = Object.fromEntries(ids.map(id => [id, {
+        monitorLink: enLinea.get(id) === true, lent: miembros[id].total, ready: miembros[id].listas, ts: ahora
+    }]));
+    hostComunidad.anotarMiembros?.(registro);
+    const lineas = ids.map(id => {
+        const m = miembros[id];
+        const punto = enLinea.has(id) ? (enLinea.get(id) ? '🟢' : '🔴') : '⚪';
+        return `${punto} <@${id}> — **${m.total}** lent · **${m.listas}** ready · ${m.total - m.listas} waiting\n　${m.porHost.join(' · ')}`;
+    });
+    const total = ids.reduce((a, id) => a + miembros[id].total, 0);
+    const listas = ids.reduce((a, id) => a + miembros[id].listas, 0);
+    lineas.push(`**Total — ${total} lent · ${listas} ready**`);
+    return lineas.join('\n').slice(0, 4000);
 }
 
 // Panel de hosts en el canal 🔒-hosts (lo arma y lo mantiene el host que tiene el turno).
 async function actualizarPanelHosts(hosts) {
+    const textoPrestadas = await seccionPrestadas(hosts).catch(() => null);
     for (const guild of client.guilds.cache.values()) {
         if (!comunidad.esComunidad(guild.id)) continue;
         const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
@@ -16693,14 +16733,18 @@ async function actualizarPanelHosts(hosts) {
         const embed = new EmbedBuilder().setTitle('🖥️ Community hosts').setColor(0x5865F2)
             .setDescription((lineas.join('\n\n') || 'No hosts yet.').slice(0, 4000))
             .setFooter({ text: '👑 has the turn · ⏸️ standby · 🟢 PC on · 🔴 PC off · updates every 2 min' }).setTimestamp();
+        const embeds = [embed];
+        if (textoPrestadas) embeds.push(new EmbedBuilder().setTitle('🎲 GP farm — lent accounts').setColor(0x57F287)
+            .setDescription(textoPrestadas)
+            .setFooter({ text: '🟢 Monitor Link on · 🔴 off · ready = can open packs now · waiting = opened in the last 24 h · split between the GP farm hosts' }));
         const guardado = await hostComunidad.panelGuardado();
         if (guardado?.canal === canal.id && guardado.bot === client.user.id) {
             const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
-            if (msg) { await msg.edit({ embeds: [embed] }).catch(() => {}); continue; }
+            if (msg) { await msg.edit({ embeds }).catch(() => {}); continue; }
         }
         // Era de otro bot (otro host) o no existe: se borra el viejo y se publica uno propio.
         if (guardado?.canal === canal.id && guardado.msg) await canal.messages.delete(guardado.msg).catch(() => {});
-        const nuevo = await canal.send({ embeds: [embed] }).catch(() => null);
+        const nuevo = await canal.send({ embeds }).catch(() => null);
         if (nuevo) await hostComunidad.guardarPanel({ canal: canal.id, msg: nuevo.id, bot: client.user.id });
     }
 }

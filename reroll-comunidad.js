@@ -259,4 +259,25 @@ async function ciclo() {
     }
 }
 
-module.exports = { iniciar, ciclo };
+// Resumen de cuentas prestadas para el panel de hosts (2026-11-01, pedido de Ale): por miembro,
+// { [discordId]: [prestadas en total, las que le tocan a ESTE host, de esas las listas para abrir] }.
+// "Listas" = pasaron el cooldown (lastPackPulled de Lean y la ultima apertura de este host).
+// null si este host esta Offline para GP farm o no tiene motor.
+async function resumenPrestadas() {
+    if (!deps) return null;
+    const motor = deps.fastTransfer.rutaMotor();
+    const parte = await deps.parte().catch(() => null);
+    if (!motor || !parte) return null;
+    const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
+    const estado = leerEstado(motor);
+    const ahora = Date.now();
+    const resumen = {};
+    for (const m of await deps.ml.cuentasReroll()) {
+        const mias = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte));
+        const listas = mias.filter(c => ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).length;
+        resumen[m.discord_id] = [m.cuentas.length, mias.length, listas];
+    }
+    return resumen;
+}
+
+module.exports = { iniciar, ciclo, resumenPrestadas };
