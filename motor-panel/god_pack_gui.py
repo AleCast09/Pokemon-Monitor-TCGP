@@ -1516,7 +1516,8 @@ class GodPackGui(QMainWindow):
             return
         if self._community:
             return
-        comunidad = self.w_community.isChecked() and cmd_override is None
+        # El boton manda clicked(False) como cmd_override: solo una lista (limpieza) NO es un Start normal.
+        comunidad = self.w_community.isChecked() and not isinstance(cmd_override, list)
         propias = bool(self.w_xml_dir.text().strip() or self.w_accounts_dir.text().strip())
         if comunidad and not propias:
             self._start_community(limpiar=True)   # sin carpeta propia: solo las prestadas
