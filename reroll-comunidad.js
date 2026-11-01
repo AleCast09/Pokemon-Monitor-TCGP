@@ -150,7 +150,11 @@ async function sincronizarPanel() {
     await deps.marcar?.(on).catch(() => {});
     log(on ? 'Community farm ON (God Pack UI Start)' : 'Community farm OFF (God Pack UI stopped or closed)');
     if (on) setTimeout(ciclo, 15 * 1000);
-    else ppm = null;
+    else {
+        // Stop: ultimo heartbeat en Offline y 0 PPM (solo si estaba farmeando, no al arrancar el bot).
+        if (ppm) await enviarPpm(motor, ajustesPanel(motor), true).catch(e => log('PPM report failed:', e?.message || e));
+        ppm = null;
+    }
 }
 
 // PPM del GP farm (2026-11-01, pedido de Ale): Zenith (LatiasBot de wr98) toma el PPM de los mensajes
@@ -167,21 +171,28 @@ async function revisarPpm() {
         const parte = await deps.parte().catch(() => null);
         if (!parte) { ppm = null; return; }
         if (!ppm) ppm = { desde: Date.now(), sobres: 0 };
-        const webhook = String(s.ppm_webhook || '').trim();
-        if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(webhook)) return;
-        // Con Community farm el panel no manda su PPM: aca va todo junto (tus cuentas + las prestadas).
-        const sobres = ppm.sobres + sobresPropios(motor, ppm.desde);
-        const minutos = Math.max(1, (Date.now() - ppm.desde) / 60000);
-        const mensaje = [s.host_name || 'Host', 'Online: Main, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10', 'Offline: none',
-            `Time: ${Math.floor(minutos)}m | Packs: ${sobres} | Avg: ${Math.round(sobres / minutos * 100) / 100} packs/min`,
-            'Version: wrProxy', 'Type: Inject Wonderpick 96P+', `Opening: ${nombreDeSobre(motor, s.pack_id || 'CN001_0010_00_000')}`].join('\n');
-        await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: mensaje }), signal: AbortSignal.timeout(10000) });
+        await enviarPpm(motor, s, false);
     } catch (e) {
         log('PPM report failed:', e?.message || e);
     } finally {
         setTimeout(revisarPpm, espera * 60 * 1000);
     }
+}
+
+// Mismo mensaje que el panel. final = true al darle Stop: todo Offline y 0 PPM, asi LatiasBot te muestra
+// apagado al instante en vez de quedarse con el ultimo PPM (2026-11-01, pedido de Ale).
+async function enviarPpm(motor, s, final) {
+    const webhook = String(s.ppm_webhook || '').trim();
+    if (!ppm || !/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(webhook)) return;
+    // Con Community farm el panel no manda su PPM: aca va todo junto (tus cuentas + las prestadas).
+    const sobres = ppm.sobres + sobresPropios(motor, ppm.desde);
+    const minutos = Math.max(1, (Date.now() - ppm.desde) / 60000);
+    const instancias = 'Main, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10';
+    const mensaje = [s.host_name || 'Host', `Online: ${final ? 'none' : instancias}`, `Offline: ${final ? instancias : 'none'}`,
+        `Time: ${Math.floor(minutos)}m | Packs: ${sobres} | Avg: ${final ? 0 : Math.round(sobres / minutos * 100) / 100} packs/min`,
+        'Version: wrProxy', 'Type: Inject Wonderpick 96P+', `Opening: ${nombreDeSobre(motor, s.pack_id || 'CN001_0010_00_000')}`].join('\n');
+    await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: mensaje }), signal: AbortSignal.timeout(10000) });
 }
 
 // Reparto fijo de cuentas entre los hosts Online: cada cuenta cae siempre en el mismo de n hosts.
