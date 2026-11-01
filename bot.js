@@ -16697,20 +16697,25 @@ async function seccionPrestadas(hosts) {
         monitorLink: enLinea.get(id) === true, lent: miembros[id].total, ready: miembros[id].listas, ts: ahora
     }]));
     hostComunidad.anotarMiembros?.(registro);
-    const lineas = ids.map(id => {
-        const m = miembros[id];
-        const punto = enLinea.has(id) ? (enLinea.get(id) ? '🟢' : '🔴') : '⚪';
-        return `${punto} <@${id}> — **${m.total}** lent · **${m.listas}** ready · ${m.total - m.listas} waiting\n　${m.porHost.join(' · ')}`;
+    // Un recuadro por host (pedido de Ale: "cada host con las cuentas que esta abriendo, por separado"):
+    // cada miembro con sus cuentas que le tocan a ESE host, listas/total.
+    const punto = (id) => enLinea.has(id) ? (enLinea.get(id) ? '🟢' : '🔴') : '⚪';
+    return farm.slice(0, 9).map(h => {
+        const filas = Object.entries(h.prestadas).filter(([, [, mias]]) => mias > 0)
+            .sort((a, b) => b[1][1] - a[1][1])
+            .map(([id, [, mias, listas]]) => `${punto(id)} <@${id}> — **${listas}**/${mias}`);
+        const mias = Object.values(h.prestadas).reduce((a, [, m]) => a + m, 0);
+        const listas = Object.values(h.prestadas).reduce((a, [, , l]) => a + l, 0);
+        return new EmbedBuilder().setColor(0x57F287)
+            .setTitle(`🎲 ${h.nombre} — GP farm host`)
+            .setDescription(`Accounts shared · **${listas}**/${mias} ready\n\n${filas.join('\n') || 'No lent accounts.'}`.slice(0, 4000))
+            .setFooter({ text: 'ready/total · ready = can open packs now · 🟢 Monitor Link on · 🔴 off' });
     });
-    const total = ids.reduce((a, id) => a + miembros[id].total, 0);
-    const listas = ids.reduce((a, id) => a + miembros[id].listas, 0);
-    lineas.push(`**Total — ${total} lent · ${listas} ready**`);
-    return lineas.join('\n').slice(0, 4000);
 }
 
 // Panel de hosts en el canal 🔒-hosts (lo arma y lo mantiene el host que tiene el turno).
 async function actualizarPanelHosts(hosts) {
-    const textoPrestadas = await seccionPrestadas(hosts).catch(() => null);
+    const recuadrosPrestadas = await seccionPrestadas(hosts).catch(() => null) || [];
     for (const guild of client.guilds.cache.values()) {
         if (!comunidad.esComunidad(guild.id)) continue;
         const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
@@ -16733,10 +16738,7 @@ async function actualizarPanelHosts(hosts) {
         const embed = new EmbedBuilder().setTitle('🖥️ Community hosts').setColor(0x5865F2)
             .setDescription((lineas.join('\n\n') || 'No hosts yet.').slice(0, 4000))
             .setFooter({ text: '👑 has the turn · ⏸️ standby · 🟢 PC on · 🔴 PC off · updates every 2 min' }).setTimestamp();
-        const embeds = [embed];
-        if (textoPrestadas) embeds.push(new EmbedBuilder().setTitle('🎲 GP farm — lent accounts').setColor(0x57F287)
-            .setDescription(textoPrestadas)
-            .setFooter({ text: '🟢 Monitor Link on · 🔴 off · ready = can open packs now · waiting = opened in the last 24 h · split between the GP farm hosts' }));
+        const embeds = [embed, ...recuadrosPrestadas];
         const guardado = await hostComunidad.panelGuardado();
         if (guardado?.canal === canal.id && guardado.bot === client.user.id) {
             const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
