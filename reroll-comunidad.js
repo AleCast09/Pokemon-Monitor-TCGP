@@ -12,7 +12,8 @@
 // manda las cartas) a traves de el.
 //
 // Corre solo en un host con motor (FAST_TRANSFER_ENGINE_DIR) y marcado Online para GP farm.
-// Ajustes opcionales del .env: REROLL_CADA_MIN (30), REROLL_COOLDOWN_HORAS (24), REROLL_LOTE (20).
+// Ajustes opcionales del .env: REROLL_CADA_MIN (10), REROLL_COOLDOWN_HORAS (24), REROLL_LOTE (20).
+// (2026-11-01, pedido de Ale: cada 10 min en vez de 30; una vuelta que no termino hace saltar la siguiente.)
 'use strict';
 const fs = require('fs');
 const os = require('os');
@@ -26,6 +27,7 @@ const num = (v, def) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v)
 let deps = null;
 let corriendo = false;
 let expansionDePack = null;   // pack_id -> codigo del set ("CN001_0010_00_000" -> "C1")
+let ppm = null;               // { desde, sobres } del GP farm desde que este host esta Online
 
 const log = (...a) => console.log('[reroll]', ...a);
 
@@ -36,7 +38,40 @@ function iniciar(d) {
     // La parte de proxies cambia cuando otro host entra o sale: se rehace el .txt cada minuto.
     setInterval(() => deps.ml.escribirProxiesMotor().catch(() => {}), 60 * 1000);
     setTimeout(ciclo, 2 * 60 * 1000);
-    setInterval(ciclo, num(process.env.REROLL_CADA_MIN, 30) * 60 * 1000);
+    setInterval(ciclo, num(process.env.REROLL_CADA_MIN, 10) * 60 * 1000);
+    setTimeout(revisarPpm, 60 * 1000);
+}
+
+// PPM del GP farm (2026-11-01, pedido de Ale): Zenith (LatiasBot de wr98) toma el PPM de los mensajes
+// del canal de heartbeat. Antes solo lo mandaba el panel GP con Start (scripts/god_pack/ppm_monitor.py),
+// asi que el GP farm abria sobres sin que nadie los contara. Ahora el host manda el mismo mensaje, al
+// mismo "PPM webhook" y con el mismo "Host name" del panel, cada "PPM Discord Interval" minutos, mientras
+// esta Online para GP farm. Si el panel esta corriendo (log vivo), no se manda: dos heartbeats chocan.
+async function revisarPpm() {
+    let espera = 5;
+    try {
+        const motor = deps?.fastTransfer.rutaMotor();
+        const s = motor ? ajustesPanel(motor) : {};
+        espera = num(s.ppm_interval, 5);
+        const parte = await deps.parte().catch(() => null);
+        if (!parte) { ppm = null; return; }
+        if (!ppm) ppm = { desde: Date.now(), sobres: 0 };
+        const webhook = String(s.ppm_webhook || '').trim();
+        if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(webhook)) return;
+        try {
+            if (Date.now() - fs.statSync(path.join(motor, 'reports', 'god_pack_live.log')).mtimeMs < 2 * 60 * 1000) return;
+        } catch (e) { /* sin log del panel */ }
+        const minutos = Math.max(1, (Date.now() - ppm.desde) / 60000);
+        const mensaje = [s.host_name || 'Host', 'Online: Main, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10', 'Offline: none',
+            `Time: ${Math.floor(minutos)}m | Packs: ${ppm.sobres} | Avg: ${Math.round(ppm.sobres / minutos * 100) / 100} packs/min`,
+            'Version: wrProxy', 'Type: Inject Wonderpick 96P+', `Opening: ${nombreDeSobre(motor, s.pack_id || 'CN001_0010_00_000')}`].join('\n');
+        await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: mensaje }), signal: AbortSignal.timeout(10000) });
+    } catch (e) {
+        log('PPM report failed:', e?.message || e);
+    } finally {
+        setTimeout(revisarPpm, espera * 60 * 1000);
+    }
 }
 
 // Reparto fijo de cuentas entre los hosts Online: cada cuenta cae siempre en el mismo de n hosts.
@@ -124,6 +159,15 @@ function productoDeSobre(motor, packId) {
         const id = String(packId).replace(/[^A-Za-z0-9_]/g, '');
         return new RegExp(`"pack_id":\\s*"${id}"[^}]*?"product_id":\\s*"([^"]+)"`).exec(catalogo)?.[1] || '';
     } catch (e) { return ''; }
+}
+
+// Nombre del sobre para el mensaje de PPM, igual que el panel ("Dual Fusion: Pikachu").
+function nombreDeSobre(motor, packId) {
+    try {
+        const catalogo = fs.readFileSync(path.join(motor, 'scripts', 'flow', 'pack_catalog.py'), 'utf8');
+        const id = String(packId).replace(/[^A-Za-z0-9_]/g, '');
+        return new RegExp(`"name":\\s*"([^"]+)"[^}]*?"pack_id":\\s*"${id}"`).exec(catalogo)?.[1] || packId;
+    } catch (e) { return packId; }
 }
 
 function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
@@ -246,6 +290,7 @@ async function ciclo() {
                     sobres += pulls.length;
                 }
                 guardarEstado(motor, estado);
+                if (ppm) ppm.sobres += sobres;
                 log(`${sobres} pack(s) opened for ${m.discord_id}`);
             } finally {
                 fs.rmSync(dir, { recursive: true, force: true });   // las XML no quedan en el host
