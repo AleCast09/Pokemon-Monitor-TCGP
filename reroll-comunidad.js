@@ -37,6 +37,8 @@ function iniciar(d) {
     deps = d;
     if (!deps.fastTransfer.rutaMotor()) return;
     instalarPanel(deps.fastTransfer.rutaMotor());
+    instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
+        INJECT_ORIGINAL, '_limit_collectors', 'max 5 online collectors per account, rotating');
     // La parte de proxies cambia cuando otro host entra o sale: se rehace el .txt cada minuto.
     setInterval(() => deps.ml.escribirProxiesMotor().catch(() => {}), 60 * 1000);
     sincronizarPanel();
@@ -64,6 +66,26 @@ function instalarPanel(motor) {
         fs.writeFileSync(destino, nuevo);
         log('God Pack UI updated: it now has "Community farm" (Start/Stop for the GP farm).');
     } catch (e) { /* sin panel en este motor */ }
+}
+
+// Mismo criterio para inject.py (2026-11-01): tope de 5 collectors online por cuenta, rotando (con 15
+// online el PPM caia a un tercio por las 15 amistades que hay que borrar en cada cuenta).
+const INJECT_ORIGINAL = '0bbd4dca2728ad2f93d428d51d2ff44d22b72fe6702b256458f91ca3567af938';
+function instalarArchivoMotor(motor, archivo, rutaDestino, huellaOriginal, marca, que) {
+    try {
+        const nuevo = fs.readFileSync(path.join(__dirname, 'motor-panel', archivo));
+        const destino = path.join(motor, ...rutaDestino);
+        const actual = fs.readFileSync(destino);
+        if (actual.equals(nuevo)) return;
+        const huella = crypto.createHash('sha256').update(actual).digest('hex');
+        if (huella !== huellaOriginal && !actual.includes(marca)) {
+            log(`${archivo} was modified on this PC - not updated. Copy motor-panel/${archivo} by hand to get: ${que}.`);
+            return;
+        }
+        fs.copyFileSync(destino, `${destino}.bak`);
+        fs.writeFileSync(destino, nuevo);
+        log(`${archivo} updated: ${que}.`);
+    } catch (e) { /* sin ese archivo en este motor */ }
 }
 
 // El GP farm corre SOLO con el panel GP en Start con "Community farm" (2026-11-01, pedido de Ale:
