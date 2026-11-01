@@ -140,15 +140,27 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
             '--verify-power', '--shuffle-proxies',
             '--stop-after-fails', String(s.stop_after_fails || 5)];
         if (s.packs_per_min > 0) args.push('--packs-per-min', String(s.packs_per_min));
+        // Lo que dice el motor queda en reports/reroll_comunidad.log (2026-11-01: todas las cuentas daban
+        // 0 sobres y no se veia por que). Pasado de 20 MB se rota a .log.1.
+        const rutaLog = path.join(motor, 'reports', 'reroll_comunidad.log');
+        let salida = null;
+        try {
+            fs.mkdirSync(path.dirname(rutaLog), { recursive: true });
+            if (fs.existsSync(rutaLog) && fs.statSync(rutaLog).size > 20 * 1024 * 1024) fs.renameSync(rutaLog, `${rutaLog}.1`);
+            salida = fs.createWriteStream(rutaLog, { flags: 'a' });
+            salida.write(`\n===== ${new Date().toISOString()} owner=${duenoId} accounts=${cantidad} python=${python} =====\n`);
+        } catch (e) { salida = null; }
+        const escribir = d => { try { salida?.write(d); } catch (e) { /* sin log */ } };
+        const cerrar = () => { try { salida?.end(); } catch (e) { /* sin log */ } };
         const hijo = spawn(python, ['-X', 'utf8', ...args], {
             cwd: motor, windowsHide: true,
             // ZENITH_ACCOUNT_OWNER: el aviso de God Pack en Zenith menciona al dueño de la cuenta prestada.
             env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8', ZENITH_ACCOUNT_OWNER: String(duenoId || '') }
         });
-        hijo.stdout.on('data', () => {});
-        hijo.stderr.on('data', () => {});
-        hijo.on('error', () => resolve(false));
-        hijo.on('close', () => resolve(true));
+        hijo.stdout.on('data', escribir);
+        hijo.stderr.on('data', escribir);
+        hijo.on('error', e => { escribir(`[spawn error] ${e?.message || e}\n`); cerrar(); resolve(false); });
+        hijo.on('close', code => { escribir(`[exit ${code}]\n`); cerrar(); resolve(true); });
     });
 }
 
