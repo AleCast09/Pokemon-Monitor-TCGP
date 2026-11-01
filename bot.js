@@ -7731,7 +7731,9 @@ if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
 // las cuentas que prestan los miembros (reroll-comunidad.js).
 if (comunidad.hayComunidad()) {
     monitorLink.usarParteReroll(() => hostComunidad.parteReroll());
-    require('./reroll-comunidad.js').iniciar({ ml: monitorLink, fastTransfer, activo: () => hostComunidad.esActivo(), parte: () => hostComunidad.parteReroll() });
+    require('./reroll-comunidad.js').iniciar({ ml: monitorLink, fastTransfer, activo: () => hostComunidad.esActivo(), parte: () => hostComunidad.parteReroll(),
+        // El GP farm sigue al panel GP (Start/Stop con "Community farm"); al cambiar se refresca el mensaje de control.
+        marcar: async (online) => { await hostComunidad.marcarReroll(online); hostComunidad.refrescarControl(); } });
 }
 dashboardApp.use(express.json());
 // Fondos animados de la pantalla de bienvenida de /tutorials (2026-08-08, a pedido
@@ -16773,9 +16775,8 @@ async function actualizarControlHost(hosts, conTurno) {
             ? otros.map(h => new ButtonBuilder().setCustomId(`host_ceder::${h.nombre}`.slice(0, 100)).setLabel(`🔁 Hand over to ${h.nombre}`.slice(0, 80)).setStyle(ButtonStyle.Secondary))
             : [new ButtonBuilder().setCustomId('host_tomar').setLabel('👑 Take the turn').setStyle(ButtonStyle.Success)];
         const filas = botones.length ? [new ActionRowBuilder().addComponents(botones)] : [];
-        if (reroll) filas.push(new ActionRowBuilder().addComponents(reroll.online
-            ? new ButtonBuilder().setCustomId('reroll_offline').setLabel('🔴 GP farm: go Offline').setStyle(ButtonStyle.Danger)
-            : new ButtonBuilder().setCustomId('reroll_online').setLabel('🎲 GP farm: go Online').setStyle(ButtonStyle.Success)));
+        // (2026-11-01) Sin botones de GP farm: se prende y se apaga desde el God Pack UI (Start/Stop
+        // con "Community farm"), en la PC del host. Este mensaje solo muestra el estado.
         const payload = { embeds: [embed], components: filas };
         const guardado = await hostComunidad.controlGuardado();
         if (guardado?.canal === canal.id) {
@@ -16831,7 +16832,7 @@ async function manejarBotonHost(interaction) {
 async function textoRerollHost() {
     if (!fastTransfer.rutaMotor()) return null;
     const parte = await hostComunidad.parteReroll().catch(() => null);
-    if (!parte) return { online: false, texto: '🎲 **GP farm: Offline** — this PC is not using the community proxies.' };
+    if (!parte) return { online: false, texto: '🎲 **GP farm: Offline** — to farm the lent accounts, open the **God Pack UI** on this PC, tick **Community farm** and press **Start**.' };
     const proxies = await monitorLink.escribirProxiesMotor().catch(() => 0);
     const con = parte.hosts.filter(h => h !== hostComunidad.nombre());
     return { online: true, texto: `🎲 **GP farm: Online** — ${proxies} prox${proxies === 1 ? 'y' : 'ies'} for this PC (\`proxies_reroll.txt\`)`
@@ -16839,6 +16840,11 @@ async function textoRerollHost() {
 }
 
 async function manejarBotonReroll(interaction) {
+    // (2026-11-01) Botones viejos de mensajes que todavia no se refrescaron: el GP farm ya no se
+    // cambia desde Discord, sino con Start/Stop en el God Pack UI de cada host.
+    return await interaction.reply({ ephemeral: true,
+        content: '🎲 The GP farm is now started and stopped from the **God Pack UI** on the host PC: tick **Community farm** and press **Start** (Stop or closing the window turns it off).' });
+    // eslint-disable-next-line no-unreachable
     if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
         return await interaction.reply({ content: '🔒 Only staff can change the GP farm.', ephemeral: true });
     }

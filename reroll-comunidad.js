@@ -31,15 +31,63 @@ let ppm = null;               // { desde, sobres } del GP farm desde que este ho
 
 const log = (...a) => console.log('[reroll]', ...a);
 
-// d: { ml (monitor-link-server), fastTransfer, activo() (tiene el turno), parte() ({ i, n } o null) }
+// d: { ml (monitor-link-server), fastTransfer, activo() (tiene el turno), parte() ({ i, n } o null),
+//      marcar(online) (GP farm Online/Offline en Upstash) }
 function iniciar(d) {
     deps = d;
     if (!deps.fastTransfer.rutaMotor()) return;
+    instalarPanel(deps.fastTransfer.rutaMotor());
     // La parte de proxies cambia cuando otro host entra o sale: se rehace el .txt cada minuto.
     setInterval(() => deps.ml.escribirProxiesMotor().catch(() => {}), 60 * 1000);
-    setTimeout(ciclo, 2 * 60 * 1000);
+    sincronizarPanel();
+    setInterval(sincronizarPanel, 20 * 1000);
     setInterval(ciclo, num(process.env.REROLL_CADA_MIN, 10) * 60 * 1000);
     setTimeout(revisarPpm, 60 * 1000);
+}
+
+// El panel GP con "Community farm" vive en motor-panel/ de este repo y se copia al motor de cada host
+// (el motor no se actualiza solo). Solo se reemplaza un panel sin tocar: el original (huella abajo) o
+// uno nuestro anterior (marca COMMUNITY_FARM_V1). Uno modificado a mano se deja y se avisa. Copia .bak.
+const PANEL_ORIGINAL = 'e3468178b609005e588fd23879ebc95cf7ac22b68b872957b57ad18fa5e35a66';
+function instalarPanel(motor) {
+    try {
+        const nuevo = fs.readFileSync(path.join(__dirname, 'motor-panel', 'god_pack_gui.py'));
+        const destino = path.join(motor, 'tools', 'god_pack_gui', 'god_pack_gui.py');
+        const actual = fs.readFileSync(destino);
+        if (actual.equals(nuevo)) return;
+        const huella = crypto.createHash('sha256').update(actual).digest('hex');
+        if (huella !== PANEL_ORIGINAL && !actual.includes('COMMUNITY_FARM_V1')) {
+            log('God Pack UI was modified on this PC - not updated. Copy motor-panel/god_pack_gui.py by hand to get "Community farm".');
+            return;
+        }
+        fs.copyFileSync(destino, `${destino}.bak`);
+        fs.writeFileSync(destino, nuevo);
+        log('God Pack UI updated: it now has "Community farm" (Start/Stop for the GP farm).');
+    } catch (e) { /* sin panel en este motor */ }
+}
+
+// El GP farm corre SOLO con el panel GP en Start con "Community farm" (2026-11-01, pedido de Ale:
+// "que el host ejecute el god pack ui, no que se inicie de la nada"). El panel escribe
+// reports/community_farm.json { on, ts } y lo renueva cada 30 s; sin renovar 2 min = apagado.
+function panelEncendido(motor) {
+    try {
+        const p = JSON.parse(fs.readFileSync(path.join(motor, 'reports', 'community_farm.json'), 'utf8'));
+        return p.on === true && Date.now() - Number(p.ts || 0) < 2 * 60 * 1000;
+    } catch (e) { return false; }
+}
+
+// Cada 20 s: el estado Online/Offline del GP farm sigue al panel. Al encenderse arranca una tanda ya.
+let panelAntes = null;
+async function sincronizarPanel() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    if (!motor) return;
+    const on = panelEncendido(motor);
+    if (on === panelAntes) return;
+    panelAntes = on;
+    await deps.marcar?.(on).catch(() => {});
+    log(on ? 'Community farm ON (God Pack UI Start)' : 'Community farm OFF (God Pack UI stopped or closed)');
+    if (on) setTimeout(ciclo, 15 * 1000);
+    else ppm = null;
 }
 
 // PPM del GP farm (2026-11-01, pedido de Ale): Zenith (LatiasBot de wr98) toma el PPM de los mensajes
@@ -193,7 +241,9 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
             '--hg-cost', '0',                      // nunca gastar relojes del miembro
             '--no-quarantine-locked',              // las XML son temporales: no hay nada que mover
             '--verify-power', '--shuffle-proxies',
-            '--stop-after-fails', String(s.stop_after_fails || 5)];
+            '--stop-after-fails', String(s.stop_after_fails || 5),
+            // Stop del panel GP: corta la tanda despues de la cuenta en curso (con su limpieza)
+            '--stop-file', path.join(motor, 'reports', 'community_farm.stop')];
         if (s.packs_per_min > 0) args.push('--packs-per-min', String(s.packs_per_min));
         const producto = productoDeSobre(motor, s.pack_id || 'CN001_0010_00_000');
         if (producto) args.push('--product-id', producto);
@@ -237,7 +287,7 @@ async function ciclo() {
     corriendo = true;
     try {
         await entregarPendientes();
-        if (!parte) return;   // Offline para GP farm
+        if (!parte || !panelEncendido(motor)) return;   // Offline: el panel GP no esta en Start
         await deps.ml.escribirProxiesMotor().catch(() => {});
 
         const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
@@ -248,6 +298,7 @@ async function ciclo() {
         // Resumen de cada vuelta (2026-11-01: el ciclo fallaba en silencio y parecia que no hacia nada).
         log(`cycle: host ${parte.i + 1}/${parte.n}, ${miembros.length} member(s) lending, ${miembros.reduce((a, m) => a + m.cuentas.length, 0)} account(s)`);
         for (const m of miembros) {
+            if (!panelEncendido(motor)) { log('stopped from the God Pack UI'); break; }
             const ahora = Date.now();
             const listas = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte)
                 && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).slice(0, lote);
