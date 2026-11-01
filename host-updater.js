@@ -45,8 +45,11 @@ async function instalar(release) {
     const antes = huellaDependencias();
     if (process.platform === 'win32') {
         execFileSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${RAIZ}' -Force`], { windowsHide: true });
+    } else if (process.platform === 'darwin') {
+        // Mac (host de Arcade): ditto y no unzip. El unzip de macOS se traba con nombres con acento
+        // (assets/element/Fósil_aleta_LPZA.png: "write error") y la actualizacion nunca se instalaba.
+        execFileSync('ditto', ['-x', '-k', zip, RAIZ]);
     } else {
-        // Mac/Linux (host de Arcade): unzip viene con el sistema; -o pisa sin preguntar.
         execFileSync('unzip', ['-o', '-q', zip, '-d', RAIZ]);
     }
     fs.rmSync(zip, { force: true });
