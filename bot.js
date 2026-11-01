@@ -9523,6 +9523,7 @@ const CLOUDFLARED_URL_OFICIAL = 'https://github.com/cloudflare/cloudflared/relea
 // pisaba entre los dos, dejando a uno con "ENOENT" al renombrar. El nombre
 // temporal ahora incluye el PID de cada proceso para que nunca choquen.
 async function asegurarCloudflaredBot() {
+    if (process.platform !== 'win32') return asegurarCloudflaredMac();
     const rutaCloudflared = path.join(__dirname, 'bin', 'cloudflared.exe');
     if (fs.existsSync(rutaCloudflared)) return { ruta: rutaCloudflared, recienDescargado: false };
     try {
@@ -9548,6 +9549,30 @@ async function asegurarCloudflaredBot() {
     }
 }
 
+// Host en Mac (Arcade, 2026-10-31): Cloudflare publica cloudflared para macOS como .tgz; se baja una
+// vez y se descomprime con tar (viene con el sistema).
+async function asegurarCloudflaredMac() {
+    const rutaCloudflared = path.join(__dirname, 'bin', 'cloudflared');
+    if (fs.existsSync(rutaCloudflared)) return { ruta: rutaCloudflared, recienDescargado: false };
+    if (process.platform !== 'darwin') return null;
+    try {
+        fs.mkdirSync(path.dirname(rutaCloudflared), { recursive: true });
+        const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+        const tgz = path.join(os.tmpdir(), `cloudflared-${process.pid}.tgz`);
+        const respuesta = await axios.get(`https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${arch}.tgz`,
+            { responseType: 'arraybuffer', timeout: 120000, maxRedirects: 5 });
+        fs.writeFileSync(tgz, Buffer.from(respuesta.data));
+        execFileSync('tar', ['-xzf', tgz, '-C', path.dirname(rutaCloudflared)]);
+        fs.rmSync(tgz, { force: true });
+        fs.chmodSync(rutaCloudflared, 0o755);
+        console.log('✅ cloudflared descargado automaticamente (Mac).');
+        return { ruta: rutaCloudflared, recienDescargado: true };
+    } catch (e) {
+        console.log('DEBUG: no se pudo descargar cloudflared para Mac:', e.message);
+        return null;
+    }
+}
+
 // Bug real encontrado en vivo 2026-08-20: entre varios reinicios seguidos del bot en una
 // misma noche, quedaron 2 cloudflared.exe huerfanos vivos -- uno de ellos, apuntando a un
 // puerto que despues paso a usar OTRO proceso (el bot de produccion en esta misma PC),
@@ -9556,6 +9581,11 @@ async function asegurarCloudflaredBot() {
 // (nunca toca un cloudflared de otra instalacion/otro programa en la misma PC) -- mismo
 // patron ya usado para AHK en matarInstanciasAhkPrevias.
 function matarCloudflaredPrevios(rutaCloudflared) {
+    if (process.platform !== 'win32') {
+        // Mac: mismo filtro por la ruta exacta de esta instalacion.
+        try { execFileSync('pkill', ['-f', rutaCloudflared]); } catch (e) { /* no habia ninguno */ }
+        return;
+    }
     try {
         const rutaEscapada = rutaCloudflared.replace(/'/g, "''");
         const script = `Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" | Where-Object { $_.ExecutablePath -eq '${rutaEscapada}' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`;

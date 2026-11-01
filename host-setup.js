@@ -17,7 +17,10 @@ const readline = require('readline');
 const { execSync } = require('child_process');
 
 const RAIZ = __dirname;
-const CARPETA_HOST = path.join(process.env.LOCALAPPDATA || os.homedir(), 'MonitorPokemonHost');
+// En Mac (host de Arcade, 2026-10-31) no hay LOCALAPPDATA: va en ~/Library/Application Support.
+const CARPETA_HOST = path.join(process.env.LOCALAPPDATA
+    || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : os.homedir()), 'MonitorPokemonHost');
+const ES_WINDOWS = process.platform === 'win32';
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const lineas = [];
@@ -74,6 +77,11 @@ function probarPython(comando) {
 
 // Devuelve el comando de Python a usar (o null). Si no hay, lo instala con winget.
 function asegurarPython() {
+    if (!ES_WINDOWS) {
+        // Mac/Linux: Python 3 se instala aparte (python.org o Homebrew); no hay winget.
+        for (const c of ['python3', 'python']) if (probarPython(c)) return c;
+        return null;
+    }
     for (const c of ['python', 'py -3']) if (probarPython(c)) return c;
     console.log('🐍 Python is not installed — installing it (Windows may ask for permission)…');
     try {
@@ -85,9 +93,33 @@ function asegurarPython() {
 }
 
 function prepararMotor(motor) {
-    const python = asegurarPython();
+    if (process.platform === 'darwin') {
+        // El tunel de Mac llega por zip/descarga: sin permiso de ejecucion y marcado en "cuarentena"
+        // (macOS no lo deja abrir). Se arreglan los dos una vez.
+        for (const f of ['takasho-proxy-darwin-arm64', 'takasho-proxy-darwin-amd64']) {
+            const ruta = path.join(motor, 'proxy', f);
+            if (!fs.existsSync(ruta)) continue;
+            try { fs.chmodSync(ruta, 0o755); } catch (e) { /* sin permiso */ }
+            try { execSync(`xattr -d com.apple.quarantine "${ruta}"`, { stdio: 'ignore' }); } catch (e) { /* no estaba marcado */ }
+        }
+    }
+    let python = asegurarPython();
+    if (python && !ES_WINDOWS) {
+        // En Mac el Python de Homebrew no deja instalar librerias "sueltas" (PEP 668): se usa un
+        // entorno propio dentro de la carpeta del host.
+        const venv = path.join(CARPETA_HOST, 'venv');
+        try {
+            if (!fs.existsSync(path.join(venv, 'bin', 'python3'))) execSync(`${python} -m venv "${venv}"`, { stdio: 'inherit' });
+            python = `"${path.join(venv, 'bin', 'python3')}"`;
+        } catch (e) {
+            console.log('⚠️ Could not create the Python environment for Miguel\'s bot.');
+            return null;
+        }
+    }
     if (!python) {
-        console.log('⚠️ Could not install Python by itself. Install Python 3.12 from https://www.python.org and run this setup again.');
+        console.log(ES_WINDOWS
+            ? '⚠️ Could not install Python by itself. Install Python 3.12 from https://www.python.org and run this setup again.'
+            : '⚠️ Python 3 was not found. Install it from https://www.python.org (or "brew install python") and run this setup again.');
         return null;
     }
     console.log(`📦 Installing what Miguel's bot needs (${probarPython(python)})… the first time takes a few minutes.`);
@@ -108,7 +140,9 @@ async function revisarHora() {
         const diferencia = Math.abs(Date.now() - new Date(r.headers.get('date')).getTime()) / 1000;
         if (diferencia > 120) {
             console.log(`\n⚠️ This PC's clock is off by ${Math.round(diferencia / 60)} minutes. Fix it or the game will reject the logins:`);
-            console.log('   Windows Settings → Time & language → Date & time → turn on "Set time automatically" → Sync now.\n');
+            console.log(ES_WINDOWS
+                ? '   Windows Settings → Time & language → Date & time → turn on "Set time automatically" → Sync now.\n'
+                : '   System Settings → General → Date & Time → turn on "Set time and date automatically".\n');
         }
     } catch (e) { /* sin internet: no se puede comparar */ }
 }
@@ -142,7 +176,7 @@ async function instalarHost() {
     let main = '';
     while (!fs.existsSync(path.join(main, 'Helper', 'cardmaster.json'))) {
         main = (await preguntar('Your PTCGPB folder (Main Path, it has Helper and Accounts inside): ')).replace(/^"|"$/g, '');
-        if (!fs.existsSync(path.join(main, 'Helper', 'cardmaster.json'))) console.log('❌ No Helper\\cardmaster.json there.');
+        if (!fs.existsSync(path.join(main, 'Helper', 'cardmaster.json'))) console.log(`❌ No ${path.join('Helper', 'cardmaster.json')} there.`);
     }
     let motor = '';
     while (!fs.existsSync(path.join(motor, 'auto_trade.py'))) {
@@ -151,10 +185,10 @@ async function instalarHost() {
     }
     const nombre = (await preguntar(`Name for this host (shown in the logs) [${os.hostname()}]: `)) || os.hostname();
 
+    fs.mkdirSync(CARPETA_HOST, { recursive: true });
     const python = prepararMotor(motor);
     await revisarHora();
 
-    fs.mkdirSync(CARPETA_HOST, { recursive: true });
     const env = {
         ...datos,
         DISCORD_BOT_TOKEN: tokenBot,
@@ -189,7 +223,10 @@ async function instalarHost() {
         // En Windows PM2 no vuelve solo despues de reiniciar la PC: un acceso en Inicio lo levanta
         // (oculto, sin ventana) con lo guardado por "pm2 save".
         const inicio = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
-        if (fs.existsSync(inicio)) {
+        if (!ES_WINDOWS) {
+            // Mac: "pm2 startup" imprime un comando con sudo que el host tiene que correr una vez.
+            console.log('🔁 To start it by itself when the Mac starts, run:  pm2 startup  and then paste the command it prints.');
+        } else if (fs.existsSync(inicio)) {
             fs.writeFileSync(path.join(inicio, 'Monitor Pokemon Host.vbs'),
                 'CreateObject("WScript.Shell").Run "cmd /c pm2 resurrect", 0, False\r\n');
             console.log('🔁 It will also start by itself when Windows starts.');

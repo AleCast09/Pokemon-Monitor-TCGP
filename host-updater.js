@@ -43,7 +43,12 @@ async function instalar(release) {
     const zip = path.join(os.tmpdir(), `monitor-host-${release.version}.zip`);
     fs.writeFileSync(zip, Buffer.from(await r.arrayBuffer()));
     const antes = huellaDependencias();
-    execFileSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${RAIZ}' -Force`], { windowsHide: true });
+    if (process.platform === 'win32') {
+        execFileSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${RAIZ}' -Force`], { windowsHide: true });
+    } else {
+        // Mac/Linux (host de Arcade): unzip viene con el sistema; -o pisa sin preguntar.
+        execFileSync('unzip', ['-o', '-q', zip, '-d', RAIZ]);
+    }
     fs.rmSync(zip, { force: true });
     fs.writeFileSync(ARCHIVO_VERSION, release.version);
     // Dependencias nuevas: se instalan al arrancar, antes de cargar el bot (con el bot andando, los

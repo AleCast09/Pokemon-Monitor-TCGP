@@ -88,12 +88,29 @@ function puertoAbierto(puerto) {
 // prendido se lanza el exe directo, separado del bot (sigue vivo entre corridas), con el mismo
 // log que usan los .bat. No se usa _tunnel_manager.bat: desde PM2 no hay consola y su
 // "timeout /t" y "start" fallan.
+// Tunel segun el sistema (2026-10-31, host en Mac de Arcade): en Mac se usa el compilado para
+// macOS (chip Apple o Intel) que vive en la misma carpeta proxy del motor.
+function archivoTunel(dirProxy) {
+    if (process.platform === 'win32') return path.join(dirProxy, 'takasho-proxy.exe');
+    if (process.platform === 'darwin') return path.join(dirProxy, `takasho-proxy-darwin-${process.arch === 'arm64' ? 'arm64' : 'amd64'}`);
+    return path.join(dirProxy, 'takasho-proxy-linux-amd64');
+}
+
+// En Mac/Linux el comando es "python3"; "python" suele no existir.
+function pythonMotor() {
+    return process.env.FAST_TRANSFER_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+}
+
 async function asegurarTunel() {
     if (await puertoAbierto(PUERTO_TUNEL)) return true;
     const dir = rutaMotor();
     const dirProxy = path.join(dir, 'proxy');
-    const exe = path.join(dirProxy, 'takasho-proxy.exe');
+    const exe = archivoTunel(dirProxy);
     if (!fs.existsSync(exe)) return false;
+    if (process.platform !== 'win32') {
+        // Si llego por zip o descarga puede venir sin permiso de ejecucion.
+        try { fs.chmodSync(exe, 0o755); } catch (e) { /* sin permiso para cambiarlo */ }
+    }
     fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
     // 'w' y no 'a' (2026-10-24): el registro del tunel se empieza de cero en cada arranque. Solo anota
     // que pedido se hizo al juego (sin cuentas ni claves), pero sumando sin fin llego a pesar 460 MB.
@@ -183,7 +200,7 @@ async function editar(interaction, payload, final = false) {
 
 function correrMotor(runId, args, alEvento) {
     return new Promise(resolve => {
-        const python = process.env.FAST_TRANSFER_PYTHON || 'python';
+        const python = pythonMotor();
         const hijo = spawn(python, ['-X', 'utf8', RUTA_SCRIPT, ...args], {
             cwd: rutaMotor(),
             windowsHide: true,
@@ -413,7 +430,7 @@ function filaBotonFarm(guildId, friendId) {
 
 function correrFarm(runId, args, alEvento) {
     return new Promise(resolve => {
-        const python = process.env.FAST_TRANSFER_PYTHON || 'python';
+        const python = pythonMotor();
         const hijo = spawn(python, ['-X', 'utf8', RUTA_SCRIPT_FARM, ...args], {
             cwd: rutaMotor(), windowsHide: true,
             env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8' }
@@ -724,7 +741,7 @@ function correrDust(runId, cuentas, alEvento, cobrar = false) {
     return new Promise(resolve => {
         const archivoCuentas = path.join(os.tmpdir(), `fast_dust_${runId}.json`);
         fs.writeFileSync(archivoCuentas, JSON.stringify(cuentas));
-        const python = process.env.FAST_TRANSFER_PYTHON || 'python';
+        const python = pythonMotor();
         const corrida = corridas.get(runId);
         const hijo = spawn(python, ['-X', 'utf8', RUTA_SCRIPT_DUST, '--engine-dir', rutaMotor(),
             '--accounts-file', archivoCuentas, '--delay', String(DUST_DELAY_S), '--stop-file', corrida.stopFile, '--with-cards', '--with-gifts',
@@ -1324,7 +1341,9 @@ async function manejarInteraccion(interaction) {
         const hijo = corrida.hijo;
         if (hijo?.pid) {
             setTimeout(() => {
-                if (hijo.exitCode === null) spawnSync('taskkill', ['/PID', String(hijo.pid), '/T', '/F'], { windowsHide: true });
+                if (hijo.exitCode !== null) return;
+                if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(hijo.pid), '/T', '/F'], { windowsHide: true });
+                else try { hijo.kill('SIGKILL'); } catch (e) { /* ya termino */ }
             }, 60000);
         }
         // Sin mensaje aparte: se quita el boton del mismo progreso y el script muestra
@@ -1420,4 +1439,4 @@ async function leerInventarioCuenta(miembro, nombreXml) {
     return estado.ok ? { datos: estado.ultimo } : { error: estado.errores[0] || 'could not read the account' };
 }
 
-module.exports = { rutaMotor, asegurarTunel, ocupado, refrescarCuentaElegida, leerInventarioCuenta, init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };
+module.exports = { rutaMotor, asegurarTunel, pythonMotor, ocupado, refrescarCuentaElegida, leerInventarioCuenta, init, habilitado, filaBoton, filaBotonFarm, filaBotonesDust, mezclarShinedust, manejarInteraccion };

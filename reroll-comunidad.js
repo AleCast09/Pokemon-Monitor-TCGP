@@ -117,7 +117,7 @@ async function codigoSet(packId) {
 
 function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
     return new Promise(resolve => {
-        const python = process.env.FAST_TRANSFER_PYTHON || 'python';
+        const python = deps.fastTransfer.pythonMotor();
         const args = [path.join(motor, 'scripts', 'god_pack', 'inject.py'),
             '--collector-codes', (s.collectors || []).join(',') || 'dummy',
             '--worker-url', s.worker_url || 'https://onlineids.zenithrise.workers.dev/elite',
