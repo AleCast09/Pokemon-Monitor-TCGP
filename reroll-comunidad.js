@@ -106,12 +106,11 @@ async function revisarPpm() {
         if (!ppm) ppm = { desde: Date.now(), sobres: 0 };
         const webhook = String(s.ppm_webhook || '').trim();
         if (!/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(webhook)) return;
-        try {
-            if (Date.now() - fs.statSync(path.join(motor, 'reports', 'god_pack_live.log')).mtimeMs < 2 * 60 * 1000) return;
-        } catch (e) { /* sin log del panel */ }
+        // Con Community farm el panel no manda su PPM: aca va todo junto (tus cuentas + las prestadas).
+        const sobres = ppm.sobres + sobresPropios(motor, ppm.desde);
         const minutos = Math.max(1, (Date.now() - ppm.desde) / 60000);
         const mensaje = [s.host_name || 'Host', 'Online: Main, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10', 'Offline: none',
-            `Time: ${Math.floor(minutos)}m | Packs: ${ppm.sobres} | Avg: ${Math.round(ppm.sobres / minutos * 100) / 100} packs/min`,
+            `Time: ${Math.floor(minutos)}m | Packs: ${sobres} | Avg: ${Math.round(sobres / minutos * 100) / 100} packs/min`,
             'Version: wrProxy', 'Type: Inject Wonderpick 96P+', `Opening: ${nombreDeSobre(motor, s.pack_id || 'CN001_0010_00_000')}`].join('\n');
         await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content: mensaje }), signal: AbortSignal.timeout(10000) });
@@ -207,6 +206,25 @@ function productoDeSobre(motor, packId) {
         const id = String(packId).replace(/[^A-Za-z0-9_]/g, '');
         return new RegExp(`"pack_id":\\s*"${id}"[^}]*?"product_id":\\s*"([^"]+)"`).exec(catalogo)?.[1] || '';
     } catch (e) { return ''; }
+}
+
+// Sobres de TUS cuentas que abrio el panel desde que se encendio el Community farm: cada sobre deja
+// una linea "  cards: ..." en reports/god_pack_live.log (el panel lo vacia en cada Start).
+function sobresPropios(motor, desde) {
+    try {
+        const ruta = path.join(motor, 'reports', 'god_pack_live.log');
+        if (fs.statSync(ruta).mtimeMs < desde) return 0;
+        return (fs.readFileSync(ruta, 'utf8').match(/\] {2,}cards: /g) || []).length;
+    } catch (e) { return 0; }
+}
+
+// Para el recuadro del host en Discord: nombre del panel ("Ale Cast") y cuantas cuentas propias tiene.
+function infoFarm() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    if (!motor || !panelEncendido(motor)) return null;
+    let propias = 0;
+    try { propias = Number(JSON.parse(fs.readFileSync(path.join(motor, 'reports', 'community_farm.json'), 'utf8')).own) || 0; } catch (e) { /* sin dato */ }
+    return { nombre: String(ajustesPanel(motor).host_name || '').trim() || null, propias };
 }
 
 // Nombre del sobre para el mensaje de PPM, igual que el panel ("Dual Fusion: Pikachu").
@@ -376,4 +394,4 @@ async function resumenPrestadas() {
     return resumen;
 }
 
-module.exports = { iniciar, ciclo, resumenPrestadas };
+module.exports = { iniciar, ciclo, resumenPrestadas, infoFarm };

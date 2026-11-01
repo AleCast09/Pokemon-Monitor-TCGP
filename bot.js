@@ -16670,7 +16670,9 @@ async function estadoDeEsteHost() {
     const reroll = await hostComunidad.parteReroll().catch(() => null) ? await monitorLink.escribirProxiesMotor().catch(() => 0) : null;
     // Cuentas prestadas que le tocan a este host (para la seccion "Lent accounts" del panel).
     const prestadas = reroll === null ? null : await require('./reroll-comunidad.js').resumenPrestadas().catch(() => null);
-    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), versionMotor, links, reroll, prestadas };
+    // Nombre del panel GP ("Ale Cast") y cuantas cuentas propias corre ahi, para su recuadro.
+    const farm = reroll === null ? null : require('./reroll-comunidad.js').infoFarm();
+    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), versionMotor, links, reroll, prestadas, farm };
 }
 
 // Seccion "Lent accounts" del panel de hosts (2026-11-01, pedido de Ale): por miembro, cuantas cuentas
@@ -16708,9 +16710,10 @@ async function seccionPrestadas(hosts) {
             .map(([id, [, mias, listas]]) => `${punto(id)} <@${id}> — **${listas}**/${mias}`);
         const mias = Object.values(h.prestadas).reduce((a, [, m]) => a + m, 0);
         const listas = Object.values(h.prestadas).reduce((a, [, , l]) => a + l, 0);
+        const propias = h.farm?.propias ? `Own accounts: **${h.farm.propias}**\n` : '';
         return new EmbedBuilder().setColor(0x57F287)
-            .setTitle(`🎲 ${h.nombre} — GP farm host`)
-            .setDescription(`Accounts shared · **${listas}**/${mias} ready\n\n${filas.join('\n') || 'No lent accounts.'}`.slice(0, 4000))
+            .setTitle(`🎲 ${h.farm?.nombre || h.nombre} — GP farm host`)
+            .setDescription(`${propias}Shared accounts: **${listas}**/${mias} ready\n\n${filas.join('\n') || 'No lent accounts.'}`.slice(0, 4000))
             .setFooter({ text: 'ready/total · ready = can open packs now · 🟢 Monitor Link on · 🔴 off' });
     });
 }

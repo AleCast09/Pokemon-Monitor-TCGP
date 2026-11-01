@@ -982,12 +982,13 @@ class GodPackGui(QMainWindow):
         # Community farm (COMMUNITY_FARM_V1): Start farmea las cuentas que los miembros prestan por
         # Monitor Link (lo hace el bot de Monitor Pokemon), en vez de las carpetas de arriba.
         self.w_community = QCheckBox(
-            "Community farm - open the accounts members lend through Monitor Link (not the folders above)")
-        self.w_community.setChecked(False)
+            "Also open the community's lent accounts (Monitor Link) - Community farm")
+        self.w_community.setChecked(True)
         self.w_community.setToolTip(
-            "Ticked: Start makes this host farm the lent accounts of the community (Zenith). "
-            "Your Monitor Pokemon bot does the work; the Live Log shows it here. Stop, or closing "
-            "this window, stops it.\nUnticked: Start opens the accounts of the folders above, as always.")
+            "Ticked: Start opens your accounts (folders above) AND the accounts members lend through "
+            "Monitor Link, at the same time. Your Monitor Pokemon bot opens the lent ones; the Live Log "
+            "shows both. Stop, or closing this window, stops both and this host goes Offline.\n"
+            "Unticked: Start opens only your accounts, as before.")
         left_layout.addWidget(self.w_community)
 
         # Buttons — compact row (28px tall instead of Qt's ~35px default) so
@@ -1304,7 +1305,7 @@ class GodPackGui(QMainWindow):
                     bool(data.get("dismiss_popups", True)))
                 self.w_min_hourglass.setValue(int(data.get("min_hourglass", 0) or 0))
                 self.w_free_only.setChecked(bool(data.get("free_only", False)))
-                self.w_community.setChecked(bool(data.get("community_farm", False)))
+                self.w_community.setChecked(bool(data.get("community_farm", True)))
                 self.w_fr_per_min.setValue(float(data.get("fr_per_min", 58.0)))
                 self.w_packs_per_min.setValue(float(data.get("packs_per_min", 55.0)))
                 self.w_shuffle_proxies.setChecked(bool(data.get("shuffle_proxies", True)))
@@ -1515,8 +1516,10 @@ class GodPackGui(QMainWindow):
             return
         if self._community:
             return
-        if self.w_community.isChecked() and cmd_override is None:
-            self._start_community()
+        comunidad = self.w_community.isChecked() and cmd_override is None
+        propias = bool(self.w_xml_dir.text().strip() or self.w_accounts_dir.text().strip())
+        if comunidad and not propias:
+            self._start_community(limpiar=True)   # sin carpeta propia: solo las prestadas
             return
         # clicked(bool) passes False into the first arg - guard against it
         cmd = cmd_override if isinstance(cmd_override, list) else self._build_cmd()
@@ -1603,7 +1606,11 @@ class GodPackGui(QMainWindow):
         if getattr(self, "_ppm_stop", None) is not None:
             self._ppm_stop.set()
         self._ppm_stop = Event()
-        webhook_target = self.w_ppm_webhook.text().strip()
+        # Con Community farm el PPM lo manda el bot de Monitor Pokemon (tus sobres + los prestados):
+        # si tambien lo mandara el panel llegarian dos heartbeats con el mismo nombre.
+        if comunidad:
+            self._start_community(limpiar=False)
+        webhook_target = "" if comunidad else self.w_ppm_webhook.text().strip()
         if webhook_target:
             Thread(target=start_ppm_loop, args=(webhook_target, current_pack_name, interval_mins,
                                                 self.w_host_name.text().strip() or "Host", self._ppm_stop),
@@ -1651,7 +1658,6 @@ class GodPackGui(QMainWindow):
         """
         if self._community:
             self._stop_community()
-            return
         if self.proc is None or self.proc.state() == QProcess.NotRunning:
             return
 
@@ -1785,12 +1791,22 @@ class GodPackGui(QMainWindow):
         try:
             self.COMMUNITY_FILE.parent.mkdir(parents=True, exist_ok=True)
             self.COMMUNITY_FILE.write_text(
-                json.dumps({"on": bool(on), "ts": int(time.time() * 1000)}), encoding="utf-8")
+                json.dumps({"on": bool(on), "ts": int(time.time() * 1000),
+                            "own": int(getattr(self, "_own_count", 0))}), encoding="utf-8")
         except Exception as exc:
             self._append_log(f"[gui] couldn't write {self.COMMUNITY_FILE.name}: {exc}\n")
 
-    def _start_community(self):
+    def _own_accounts(self) -> int:
+        """Cuantas cuentas propias (XML) hay en las carpetas del panel, para el recuadro de Discord."""
+        carpeta = self.w_xml_dir.text().strip() or self.w_accounts_dir.text().strip()
+        try:
+            return sum(1 for _ in Path(carpeta).rglob("*.xml")) if carpeta and Path(carpeta).is_dir() else 0
+        except Exception:
+            return 0
+
+    def _start_community(self, limpiar: bool = True):
         self._save_settings()
+        self._own_count = self._own_accounts()
         try:
             if self.COMMUNITY_STOP.exists():
                 self.COMMUNITY_STOP.unlink()
@@ -1802,13 +1818,14 @@ class GodPackGui(QMainWindow):
             self._community_pos = self.COMMUNITY_LOG.stat().st_size
         except Exception:
             self._community_pos = 0
-        self.log_view.clear()
-        self._stdout_raw_pending.clear()
-        self._stdout_line_tail = ""
-        self._live_tail = ""
-        self._live = {"accounts": 0, "packs": 0, "matches": 0, "t0": time.time()}
-        self._update_live_label(running=True)
-        self._log_pending = []
+        if limpiar:
+            self.log_view.clear()
+            self._stdout_raw_pending.clear()
+            self._stdout_line_tail = ""
+            self._live_tail = ""
+            self._live = {"accounts": 0, "packs": 0, "matches": 0, "t0": time.time()}
+            self._update_live_label(running=True)
+            self._log_pending = []
         self._append_log("[gui] Community farm ON - your Monitor Pokemon bot opens the accounts members "
                          "lend through Monitor Link. First batch within a minute, then every 10 min.\n"
                          "[gui] Stop (or closing this window) turns it off.\n")
@@ -1856,13 +1873,15 @@ class GodPackGui(QMainWindow):
         self._community_tick()
         self._append_log("\n[gui] Community farm OFF - the account in progress finishes its cleanup, "
                          "then this host stops farming.\n")
-        self.btn_start.setEnabled(True)
-        self.btn_cleanup.setEnabled(True)
-        self.btn_stop.setEnabled(False)
         self.w_community.setEnabled(True)
-        self.status_label.setText("Idle (Community farm stopped).")
-        self._update_live_label(running=False)
-        self._refresh_pool()
+        # Si tus cuentas siguen corriendo (Stop las corta con su limpieza), los botones los maneja ese flujo.
+        if self.proc is None or self.proc.state() == QProcess.NotRunning:
+            self.btn_start.setEnabled(True)
+            self.btn_cleanup.setEnabled(True)
+            self.btn_stop.setEnabled(False)
+            self.status_label.setText("Idle (Community farm stopped).")
+            self._update_live_label(running=False)
+            self._refresh_pool()
 
     def _on_stdout(self):
         """
@@ -1886,6 +1905,12 @@ class GodPackGui(QMainWindow):
         self.btn_stop.setEnabled(False)
         self.btn_stop.setText("Stop")
         self.status_label.setText(f"Idle (last exit: {code}).")
+        if self._community:
+            # Tus cuentas terminaron, pero el Community farm sigue hasta que le des Stop.
+            self.btn_start.setEnabled(False)
+            self.btn_cleanup.setEnabled(False)
+            self.btn_stop.setEnabled(True)
+            self.status_label.setText("Your accounts are done - Community farm still running (Stop to end).")
         # Clean up the stop file so it doesn't leak into a subsequent run.
         # (Belt-and-braces: _start_injection also unlinks any stale file.)
         stop_path = getattr(self, "_stop_f", None)
