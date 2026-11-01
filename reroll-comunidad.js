@@ -27,7 +27,8 @@ const num = (v, def) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v)
 let deps = null;
 let corriendo = false;
 let expansionDePack = null;   // pack_id -> codigo del set ("CN001_0010_00_000" -> "C1")
-let ppm = null;               // { desde, sobres } del GP farm desde que este host esta Online
+let ppm = null;               // { desde, sobres, basePropios?, pausado?, reanudado?, pausa? } del GP farm
+const PPM_PAUSA_MS = 15 * 60 * 1000;   // tras un Stop, el PPM se guarda 15 min por si vuelve a dar Start
 
 const log = (...a) => console.log('[reroll]', ...a);
 
@@ -149,11 +150,22 @@ async function sincronizarPanel() {
     panelAntes = on;
     await deps.marcar?.(on).catch(() => {});
     log(on ? 'Community farm ON (God Pack UI Start)' : 'Community farm OFF (God Pack UI stopped or closed)');
-    if (on) setTimeout(ciclo, 15 * 1000);
-    else {
+    if (on) {
+        // Start de nuevo antes de 15 min: el PPM sigue desde donde iba (2026-11-01, idea de wr98).
+        if (ppm?.pausa && Date.now() - ppm.pausa.at < PPM_PAUSA_MS) {
+            ppm.basePropios = (ppm.basePropios || 0) + ppm.pausa.propios;
+            ppm.pausado = (ppm.pausado || 0) + (Date.now() - ppm.pausa.at);
+            ppm.reanudado = Date.now();
+            delete ppm.pausa;
+        } else ppm = null;
+        setTimeout(ciclo, 15 * 1000);
+    } else {
         // Stop: ultimo heartbeat en Offline y 0 PPM (solo si estaba farmeando, no al arrancar el bot).
-        if (ppm) await enviarPpm(motor, ajustesPanel(motor), true).catch(e => log('PPM report failed:', e?.message || e));
-        ppm = null;
+        if (ppm) {
+            await enviarPpm(motor, ajustesPanel(motor), true).catch(e => log('PPM report failed:', e?.message || e));
+            // Se guarda 15 min por si vuelve a dar Start (cambiar algo del panel no reinicia el PPM).
+            ppm.pausa = { at: Date.now(), propios: sobresPropios(motor, ppm.reanudado || ppm.desde) };
+        }
     }
 }
 
@@ -169,7 +181,10 @@ async function revisarPpm() {
         const s = motor ? ajustesPanel(motor) : {};
         espera = num(s.ppm_interval, 5);
         const parte = await deps.parte().catch(() => null);
-        if (!parte) { ppm = null; return; }
+        if (!parte) {
+            if (!ppm?.pausa || Date.now() - ppm.pausa.at >= PPM_PAUSA_MS) ppm = null;
+            return;
+        }
         if (!ppm) ppm = { desde: Date.now(), sobres: 0 };
         await enviarPpm(motor, s, false);
     } catch (e) {
@@ -185,8 +200,9 @@ async function enviarPpm(motor, s, final) {
     const webhook = String(s.ppm_webhook || '').trim();
     if (!ppm || !/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(webhook)) return;
     // Con Community farm el panel no manda su PPM: aca va todo junto (tus cuentas + las prestadas).
-    const sobres = ppm.sobres + sobresPropios(motor, ppm.desde);
-    const minutos = Math.max(1, (Date.now() - ppm.desde) / 60000);
+    // Tus sobres: los de antes de un Stop/Start (basePropios) + los del log actual del panel.
+    const sobres = ppm.sobres + (ppm.basePropios || 0) + (ppm.pausa ? ppm.pausa.propios : sobresPropios(motor, ppm.reanudado || ppm.desde));
+    const minutos = Math.max(1, (Date.now() - ppm.desde - (ppm.pausado || 0)) / 60000);
     const instancias = 'Main, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10';
     const mensaje = [s.host_name || 'Host', `Online: ${final ? 'none' : instancias}`, `Offline: ${final ? instancias : 'none'}`,
         `Time: ${Math.floor(minutos)}m | Packs: ${sobres} | Avg: ${final ? 0 : Math.round(sobres / minutos * 100) / 100} packs/min`,

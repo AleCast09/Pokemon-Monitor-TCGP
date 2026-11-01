@@ -1634,7 +1634,16 @@ class GodPackGui(QMainWindow):
                 f"Write-Host '=== tailing: {log_path} ===' -ForegroundColor Cyan; "
                 f"Get-Content -Wait -Path '{log_path}'"
             )
-            subprocess.Popen(
+            # (2026-11-01, wr98) Cada Start dejaba la ventana del Start anterior abierta: se cierra
+            # antes de abrir la nueva, asi queda una sola.
+            viejo = getattr(self, "_tail_proc", None)
+            if viejo is not None and viejo.poll() is None:
+                try:
+                    subprocess.run(["taskkill", "/PID", str(viejo.pid), "/T", "/F"],
+                                   capture_output=True, creationflags=0x08000000)
+                except Exception:
+                    pass
+            self._tail_proc = subprocess.Popen(
                 ["powershell.exe", "-NoExit", "-Command", ps_cmd],
                 creationflags=CREATE_NEW_CONSOLE,
             )
@@ -1659,6 +1668,10 @@ class GodPackGui(QMainWindow):
         """
         if self._community:
             self._stop_community()
+        # (2026-11-01, wr98) Stop apaga tambien el PPM del panel: antes seguia mandando heartbeats
+        # despues del Stop, y con el siguiente Start llegaban dos (uno viejo y uno nuevo).
+        if getattr(self, "_ppm_stop", None) is not None:
+            self._ppm_stop.set()
         if self.proc is None or self.proc.state() == QProcess.NotRunning:
             return
 
