@@ -1099,6 +1099,23 @@ def _limit_collectors(live_codes: list[str], manual_codes: list[str]) -> list[st
     return pick + [c for c in live_codes if c in manual]
 
 
+_full_lock = threading.Lock()
+
+
+def _note_full_collectors(pids: list[str], pid_to_code: dict, tag: str = "") -> None:
+    """Anota collectors que rechazaron la solicitud mientras otros la aceptaban (lista llena).
+    El bot de Monitor Pokemon lee reports/collectors_full.jsonl y avisa (anti doble reroll)."""
+    try:
+        path = PROJECT_ROOT / "reports" / "collectors_full.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _full_lock, open(path, "a", encoding="utf-8") as f:
+            for pid in pids:
+                f.write(json.dumps({"ts": int(time.time() * 1000), "pid": pid,
+                                    "code": pid_to_code.get(pid, ""), "account": tag}) + "\n")
+    except Exception as exc:
+        log(f"[fr] could not write collectors_full.jsonl: {str(exc)[:120]}", tag=tag)
+
+
 def resolve_friend_code(sess, friend_code: str, max_retries: int = 3) -> Optional[str]:
     """
     Convert 16-digit friend code (dashed or raw) or UUID to player_id UUID.
@@ -2442,7 +2459,24 @@ def inject_one(
                 # final sweep (or the next run's startup sweep) cleans up.
                 fr_cleanup.ledger_open(account, target_pids)
                 fr_was_sent = True
-                if not send_friend_requests(sess, target_pids):
+                fr_ok = send_friend_requests(sess, target_pids)
+                if not fr_ok and len(target_pids) > 1:
+                    # (2026-11-01) El paquete falla entero (ABORTED) si UNO de los collectors tiene la
+                    # lista de amigos llena, y la cuenta se saltaba sin abrir (487 veces en un dia).
+                    # Se reintenta de a uno: la cuenta sigue con los que aceptaron, y los que rechazan
+                    # mientras otros aceptan quedan en reports/collectors_full.jsonl (anti doble reroll:
+                    # un main lleno con muy pocas cuentas nuestras = acepta solicitudes de otro grupo).
+                    ok_pids, full_pids = [], []
+                    for pid in target_pids:
+                        (ok_pids if send_friend_requests(sess, [pid]) else full_pids).append(pid)
+                    if ok_pids:
+                        if full_pids:
+                            _note_full_collectors(full_pids, pid_to_friend_code, tag)
+                            log(f"[fr] {len(full_pids)} collector(s) rejected the request (friend list full?); "
+                                f"continuing with {len(ok_pids)}", tag=tag)
+                        target_pids = ok_pids
+                        fr_ok = True
+                if not fr_ok:
                     result["error"] = "friend_request_failed"
                     # Some FRs may have landed (pending OR accepted) before the
                     # error. Withdraw/delete all of them.

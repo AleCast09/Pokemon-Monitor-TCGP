@@ -7733,7 +7733,17 @@ if (comunidad.hayComunidad()) {
     monitorLink.usarParteReroll(() => hostComunidad.parteReroll());
     require('./reroll-comunidad.js').iniciar({ ml: monitorLink, fastTransfer, activo: () => hostComunidad.esActivo(), parte: () => hostComunidad.parteReroll(),
         // El GP farm sigue al panel GP (Start/Stop con "Community farm"); al cambiar se refresca el mensaje de control.
-        marcar: async (online) => { await hostComunidad.marcarReroll(online); hostComunidad.refrescarControl(); } });
+        marcar: async (online) => { await hostComunidad.marcarReroll(online); hostComunidad.refrescarControl(); },
+        // Anti doble reroll: aviso en el canal de hosts (lo ve staff), una vez por main aunque lo vean varios hosts.
+        hostsFarm: () => hostComunidad.hostsReroll(), primeraVez: hostComunidad.primeraVez,
+        avisar: async (texto) => {
+            for (const guild of client.guilds.cache.values()) {
+                if (!comunidad.esComunidad(guild.id)) continue;
+                const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
+                const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+                if (canal) await canal.send({ content: texto.slice(0, 1900), allowedMentions: { parse: [] } }).catch(() => {});
+            }
+        } });
 }
 dashboardApp.use(express.json());
 // Fondos animados de la pantalla de bienvenida de /tutorials (2026-08-08, a pedido

@@ -45,6 +45,47 @@ function iniciar(d) {
     setInterval(sincronizarPanel, 20 * 1000);
     setInterval(ciclo, num(process.env.REROLL_CADA_MIN, 10) * 60 * 1000);
     setTimeout(revisarPpm, 60 * 1000);
+    setInterval(revisarLlenos, 60 * 1000);
+}
+
+// Anti doble reroll (2026-11-01, plan de Ale): inject.py anota en reports/collectors_full.jsonl cada main
+// que rechazo nuestra solicitud mientras los demas la aceptaban (lista de amigos llena, 99). Cada cuenta
+// nuestra queda agregada a un main solo ~30 s y hay a lo sumo ~14 a la vez por host farmeando, asi que un
+// main lleno tiene casi todos sus amigos de AFUERA: acepta solicitudes de otro grupo. Por ahora solo se
+// avisa (en el canal de hosts); un aviso por main cada 6 h aunque lo detecten varios hosts.
+const TOPE_AMIGOS = 99, NUESTRAS_POR_HOST = 14, TOLERANCIA = 5;
+let posLlenos = null;
+async function revisarLlenos() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    if (!motor) return;
+    const ruta = path.join(motor, 'reports', 'collectors_full.jsonl');
+    let tam = 0;
+    try { tam = fs.statSync(ruta).size; } catch (e) { return; }
+    if (posLlenos === null || tam < posLlenos) { posLlenos = tam; return; }   // al arrancar: solo lo nuevo
+    if (tam === posLlenos) return;
+    const fd = fs.openSync(ruta, 'r');
+    const buf = Buffer.alloc(tam - posLlenos);
+    fs.readSync(fd, buf, 0, buf.length, posLlenos);
+    fs.closeSync(fd);
+    posLlenos = tam;
+    const hosts = Math.max(1, (await deps.hostsFarm?.().catch(() => []))?.length || 1);
+    const nuestrasMax = hosts * NUESTRAS_POR_HOST;
+    const deAfuera = TOPE_AMIGOS - nuestrasMax;
+    if (deAfuera <= TOLERANCIA) return;
+    const vistos = new Set();
+    for (const linea of buf.toString('utf8').split('\n')) {
+        let ev;
+        try { ev = JSON.parse(linea); } catch (e) { continue; }
+        const codigo = String(ev.code || ev.pid || '');
+        if (!codigo || vistos.has(codigo)) continue;
+        vistos.add(codigo);
+        if (!await deps.primeraVez?.(`zenith:lleno:${codigo}`, 6 * 3600).catch(() => false)) continue;
+        const legible = /^\d{16}$/.test(codigo) ? codigo.replace(/(\d{4})(?=\d)/g, '$1-') : codigo;
+        log(`friend list full: ${legible} (double reroll?)`);
+        await deps.avisar?.(`⚠️ **Possible double reroll** — main \`${legible}\` rejected our friend request because its friend list is **full (${TOPE_AMIGOS})**, while the other mains accepted.\n`
+            + `Right now at most **${nuestrasMax}** of its friends can be ours (${hosts} farm host${hosts === 1 ? '' : 's'}), so at least **${deAfuera}** come from outside — this main is probably accepting another group's requests.\n`
+            + `*Warning only — nobody was set offline.*`).catch(() => {});
+    }
 }
 
 // El panel GP con "Community farm" vive en motor-panel/ de este repo y se copia al motor de cada host

@@ -219,8 +219,15 @@ async function iniciar(opciones) {
 
 // Miembros que prestan cuentas al GP farm (2026-11-01): lo escribe el host del turno con cada panel, para
 // LatiasBot (wr98). Clave zenith:miembros = JSON { discordId: { monitorLink, lent, ready, ts } }.
+// true solo para el PRIMER host que anota esta clave en `segundos` (SET NX EX): un aviso por evento
+// aunque lo detecten varios hosts a la vez.
+async function primeraVez(clave, segundos) {
+    if (!configurado()) return true;
+    try { return (await redis('SET', clave, '1', 'NX', 'EX', String(segundos))) === 'OK'; } catch (e) { return false; }
+}
+
 const anotarMiembros = (registro) => configurado()
     ? redis('SET', 'zenith:miembros', JSON.stringify(registro)).catch(() => {}) : Promise.resolve();
 
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
-    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros };
+    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez };
