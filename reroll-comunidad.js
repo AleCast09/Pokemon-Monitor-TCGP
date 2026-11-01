@@ -187,20 +187,26 @@ async function ciclo() {
         const lote = num(process.env.REROLL_LOTE, 20);
         const s = ajustesPanel(motor);
         const estado = leerEstado(motor);
-        for (const m of await deps.ml.cuentasReroll()) {
+        const miembros = await deps.ml.cuentasReroll();
+        // Resumen de cada vuelta (2026-11-01: el ciclo fallaba en silencio y parecia que no hacia nada).
+        log(`cycle: host ${parte.i + 1}/${parte.n}, ${miembros.length} member(s) lending, ${miembros.reduce((a, m) => a + m.cuentas.length, 0)} account(s)`);
+        for (const m of miembros) {
             const ahora = Date.now();
             const listas = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte)
                 && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).slice(0, lote);
-            if (!listas.length) continue;
+            if (!listas.length) { log(`${m.discord_id}: no account ready (cooldown ${cooldown / 3600000} h)`); continue; }
             if (!await deps.fastTransfer.asegurarTunel()) { log('tunnel 9090 is down - skipping this cycle'); return; }
             let xmls;
             try {
                 xmls = deps.activo()
                     ? await deps.ml.pedirXmlReroll(m.discord_id, listas.map(c => c.f))
                     : await deps.ml.xmlRerollPorHostActivo(m.discord_id, listas.map(c => c.f));
-            } catch (e) { continue; }   // PC del miembro apagada, o el host del turno no contesta
+            } catch (e) {   // PC del miembro apagada, o el host del turno no contesta
+                log(`${m.discord_id}: could not get the ${listas.length} account file(s) ${deps.activo() ? 'from their Monitor Link' : 'through the host with the turn'}: ${e?.message || e}`);
+                continue;
+            }
             const nombres = Object.keys(xmls);
-            if (!nombres.length) continue;
+            if (!nombres.length) { log(`${m.discord_id}: asked for ${listas.length} account file(s), got none back`); continue; }
 
             const dir = path.join(os.tmpdir(), `ml_reroll_${crypto.randomBytes(6).toString('hex')}`);
             fs.mkdirSync(dir, { recursive: true });
