@@ -16269,88 +16269,117 @@ async function rechazarGuildNoAutorizado(guild) {
 // Sync Channels (antes vivia dentro del case de btn_crear_canales_menu). Funcion aparte para que el
 // host de la comunidad tambien la use al tomar el turno (community-host.js) con una "interaccion"
 // armada a mano: { guild, guildId, user, client, editReply }.
+// Categorias y canales que arma Sync Channels (a nivel de modulo desde 2026-11-01: tambien los usa
+// adoptarCanalesComunidad para que un host nuevo encuentre los canales que ya existen).
+const GRUPOS_SYNC = [
+    {
+        categoria: '🔔 UPDATES 🔔',
+        tipoCategoria: 'actualizaciones_categoria',
+        canales: [
+            { tipo: 'actualizaciones', name: '🔔-updates' },
+            { tipo: 'tutoriales', name: '📚-tutorials' },
+            { tipo: 'apoyo', name: '☕-donate' },
+            { tipo: 'cmd_feedback', name: '📝-feedback' }
+        ]
+    },
+    {
+        categoria: '⚙️ SETTINGS ⚙️',
+        tipoCategoria: 'settings_categoria',
+        canales: [
+            { tipo: 'cmd_setup', name: '⚙-settings' },
+            { tipo: 'cmd_build_embed', name: '🔧-build-embed' },
+            { tipo: 'cmd_build_webhooks', name: '🔗-build-webhooks' }
+        ]
+    },
+    {
+        categoria: '💓 HEARTBEAT 💓',
+        tipoCategoria: 'heartbeat_categoria',
+        canales: [
+            { tipo: 'heartbeat', name: '💓-heartbeat' }
+        ]
+    },
+    {
+        categoria: '📦 PTCG POCKET DROPS 📦',
+        tipoCategoria: 'crear_canales',
+        canales: [
+            { tipo: 's4t', name: '🤖-s4t' },
+            { tipo: 's4t-categoria', name: '📊-s4t-category' },
+            { tipo: '3-diamond', name: '🔷-3-diamond' },
+            { tipo: '4-diamond', name: '💠-4-diamond' },
+            { tipo: '1-star', name: '⭐-1-star' },
+            { tipo: '1-star-shiny', name: '🌟-1-star-shiny' },
+            { tipo: '2-star-trainer', name: '⭐⭐-trainer' },
+            { tipo: '2-star-rainbow', name: '🌈-2-star-rainbow' },
+            { tipo: '2-star-full-art', name: '🎨-2-star-full-art' },
+            { tipo: '2-star-shiny', name: '✨-2-star-shiny' },
+            { tipo: 'immersive', name: '🌌-immersive' },
+            { tipo: 'crown-rare', name: '👑-crown-rare' },
+            { tipo: 'wishlist', name: '💖-wishlist' }
+        ]
+    },
+    {
+        categoria: '📦 GOD PACKS 📦',
+        tipoCategoria: 'godpack_categoria',
+        canales: [
+            { tipo: 'godpack-general', name: '📦-godpack-general' },
+            { tipo: 'godpack-alive', name: '👼-godpack-alive' },
+            { tipo: 'godpack-dead', name: '☠️-godpack-dead' }
+        ]
+    },
+    {
+        categoria: '🔥 MANAGER 🔥',
+        tipoCategoria: 'manager_categoria',
+        canales: [
+            { tipo: 'cmd_card_wishlist', name: '💖-cards-wishlist' },
+            { tipo: 'cmd_card_all', name: '⚡-all-cards' },
+            { tipo: 'cmd_card_gold', name: '🏆-gold-cards' },
+            { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' },
+            { tipo: 'shinedust', name: '🍬-shinedust' },
+            { tipo: 'info_accounts', name: '📋-info-accounts' }
+        ]
+    },
+    {
+        categoria: '🎮 RUN MUMU PLAYER 🎮',
+        tipoCategoria: 'run_mumu_categoria',
+        canales: [
+            { tipo: 'cmd_run_instance', name: '🔄-trading' },
+            // Agregados 2026-08-24 a pedido explicito del usuario -- canales
+            // nuevos, todavia sin comando propio (igual que Donate/Heartbeat).
+            { tipo: 'share-cards', name: '🃏-share-cards' },
+            { tipo: 'farm-shop-tickets', name: '🎫-farm-shop-tickets' }
+        ]
+    }
+];;
+
+// Host nuevo de la comunidad (2026-11-01, Arcade): su base esta vacia y nunca corrio Sync Channels,
+// asi que no sabia cual era 🔒-hosts (no publicaba su mensaje de control) ni los canales de comandos.
+// Al arrancar, cada canal de la comunidad que falte en su base se busca por nombre en el server y se
+// anota. Sin webhook ('N/A'): el proximo Sync Channels lo crea; los canales ya anotados no se tocan.
+async function adoptarCanalesComunidad() {
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        try {
+            await guild.channels.fetch();
+            for (const grupo of comunidad.gruposSync(guild.id, GRUPOS_SYNC)) {
+                for (const { tipo, name } of grupo.canales) {
+                    const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [guild.id, tipo]);
+                    if (fila?.canal_id) continue;
+                    const canal = guild.channels.cache.find(c => c.name === name && c.type === ChannelType.GuildText);
+                    if (!canal) continue;
+                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [guild.id, tipo]);
+                    await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, 'N/A')`, [guild.id, tipo, canal.id]);
+                    console.log(`🔗 Community channel found: ${name}`);
+                }
+            }
+        } catch (e) {
+            console.log('DEBUG: no se pudieron adoptar los canales de la comunidad:', e?.message || e);
+        }
+    }
+}
+
 async function sincronizarCanales(interaction) {
         try {
-            const grupos = [
-                {
-                    categoria: '🔔 UPDATES 🔔',
-                    tipoCategoria: 'actualizaciones_categoria',
-                    canales: [
-                        { tipo: 'actualizaciones', name: '🔔-updates' },
-                        { tipo: 'tutoriales', name: '📚-tutorials' },
-                        { tipo: 'apoyo', name: '☕-donate' },
-                        { tipo: 'cmd_feedback', name: '📝-feedback' }
-                    ]
-                },
-                {
-                    categoria: '⚙️ SETTINGS ⚙️',
-                    tipoCategoria: 'settings_categoria',
-                    canales: [
-                        { tipo: 'cmd_setup', name: '⚙-settings' },
-                        { tipo: 'cmd_build_embed', name: '🔧-build-embed' },
-                        { tipo: 'cmd_build_webhooks', name: '🔗-build-webhooks' }
-                    ]
-                },
-                {
-                    categoria: '💓 HEARTBEAT 💓',
-                    tipoCategoria: 'heartbeat_categoria',
-                    canales: [
-                        { tipo: 'heartbeat', name: '💓-heartbeat' }
-                    ]
-                },
-                {
-                    categoria: '📦 PTCG POCKET DROPS 📦',
-                    tipoCategoria: 'crear_canales',
-                    canales: [
-                        { tipo: 's4t', name: '🤖-s4t' },
-                        { tipo: 's4t-categoria', name: '📊-s4t-category' },
-                        { tipo: '3-diamond', name: '🔷-3-diamond' },
-                        { tipo: '4-diamond', name: '💠-4-diamond' },
-                        { tipo: '1-star', name: '⭐-1-star' },
-                        { tipo: '1-star-shiny', name: '🌟-1-star-shiny' },
-                        { tipo: '2-star-trainer', name: '⭐⭐-trainer' },
-                        { tipo: '2-star-rainbow', name: '🌈-2-star-rainbow' },
-                        { tipo: '2-star-full-art', name: '🎨-2-star-full-art' },
-                        { tipo: '2-star-shiny', name: '✨-2-star-shiny' },
-                        { tipo: 'immersive', name: '🌌-immersive' },
-                        { tipo: 'crown-rare', name: '👑-crown-rare' },
-                        { tipo: 'wishlist', name: '💖-wishlist' }
-                    ]
-                },
-                {
-                    categoria: '📦 GOD PACKS 📦',
-                    tipoCategoria: 'godpack_categoria',
-                    canales: [
-                        { tipo: 'godpack-general', name: '📦-godpack-general' },
-                        { tipo: 'godpack-alive', name: '👼-godpack-alive' },
-                        { tipo: 'godpack-dead', name: '☠️-godpack-dead' }
-                    ]
-                },
-                {
-                    categoria: '🔥 MANAGER 🔥',
-                    tipoCategoria: 'manager_categoria',
-                    canales: [
-                        { tipo: 'cmd_card_wishlist', name: '💖-cards-wishlist' },
-                        { tipo: 'cmd_card_all', name: '⚡-all-cards' },
-                        { tipo: 'cmd_card_gold', name: '🏆-gold-cards' },
-                        { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' },
-                        { tipo: 'shinedust', name: '🍬-shinedust' },
-                        { tipo: 'info_accounts', name: '📋-info-accounts' }
-                    ]
-                },
-                {
-                    categoria: '🎮 RUN MUMU PLAYER 🎮',
-                    tipoCategoria: 'run_mumu_categoria',
-                    canales: [
-                        { tipo: 'cmd_run_instance', name: '🔄-trading' },
-                        // Agregados 2026-08-24 a pedido explicito del usuario -- canales
-                        // nuevos, todavia sin comando propio (igual que Donate/Heartbeat).
-                        { tipo: 'share-cards', name: '🃏-share-cards' },
-                        { tipo: 'farm-shop-tickets', name: '🎫-farm-shop-tickets' }
-                    ]
-                }
-            ];
-
+            const grupos = GRUPOS_SYNC;
             // Solo canales que tienen un comando real asignado (aunque no se pueda
             // "ejecutar" solo, como /embed, /webhook, /feedback) o que explican algo
             // que no se repite (Updates/Support) reciben un embed al sincronizar. El
@@ -16862,6 +16891,7 @@ async function limpiarPanelesDeOtrosBots(guild) {
 
 client.once('ready', async () => {
     try {
+        if (comunidad.hayComunidad()) await adoptarCanalesComunidad();
         await hostComunidad.iniciar({ alTomar: tomarTurnoComunidad, alSoltar: soltarTurnoComunidad, estado: estadoDeEsteHost, panel: actualizarPanelHosts, control: actualizarControlHost });
         await registrarSlashCommands();
         console.log(`🤖 Bot ready as ${client.user.tag}`);
