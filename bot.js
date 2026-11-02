@@ -16674,8 +16674,16 @@ async function estadoDeEsteHost() {
     }
     // Version del juego para la que esta actualizado el motor (2026-10-29, pedido de Ale): sale de
     // engine\config\current-version.txt, lo escribe scripts\update_bot.py al actualizar con el XAPK.
-    let versionMotor = null;
-    try { versionMotor = fs.readFileSync(path.join(motor, 'engine', 'config', 'current-version.txt'), 'utf8').trim().replace(/^v/i, '') || null; } catch (e) { /* sin motor */ }
+    // (2026-11-01) Tambien se mira engine\core\session.py: quien actualiza a mano (copiando session.py)
+    // no toca current-version.txt y el panel lo marcaba "outdated". Se usa la version mas alta de las dos.
+    const numV = (v) => String(v || '').split('.').map(n => n.padStart(4, '0')).join('.');
+    const candidatas = [];
+    try { candidatas.push(fs.readFileSync(path.join(motor, 'engine', 'config', 'current-version.txt'), 'utf8').trim().replace(/^v/i, '')); } catch (e) { /* sin archivo */ }
+    try {
+        const sesion = fs.readFileSync(path.join(motor, 'engine', 'core', 'session.py'), 'utf8');
+        for (const m of sesion.matchAll(/"x-takasho-app-version"\s*:\s*"(\d+\.\d+\.\d+)"/g)) candidatas.push(m[1]);
+    } catch (e) { /* sin motor */ }
+    const versionMotor = candidatas.filter(v => /^\d+\.\d+\.\d+$/.test(v)).sort((a, b) => numV(b).localeCompare(numV(a)))[0] || null;
     // GP farm: cuantas proxies de la bolsa le tocan a este host (null = Offline).
     const reroll = await hostComunidad.parteReroll().catch(() => null) ? await monitorLink.escribirProxiesMotor().catch(() => 0) : null;
     // Cuentas prestadas que le tocan a este host (para la seccion "Lent accounts" del panel).
