@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.6"
+global VERSION := "ahk-1.9.7"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -34,6 +34,7 @@ global ProxyFile := "", ProxyHuella := "", ProxiesEnviadas := ""
 ; sent; each .xml is sent when a host is about to open it (like Fast Share) and the host deletes it.
 global CFG_REROLL := CFG_DIR . "\reroll_accounts.txt", CFG_REROLL_LOG := CFG_DIR . "\reroll_log.txt"
 global CuentasReroll := {}, UltimoReroll := ""
+global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global Status, Info, Clave, BtnLink, Inicio, LinkBox, LVCuentas, Barra
 
 CargarConfig()
@@ -55,6 +56,7 @@ CargarConfig() {
     IniRead, LibToken, %CFG%, link, libToken, %A_Space%
     IniRead, Ruta, %CFG%, folder, mainPath, %A_Space%
     IniRead, ProxyFile, %CFG%, proxies, file, %A_Space%
+    IniRead, Amigos, %CFG%, friends, ids, %A_Space%
     CuentasReroll := {}
     Loop, Read, %CFG_REROLL%
         if (Trim(A_LoopReadLine) != "")
@@ -111,6 +113,7 @@ CrearVentana() {
     Gui, Add, Button, xm y+6 w177 h30 gCompartirProxies, Share proxies
     Gui, Add, Button, x+6 yp w177 h30 gDejarProxies, Stop sharing proxies
     Gui, Add, Button, xm y+6 w360 h30 gCompartirCuentas, Share accounts for reroll (96+ packs)
+    Gui, Add, Button, xm y+6 w360 h30 gElegirAmigos, Friends who can use my accounts in Discord
     Gui, Add, Checkbox, xm y+12 vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
     Gui, Show, AutoSize, Monitor Link
@@ -294,7 +297,7 @@ CompartirCuentas:
     Gui, 2:Add, Text, w440 y+6, While an account is shared, do NOT open it on your own instances: the same account in two places at once gets errors.
     Gui, 2:Font, s9 Norm cBlack, Segoe UI
     Gui, 2:Add, Text, w440 y+6, Accounts that are not God Pack eligible are locked (GP column = days of packs still missing): they can't be shared until they are eligible.
-    Gui, 2:Add, ListView, w440 r16 y+8 Checked Grid -Multi AltSubmit gLVCuentasClic vLVCuentas, Account|Packs|GP
+    Gui, 2:Add, ListView, w520 r16 y+8 Checked Grid -Multi AltSubmit gLVCuentasClic vLVCuentas, Account|Packs|GP|Since pause
     Gui, 2:Default
     total := 0, noElegibles := 0, compartidas := 0
     Loop, Files, %CarpetaJson%\*.json
@@ -308,15 +311,17 @@ CompartirCuentas:
             continue
         f := RegExMatch(t, """fileName""\s*:\s*""((?:[^""\\]|\\.)*)""", mf) ? JsonUnesc(mf1) : A_LoopFileName
         ; GP column: OK = God Pack eligible; "N days" = still needs packs on N more different days.
-        faltan := DiasFaltanGP(t)
+        faltan := DiasFaltanGP(t, sobres)
+        ; Since pause: packs opened after the last 30-day pause out of 96, and how many are missing to reach 96 again.
+        desdePausa := sobres >= 96 ? sobres . "/96 OK" : sobres . "/96 (-" . (96 - sobres) . ")"
         if (faltan)
             noElegibles++
         else if (CuentasReroll.HasKey(f))
             compartidas++
-        LV_Add(CuentasReroll.HasKey(f) && !faltan ? "Check" : "", f, mp1 + 0, faltan ? "Locked " . faltan . "d" : "OK")
+        LV_Add(CuentasReroll.HasKey(f) && !faltan ? "Check" : "", f, mp1 + 0, faltan ? "Locked " . faltan . "d" : "OK", desdePausa)
         total++
     }
-    LV_ModifyCol(1, 270), LV_ModifyCol(2, "70 Integer SortDesc"), LV_ModifyCol(3, 80)
+    LV_ModifyCol(1, 250), LV_ModifyCol(2, "60 Integer SortDesc"), LV_ModifyCol(3, 80), LV_ModifyCol(4, 105)
     Gui, 2:Add, Text, w440 y+6, % total . " accounts with 96+ packs - " . compartidas . " shared now."
     Gui, 2:Add, Text, w440 y+2, % "God Pack eligible: " . (total - noElegibles) . " - locked (not eligible yet): " . noElegibles . "."
     Gui, 2:Add, Button, xm y+8 w100 h28 gMarcarTodas, Tick all
@@ -391,6 +396,64 @@ GuardarCompartidas:
     if (!ok)
         MsgBox, 48, Monitor Link, Saved, but could not reach the bot. It will be sent when it shows Connected.
 return
+
+; Friends (2026-11-06, Ale): Discord IDs of people who can use the bot with THIS member's accounts,
+; without installing Monitor Link. The .xml files still only leave this PC when the bot asks for one.
+ElegirAmigos:
+    InputBox, nuevos, Friends who can use my accounts, % "Discord user IDs of your friends, separated by commas (max 10).`n`nThey will use the bot in Zenith Rise with YOUR accounts: see your cards, Fast Share/Trade and Extract XML.`nLeave it empty to remove them all.`n`n(Discord: Settings > Advanced > Developer Mode, then right-click the user > Copy User ID)", , 460, 270, , , , , %Amigos%
+    if (ErrorLevel)
+        return
+    lista := "", malos := ""
+    Loop, Parse, nuevos, `,%A_Space%`n`r
+    {
+        id := Trim(A_LoopField)
+        if (id = "")
+            continue
+        if !RegExMatch(id, "^\d{17,20}$") {
+            malos .= " " . id
+            continue
+        }
+        if !InStr("," . lista . ",", "," . id . ",")
+            lista .= (lista = "" ? "" : ",") . id
+    }
+    if (malos != "") {
+        MsgBox, 48, Monitor Link, % "These are not Discord user IDs:" . malos . "`n`nA user ID is a long number (17-20 digits)."
+        return
+    }
+    if (lista != "") {
+        MsgBox, 36, Monitor Link, % "Let these Discord users use the bot with your accounts?`n`n" . StrReplace(lista, ",", "`n") . "`n`nThey can see your cards, do Fast Share/Trade and Extract XML with your accounts. Only add people you trust."
+        IfMsgBox, No
+            return
+    }
+    Amigos := lista
+    IniWrite, %Amigos%, %CFG%, friends, ids
+    if !EnviarAmigos()
+        MsgBox, 48, Monitor Link, Saved, but could not reach the bot. It will be sent when it shows Connected.
+    else
+        MsgBox, 64, Monitor Link, % lista = "" ? "Done: no friends can use your accounts now." : "Done: your friends can use the bot with your accounts now."
+return
+
+EnviarAmigos() {
+    if (Token = "")
+        return false
+    items := ""
+    Loop, Parse, Amigos, `,
+        if (A_LoopField != "")
+            items .= (items = "" ? "" : ",") . """" . A_LoopField . """"
+    body := "{""ids"":[" . items . "]}"
+    try {
+        r := Http("POST", ServerUrl . "/link/friends", body, "text/plain; charset=utf-8", Token, 30)
+    } catch e {
+        return false
+    }
+    if (r.status = 401) {
+        NoVinculado()
+        return false
+    }
+    for _, espejo in Espejos
+        try Http("POST", espejo . "/link/friends", body, "text/plain; charset=utf-8", Token, 30)
+    return r.status = 200
+}
 
 ; Name, packCount and lastPackPulled of each shared account to every host (the active one and the
 ; others): with the last pack time the host never opens an account that already opened recently.
@@ -669,6 +732,8 @@ Arrancar() {
     SubirProxies(true)
     if (CuentasReroll.Count())
         EnviarCuentasReroll()
+    if (Amigos != "")
+        EnviarAmigos()
     SetTimer, Ping, 60000
     SetTimer, ResumenPeriodico, 600000
     SetTimer, RevisarTrabajos, 300
@@ -691,6 +756,8 @@ ResumenPeriodico:
     SubirProxies(false)
     if (CuentasReroll.Count())
         EnviarCuentasReroll()
+    if (Amigos != "")
+        EnviarAmigos()
 return
 
 SubirResumen(forzar, folderError := "") {
@@ -859,6 +926,8 @@ Ping:
         SubirProxies(true)
         if (CuentasReroll.Count())
             EnviarCuentasReroll()
+        if (Amigos != "")
+            EnviarAmigos()
     }
     if RegExMatch(r.text, """folder""\s*:\s*""((?:[^""\\]|\\.)*)""", mp) {
         pedida := JsonUnesc(mp1)
@@ -1350,29 +1419,32 @@ Http(metodo, url, body := "", tipo := "", bearer := "", segundos := 30) {
 ; account (pulls[] of its .json), it stops being eligible; it is eligible again once it opened packs on
 ; 30 different days after the LAST such gap (a new 30-day gap restarts the count). 30+ days since the
 ; last pack until today also counts as a gap. Returns the days still missing (0 = eligible).
-DiasFaltanGP(t) {
-    dias := {}, pos := 1
+DiasFaltanGP(t, ByRef sobres := 0) {
+    dias := {}, pos := 1, sobres := 0
     while (pos := RegExMatch(t, """timestamp""\s*:\s*""(\d{4})-(\d{2})-(\d{2})[^""]*""\s*,\s*""pack""", m, pos)) {
-        dias[(m1 . m2 . m3) + 0] := true
+        k := (m1 . m2 . m3) + 0
+        dias[k] := dias.HasKey(k) ? dias[k] + 1 : 1   ; packs opened that day
         pos += StrLen(m)
     }
     if (!dias.Count())
         return 0   ; no pack history: nothing to judge
     hueco := false, desde := 0, anterior := ""
-    for d in dias {   ; integer keys: AutoHotkey walks them in order
+    for d, n in dias {   ; integer keys: AutoHotkey walks them in order
         if (anterior != "") {
             x := d . "", y := anterior . ""
             EnvSub, x, %y%, Days
             if (x >= 30)
-                hueco := true, desde := 0
+                hueco := true, desde := 0, sobres := 0
         }
-        desde++
+        desde++, sobres += n   ; sobres = packs since the last 30-day pause
         anterior := d
     }
     hoy := A_YYYY . A_MM . A_DD, y := anterior . ""
     EnvSub, hoy, %y%, Days
-    if (hoy >= 30)
+    if (hoy >= 30) {
+        sobres := 0   ; the pause is now: counting starts again from 0
         return 30
+    }
     if (!hueco)
         return 0
     return desde >= 30 ? 0 : 30 - desde

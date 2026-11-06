@@ -11462,6 +11462,15 @@ async function manejarInteraccionPrincipal(interaction) {
         return await manejarBotonReroll(interaction);
     }
     if (comunidad.esComunidad(interaction.guildId) && !hostComunidad.esActivo()) return;
+    // Amigo de un miembro (lo anoto el miembro en su Monitor Link): sin Monitor Link propio, el bot le
+    // muestra y le deja usar las cuentas del miembro -- todo lo que sigue corre como si fuera el dueño.
+    if (comunidad.esComunidad(interaction.guildId) && interaction.user) {
+        const duenoAmigo = monitorLink.duenoDe(interaction.user.id);
+        if (duenoAmigo && !(await monitorLink.estadoAgente(interaction.user.id).catch(() => ({}))).vinculado) {
+            interaction._usuarioMonitor = duenoAmigo;
+            comunidad.contexto.enterWith({ guildId: interaction.guildId, userId: duenoAmigo });
+        }
+    }
     // Lista desplegable de la carta (comunidad): la opcion elegida se atiende igual que su boton.
     if (interaction.isStringSelectMenu() && interaction.customId === 'card_menu') {
         interaction.customId = interaction.values[0];
@@ -11496,12 +11505,12 @@ async function manejarInteraccionPrincipal(interaction) {
             && !interaction.customId.startsWith('tutorial_');
         if (esComando || esPanel) {
             const rol = await comunidad.rolMonitor(interaction.guild).catch(() => null);
-            if (rol && !interaction.member.roles.cache.has(rol.id)) return await avisoVincularPrimero(interaction);
+            if (rol && !interaction.member.roles.cache.has(rol.id) && !interaction._usuarioMonitor) return await avisoVincularPrimero(interaction);
         }
     }
     // Comunidad + Monitor Link: las cartas salen del resumen que subio el programa de ESTE usuario.
     if (comunidad.esComunidad(interaction.guildId) && interaction.user) {
-        const vinculado = await monitorLink.precargar(interaction.user.id).catch(() => false);
+        const vinculado = await monitorLink.precargar(interaction._usuarioMonitor || interaction.user.id).catch(() => false);
         if (interaction.isChatInputCommand()) {
             const cmd = interaction.commandName;
             // Resultados personales en privado (pedido de Ale): solo los ve quien los pidio, con

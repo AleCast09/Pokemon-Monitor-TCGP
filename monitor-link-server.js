@@ -30,6 +30,11 @@ async function asegurarTablas() {
     await db.run(`CREATE TABLE IF NOT EXISTS link_proxies (
         discord_id TEXT PRIMARY KEY, lista TEXT, n INTEGER, ts INTEGER)`);
     // Cuentas que el miembro presta al reroll (solo los nombres de archivo; las XML se piden al momento).
+    // Amigos (2026-11-06, pedido de Ale): un miembro anota en SU Monitor Link el ID de Discord de un amigo
+    // y ese amigo usa el bot con las cuentas del miembro, sin instalar Monitor Link (las XML siguen
+    // saliendo solo del Monitor Link del dueño, al momento).
+    await db.run(`CREATE TABLE IF NOT EXISTS link_amigos (
+        amigo_id TEXT PRIMARY KEY, dueno_id TEXT, ts INTEGER)`);
     await db.run(`CREATE TABLE IF NOT EXISTS link_reroll (
         discord_id TEXT PRIMARY KEY, cuentas TEXT, n INTEGER, ts INTEGER)`);
     // Cartas que salieron en el reroll y todavia no llegaron al JSON del miembro (PC apagada, etc.).
@@ -240,9 +245,10 @@ function registrar(app, dependencias) {
     // busca en la libreta la direccion del host que tiene el turno.
     const activo = dependencias.activo || (() => true);
     // Excepcion: el resumen y las proxies se reciben igual en espera (ver anotarHost / espejos).
-    app.use('/link', (req, res, next) => (activo() || (req.method === 'POST' && ['/summary', '/proxies', '/reroll-accounts'].includes(req.path)) ? next() : res.status(503).json({ error: 'standby' })));
+    app.use('/link', (req, res, next) => (activo() || (req.method === 'POST' && ['/summary', '/proxies', '/reroll-accounts', '/friends'].includes(req.path)) ? next() : res.status(503).json({ error: 'standby' })));
     sincronizarAgentes();
     setInterval(sincronizarAgentes, 10 * 60 * 1000);
+    cargarAmigos();
     const nombreUsuario = dependencias.nombreUsuario || (async () => null);
 
     app.post('/link/claim', express.json(), async (req, res) => {
@@ -440,6 +446,26 @@ function registrar(app, dependencias) {
 
     // 🎲 Share accounts for reroll: los nombres de las cuentas (96+ sobres) que el miembro presta.
     // Lista vacia = deja de prestar. Nunca viajan contraseñas en este paso.
+    // Amigos del miembro: { ids: ["discordId", ...] } reemplaza la lista entera (vacia = ninguno).
+    app.post('/link/friends', express.text({ type: 'text/plain', limit: '16kb' }), async (req, res) => {
+        try {
+            await asegurarTablas();
+            const agente = await agenteDe(req);
+            if (!agente) return res.status(401).json({ error: 'not_linked' });
+            let datos;
+            try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
+            const dueno = String(agente.discord_id);
+            const ids = [...new Set((Array.isArray(datos.ids) ? datos.ids : []).map(x => String(x).trim()))]
+                .filter(x => /^\d{17,20}$/.test(x) && x !== dueno).slice(0, 10);
+            await db.run(`DELETE FROM link_amigos WHERE dueno_id = ?`, [dueno]);
+            for (const id of ids) await db.run(`INSERT OR REPLACE INTO link_amigos (amigo_id, dueno_id, ts) VALUES (?, ?, ?)`, [id, dueno, Date.now()]);
+            await cargarAmigos();
+            res.json({ ok: true, friends: ids.length });
+        } catch (e) {
+            res.status(500).json({ error: 'error' });
+        }
+    });
+
     app.post('/link/reroll-accounts', express.text({ type: 'text/plain', limit: '2mb' }), async (req, res) => {
         try {
             await asegurarTablas();
@@ -521,6 +547,19 @@ async function pasarSobresAlHostActivo() {
 }
 
 // Cuentas prestadas al reroll: [{ discord_id, cuentas: [{ f, p, l }], ts }].
+// amigo -> dueño, en memoria (se lee en cada interaccion del bot, sin ir a la base).
+const amigos = new Map();
+async function cargarAmigos() {
+    try {
+        await asegurarTablas();
+        const filas = await db.all(`SELECT amigo_id, dueno_id FROM link_amigos`) || [];
+        amigos.clear();
+        for (const f of filas) amigos.set(String(f.amigo_id), String(f.dueno_id));
+    } catch (e) { /* sin tablas todavia */ }
+}
+// Dueño cuyas cuentas usa este usuario de Discord (null si no es amigo de nadie).
+const duenoDe = (discordId) => amigos.get(String(discordId)) || null;
+
 async function cuentasReroll() {
     await asegurarTablas();
     const filas = await db.all(`SELECT discord_id, cuentas, ts FROM link_reroll ORDER BY discord_id`) || [];
@@ -863,5 +902,5 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
+module.exports = { duenoDe, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
     usarParteReroll, escribirProxiesMotor, xmlRerollPorHostActivo, pasarSobresAlHostActivo };
