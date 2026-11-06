@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.7"
+global VERSION := "ahk-1.9.8"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -461,6 +461,9 @@ EnviarCuentasReroll() {
     if (Token = "")
         return false
     datos := {}, bloqueadas := {}
+    ; Totals for the hosts panel (Ale 2026-11-06): accounts with 96+ packs, how many are God Pack
+    ; eligible and how many locked. Only these 3 numbers leave the PC, never the accounts.
+    n96 := 0, nOk := 0, nBloq := 0
     if (CarpetaJson != "")
         Loop, Files, %CarpetaJson%\*.json
         {
@@ -470,12 +473,22 @@ EnviarCuentasReroll() {
             if !RegExMatch(t, """fileName""\s*:\s*""((?:[^""\\]|\\.)*)""", mf)
                 continue
             f := JsonUnesc(mf1)
+            p := RegExMatch(t, """packCount""\s*:\s*(\d+)", mp) ? mp1 : 0
+            if (p < 96 && !CuentasReroll.HasKey(f))
+                continue
+            ; e = days still missing to be God Pack eligible (0 = eligible); locked accounts are not shared.
+            e := DiasFaltanGP(t)
+            if (p >= 96) {
+                n96++
+                if (e)
+                    nBloq++
+                else
+                    nOk++
+            }
             if !CuentasReroll.HasKey(f)
                 continue
-            p := RegExMatch(t, """packCount""\s*:\s*(\d+)", mp) ? mp1 : 0
             l := RegExMatch(t, """lastPackPulled""\s*:\s*""(\d+)""", ml) ? ml1 : ""
-            ; e = days still missing to be God Pack eligible (0 = eligible); only this number leaves the PC.
-            if (DiasFaltanGP(t))   ; not God Pack eligible: locked, not shared (Ale 2026-11-06)
+            if (e)   ; not God Pack eligible: locked, not shared (Ale 2026-11-06)
                 bloqueadas[f] := true
             else
                 datos[f] := "{""f"":""" . JsonEsc(f) . """,""p"":" . p . ",""l"":""" . l . """,""e"":0}"
@@ -484,7 +497,8 @@ EnviarCuentasReroll() {
     for f in CuentasReroll
         if !bloqueadas.HasKey(f)
             items .=(items = "" ? "" : ",") . (datos.HasKey(f) ? datos[f] : """" . JsonEsc(f) . """")
-    body := "{""accounts"":[" . items . "]}"
+    body := "{""accounts"":[" . items . "]"
+        . (CarpetaJson != "" ? ",""stats"":{""n96"":" . n96 . ",""ok"":" . nOk . ",""lock"":" . nBloq . "}" : "") . "}"
     try {
         r := Http("POST", ServerUrl . "/link/reroll-accounts", body, "text/plain; charset=utf-8", Token, 60)
     } catch e {
@@ -730,8 +744,7 @@ Arrancar() {
     EnLinea := true
     SubirResumen(true)
     SubirProxies(true)
-    if (CuentasReroll.Count())
-        EnviarCuentasReroll()
+    EnviarCuentasReroll()   ; always: it also sends the eligibility totals
     if (Amigos != "")
         EnviarAmigos()
     SetTimer, Ping, 60000
@@ -754,8 +767,7 @@ NoVinculado() {
 ResumenPeriodico:
     SubirResumen(false)
     SubirProxies(false)
-    if (CuentasReroll.Count())
-        EnviarCuentasReroll()
+    EnviarCuentasReroll()   ; always: it also sends the eligibility totals
     if (Amigos != "")
         EnviarAmigos()
 return
@@ -924,8 +936,7 @@ Ping:
         Espejos := nuevos
         SubirResumen(true)
         SubirProxies(true)
-        if (CuentasReroll.Count())
-            EnviarCuentasReroll()
+        EnviarCuentasReroll()   ; always: it also sends the eligibility totals
         if (Amigos != "")
             EnviarAmigos()
     }

@@ -35,6 +35,9 @@ async function asegurarTablas() {
     // saliendo solo del Monitor Link del dueño, al momento).
     await db.run(`CREATE TABLE IF NOT EXISTS link_amigos (
         amigo_id TEXT PRIMARY KEY, dueno_id TEXT, ts INTEGER)`);
+    // Totales de elegibilidad GP de cada miembro (Monitor Link 1.9.8+): solo numeros, para el panel de hosts.
+    await db.run(`CREATE TABLE IF NOT EXISTS link_gp (
+        discord_id TEXT PRIMARY KEY, n96 INTEGER, ok INTEGER, bloq INTEGER, ts INTEGER)`);
     await db.run(`CREATE TABLE IF NOT EXISTS link_reroll (
         discord_id TEXT PRIMARY KEY, cuentas TEXT, n INTEGER, ts INTEGER)`);
     // Cartas que salieron en el reroll y todavia no llegaron al JSON del miembro (PC apagada, etc.).
@@ -493,6 +496,13 @@ function registrar(app, dependencias) {
                     // e = dias que le faltan para ser elegible a God Pack (0 = elegible; lo calcula Monitor Link 1.9.5+).
                     e: Number.isInteger(c?.e) && c.e >= 0 && c.e <= 30 ? c.e : null };
             }).filter(Boolean).slice(0, 20000);
+            const st = datos.stats;
+            const entero = (x) => Number.isInteger(x) && x >= 0 && x < 1e6;
+            if (st && entero(st.n96) && entero(st.ok) && entero(st.lock)) {
+                await db.run(`INSERT INTO link_gp (discord_id, n96, ok, bloq, ts) VALUES (?, ?, ?, ?, ?)
+                     ON CONFLICT(discord_id) DO UPDATE SET n96 = excluded.n96, ok = excluded.ok, bloq = excluded.bloq, ts = excluded.ts`,
+                    [agente.discord_id, st.n96, st.ok, st.lock, Date.now()]);
+            }
             if (cuentas.length) {
                 await db.run(`INSERT INTO link_reroll (discord_id, cuentas, n, ts) VALUES (?, ?, ?, ?)
                      ON CONFLICT(discord_id) DO UPDATE SET cuentas = excluded.cuentas, n = excluded.n, ts = excluded.ts`,
@@ -569,6 +579,22 @@ async function cargarAmigos() {
 }
 // Dueño cuyas cuentas usa este usuario de Discord (null si no es amigo de nadie).
 const duenoDe = (discordId) => amigos.get(String(discordId)) || null;
+
+// Status de cuentas de toda la comunidad para el panel de hosts.
+async function estadoCuentasComunidad() {
+    await asegurarTablas();
+    const resumen = await db.all(`SELECT discord_id, cuentas FROM link_resumen`) || [];
+    const gp = await db.all(`SELECT n96, ok, bloq FROM link_gp`) || [];
+    const prestadas = await db.all(`SELECT n FROM link_reroll`) || [];
+    const vinculados = await db.all(`SELECT ultimo FROM link_agentes`) || [];
+    const suma = (filas, k) => filas.reduce((a, f) => a + (Number(f[k]) || 0), 0);
+    return {
+        miembros: vinculados.length, enLinea: vinculados.filter(v => Date.now() - (v.ultimo || 0) < 3 * 60 * 1000).length,
+        cuentas: suma(resumen, 'cuentas'), conDatos: resumen.length,
+        n96: suma(gp, 'n96'), elegibles: suma(gp, 'ok'), bloqueadas: suma(gp, 'bloq'), conGp: gp.length,
+        prestadas: suma(prestadas, 'n')
+    };
+}
 
 async function cuentasReroll() {
     await asegurarTablas();
@@ -912,5 +938,5 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { duenoDe, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
+module.exports = { estadoCuentasComunidad, duenoDe, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
     usarParteReroll, escribirProxiesMotor, xmlRerollPorHostActivo, pasarSobresAlHostActivo };

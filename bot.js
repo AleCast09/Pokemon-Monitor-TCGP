@@ -16734,7 +16734,7 @@ async function seccionPrestadas(hosts) {
     // Un recuadro por host (pedido de Ale: "cada host con las cuentas que esta abriendo, por separado"):
     // cada miembro con sus cuentas que le tocan a ESE host, listas/total.
     const punto = (id) => enLinea.has(id) ? (enLinea.get(id) ? '🟢' : '🔴') : '⚪';
-    return farm.slice(0, 9).map(h => {
+    return farm.slice(0, 8).map(h => {   // 8: Discord admite 10 recuadros (hosts + status de cuentas + farms)
         const filas = Object.entries(h.prestadas).filter(([, [, mias]]) => mias > 0)
             .sort((a, b) => b[1][1] - a[1][1])
             .map(([id, [, mias, listas, noElegibles]]) => `${punto(id)} <@${id}> — **${listas}**/${mias}`
@@ -16749,9 +16749,32 @@ async function seccionPrestadas(hosts) {
     });
 }
 
+// Status de las cuentas de toda la comunidad (pedido de Ale 2026-11-06): total de los Monitor Link
+// vinculados, cuantas tienen 96+ sobres, cuantas son elegibles a God Pack y cuantas estan bloqueadas.
+async function seccionCuentasComunidad() {
+    const e = await monitorLink.estadoCuentasComunidad();
+    if (!e.miembros) return null;
+    const n = (x) => Number(x || 0).toLocaleString('en-US');
+    const pct = e.n96 ? ` (${Math.round(e.elegibles * 100 / e.n96)}%)` : '';
+    return new EmbedBuilder().setTitle('📊 Community accounts').setColor(0xFEE75C)
+        .setDescription([
+            `👥 Linked members: **${n(e.miembros)}** · 🟢 Monitor Link on now: **${n(e.enLinea)}**`,
+            `📦 Accounts in total: **${n(e.cuentas)}**`,
+            ``,
+            `🎴 With 96+ packs: **${n(e.n96)}**`,
+            `✅ God Pack eligible: **${n(e.elegibles)}**${pct}`,
+            `🔒 Not eligible yet (locked): **${n(e.bloqueadas)}**`,
+            `🎲 Shared for the GP farm: **${n(e.prestadas)}**`,
+            ``,
+            `-# GP totals from ${n(e.conGp)} of ${n(e.miembros)} members (Monitor Link 1.9.8+, sent every 10 min).`
+        ].join('\n'))
+        .setFooter({ text: 'Not eligible = a 30+ day pause; it needs packs on 30 different days again' });
+}
+
 // Panel de hosts en el canal 🔒-hosts (lo arma y lo mantiene el host que tiene el turno).
 async function actualizarPanelHosts(hosts) {
     const recuadrosPrestadas = await seccionPrestadas(hosts).catch(() => null) || [];
+    const recuadroCuentas = await seccionCuentasComunidad().catch(() => null);
     for (const guild of client.guilds.cache.values()) {
         if (!comunidad.esComunidad(guild.id)) continue;
         const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
@@ -16774,7 +16797,7 @@ async function actualizarPanelHosts(hosts) {
         const embed = new EmbedBuilder().setTitle('🖥️ Community hosts').setColor(0x5865F2)
             .setDescription((lineas.join('\n\n') || 'No hosts yet.').slice(0, 4000))
             .setFooter({ text: '👑 has the turn · ⏸️ standby · 🟢 PC on · 🔴 PC off · updates every 2 min' }).setTimestamp();
-        const embeds = [embed, ...recuadrosPrestadas];
+        const embeds = [embed, ...(recuadroCuentas ? [recuadroCuentas] : []), ...recuadrosPrestadas];
         const guardado = await hostComunidad.panelGuardado();
         if (guardado?.canal === canal.id && guardado.bot === client.user.id) {
             const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
