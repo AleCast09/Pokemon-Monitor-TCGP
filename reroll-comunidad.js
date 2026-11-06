@@ -163,6 +163,9 @@ function panelOcupado(motor) {
 //   God Pack        -> solo las ELEGIBLES confirmadas (e === 0).
 // Sin el dato (Monitor Link viejo) no se abren en ningun modo.
 const soloSobres = (s) => String(s?.run_mode || 'godpack') === 'packs-only';
+// Run Mode del panel de este host (motor puede ser null: entonces "godpack").
+const modoPanel = (motor) => (motor && ajustesPanel(motor).run_mode) || 'godpack';
+let modoAntes = null;
 const cuentaDelModo = (c, s) => soloSobres(s) ? c.e > 0 : c.e === 0;
 
 // Cuadro "ACCOUNTS LEFT · OPENED" del God Pack UI (Ale 2026-11-06): las prestadas de ESTE host que quedan
@@ -171,7 +174,7 @@ let inicioOn = Date.now();
 async function escribirEstadoPanel() {
     const motor = deps?.fastTransfer.rutaMotor();
     if (!motor || !panelEncendido(motor)) return;
-    const parte = await deps.parte().catch(() => null);
+    const parte = await deps.parte(modoPanel(motor)).catch(() => null);
     if (!parte) return;
     const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
     const s = ajustesPanel(motor), estado = leerEstado(motor), abiertas = leerAbiertas(motor), ahora = Date.now();
@@ -194,9 +197,18 @@ async function sincronizarPanel() {
     const motor = deps?.fastTransfer.rutaMotor();
     if (!motor) return;
     const on = panelEncendido(motor);
+    const modo = modoPanel(motor);
+    // Cambio de Run Mode con el farm prendido: se vuelve a anotar para repartir con los hosts de ese modo.
+    if (on && on === panelAntes && modo !== modoAntes) {
+        modoAntes = modo;
+        await deps.marcar?.(true, modo).catch(() => {});
+        log(`Run Mode changed to ${modo} - sharing accounts with the hosts in that mode`);
+        return;
+    }
     if (on === panelAntes) return;
     panelAntes = on;
-    await deps.marcar?.(on).catch(() => {});
+    modoAntes = modo;
+    await deps.marcar?.(on, modo).catch(() => {});
     log(on ? 'Community farm ON (God Pack UI Start)' : 'Community farm OFF (God Pack UI stopped or closed)');
     if (on) {
         inicioOn = Date.now();   // el cuadro del panel cuenta las abiertas desde este Start
@@ -229,7 +241,7 @@ async function revisarPpm() {
         const motor = deps?.fastTransfer.rutaMotor();
         const s = motor ? ajustesPanel(motor) : {};
         espera = num(s.ppm_interval, 5);
-        const parte = await deps.parte().catch(() => null);
+        const parte = await deps.parte(modoPanel(motor)).catch(() => null);
         if (!parte) {
             if (!ppm?.pausa || Date.now() - ppm.pausa.at >= PPM_PAUSA_MS) ppm = null;
             return;
@@ -375,7 +387,7 @@ function infoFarm() {
     if (!motor || !panelEncendido(motor)) return null;
     let propias = 0;
     try { propias = Number(JSON.parse(fs.readFileSync(path.join(motor, 'reports', 'community_farm.json'), 'utf8')).own) || 0; } catch (e) { /* sin dato */ }
-    return { nombre: String(ajustesPanel(motor).host_name || '').trim() || null, propias };
+    return { nombre: String(ajustesPanel(motor).host_name || '').trim() || null, propias, modo: modoPanel(motor) };
 }
 
 // Nombre del sobre para el mensaje de PPM, igual que el panel ("Dual Fusion: Pikachu").
@@ -461,7 +473,7 @@ let esperarPropias = false;   // las propias del host siguen abriendose: se rein
 async function ciclo() {
     if (corriendo || !deps) return;
     const motor = deps.fastTransfer.rutaMotor();
-    const parte = await deps.parte().catch(() => null);
+    const parte = await deps.parte(modoPanel(motor)).catch(() => null);
     if (!motor) return;
     corriendo = true;
     let trabajo = false;   // si abrio alguna tanda: la siguiente arranca enseguida
@@ -560,7 +572,7 @@ async function ciclo() {
 async function resumenPrestadas() {
     if (!deps) return null;
     const motor = deps.fastTransfer.rutaMotor();
-    const parte = await deps.parte().catch(() => null);
+    const parte = await deps.parte(modoPanel(motor)).catch(() => null);
     if (!motor || !parte) return null;
     const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
     const estado = leerEstado(motor);
@@ -575,7 +587,9 @@ async function resumenPrestadas() {
         const noElegibles = mias.filter(c => c.e > 0).length;
         // 5to: cuantas abrio ESTE host (al menos 1 sobre) en las ultimas 24 h.
         const abiertasHost = m.cuentas.filter(c => ahora - (abiertas[`${m.discord_id}|${c.f}`] || 0) < 24 * 3600 * 1000).length;
-        resumen[m.discord_id] = [m.cuentas.length, mias.length, listas, noElegibles, abiertasHost];
+        // 6to: de las de este host, cuantas son elegibles (GP farm). El panel muestra 4to o 6to segun el modo.
+        const elegibles = mias.filter(c => c.e === 0).length;
+        resumen[m.discord_id] = [m.cuentas.length, mias.length, listas, noElegibles, abiertasHost, elegibles];
     }
     return resumen;
 }

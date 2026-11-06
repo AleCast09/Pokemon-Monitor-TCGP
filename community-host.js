@@ -165,24 +165,32 @@ const olvidarPanel = (msgId) => configurado() ? redis('HDEL', CLAVE_PANELES, Str
 // Hash zenith:reroll, campo = nombre del host, valor { online, ts }. Cuenta solo si la PC esta prendida.
 const CLAVE_REROLL = 'zenith:reroll';
 
-async function marcarReroll(online) {
-    if (online) await redis('HSET', CLAVE_REROLL, YO, JSON.stringify({ online: true, ts: Date.now() }));
+// modo = "Run Mode" del panel GP ("godpack" | "packs-only"): las cuentas se reparten solo entre los hosts
+// del MISMO modo (Ale 2026-11-06: uno en Only Pack y otro en GP farm no deben partirse las mismas cuentas).
+async function marcarReroll(online, modo = 'godpack') {
+    if (online) await redis('HSET', CLAVE_REROLL, YO, JSON.stringify({ online: true, ts: Date.now(), modo: modo || 'godpack' }));
     else await redis('HDEL', CLAVE_REROLL, YO);
 }
 
 // Nombres de los hosts Online para reroll y con la PC prendida, en orden fijo (igual en todos los hosts).
-async function hostsReroll() {
+// modo (opcional): solo los hosts en ese modo (un host viejo, sin modo, cuenta como "godpack").
+async function hostsReroll(modo = null) {
     if (!configurado()) return [];
     const plano = await redis('HGETALL', CLAVE_REROLL) || [];
     const prendidos = new Set((await hostsConocidos()).filter(h => h.enLinea).map(h => h.nombre));
     const lista = [];
-    for (let i = 0; i + 1 < plano.length; i += 2) if (prendidos.has(plano[i])) lista.push(plano[i]);
+    for (let i = 0; i + 1 < plano.length; i += 2) {
+        if (!prendidos.has(plano[i])) continue;
+        let suModo = 'godpack';
+        try { suModo = JSON.parse(plano[i + 1]).modo || 'godpack'; } catch (e) { /* viejo */ }
+        if (!modo || suModo === modo) lista.push(plano[i]);
+    }
     return lista.sort();
 }
 
 // La parte de ESTE host: { i, n, hosts } (i-esimo de n hosts Online), o null si no esta Online.
-async function parteReroll() {
-    const hosts = await hostsReroll();
+async function parteReroll(modo = null) {
+    const hosts = await hostsReroll(modo);
     const i = hosts.indexOf(YO);
     return i < 0 ? null : { i, n: hosts.length, hosts };
 }

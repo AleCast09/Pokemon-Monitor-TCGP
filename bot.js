@@ -7758,9 +7758,9 @@ if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
 // las cuentas que prestan los miembros (reroll-comunidad.js).
 if (comunidad.hayComunidad()) {
     monitorLink.usarParteReroll(() => hostComunidad.parteReroll());
-    require('./reroll-comunidad.js').iniciar({ ml: monitorLink, fastTransfer, activo: () => hostComunidad.esActivo(), parte: () => hostComunidad.parteReroll(),
+    require('./reroll-comunidad.js').iniciar({ ml: monitorLink, fastTransfer, activo: () => hostComunidad.esActivo(), parte: (modo) => hostComunidad.parteReroll(modo),
         // El GP farm sigue al panel GP (Start/Stop con "Community farm"); al cambiar se refresca el mensaje de control.
-        marcar: async (online) => { await hostComunidad.marcarReroll(online); hostComunidad.refrescarControl(); },
+        marcar: async (online, modo) => { await hostComunidad.marcarReroll(online, modo); hostComunidad.refrescarControl(); },
         // Anti doble reroll: aviso en el canal de hosts (lo ve staff), una vez por main aunque lo vean varios hosts.
         hostsFarm: () => hostComunidad.hostsReroll(), primeraVez: hostComunidad.primeraVez,
         avisar: async (texto) => {
@@ -16764,17 +16764,24 @@ async function seccionPrestadas(hosts) {
     const suma = (h, i) => Object.values(h.prestadas).reduce((a, v) => a + (Number(v[i]) || 0), 0);
     const totalPrestadas = Object.values(miembros).reduce((a, m) => a + m.total, 0);
     const totalAbiertas = farm.reduce((a, h) => a + suma(h, 4), 0);
+    // (2026-11-06, Ale) Segun el Run Mode del host: Only Pack = farm de 96P (cuentas NO elegibles de cada
+    // miembro); God Pack = GP farm (cuentas elegibles). Por miembro: cuantas de ese tipo le tocan a este
+    // host y cuantas ya abrio. Los hosts del mismo modo se reparten las cuentas (community-host.js).
     const recuadros = farm.slice(0, 8).map(h => {   // 8: Discord admite 10 recuadros (hosts + status de cuentas + farms)
-        const filas = Object.entries(h.prestadas).filter(([, [, mias]]) => mias > 0)
-            .sort((a, b) => b[1][1] - a[1][1])
-            .map(([id, [, mias, listas, noElegibles, abiertas]]) => `${punto(id)} <@${id}> — 🎴 **${listas}** available · ✅ **${abiertas || 0}** opened · of ${mias}`
-                + (noElegibles ? ` · ⚠️ ${noElegibles} not GP-eligible` : ''));
+        const sobres = h.farm?.modo === 'packs-only';
+        const delModo = (v) => sobres ? (Number(v[3]) || 0) : (v[5] ?? Math.max(0, (Number(v[1]) || 0) - (Number(v[3]) || 0)));
+        const filas = Object.entries(h.prestadas).filter(([, v]) => delModo(v) > 0)
+            .sort((a, b) => delModo(b[1]) - delModo(a[1]))
+            .map(([id, v]) => `${punto(id)} <@${id}> — ${sobres ? '🔒' : '⭐'} **${delModo(v).toLocaleString('en-US')}** ${sobres ? 'not eligible' : 'GP-eligible'}`
+                + ` · ✅ **${(Number(v[4]) || 0).toLocaleString('en-US')}** opened`);
+        const totalModo = Object.values(h.prestadas).reduce((a, v) => a + delModo(v), 0);
         const propias = h.farm?.propias ? `Own accounts: **${h.farm.propias}**\n` : '';
-        return new EmbedBuilder().setColor(0x57F287)
-            .setTitle(`🎲 ${h.farm?.nombre || h.nombre} — GP farm host`)
-            .setDescription((`${propias}🎴 Available now: **${suma(h, 2).toLocaleString('en-US')}** · ✅ Opened (24 h): **${suma(h, 4).toLocaleString('en-US')}**`
-                + ` · Shared accounts on this host: **${suma(h, 1).toLocaleString('en-US')}**\n\n${filas.join('\n') || 'No lent accounts.'}`).slice(0, 4000))
-            .setFooter({ text: 'available = can open packs now · opened = opened by this host in the last 24 h · 🟢 Monitor Link on · 🔴 off' });
+        const modoTexto = sobres ? '📦 Mode: **Only packs** — 96P farm (not-eligible accounts)' : '✨ Mode: **God Pack farm** (eligible accounts)';
+        return new EmbedBuilder().setColor(sobres ? 0xF0A93A : 0x57F287)
+            .setTitle(`🎲 ${h.farm?.nombre || h.nombre} — ${sobres ? '96P pack farm' : 'GP farm'} host`)
+            .setDescription((`${modoTexto}\n${propias}🎴 Available now: **${suma(h, 2).toLocaleString('en-US')}** · ✅ Opened (24 h): **${suma(h, 4).toLocaleString('en-US')}**`
+                + ` · Accounts for this mode on this host: **${totalModo.toLocaleString('en-US')}**\n\n${filas.join('\n') || 'No lent accounts for this mode.'}`).slice(0, 4000))
+            .setFooter({ text: 'opened = opened by this host in the last 24 h · hosts in the same mode split the accounts · 🟢 Monitor Link on · 🔴 off' });
     });
     const ultimo = recuadros[recuadros.length - 1];
     if (ultimo) {
