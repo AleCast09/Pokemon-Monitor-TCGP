@@ -1113,7 +1113,7 @@ def fetch_live_worker_codes(fallback_codes: list[str], ttl_sec: float = 15.0) ->
 # solicitudes y despues borraba las 15 amistades una por una, y el PPM caia a un tercio. Ahora cada
 # cuenta manda a los codigos propios del panel + hasta _max_collectors de la lista online, rotando
 # entre cuentas para que todos los online sigan recibiendo God Packs.
-_max_collectors = 5
+_max_collectors = 0   # 0 = all online collectors (Ale: everyone online must be able to pick the GP)
 _collector_turn = itertools.count()
 
 
@@ -3371,7 +3371,7 @@ def run_injection(args) -> int:
     # inject.py processes combined). File-locked via .pack_budget.json at
     # the project root. 0 = disabled (falls back to fr_per_min behavior).
     global _pack_budget_max_per_min, _max_collectors
-    _max_collectors = int(getattr(args, "max_collectors", 5) or 0)
+    _max_collectors = int(getattr(args, "max_collectors", 0) or 0)
     ppm = float(getattr(args, "packs_per_min", 0) or 0)
     if ppm > 0:
         _pack_budget_max_per_min = ppm
@@ -3839,7 +3839,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "Total sends scale with collector count: 58/min × N. "
                         "Default 58 (matches observed cap). 0 disables throttle. "
                         "LEGACY: prefer --packs-per-min for a global cap.")
-    p.add_argument("--max-collectors", type=int, default=5,
+    p.add_argument("--max-collectors", type=int, default=0,   # Ale 2026-11-06: every online Main must get the GP
                    help="Max online (Worker) collectors per account, rotating between accounts. "
                         "The panel's own collector codes are always added on top. 0 = all.")
     p.add_argument("--packs-per-min", type=float, default=0.0,
