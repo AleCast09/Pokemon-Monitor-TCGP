@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.5"
+global VERSION := "ahk-1.9.6"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -293,9 +293,10 @@ CompartirCuentas:
     Gui, 2:Font, s9 Bold cC62828, Segoe UI
     Gui, 2:Add, Text, w440 y+6, While an account is shared, do NOT open it on your own instances: the same account in two places at once gets errors.
     Gui, 2:Font, s9 Norm cBlack, Segoe UI
-    Gui, 2:Add, ListView, w440 r16 y+8 Checked Grid -Multi vLVCuentas, Account|Packs|GP
+    Gui, 2:Add, Text, w440 y+6, Accounts that are not God Pack eligible are locked (GP column = days of packs still missing): they can't be shared until they are eligible.
+    Gui, 2:Add, ListView, w440 r16 y+8 Checked Grid -Multi AltSubmit gLVCuentasClic vLVCuentas, Account|Packs|GP
     Gui, 2:Default
-    total := 0, noElegibles := 0
+    total := 0, noElegibles := 0, compartidas := 0
     Loop, Files, %CarpetaJson%\*.json
     {
         if (Mod(A_Index, 20) = 0)
@@ -310,12 +311,14 @@ CompartirCuentas:
         faltan := DiasFaltanGP(t)
         if (faltan)
             noElegibles++
-        LV_Add(CuentasReroll.HasKey(f) ? "Check" : "", f, mp1 + 0, faltan ? faltan . " days" : "OK")
+        else if (CuentasReroll.HasKey(f))
+            compartidas++
+        LV_Add(CuentasReroll.HasKey(f) && !faltan ? "Check" : "", f, mp1 + 0, faltan ? "Locked " . faltan . "d" : "OK")
         total++
     }
     LV_ModifyCol(1, 270), LV_ModifyCol(2, "70 Integer SortDesc"), LV_ModifyCol(3, 80)
-    Gui, 2:Add, Text, w440 y+6, % total . " accounts with 96+ packs - " . CuentasReroll.Count() . " shared now."
-    Gui, 2:Add, Text, w440 y+2, % "God Pack eligible: " . (total - noElegibles) . " - not eligible yet: " . noElegibles . " (GP column: days of packs still missing)."
+    Gui, 2:Add, Text, w440 y+6, % total . " accounts with 96+ packs - " . compartidas . " shared now."
+    Gui, 2:Add, Text, w440 y+2, % "God Pack eligible: " . (total - noElegibles) . " - locked (not eligible yet): " . noElegibles . "."
     Gui, 2:Add, Button, xm y+8 w100 h28 gMarcarTodas, Tick all
     Gui, 2:Add, Button, x+6 yp w100 h28 gDesmarcarTodas, Untick all
     Gui, 2:Add, Button, x+40 yp w188 h28 Default gGuardarCompartidas, Save and share
@@ -326,8 +329,33 @@ return
 MarcarTodas:
 DesmarcarTodas:
     Gui, 2:Default
-    LV_Modify(0, A_ThisLabel = "MarcarTodas" ? "Check" : "-Check")
+    LV_Modify(0, "-Check")
+    if (A_ThisLabel = "MarcarTodas")
+        Loop % LV_GetCount()
+        {
+            LV_GetText(gp, A_Index, 3)
+            if (gp = "OK")
+                LV_Modify(A_Index, "Check")
+        }
     Gui, 1:Default
+return
+
+; A locked account (not God Pack eligible) can't be ticked.
+LVCuentasClic:
+    if (A_GuiEvent != "I" || !InStr(ErrorLevel, "C", true))
+        return
+    Gui, 2:Default
+    LV_GetText(gp, A_EventInfo, 3)
+    if (gp != "OK") {
+        LV_Modify(A_EventInfo, "-Check")
+        ToolTip, Locked: this account is not God Pack eligible yet.
+        SetTimer, QuitarTipCuentas, -2500
+    }
+    Gui, 1:Default
+return
+
+QuitarTipCuentas:
+    ToolTip
 return
 
 2GuiClose:
@@ -340,7 +368,9 @@ GuardarCompartidas:
     nuevas := {}, fila := 0
     while (fila := LV_GetNext(fila, "Checked")) {
         LV_GetText(f, fila, 1)
-        nuevas[f] := true
+        LV_GetText(gp, fila, 3)
+        if (gp = "OK")
+            nuevas[f] := true
     }
     Gui, 1:Default
     if (nuevas.Count()) {
@@ -367,7 +397,7 @@ return
 EnviarCuentasReroll() {
     if (Token = "")
         return false
-    datos := {}
+    datos := {}, bloqueadas := {}
     if (CarpetaJson != "")
         Loop, Files, %CarpetaJson%\*.json
         {
@@ -382,11 +412,15 @@ EnviarCuentasReroll() {
             p := RegExMatch(t, """packCount""\s*:\s*(\d+)", mp) ? mp1 : 0
             l := RegExMatch(t, """lastPackPulled""\s*:\s*""(\d+)""", ml) ? ml1 : ""
             ; e = days still missing to be God Pack eligible (0 = eligible); only this number leaves the PC.
-            datos[f] := "{""f"":""" . JsonEsc(f) . """,""p"":" . p . ",""l"":""" . l . """,""e"":" . DiasFaltanGP(t) . "}"
+            if (DiasFaltanGP(t))   ; not God Pack eligible: locked, not shared (Ale 2026-11-06)
+                bloqueadas[f] := true
+            else
+                datos[f] := "{""f"":""" . JsonEsc(f) . """,""p"":" . p . ",""l"":""" . l . """,""e"":0}"
         }
     items := ""
     for f in CuentasReroll
-        items .= (items = "" ? "" : ",") . (datos.HasKey(f) ? datos[f] : """" . JsonEsc(f) . """")
+        if !bloqueadas.HasKey(f)
+            items .=(items = "" ? "" : ",") . (datos.HasKey(f) ? datos[f] : """" . JsonEsc(f) . """")
     body := "{""accounts"":[" . items . "]}"
     try {
         r := Http("POST", ServerUrl . "/link/reroll-accounts", body, "text/plain; charset=utf-8", Token, 60)
