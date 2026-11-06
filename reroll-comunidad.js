@@ -53,6 +53,8 @@ function iniciar(d) {
     setInterval(ciclo, num(process.env.REROLL_CADA_MIN, 10) * 60 * 1000);
     setTimeout(revisarPpm, 60 * 1000);
     setInterval(revisarLlenos, 60 * 1000);
+    setInterval(() => copiarWebhookGp().catch(() => {}), 60 * 1000);
+    copiarWebhookGp().catch(() => {});
     setInterval(() => escribirEstadoPanel().catch(() => {}), 30 * 1000);
 }
 
@@ -506,6 +508,21 @@ async function revisarBaneadas(motor, desde, duenoId, nombres) {
         await deps.avisar?.(`⛔ **Likely banned** — <@${duenoId}>'s account \`${nombre}\`: the game refused it on ${ev.proxies || 2}+ different proxies. `
             + `The GP farm won't open it again, and it shows as **Banned?** in their Monitor Link.`).catch(() => {});
     }
+}
+
+// Webhook de God Packs de la comunidad (Upstash zenith:gp_webhook, lo carga el staff en 🔒-hosts) -> archivo del
+// motor reports/community_gp_webhook.txt: discord_notifier.py lo usa si el panel no tiene webhook propio.
+async function copiarWebhookGp() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    if (!motor || !deps.webhookGp) return;
+    const url = String(await deps.webhookGp() || '').trim();
+    const ruta = path.join(motor, 'reports', 'community_gp_webhook.txt');
+    let actual = '';
+    try { actual = fs.readFileSync(ruta, 'utf8').trim(); } catch (e) { /* no existe */ }
+    if (url === actual) return;
+    fs.mkdirSync(path.dirname(ruta), { recursive: true });
+    if (url) fs.writeFileSync(ruta, url); else { try { fs.unlinkSync(ruta); } catch (e) { /* nada */ } }
+    log(url ? 'community God Pack webhook updated' : 'community God Pack webhook removed');
 }
 
 let esperarPropias = false;   // las propias del host siguen abriendose: se reintenta en 1 min

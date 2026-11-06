@@ -243,6 +243,18 @@ async function baneadas() {
     return s;
 }
 
+// Webhook de God Packs de la comunidad (2026-11-06, Ale): lo carga el staff desde 🔒-hosts y cada host lo usa
+// cuando el "God Pack Hit Webhook URL" de su panel esta vacio. Vive solo en Upstash (nunca en el repo).
+async function guardarWebhookGp(url) {
+    if (!configurado()) return false;
+    await redis('SET', 'zenith:gp_webhook', String(url || ''));
+    return true;
+}
+async function webhookGp() {
+    if (!configurado()) return '';
+    try { return String(await redis('GET', 'zenith:gp_webhook') || ''); } catch (e) { return ''; }
+}
+
 async function primeraVez(clave, segundos) {
     if (!configurado()) return true;
     try { return (await redis('SET', clave, '1', 'NX', 'EX', String(segundos))) === 'OK'; } catch (e) { return false; }
@@ -252,4 +264,4 @@ const anotarMiembros = (registro) => configurado()
     ? redis('SET', 'zenith:miembros', JSON.stringify(registro)).catch(() => {}) : Promise.resolve();
 
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
-    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas };
+    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, guardarWebhookGp, webhookGp };

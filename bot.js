@@ -7763,7 +7763,7 @@ if (comunidad.hayComunidad()) {
         marcar: async (online, modo) => { await hostComunidad.marcarReroll(online, modo); hostComunidad.refrescarControl(); },
         // Anti doble reroll: aviso en el canal de hosts (lo ve staff), una vez por main aunque lo vean varios hosts.
         hostsFarm: () => hostComunidad.hostsReroll(), primeraVez: hostComunidad.primeraVez,
-        marcarBaneada: hostComunidad.marcarBaneada, baneadas: hostComunidad.baneadas,
+        marcarBaneada: hostComunidad.marcarBaneada, baneadas: hostComunidad.baneadas, webhookGp: hostComunidad.webhookGp,
         avisar: async (texto) => {
             for (const guild of client.guilds.cache.values()) {
                 if (!comunidad.esComunidad(guild.id)) continue;
@@ -11483,6 +11483,10 @@ client.on('interactionCreate', (interaction) => comunidad.contexto.run(
 ));
 async function manejarInteraccionPrincipal(interaction) {
     if (comunidad.soloComunidad() && !comunidad.esComunidad(interaction.guildId)) return;
+    // 🌟 GP webhook (staff, cualquier host): ventana privada para guardar el webhook de God Packs de la comunidad.
+    if (comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_gpwebhook' || interaction.customId === 'host_gpwebhook_modal')) {
+        return await manejarWebhookGp(interaction);
+    }
     if (interaction.isButton() && comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_tomar' || interaction.customId.startsWith('host_ceder::'))) {
         return await manejarBotonHost(interaction);
     }
@@ -16893,6 +16897,7 @@ async function actualizarControlHost(hosts, conTurno) {
         const botones = conTurno
             ? otros.map(h => new ButtonBuilder().setCustomId(`host_ceder::${h.nombre}`.slice(0, 100)).setLabel(`🔁 Hand over to ${h.nombre}`.slice(0, 80)).setStyle(ButtonStyle.Secondary))
             : [new ButtonBuilder().setCustomId('host_tomar').setLabel('👑 Take the turn').setStyle(ButtonStyle.Success)];
+        if (botones.length < 5) botones.push(new ButtonBuilder().setCustomId('host_gpwebhook').setLabel('🌟 GP webhook').setStyle(ButtonStyle.Secondary));
         const filas = botones.length ? [new ActionRowBuilder().addComponents(botones)] : [];
         // (2026-11-01) Sin botones de GP farm: se prende y se apaga desde el God Pack UI (Start/Stop
         // con "Community farm"), en la PC del host. Este mensaje solo muestra el estado.
@@ -16928,6 +16933,29 @@ async function avisoVincularPrimero(interaction) {
 
 // Botones de control de host. Se atienden ANTES del filtro de "solo el host activo contesta": el que
 // esta en espera tiene que poder tomar el turno.
+// Webhook de God Packs de la comunidad: el staff lo pega en una ventana privada (nunca queda en el chat) y se
+// guarda en Upstash; los motores lo usan cuando el panel de un host no tiene webhook propio.
+async function manejarWebhookGp(interaction) {
+    if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
+        return await interaction.reply({ content: '🔒 Only staff can set the God Pack webhook.', ephemeral: true }).catch(() => {});
+    }
+    if (interaction.isButton()) {
+        const modal = new ModalBuilder().setCustomId('host_gpwebhook_modal').setTitle('🌟 Community God Pack webhook')
+            .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
+                .setCustomId('url').setLabel('Webhook of the GP channel KyuremBot reads').setStyle(TextInputStyle.Short)
+                .setPlaceholder('https://discord.com/api/webhooks/...').setRequired(false).setMaxLength(200)));
+        return await interaction.showModal(modal).catch(() => {});
+    }
+    const url = String(interaction.fields.getTextInputValue('url') || '').trim();
+    if (url && !/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(url)) {
+        return await interaction.reply({ content: '❌ That is not a Discord webhook URL.', ephemeral: true }).catch(() => {});
+    }
+    await hostComunidad.guardarWebhookGp(url);
+    await interaction.reply({ ephemeral: true, content: url
+        ? '🌟 Saved. Every host uses it for God Pack alerts when the "God Pack Hit Webhook URL" of its God Pack UI is empty (it reaches each host within a minute).'
+        : '🗑️ Community God Pack webhook removed.' }).catch(() => {});
+}
+
 async function manejarBotonHost(interaction) {
     if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
         return await interaction.reply({ content: '🔒 Only staff can change the host.', ephemeral: true });

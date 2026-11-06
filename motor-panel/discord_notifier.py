@@ -21,9 +21,17 @@ def _config_discord() -> tuple[str, str]:
     """Ale 2026-10-30: webhook y mencion salen del panel (settings.json), no del codigo."""
     try:
         data = json.loads(SETTINGS_FILE.read_text("utf-8"))
-        return str(data.get("gp_webhook") or "").strip(), str(data.get("mention_id") or "").strip()
+        webhook, mencion = str(data.get("gp_webhook") or "").strip(), str(data.get("mention_id") or "").strip()
     except Exception:
-        return "", ""
+        webhook, mencion = "", ""
+    # 2026-11-06 (Ale): empty panel webhook -> the community one (the staff sets it in 🔒-hosts; the Monitor
+    # Pokemon bot writes it here), so every host's God Packs reach KyuremBot.
+    if not webhook:
+        try:
+            webhook = (PROJECT_ROOT / "reports" / "community_gp_webhook.txt").read_text("utf-8").strip()
+        except Exception:
+            webhook = ""
+    return webhook, mencion
 
 PACK_TAG_MAP = {
     "BN011_0010_00_000": "DeluxeB",
@@ -402,7 +410,9 @@ def notify_god_pack_async(
                     log_fn("[discord] GOD PACK NOT POSTED: 'God Pack Hit Webhook URL' is empty in the God Pack UI "
                            "(Collectors / Discord tab) - fill it and press Save Settings")
                 return
-            msg = (f"<@{mencion}>\n" if mencion else "") + f"{nickname} ({user_16_id})\n{header_tags}"
+            # Formato que lee KyuremBot (gpmod.py de wr98): 1ra linea = <@dueño>, "Nickname (16 digitos)",
+            # "[3/5][2P][Pack]" y "File name: x.xml" (sale en el pie de su post).
+            msg = (f"<@{mencion}>\n" if mencion else "") + f"{nickname} ({user_16_id})\n{header_tags}\nFile name: {xml_filename}"
             # Cuenta prestada por un miembro (reroll de la comunidad, Monitor Pokemon pone su id):
             # se lo menciona para que sepa que el GP salio en SU cuenta.
             dueno = os.environ.get("ZENITH_ACCOUNT_OWNER", "").strip()
