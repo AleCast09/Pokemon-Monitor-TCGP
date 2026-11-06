@@ -401,6 +401,19 @@ function nombreDeSobre(motor, packId) {
     } catch (e) { return packId; }
 }
 
+// Un host con su inject.py modificado a mano (no se reemplaza, ej. wr98) puede no conocer una opcion nueva: si se
+// la pasa, argparse cierra el motor al instante y el farm no abre nada (2026-11-06, wr98). Solo se pasan las que
+// su inject.py tiene. Se lee el archivo una vez por cambio (fecha de modificacion).
+let _injectLeido = { mtime: 0, texto: '' };
+function motorConoce(motor, opcion) {
+    try {
+        const ruta = path.join(motor, 'scripts', 'god_pack', 'inject.py');
+        const mtime = fs.statSync(ruta).mtimeMs;
+        if (mtime !== _injectLeido.mtime) _injectLeido = { mtime, texto: fs.readFileSync(ruta, 'utf8') };
+        return _injectLeido.texto.includes(`"${opcion}"`);
+    } catch (e) { return false; }
+}
+
 function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
     return new Promise(resolve => {
         const python = deps.fastTransfer.pythonMotor();
@@ -423,7 +436,7 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
             '--pack-power-min', s.pack_power_min || '1/5',
             '--hg-cost', '0',                      // nunca gastar relojes del miembro
             '--no-quarantine-locked',              // las XML son temporales: no hay nada que mover
-            '--verify-power', '--full-power-only', '--shuffle-proxies',
+            '--verify-power', ...(motorConoce(motor, '--full-power-only') ? ['--full-power-only'] : []), '--shuffle-proxies',
             '--stop-after-fails', String(s.stop_after_fails || 5),
             // Stop del panel GP: corta la tanda despues de la cuenta en curso (con su limpieza)
             '--stop-file', path.join(motor, 'reports', 'community_farm.stop')];
