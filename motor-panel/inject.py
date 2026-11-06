@@ -1118,13 +1118,14 @@ _collector_turn = itertools.count()
 
 
 FR_MAX_PER_MIN = 20.0            # friend requests per minute to any one collector (Main), ceiling
-COLLECTOR_PAUSE_SEC = 6 * 3600   # a Main that starts refusing requests gets none for 6 h
+COLLECTOR_PAUSE_SEC = 30 * 60    # a Main refusing requests again and again is skipped 30 min
+COLLECTOR_FAILS_TO_PAUSE = 3     # ...after this many refusals within COLLECTOR_PAUSE_SEC (full list / soft-ban)
 _paused_lock = threading.Lock()
 _paused_cache = {"ts": 0.0, "data": {}}
 
 
-PAUSE_COLLECTORS = False   # 2026-11-06 (Ale): OFF - it paused 10 of 16 Mains in 30 min on any transient
-                           # refusal ("server busy"); every online Main must get every God Pack.
+PAUSE_COLLECTORS = True    # 2026-11-06 (Ale): only after 3 refusals in 30 min (a single "server busy" no
+                           # longer pauses a healthy Main), and only for 30 min.
 
 
 def _paused_collectors() -> dict:
@@ -1136,8 +1137,9 @@ def _paused_collectors() -> dict:
         return _paused_cache["data"]
     data = {}
     try:
-        raw = json.loads((PROJECT_ROOT / "reports" / "collectors_paused.json").read_text("utf-8"))
-        data = {str(k): float(v) for k, v in (raw or {}).items() if float(v) > now}
+        raw = json.loads((PROJECT_ROOT / "reports" / "collectors_paused.json").read_text("utf-8")) or {}
+        raw = raw.get("paused", {}) if "paused" in raw else {}   # old format: ignored (it was too eager)
+        data = {str(k): float(v) for k, v in raw.items() if float(v) > now}
     except Exception:
         pass
     _paused_cache.update(ts=now, data=data)
@@ -1145,29 +1147,41 @@ def _paused_collectors() -> dict:
 
 
 def _pause_collectors(codes: list[str], tag: str = "") -> None:
-    """2026-11-06 (Ale): a Main that refuses our requests (friend soft-ban or full list) is paused 6 h,
-    so the farm stops hammering it while it recovers."""
+    """2026-11-06 (Ale): a Main that refuses our request while other Mains accept it (full friend list or
+    friend soft-ban) gets a strike; 3 strikes within 30 min = skipped for 30 min. Shared by every inject.py
+    on this PC (reports/collectors_paused.json: {"paused": {code: until}, "fails": {code: [ts, ...]}})."""
     codes = [str(c or "").replace("-", "").strip() for c in codes if c]
     if not codes or not PAUSE_COLLECTORS:
         return
     path = PROJECT_ROOT / "reports" / "collectors_paused.json"
-    until = time.time() + COLLECTOR_PAUSE_SEC
+    now = time.time()
+    nuevos = []
     with _paused_lock:
         try:
             data = json.loads(path.read_text("utf-8")) if path.exists() else {}
         except Exception:
             data = {}
+        if "paused" not in data:   # old format {code: until}
+            data = {"paused": {}, "fails": {}}
+        paused = {k: float(v) for k, v in data.get("paused", {}).items() if float(v) > now}
+        fails = {k: [t for t in v if now - float(t) < COLLECTOR_PAUSE_SEC] for k, v in data.get("fails", {}).items()}
         for c in codes:
-            data[c] = until
-        data = {k: v for k, v in data.items() if float(v) > time.time()}
+            fails.setdefault(c, []).append(now)
+            if len(fails[c]) >= COLLECTOR_FAILS_TO_PAUSE and c not in paused:
+                paused[c] = now + COLLECTOR_PAUSE_SEC
+                fails[c] = []
+                nuevos.append(c)
+        fails = {k: v for k, v in fails.items() if v}
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data), encoding="utf-8")
+            path.write_text(json.dumps({"paused": paused, "fails": fails}), encoding="utf-8")
         except Exception:
             pass
         _paused_cache["ts"] = 0.0
-    log(f"[fr] paused {len(codes)} collector(s) for {COLLECTOR_PAUSE_SEC // 3600} h (refusing requests): "
-        f"{', '.join(codes)}", tag=tag)
+    if nuevos:
+        log(f"[fr] {len(nuevos)} Main(s) refused requests {COLLECTOR_FAILS_TO_PAUSE} times in "
+            f"{COLLECTOR_PAUSE_SEC // 60} min (friend list full?) - skipped for {COLLECTOR_PAUSE_SEC // 60} min: "
+            f"{', '.join(nuevos)}", tag=tag)
 
 
 def _limit_collectors(live_codes: list[str], manual_codes: list[str]) -> list[str]:

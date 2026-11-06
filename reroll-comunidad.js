@@ -78,36 +78,20 @@ let posLlenos = null;
 async function revisarLlenos() {
     const motor = deps?.fastTransfer.rutaMotor();
     if (!motor) return;
-    const ruta = path.join(motor, 'reports', 'collectors_full.jsonl');
-    let tam = 0;
-    try { tam = fs.statSync(ruta).size; } catch (e) { return; }
-    if (posLlenos === null || tam < posLlenos) { posLlenos = tam; return; }   // al arrancar: solo lo nuevo
-    if (tam === posLlenos) return;
-    const fd = fs.openSync(ruta, 'r');
-    const buf = Buffer.alloc(tam - posLlenos);
-    fs.readSync(fd, buf, 0, buf.length, posLlenos);
-    fs.closeSync(fd);
-    posLlenos = tam;
-    const hosts = Math.max(1, (await deps.hostsFarm?.().catch(() => []))?.length || 1);
-    const nuestrasMax = hosts * NUESTRAS_POR_HOST;
-    const deAfuera = TOPE_AMIGOS - nuestrasMax;
-    if (deAfuera <= TOLERANCIA) return;
-    const vistos = new Set();
-    for (const linea of buf.toString('utf8').split('\n')) {
-        let ev;
-        try { ev = JSON.parse(linea); } catch (e) { continue; }
-        const codigo = String(ev.code || ev.pid || '');
-        if (!codigo || vistos.has(codigo)) continue;
-        vistos.add(codigo);
-        if (!await deps.primeraVez?.(`zenith:lleno:${codigo}`, 6 * 3600).catch(() => false)) continue;
+    // (2026-11-06, Ale) Mains con la lista de amigos llena (o bloqueo de amigos): el motor los saltea 30 min despues
+    // de 3 rechazos (reports/collectors_paused.json). Aca se avisa en 🔒-hosts, una vez cada 6 h por Main, para que
+    // el dueño borre amigos. (Reemplaza el aviso de "doble reroll", que daba falsos positivos.)
+    let pausados = {};
+    try { pausados = JSON.parse(fs.readFileSync(path.join(motor, 'reports', 'collectors_paused.json'), 'utf8')).paused || {}; } catch (e) { return; }
+    for (const [codigo, hasta] of Object.entries(pausados)) {
+        if (Number(hasta) * 1000 < Date.now()) continue;
+        if (!await deps.primeraVez?.(`zenith:lleno2:${codigo}`, 6 * 3600).catch(() => false)) continue;
         const legible = /^\d{16}$/.test(codigo) ? codigo.replace(/(\d{4})(?=\d)/g, '$1-') : codigo;
-        log(`friend list full: ${legible} (double reroll?)`);
-        // 2026-11-06 (Ale): el aviso en Discord daba falsos positivos (el propio reroll de cada miembro tambien
-        // agrega su Main, y con varios hosts en paralelo hay mas de 14 cuentas nuestras a la vez). Solo log.
-        if (!AVISAR_LLENOS) continue;
-        await deps.avisar?.(`⚠️ **Possible double reroll** — main \`${legible}\` rejected our friend request because its friend list is **full (${TOPE_AMIGOS})**, while the other mains accepted.\n`
-            + `Right now at most **${nuestrasMax}** of its friends can be ours (${hosts} farm host${hosts === 1 ? '' : 's'}), so at least **${deAfuera}** come from outside — this main is probably accepting another group's requests.\n`
-            + `*Warning only — nobody was set offline.*`).catch(() => {});
+        const nombre = await Promise.resolve(deps.nombreMain?.(codigo)).catch(() => null);
+        log(`main refusing friend requests: ${legible}${nombre ? ` (${nombre})` : ''}`);
+        await deps.avisar?.(`⚠️ **Main refusing friend requests** — \`${legible}\`${nombre ? ` (**${nombre}**)` : ''} refused our requests 3 times in 30 min. `
+            + `Its **friend list is probably full (99)** or it has a temporary friend soft-ban.\n`
+            + `> The farm skips it for 30 min. The owner should **remove friends** (keep only God Packs still to pick) — otherwise it can't get new God Packs.`).catch(() => {});
     }
 }
 
