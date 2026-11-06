@@ -240,6 +240,18 @@ function archivoProxies(motor, s) {
 
 // Estado propio: cuando se abrio por ultima vez cada cuenta prestada ("discordId|archivo" -> ms).
 function rutaEstado(motor) { return path.join(motor, 'reports', 'reroll_comunidad.json'); }
+// Cuentas que ESTE host abrio de verdad (al menos 1 sobre): { "discordId|archivo": ms } (panel de hosts,
+// pedido de Ale 2026-11-06: "cuantos se abrieron en cada host"). Se guardan las ultimas 24 h.
+function rutaAbiertas(motor) { return path.join(motor, 'reports', 'reroll_abiertas.json'); }
+function leerAbiertas(motor) { try { return JSON.parse(fs.readFileSync(rutaAbiertas(motor), 'utf8')); } catch (e) { return {}; } }
+function anotarAbiertas(motor, claves) {
+    if (!claves.length) return;
+    const ahora = Date.now(), dia = 24 * 3600 * 1000;
+    const abiertas = leerAbiertas(motor);
+    for (const k of Object.keys(abiertas)) if (ahora - abiertas[k] > dia) delete abiertas[k];
+    for (const k of claves) abiertas[k] = ahora;
+    try { fs.writeFileSync(rutaAbiertas(motor), JSON.stringify(abiertas)); } catch (e) { /* nada */ }
+}
 function leerEstado(motor) { try { return JSON.parse(fs.readFileSync(rutaEstado(motor), 'utf8')); } catch (e) { return {}; } }
 function guardarEstado(motor, estado) {
     fs.mkdirSync(path.dirname(rutaEstado(motor)), { recursive: true });
@@ -358,7 +370,7 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
             '--pack-power-min', s.pack_power_min || '1/5',
             '--hg-cost', '0',                      // nunca gastar relojes del miembro
             '--no-quarantine-locked',              // las XML son temporales: no hay nada que mover
-            '--verify-power', '--shuffle-proxies',
+            '--verify-power', '--full-power-only', '--shuffle-proxies',
             '--stop-after-fails', String(s.stop_after_fails || 5),
             // Stop del panel GP: corta la tanda despues de la cuenta en curso (con su limpieza)
             '--stop-file', path.join(motor, 'reports', 'community_farm.stop')];
@@ -460,12 +472,14 @@ async function ciclo() {
                 trabajo = true;
                 await correrInject(motor, dir, s, nombres.length, m.discord_id);
                 let sobres = 0;
+                const abiertasTanda = [];
                 for (const nombre of nombres) {
                     const base = path.basename(nombre).replace(/\.xml$/i, '');
                     estado[`${m.discord_id}|${nombre}`] = Date.now();
                     let pulls = [];
                     try { pulls = JSON.parse(fs.readFileSync(path.join(dir, `${base}.json`), 'utf8')).pulls || []; } catch (e) { /* nada */ }
                     if (!pulls.length) continue;
+                    abiertasTanda.push(`${m.discord_id}|${nombre}`);
                     // Lean anota el codigo del set ("C1"); toda la corrida abre el mismo sobre.
                     const set = await codigoSet(s.pack_id || 'CN001_0010_00_000');
                     for (const p of pulls) { p.pack = set; p.aviso = avisoS4t(motor, p.cards); }
@@ -473,6 +487,7 @@ async function ciclo() {
                     sobres += pulls.length;
                 }
                 guardarEstado(motor, estado);
+                anotarAbiertas(motor, abiertasTanda);
                 if (ppm) ppm.sobres += sobres;
                 log(`${sobres} pack(s) opened for ${m.discord_id}`);
             } finally {
@@ -502,6 +517,7 @@ async function resumenPrestadas() {
     if (!motor || !parte) return null;
     const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
     const estado = leerEstado(motor);
+    const abiertas = leerAbiertas(motor);
     const ahora = Date.now();
     const resumen = {};
     for (const m of await deps.ml.cuentasReroll()) {
@@ -509,7 +525,9 @@ async function resumenPrestadas() {
         const listas = mias.filter(c => c.e === 0 && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).length;
         // 4to: de las de este host, cuantas todavia no son elegibles a God Pack (solo aviso, el farm las abre igual).
         const noElegibles = mias.filter(c => c.e > 0).length;
-        resumen[m.discord_id] = [m.cuentas.length, mias.length, listas, noElegibles];
+        // 5to: cuantas abrio ESTE host (al menos 1 sobre) en las ultimas 24 h.
+        const abiertasHost = m.cuentas.filter(c => ahora - (abiertas[`${m.discord_id}|${c.f}`] || 0) < 24 * 3600 * 1000).length;
+        resumen[m.discord_id] = [m.cuentas.length, mias.length, listas, noElegibles, abiertasHost];
     }
     return resumen;
 }

@@ -16759,19 +16759,31 @@ async function seccionPrestadas(hosts) {
     // Un recuadro por host (pedido de Ale: "cada host con las cuentas que esta abriendo, por separado"):
     // cada miembro con sus cuentas que le tocan a ESE host, listas/total.
     const punto = (id) => enLinea.has(id) ? (enLinea.get(id) ? '🟢' : '🔴') : '⚪';
-    return farm.slice(0, 8).map(h => {   // 8: Discord admite 10 recuadros (hosts + status de cuentas + farms)
+    // (2026-11-06, Ale) Cada host: disponibles ahora y abiertas por ESE host (24 h), por miembro y en total;
+    // abajo, una sola vez, el total de cuentas prestadas y el total abiertas entre todos los hosts.
+    const suma = (h, i) => Object.values(h.prestadas).reduce((a, v) => a + (Number(v[i]) || 0), 0);
+    const totalPrestadas = Object.values(miembros).reduce((a, m) => a + m.total, 0);
+    const totalAbiertas = farm.reduce((a, h) => a + suma(h, 4), 0);
+    const recuadros = farm.slice(0, 8).map(h => {   // 8: Discord admite 10 recuadros (hosts + status de cuentas + farms)
         const filas = Object.entries(h.prestadas).filter(([, [, mias]]) => mias > 0)
             .sort((a, b) => b[1][1] - a[1][1])
-            .map(([id, [, mias, listas, noElegibles]]) => `${punto(id)} <@${id}> — **${listas}**/${mias}`
+            .map(([id, [, mias, listas, noElegibles, abiertas]]) => `${punto(id)} <@${id}> — 🎴 **${listas}** available · ✅ **${abiertas || 0}** opened · of ${mias}`
                 + (noElegibles ? ` · ⚠️ ${noElegibles} not GP-eligible` : ''));
-        const mias = Object.values(h.prestadas).reduce((a, [, m]) => a + m, 0);
-        const listas = Object.values(h.prestadas).reduce((a, [, , l]) => a + l, 0);
         const propias = h.farm?.propias ? `Own accounts: **${h.farm.propias}**\n` : '';
         return new EmbedBuilder().setColor(0x57F287)
             .setTitle(`🎲 ${h.farm?.nombre || h.nombre} — GP farm host`)
-            .setDescription(`${propias}Shared accounts: **${listas}**/${mias} ready\n\n${filas.join('\n') || 'No lent accounts.'}`.slice(0, 4000))
-            .setFooter({ text: 'ready/total · ready = can open packs now · 🟢 Monitor Link on · 🔴 off · ⚠️ not GP-eligible = a 30+ day pause, needs 96 packs again' });
+            .setDescription((`${propias}🎴 Available now: **${suma(h, 2).toLocaleString('en-US')}** · ✅ Opened (24 h): **${suma(h, 4).toLocaleString('en-US')}**`
+                + ` · Shared accounts on this host: **${suma(h, 1).toLocaleString('en-US')}**\n\n${filas.join('\n') || 'No lent accounts.'}`).slice(0, 4000))
+            .setFooter({ text: 'available = can open packs now · opened = opened by this host in the last 24 h · 🟢 Monitor Link on · 🔴 off' });
     });
+    const ultimo = recuadros[recuadros.length - 1];
+    if (ultimo) {
+        const desc = ultimo.data.description || '';
+        const pie = `\n\n━━━━━━━━━━\n📦 **All hosts:** **${totalPrestadas.toLocaleString('en-US')}** shared accounts · `
+            + `✅ **${totalAbiertas.toLocaleString('en-US')}** opened in the last 24 h`;
+        ultimo.setDescription(desc.slice(0, 4096 - pie.length) + pie);
+    }
+    return recuadros;
 }
 
 // Status de las cuentas de toda la comunidad (pedido de Ale 2026-11-06): total de los Monitor Link

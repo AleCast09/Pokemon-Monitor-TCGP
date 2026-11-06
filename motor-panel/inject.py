@@ -1102,6 +1102,19 @@ def _limit_collectors(live_codes: list[str], manual_codes: list[str]) -> list[st
 _full_lock = threading.Lock()
 
 
+_FULL_POWER_ONLY = False   # set from --full-power-only in main()
+
+
+def _skip_partial_power(power: int, packs: int, hg_cost, result: dict, tag: str = "") -> bool:
+    """--full-power-only: skip a free-pack account whose server power is known (>= 0) but lower
+    than the packs we want (e.g. 1 of 2). Nothing is stamped: it is picked again once recharged."""
+    if not _FULL_POWER_ONLY or power < 0 or (hg_cost or 0) > 0 or power >= int(packs or 0):
+        return False
+    result["error"] = f"verify_power_partial (server says {power} of {packs} packs)"
+    log(f"skipping - only {power} of {packs} packs recharged (full-power-only). Not sending FR.", tag=tag)
+    return True
+
+
 def _note_full_collectors(pids: list[str], pid_to_code: dict, tag: str = "") -> None:
     """Anota collectors que rechazaron la solicitud mientras otros la aceptaban (lista llena).
     El bot de Monitor Pokemon lee reports/collectors_full.jsonl y avisa (anti doble reroll)."""
@@ -2369,6 +2382,11 @@ def inject_one(
                 log(f"skipping - server says 0 packs. Not sending FR.", tag=tag)
                 return result
 
+            # --full-power-only (GP farm, Ale 2026-11-06): only accounts with ALL their free packs
+            # recharged; one with 1 of 2 is skipped (no FR sent) and retried once it is full.
+            if _skip_partial_power(power, packs, hg_cost, result, tag):
+                return result
+
             # Cap requested pack count at what the server actually has.
             # Server usually reports 1 or 2 for a healthy account (24h+
             # cooldown). Only cap on a FREE pack (rocket, hg_cost==0)
@@ -2424,6 +2442,9 @@ def inject_one(
                     gp_state.mark_power_used(account["account_key"], "server_zero_power")
                 result["error"] = "verify_power_zero (server says no power)"
                 log(f"skipping - server says 0 packs.", tag=tag)
+                return result
+
+            if _skip_partial_power(power, packs, hg_cost, result, tag):
                 return result
 
             # Cap: only when heal_items is NOT being sent (rocket).
@@ -3367,7 +3388,7 @@ def run_injection(args) -> int:
             errors += 1
             if "login_failed" in err:
                 accounts_login_fail += 1
-            elif "ABORTED" in err or "verify_power_zero" in err or "no_pack_power" in err:
+            elif "ABORTED" in err or "verify_power_zero" in err or "verify_power_partial" in err or "no_pack_power" in err:
                 accounts_aborted += 1
             elif "PERMISSION_DENIED" in err or "<!doctype html" in err.lower():
                 accounts_proxy_dead += 1
@@ -3614,6 +3635,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "than N hours. Missing/unparseable field = eligible.")
     p.add_argument("--wait-accept", type=float, default=7.0,
                    help="Seconds to wait after friend request for manual accept.")
+    p.add_argument("--full-power-only", action="store_true",
+                   help="With --verify-power (or godpack mode): skip accounts whose free packs are "
+                        "not ALL recharged (e.g. 1 of 2). Used by the community GP farm.")
     p.add_argument("--verify-power", action="store_true",
                    help="Also call GetPackPowerV1 before sending FR (skips accounts "
                         "the server reports empty). Slower but stops wasting FRs when "
@@ -3750,6 +3774,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     _install_signal_handlers()
     args = build_parser().parse_args()
+    global _FULL_POWER_ONLY
+    _FULL_POWER_ONLY = bool(getattr(args, "full_power_only", False))
     # Start file-based stop watcher only if --stop-file was provided.
     # The GUI passes one; running inject.py from a plain terminal doesn't
     # need it (Ctrl+C sends SIGINT which the signal handler catches).
