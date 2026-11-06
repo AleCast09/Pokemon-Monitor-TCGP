@@ -1102,7 +1102,59 @@ _max_collectors = 5
 _collector_turn = itertools.count()
 
 
+FR_MAX_PER_MIN = 20.0            # friend requests per minute to any one collector (Main), ceiling
+COLLECTOR_PAUSE_SEC = 6 * 3600   # a Main that starts refusing requests gets none for 6 h
+_paused_lock = threading.Lock()
+_paused_cache = {"ts": 0.0, "data": {}}
+
+
+def _paused_collectors() -> dict:
+    """reports/collectors_paused.json {code: until_epoch}, shared by every inject.py on this PC."""
+    now = time.time()
+    if now - _paused_cache["ts"] < 30:
+        return _paused_cache["data"]
+    data = {}
+    try:
+        raw = json.loads((PROJECT_ROOT / "reports" / "collectors_paused.json").read_text("utf-8"))
+        data = {str(k): float(v) for k, v in (raw or {}).items() if float(v) > now}
+    except Exception:
+        pass
+    _paused_cache.update(ts=now, data=data)
+    return data
+
+
+def _pause_collectors(codes: list[str], tag: str = "") -> None:
+    """2026-11-06 (Ale): a Main that refuses our requests (friend soft-ban or full list) is paused 6 h,
+    so the farm stops hammering it while it recovers."""
+    codes = [str(c or "").replace("-", "").strip() for c in codes if c]
+    if not codes:
+        return
+    path = PROJECT_ROOT / "reports" / "collectors_paused.json"
+    until = time.time() + COLLECTOR_PAUSE_SEC
+    with _paused_lock:
+        try:
+            data = json.loads(path.read_text("utf-8")) if path.exists() else {}
+        except Exception:
+            data = {}
+        for c in codes:
+            data[c] = until
+        data = {k: v for k, v in data.items() if float(v) > time.time()}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
+        _paused_cache["ts"] = 0.0
+    log(f"[fr] paused {len(codes)} collector(s) for {COLLECTOR_PAUSE_SEC // 3600} h (refusing requests): "
+        f"{', '.join(codes)}", tag=tag)
+
+
 def _limit_collectors(live_codes: list[str], manual_codes: list[str]) -> list[str]:
+    # Paused Mains (refusing requests) are skipped; if EVERY one is paused, keep them so the run still works.
+    paused = _paused_collectors()
+    sin_pausa = [c for c in live_codes if str(c).replace("-", "").strip() not in paused]
+    if sin_pausa:
+        live_codes = sin_pausa
     if _max_collectors <= 0:
         return live_codes
     manual = {str(c or "").replace("-", "").strip() for c in manual_codes}
@@ -2545,6 +2597,7 @@ def inject_one(
                     if ok_pids:
                         if full_pids:
                             _note_full_collectors(full_pids, pid_to_friend_code, tag)
+                            _pause_collectors([pid_to_friend_code.get(p, "") for p in full_pids], tag)
                             log(f"[fr] {len(full_pids)} collector(s) rejected the request (friend list full?); "
                                 f"continuing with {len(ok_pids)}", tag=tag)
                         target_pids = ok_pids
@@ -3234,6 +3287,10 @@ def run_injection(args) -> int:
     # Configure global FR rate limit
     global _fr_min_interval_s
     rate = float(getattr(args, "fr_per_min", 0) or 0)
+    # 2026-11-06 (Ale): a Main got a friend soft-ban from too many requests. Never more than
+    # FR_MAX_PER_MIN per collector (also when the panel sends 0 = "disabled").
+    if rate <= 0 or rate > FR_MAX_PER_MIN:
+        rate = FR_MAX_PER_MIN
     if rate > 0:
         _fr_min_interval_s = 60.0 / rate
         log(f"FR rate limit: max {rate:.0f} friend requests/min PER COLLECTOR "

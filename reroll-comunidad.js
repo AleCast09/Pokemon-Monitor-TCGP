@@ -39,7 +39,10 @@ function iniciar(d) {
     if (!deps.fastTransfer.rutaMotor()) return;
     instalarPanel(deps.fastTransfer.rutaMotor());
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
-        INJECT_ORIGINAL, '_limit_collectors', 'max 5 online collectors per account, rotating');
+        INJECT_ORIGINAL, '_limit_collectors', 'max 5 online collectors per account, max 20 requests/min per Main, Mains refusing requests paused 6 h',
+        // (2026-11-06, Ale) Un Main quedo con soft ban de amigos: un host con su inject.py propio mandaba a 13 Mains
+        // por cuenta sin limite. Sin estos limites se instala el nuestro igual (el suyo queda como .bak-propio).
+        'FR_MAX_PER_MIN');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent',
