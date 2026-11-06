@@ -42,7 +42,10 @@ function iniciar(d) {
         INJECT_ORIGINAL, '_limit_collectors', 'max 5 online collectors per account, rotating');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
-        '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent');
+        '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent',
+        // (2026-11-06, Arcade) Sin el webhook de la comunidad sus God Packs no le llegan a KyuremBot: se instala igual
+        // aunque este modificado a mano (el suyo queda como .bak-propio).
+        'community_gp_webhook');
     // (2026-11-06) PPM del panel de wr98: sigue 15 min despues de un Stop y cuenta tambien el GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'ppm_monitor.py', ['scripts', 'god_pack', 'ppm_monitor.py'],
         '2d3767ae2968a2c66e9ac2ec0fb8c0331d486839486a6e1921c756b35299a8f3', 'CACHE_TTL_SEC = 15 * 60', 'PPM kept 15 min after Stop');
@@ -126,13 +129,21 @@ function instalarPanel(motor) {
 // Mismo criterio para inject.py (2026-11-01): tope de 5 collectors online por cuenta, rotando (con 15
 // online el PPM caia a un tercio por las 15 amistades que hay que borrar en cada cuenta).
 const INJECT_ORIGINAL = '0bbd4dca2728ad2f93d428d51d2ff44d22b72fe6702b256458f91ca3567af938';
-function instalarArchivoMotor(motor, archivo, rutaDestino, huellaOriginal, marca, que) {
+// obligatorio (opcional): texto que el archivo del host TIENE que tener; si le falta, se instala el nuestro aunque
+// este modificado a mano, y el suyo se guarda como .bak-propio.
+function instalarArchivoMotor(motor, archivo, rutaDestino, huellaOriginal, marca, que, obligatorio = null) {
     try {
         const nuevo = fs.readFileSync(path.join(__dirname, 'motor-panel', archivo));
         const destino = path.join(motor, ...rutaDestino);
         const actual = fs.readFileSync(destino);
         if (actual.equals(nuevo)) return;
         const huella = crypto.createHash('sha256').update(actual).digest('hex');
+        if (obligatorio && !actual.includes(obligatorio) && huella !== huellaOriginal && !actual.includes(marca)) {
+            fs.copyFileSync(destino, `${destino}.bak-propio`);
+            fs.writeFileSync(destino, nuevo);
+            log(`${archivo} was modified on this PC but lacked a required fix - replaced (yours saved as ${archivo}.bak-propio): ${que}.`);
+            return;
+        }
         if (huella !== huellaOriginal && !actual.includes(marca)) {
             log(`${archivo} was modified on this PC - not updated. Copy motor-panel/${archivo} by hand to get: ${que}.`);
             return;
