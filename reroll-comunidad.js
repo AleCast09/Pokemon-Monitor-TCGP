@@ -416,8 +416,9 @@ async function ciclo() {
         for (const m of miembros) {
             if (!panelEncendido(motor)) { log('stopped from the God Pack UI'); break; }
             const ahora = Date.now();
-            // Ale 2026-11-06: las cuentas que no son elegibles a God Pack (e > 0) quedan bloqueadas, no se abren.
-            const listas = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte) && !(c.e > 0)
+            // Ale 2026-11-06: solo se abren cuentas CONFIRMADAS elegibles a God Pack (e === 0, Monitor Link 1.9.6+);
+            // sin el dato (Monitor Link viejo) o con dias faltantes (e > 0) quedan bloqueadas.
+            const listas = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte) && c.e === 0
                 && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).slice(0, lote);
             if (!listas.length) { log(`${m.discord_id}: no account ready (cooldown ${cooldown / 3600000} h)`); continue; }
             if (!await deps.fastTransfer.asegurarTunel()) { log('tunnel 9090 is down - skipping this cycle'); return; }
@@ -492,7 +493,7 @@ async function resumenPrestadas() {
     const resumen = {};
     for (const m of await deps.ml.cuentasReroll()) {
         const mias = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte));
-        const listas = mias.filter(c => !(c.e > 0) && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).length;
+        const listas = mias.filter(c => c.e === 0 && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).length;
         // 4to: de las de este host, cuantas todavia no son elegibles a God Pack (solo aviso, el farm las abre igual).
         const noElegibles = mias.filter(c => c.e > 0).length;
         resumen[m.discord_id] = [m.cuentas.length, mias.length, listas, noElegibles];
