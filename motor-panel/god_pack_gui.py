@@ -555,6 +555,10 @@ class GodPackGui(QMainWindow):
         self.stat_packs = self._create_stat_card("PACKS OPENED", "0", D["ACCENT"])
         self.stat_matches = self._create_stat_card("GOD PACK HITS", "0", D["GOLD"])
         self.stat_ppm = self._create_stat_card("ELAPSED & SPEED", "0.0m | 0.0 PPM", D["GREEN"])
+        # Ale 2026-11-06: accounts still to open (own + lent of this host, in the panel's Run Mode) | opened.
+        self.stat_left = self._create_stat_card("ACCOUNTS LEFT | OPENED", "0 | 0", D["CYAN"])
+        self._own_total = 0; self._own_done = 0; self._own_opened = 0
+        stats_row.addWidget(self.stat_left)
         stats_row.addWidget(self.stat_accounts)
         stats_row.addWidget(self.stat_packs)
         stats_row.addWidget(self.stat_matches)
@@ -1462,6 +1466,7 @@ class GodPackGui(QMainWindow):
         self._last_pack_line.clear()
         self._pending_hit_header.clear()
         self._live = {"accounts": 0, "packs": 0, "matches": 0, "errors": 0, "t0": time.time()}
+        self._own_total = 0; self._own_done = 0; self._own_opened = 0
         self._update_live_label(running=True)
         self._log_pending = []
         self._append_log(f"[gui] launching: {' '.join(cmd)}\n")
@@ -1741,6 +1746,8 @@ class GodPackGui(QMainWindow):
         self._set_badge("COMMUNITY", D["CYAN"])
 
     def _community_tick(self):
+        if int(time.time()) % 5 == 0:
+            self._update_left_card()
         try:
             size = self.COMMUNITY_LOG.stat().st_size
             if size < self._community_pos:
@@ -1782,7 +1789,32 @@ class GodPackGui(QMainWindow):
         if self.proc is None:
             return
         try:
-            self._stdout_raw_pending.extend(bytes(self.proc.readAllStandardOutput()))
+            chunk = bytes(self.proc.readAllStandardOutput())
+            self._stdout_raw_pending.extend(chunk)
+            # Own accounts only (this process): how many it will open and how many it already did.
+            texto = chunk.decode("utf-8", "replace")
+            m = re.search(r"discovered: eligible=(\d+)", texto)
+            if m:
+                self._own_total = int(m.group(1))
+            for m in re.finditer(r"ACCOUNT SUMMARY: opened (\d+)/", texto):
+                self._own_done += 1
+                if int(m.group(1)) > 0:
+                    self._own_opened += 1
+            self._update_left_card()
+        except Exception:
+            pass
+
+    def _update_left_card(self):
+        lent_left = lent_opened = 0
+        try:
+            st = json.loads((ROOT / "reports" / "community_farm_status.json").read_text("utf-8"))
+            if self._community and time.time() * 1000 - float(st.get("ts", 0)) < 5 * 60 * 1000:
+                lent_left, lent_opened = int(st.get("available", 0)), int(st.get("opened", 0))
+        except Exception:
+            pass
+        own_left = max(0, self._own_total - self._own_done)
+        try:
+            self.stat_left._val_label.setText(f"{own_left + lent_left:,} | {self._own_opened + lent_opened:,}")
         except Exception:
             pass
 

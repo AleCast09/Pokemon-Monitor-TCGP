@@ -53,6 +53,7 @@ function iniciar(d) {
     setInterval(ciclo, num(process.env.REROLL_CADA_MIN, 10) * 60 * 1000);
     setTimeout(revisarPpm, 60 * 1000);
     setInterval(revisarLlenos, 60 * 1000);
+    setInterval(() => escribirEstadoPanel().catch(() => {}), 30 * 1000);
 }
 
 // Anti doble reroll (2026-11-01, plan de Ale): inject.py anota en reports/collectors_full.jsonl cada main
@@ -164,6 +165,29 @@ function panelOcupado(motor) {
 const soloSobres = (s) => String(s?.run_mode || 'godpack') === 'packs-only';
 const cuentaDelModo = (c, s) => soloSobres(s) ? c.e > 0 : c.e === 0;
 
+// Cuadro "ACCOUNTS LEFT · OPENED" del God Pack UI (Ale 2026-11-06): las prestadas de ESTE host que quedan
+// para abrir en el modo del panel y las que abrio desde el ultimo Start. Va a reports/community_farm_status.json.
+let inicioOn = Date.now();
+async function escribirEstadoPanel() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    if (!motor || !panelEncendido(motor)) return;
+    const parte = await deps.parte().catch(() => null);
+    if (!parte) return;
+    const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
+    const s = ajustesPanel(motor), estado = leerEstado(motor), abiertas = leerAbiertas(motor), ahora = Date.now();
+    let disponibles = 0, abiertasDesdeStart = 0;
+    for (const m of await deps.ml.cuentasReroll()) {
+        for (const c of m.cuentas) {
+            const clave = `${m.discord_id}|${c.f}`;
+            if ((abiertas[clave] || 0) >= inicioOn) abiertasDesdeStart++;
+            if (miCuenta(m.discord_id, c.f, parte) && cuentaDelModo(c, s)
+                && ahora - Math.max(msDeLean(c.l), estado[clave] || 0) >= cooldown) disponibles++;
+        }
+    }
+    fs.writeFileSync(path.join(motor, 'reports', 'community_farm_status.json'),
+        JSON.stringify({ available: disponibles, opened: abiertasDesdeStart, mode: s.run_mode || 'godpack', ts: ahora }));
+}
+
 // Cada 20 s: el estado Online/Offline del GP farm sigue al panel. Al encenderse arranca una tanda ya.
 let panelAntes = null;
 async function sincronizarPanel() {
@@ -175,6 +199,7 @@ async function sincronizarPanel() {
     await deps.marcar?.(on).catch(() => {});
     log(on ? 'Community farm ON (God Pack UI Start)' : 'Community farm OFF (God Pack UI stopped or closed)');
     if (on) {
+        inicioOn = Date.now();   // el cuadro del panel cuenta las abiertas desde este Start
         // Start de nuevo antes de 15 min: el PPM sigue desde donde iba (2026-11-01, idea de wr98).
         if (ppm?.pausa && Date.now() - ppm.pausa.at < PPM_PAUSA_MS) {
             ppm.basePropios = (ppm.basePropios || 0) + ppm.pausa.propios;
@@ -508,6 +533,7 @@ async function ciclo() {
                 }
                 guardarEstado(motor, estado);
                 anotarAbiertas(motor, abiertasTanda);
+                escribirEstadoPanel().catch(() => {});
                 if (ppm) ppm.sobres += sobres;
                 log(`${sobres} pack(s) opened for ${m.discord_id}`);
             } finally {
