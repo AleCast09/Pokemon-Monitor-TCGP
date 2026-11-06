@@ -241,6 +241,7 @@ async function agenteDe(req) {
 function registrar(app, dependencias) {
     db = dependencias.db;
     const alVincular = dependencias.alVincular || (async () => {});
+    const alDesvincular = dependencias.alDesvincular || (async () => {});
     // Host en espera (community-host.js): no atiende a ningun Monitor Link; al recibir 503 cada uno
     // busca en la libreta la direccion del host que tiene el turno.
     const activo = dependencias.activo || (() => true);
@@ -457,9 +458,17 @@ function registrar(app, dependencias) {
             const dueno = String(agente.discord_id);
             const ids = [...new Set((Array.isArray(datos.ids) ? datos.ids : []).map(x => String(x).trim()))]
                 .filter(x => /^\d{17,20}$/.test(x) && x !== dueno).slice(0, 10);
+            const antes = (await db.all(`SELECT amigo_id FROM link_amigos WHERE dueno_id = ?`, [dueno]) || []).map(f => String(f.amigo_id));
             await db.run(`DELETE FROM link_amigos WHERE dueno_id = ?`, [dueno]);
             for (const id of ids) await db.run(`INSERT OR REPLACE INTO link_amigos (amigo_id, dueno_id, ts) VALUES (?, ?, ?)`, [id, dueno, Date.now()]);
             await cargarAmigos();
+            // Rol Monitor (pedido de Ale): el amigo lo recibe al anotarlo (como al vincular) y lo pierde al
+            // quitarlo, salvo que tenga su propio Monitor Link o sea amigo de otro miembro.
+            for (const id of ids) alVincular(id, agente.guild_id).catch(e => console.error('DEBUG: rol al amigo:', e?.message || e));
+            for (const id of antes.filter(x => !ids.includes(x) && !duenoDe(x))) {
+                const propio = await db.get(`SELECT 1 AS si FROM link_agentes WHERE discord_id = ?`, [id]);
+                if (!propio) alDesvincular(id, agente.guild_id).catch(e => console.error('DEBUG: quitar rol al amigo:', e?.message || e));
+            }
             res.json({ ok: true, friends: ids.length });
         } catch (e) {
             res.status(500).json({ error: 'error' });

@@ -7724,6 +7724,7 @@ dashboardApp.use('/tutorial-img', express.static(path.join(__dirname, 'assets', 
 if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
     db,
     alVincular: (discordId, guildId) => darRolMonitor(guildId, discordId),
+    alDesvincular: (discordId, guildId) => quitarRolMonitor(guildId, discordId),
     activo: () => hostComunidad.esActivo(),
     nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null
 });
@@ -16907,6 +16908,15 @@ async function manejarBotonReroll(interaction) {
 }
 
 // Rol Monitor: se da al vincular la PC con /link (y al tomar el turno, a todos los ya vinculados).
+// Amigo quitado de la lista de un miembro (Monitor Link): pierde el rol Monitor.
+async function quitarRolMonitor(guildId, discordId) {
+    const guild = client.guilds.cache.get(String(guildId));
+    if (!guild || !comunidad.esComunidad(guild.id) || comunidad.esStaff(String(discordId))) return;
+    const rol = await comunidad.rolMonitor(guild);
+    const miembro = rol ? await guild.members.fetch(String(discordId)).catch(() => null) : null;
+    if (miembro && miembro.roles.cache.has(rol.id)) await miembro.roles.remove(rol, 'Removed from a Monitor Link friends list').catch(() => {});
+}
+
 async function darRolMonitor(guildId, discordId) {
     const guild = client.guilds.cache.get(String(guildId));
     if (!guild || !comunidad.esComunidad(guild.id)) return;
