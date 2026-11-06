@@ -2202,6 +2202,12 @@ def inject_one(
                     classification = classify_login_failure(err_obj, proxies_tried_n)
                 except Exception:
                     pass
+            # Nintendo BaaS failing (e.g. "idToken missing", HTTP errors) happens BEFORE the game
+            # server sees the account, so it says nothing about a ban: retry next run instead of
+            # moving the file. 2026-11-06 (Ale): BaaS refused every login and 159 good accounts
+            # were sent to QUARANTINE/unknown_failure.
+            if "BaaS login failed" in err_str:
+                classification = "transient"
             if classification != "transient":
                 reason_text = (
                     f"Classification: {classification}\n"
