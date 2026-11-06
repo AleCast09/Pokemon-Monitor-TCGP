@@ -777,7 +777,9 @@ def _quarantine_account(
         log(f"[quarantine] {tag}: no path info, cannot move files", tag=tag)
     else:
         try:
-            dest_root = source_dir / "QUARANTINE" / classification
+            # (Arcade 2026-11-06) One QUARANTINE folder for every account (the reason, with its
+            # classification, is in <name>.reason.txt) instead of one subfolder per classification.
+            dest_root = source_dir / "QUARANTINE"
             dest_root.mkdir(parents=True, exist_ok=True)
             # Glob everything in the source dir starting with basename —
             # catches xml, json, .home_battle_menu.json, .state.json, etc.
@@ -795,6 +797,19 @@ def _quarantine_account(
                     moved += 1
                 except Exception as exc:
                     log(f"[quarantine] move failed for {fp.name}: {exc}", tag=tag)
+            # (Arcade) The account JSON lives in another folder (Cards/accounts, named by deviceAccount):
+            # move it too, next to its XML, so the quarantined account is complete in one place.
+            if json_path:
+                jp = Path(json_path)
+                try:
+                    if jp.is_file() and jp.parent != source_dir:
+                        dest = dest_root / jp.name   # original name: it can go back to Cards/accounts as is
+                        if dest.exists():
+                            dest.unlink()
+                        shutil.move(str(jp), str(dest))
+                        moved += 1
+                except Exception as exc:
+                    log(f"[quarantine] move failed for {jp.name}: {exc}", tag=tag)
             # Write a companion .reason.txt so the user can see WHY without
             # digging through logs.
             try:
@@ -1369,74 +1384,69 @@ def _discover_send_requests_field(Request) -> tuple[Optional[str], Optional[bool
     return None, None
 
 
-def send_friend_requests(sess, target_pids: list[str]) -> bool:
+def send_friend_requests(sess, target_pids: list[str], tag: str = "") -> bool:
     """
-    Send friend request to one or more player_ids.
-
-    Uses the GameSession's built-in helper `sess.send_friend_requests(pids)`
-    when available — that's what auto_trade.py uses successfully. The
-    helper knows the exact Request shape for this build (which our raw
-    _call attempts kept getting wrong: "no player_ids field" and then
-    StatusCode.INTERNAL on the guessed schemas).
-
-    Falls back to a manual _call with runtime field introspection only
-    when the helper is missing.
+    Send friend request to one or more player_ids using batched helper.
     """
     if not target_pids:
         return True
 
-    # Preferred path — GameSession's own helper (mirrors auto_trade.py).
     helper = getattr(sess, "send_friend_requests", None)
     if callable(helper):
-        try:
-            r = helper(list(target_pids))
-            # GameSession helpers return {"success": False, "error": ...}
-            # instead of raising — check it, or failures look like success.
-            if isinstance(r, dict) and not r.get("success", True):
-                log(f"[!] SendRequestsV1 failed: {str(r.get('error', ''))[:200]}")
+        import time
+        batch_size = 2
+        for i in range(0, len(target_pids), batch_size):
+            batch = target_pids[i:i + batch_size]
+            try:
+                r = helper(list(batch))
+                if isinstance(r, dict) and not r.get("success", True):
+                    err_str = str(r.get("error", ""))
+                    if "ABORTED" in err_str:
+                        log(f"[!] SendRequestsV1 ABORTED en lote. Servidor saturado.", tag=tag)
+                        return False
+                    log(f"[!] SendRequestsV1 helper error: {err_str[:200]}", tag=tag)
+            except Exception as exc:
+                if "ABORTED" in str(exc):
+                    return False
+                log(f"[!] sess.send_friend_requests helper crashed: {str(exc)[:200]}", tag=tag)
                 return False
-            return True
-        except Exception as exc:
-            log(f"[!] sess.send_friend_requests helper failed: {str(exc)[:200]}")
-            return False
+            
+            if i + batch_size < len(target_pids):
+                time.sleep(1.5)
+        return True
 
-    # Fallback — raw _call with field introspection.
+    # Fallback (solo si el helper nativo no existe)
     try:
         from engine.takasho.schema.lettuce_server.player_api import friend_send_requests_v1_pb2
         Request = friend_send_requests_v1_pb2.FriendSendRequestsV1.Types.Request
         Response = friend_send_requests_v1_pb2.FriendSendRequestsV1.Types.Response
 
-        # One-time schema dump so we can see the real field list if this
-        # ever runs — helpful for debugging a future build change.
-        if not _send_requests_field_cache["logged"]:
-            _dump_message_schema(Request, "FriendSendRequestsV1.Request")
-            _send_requests_field_cache["logged"] = True
-
         field_name, is_repeated = _discover_send_requests_field(Request)
         if field_name is None:
-            available = list(Request.DESCRIPTOR.fields_by_name.keys())
-            log(f"[!] SendRequestsV1 Request has no recognized target field. "
-                f"Available fields: {available}")
             return False
 
-        log(f"[+] SendRequestsV1 raw fallback: field '{field_name}' "
-            f"({'repeated' if is_repeated else 'singular'})")
-
         if is_repeated:
-            req = Request(**{field_name: list(target_pids)})
-            sess._call(
-                "/takasho.schema.lettuce_server.player_api.Friend/SendRequestsV1",
-                req,
-                Response,
-            )
+            batch_size = 2
+            import time
+            for i in range(0, len(target_pids), batch_size):
+                batch = target_pids[i:i + batch_size]
+                req = Request(**{field_name: list(batch)})
+                try:
+                    sess._call("/takasho.schema.lettuce_server.player_api.Friend/SendRequestsV1", req, Response)
+                except Exception as exc:
+                    if "ABORTED" in str(exc): return False
+                if i + batch_size < len(target_pids):
+                    time.sleep(1.5)
         else:
-            for pid in target_pids:
+            import time
+            for i, pid in enumerate(target_pids):
                 req = Request(**{field_name: pid})
-                sess._call(
-                    "/takasho.schema.lettuce_server.player_api.Friend/SendRequestsV1",
-                    req,
-                    Response,
-                )
+                try:
+                    sess._call("/takasho.schema.lettuce_server.player_api.Friend/SendRequestsV1", req, Response)
+                except Exception as exc:
+                    if "ABORTED" in str(exc): return False
+                if i < len(target_pids) - 1:
+                    time.sleep(1.0)
         return True
     except Exception as exc:
         log(f"[!] SendRequestsV1 fallback failed: {str(exc)[:200]}")
@@ -1776,7 +1786,8 @@ def _dump_pack_power_entry(p, tag: str = "") -> None:
 
 
 def get_pack_power(sess, max_retries: int = 3, tag: str = "",
-                    force_try_purchase: bool = False) -> int:
+                    force_try_purchase: bool = False,
+                    target_power_id: str = "PACK_POWER_NORMAL") -> int:
     """
     Return total available PACK_POWER_NORMAL, using effective (recharge-aware)
     accounting. Retries transient RPC errors.
@@ -1798,6 +1809,9 @@ def get_pack_power(sess, max_retries: int = 3, tag: str = "",
     Request = pack_get_pack_power_v1_pb2.PackGetPackPowerV1.Types.Request
     Response = pack_get_pack_power_v1_pb2.PackGetPackPowerV1.Types.Response
 
+    # (wr98) First Partners / SP1: the special power pool. The exact power_id the server reports is kept on
+    # sess._discovered_special_power_id so PurchaseV2 uses it.
+    want_special = (target_power_id and target_power_id != "PACK_POWER_NORMAL")
     last_err = ""
     for attempt in range(1, max_retries + 1):
         try:
@@ -1807,6 +1821,7 @@ def get_pack_power(sess, max_retries: int = 3, tag: str = "",
                 Response,
             )
             total_normal = 0
+            total_special = 0
             total_all = 0
             debug_parts = []
             next_wait_parts = []
@@ -1817,6 +1832,13 @@ def get_pack_power(sess, max_retries: int = 3, tag: str = "",
                 debug_parts.append(f"pid='{pid}' stored={stored} effective={effective}")
                 if pid == "PACK_POWER_NORMAL":
                     total_normal += effective
+                else:
+                    total_special += max(stored, effective)
+                    if pid:
+                        try:
+                            sess._discovered_special_power_id = pid
+                        except Exception:
+                            pass
                 total_all += effective
                 if not _pack_power_schema_logged["logged"]:
                     _dump_pack_power_entry(p, tag=tag)
@@ -1837,6 +1859,12 @@ def get_pack_power(sess, max_retries: int = 3, tag: str = "",
                     tag=tag)
             if next_wait_parts:
                 log(f"  next recharge: {' | '.join(next_wait_parts)}", tag=tag)
+            if want_special:
+                if total_special > 0:
+                    return total_special
+                # (wr98) The server may not list the special power: return 1 so PurchaseV2 tries the free claim.
+                log("[sp1] special pack selected; attempting 1 free pack claim", tag=tag)
+                return 1
             if total_normal > 0:
                 return total_normal
             if total_all > 0:
@@ -2005,7 +2033,7 @@ def _pack_get_detail(sess, pack_id: str, max_retries: int = 3, tag: str = ""):
 
 
 def open_pack(sess, pack_id: str, product_id: str, tag: str = "",
-              hg_cost: int = 0) -> Optional[dict]:
+              hg_cost: int = 0, power_id: str = "PACK_POWER_NORMAL") -> Optional[dict]:
     """
     Open one pack via Pack/GetDetailV2 + PackShop/PurchaseV2.
 
@@ -2041,42 +2069,84 @@ def open_pack(sess, pack_id: str, product_id: str, tag: str = "",
                     product_id=product_id,
                     amount=Request.Types.Amount.AMOUNT_ONE,
                 )
-                use = purchase_req.use_powers.add()
-                use.power_id = "PACK_POWER_NORMAL"
-                use.amount = 1
-                # Heal items — paid packs (Mega Rising, Shining Revelry,
-                # Eevee Grove, ...) require the client to spend LARGE
-                # hourglasses to refill pack power on the fly. Rocket
-                # (BN010) sends empty healItems and is free. This is
-                # what lets a 10-pack farm run actually charge through
-                # the free-power cap of 1-2/day per account.
-                # Verified against wire capture 2026-09-28.
-                if hg_cost > 0:
+                effective_power_id = power_id or "PACK_POWER_NORMAL"
+                if effective_power_id != "PACK_POWER_NORMAL":
+                    discovered = getattr(sess, "_discovered_special_power_id", "")
+                    if discovered:
+                        effective_power_id = discovered
+                
+                # --- LOGICA SP1 CORREGIDA ---
+                if pack_id.startswith("SP"):
+                    log(f"[sp1] Procesando sobre especial de bienvenida {pack_id}", tag=tag)
+                    purchase_req.product_id = product_id if product_id else "PC_PS_2610010_01_01_01"
                     try:
-                        from engine.takasho.schema.lettuce_server.resource.item import (
-                            pack_power_charger_pb2,
+                        result = sess._call(
+                            "/takasho.schema.lettuce_server.player_api.PackShop/PurchaseV2",
+                            _apply_do_share(purchase_req, tag=tag),
+                            Response,
                         )
-                        T = pack_power_charger_pb2.PackPowerCharger.Types.Type
-                        charger = purchase_req.heal_items.chargers.add()
-                        charger.type = T.TYPE_LARGE
-                        charger.amount = int(hg_cost)
-                    except Exception as exc:
-                        log(f"[!] heal_items build failed (continuing without): "
-                            f"{str(exc)[:200]}", tag=tag)
-                # CRITICAL: doShare=true makes the opened pack appear in
-                # friends' Wonder Pick lineups. Without this the god packs
-                # we open exist only for the bot — no collector can pick
-                # them. Every real client capture sends doShare: true.
-                # Injected as raw field-7 varint when the pb2 lacks it.
-                request_to_send = _apply_do_share(purchase_req, tag=tag)
-                result = sess._call(
-                    "/takasho.schema.lettuce_server.player_api.PackShop/PurchaseV2",
-                    request_to_send,
-                    Response,
-                )
-                # Feed/ShareV1 — real client always calls this right after
-                # PurchaseV2, with the same transaction_id. It's what pushes
-                # the opened pack into friends' Wonder Pick timeline.
+                    except Exception as first_exc:
+                        if "INTERNAL" in str(first_exc):
+                            log(f"[sp1] Advertencia en compra directa, intentando método alternativo: {first_exc}", tag=tag)
+                            alt_candidates = [
+                                ("PC_PS_2610000_01_01_01", effective_power_id),
+                                ("PC_PS_2610010_01_01_01", "PACK_POWER_NORMAL"),
+                                ("PC_PS_2609000_01_01_01", effective_power_id),
+                            ]
+                            for alt_prod, alt_pow in alt_candidates:
+                                try:
+                                    detail_alt = _pack_get_detail(sess, pack_id, max_retries=1, tag=tag)
+                                    if detail_alt is not None:
+                                        consistent_token = getattr(detail_alt, "pack_consistent_token", consistent_token)
+                                    req_alt = Request(
+                                        pack_consistent_token=consistent_token,
+                                        transaction_id=str(uuid.uuid4()),
+                                        product_id=alt_prod,
+                                        amount=Request.Types.Amount.AMOUNT_ONE,
+                                    )
+                                    u_alt = req_alt.use_powers.add()
+                                    u_alt.power_id = alt_pow
+                                    u_alt.amount = 1
+                                    result = sess._call(
+                                        "/takasho.schema.lettuce_server.player_api.PackShop/PurchaseV2",
+                                        _apply_do_share(req_alt, tag=tag),
+                                        Response,
+                                    )
+                                    purchase_req = req_alt
+                                    log(f"[sp1] PurchaseV2 OK with fallback product_id={alt_prod} power_id={alt_pow}", tag=tag)
+                                    break
+                                except Exception:
+                                    continue
+                            if result is None:
+                                raise first_exc
+                        else:
+                            raise first_exc
+                else:
+                    use = purchase_req.use_powers.add()
+                    use.power_id = effective_power_id
+                    use.amount = 1
+                    if hg_cost > 0:
+                        try:
+                            from engine.takasho.schema.lettuce_server.resource.item import (
+                                pack_power_charger_pb2,
+                            )
+                            T = pack_power_charger_pb2.PackPowerCharger.Types.Type
+                            charger = purchase_req.heal_items.chargers.add()
+                            charger.type = T.TYPE_LARGE
+                            charger.amount = int(hg_cost)
+                        except Exception as exc:
+                            log(f"[!] heal_items build failed (continuing without): "
+                                f"{str(exc)[:200]}", tag=tag)
+                    
+                    request_to_send = _apply_do_share(purchase_req, tag=tag)
+                    result = sess._call(
+                        "/takasho.schema.lettuce_server.player_api.PackShop/PurchaseV2",
+                        request_to_send,
+                        Response,
+                    )
+                # --- FIN LOGICA SP1 ---
+
+                # Feed/ShareV1
                 _feed_share(sess, purchase_req.transaction_id, tag=tag)
                 break
             except Exception as exc:
@@ -2085,8 +2155,7 @@ def open_pack(sess, pack_id: str, product_id: str, tag: str = "",
                     log(f"[.] PurchaseV2 attempt {attempt}/2 transient, "
                         f"retrying in 2.0s: {last_err[:100]}", tag=tag)
                     time.sleep(2.0)
-                    # Refresh the consistency token before retrying — some
-                    # server versions reject a re-used token.
+                    # Refresh the consistency token before retrying
                     detail2 = _pack_get_detail(sess, pack_id, max_retries=2, tag=tag)
                     if detail2 is not None:
                         consistent_token = getattr(detail2, "pack_consistent_token",
@@ -2098,7 +2167,6 @@ def open_pack(sess, pack_id: str, product_id: str, tag: str = "",
             if "ABORTED" in last_err:
                 hint = (" — server says no pack power (JSON's lastPackPulled "
                         "may be stale, or another tool opened packs since)")
-                # Remembered so inject_one() records the cooldown offline.
                 try:
                     sess._gp_no_power = True
                 except Exception:
@@ -2123,20 +2191,13 @@ def open_pack(sess, pack_id: str, product_id: str, tag: str = "",
         table_str = ",".join(t for t in table_ids if t)
         primary_table = next((t for t in table_ids if t), table_str)
 
-        # Full classification: 5/5, 4/5, .., 0/5, crown, shiny, rare-2sr,
-        # rare-1sr, normal, unknown. Handles _02 (god), _03 (rare), _01 (normal).
         info = gp_cards.classify_pack(cards, primary_table)
         label = info["label"]
-
-        # Human-readable summary of the pack (names + rarities)
         summary = gp_cards.summarize_cards(cards)
 
-        # Build the log line — visible categories for the GUI filter.
         if info["is_god_pickable"]:
             tag_str = f" <-- GOD PACK {label} (WONDER-PICKABLE)"
         elif info["is_god_unpickable"]:
-            # Surface prominently per user request — user answered YES to
-            # "surface unpickable god packs prominently".
             tag_str = f" <-- [!!] god pack drawn but UNPICKABLE ({label})"
         elif info["is_rare_2sr"]:
             tag_str = f" <-- RARE PACK (2xSR - GP&Double eligible)"
@@ -2145,12 +2206,11 @@ def open_pack(sess, pack_id: str, product_id: str, tag: str = "",
         else:
             tag_str = ""
 
-        log(f"pack opened cards={len(cards)} table={table_str or '?'}{tag_str}",
-            tag=tag)
+        log(f"pack opened cards={len(cards)} table={table_str or '?'}{tag_str}", tag=tag)
         log(f"  cards: {summary}", tag=tag)
 
         return {
-            "pack_info": info,                # full classifier output
+            "pack_info": info,
             "god_pack": info["is_god_pickable"],
             "god_pack_raw": info["is_god_table"],
             "wonder_pickable": not info["is_god_unpickable"],
@@ -2260,6 +2320,7 @@ def inject_one(
     dismiss_popups: bool = True,         # before packs, flip welcome/60hg popup flags
     min_hourglass: int = 0,              # skip account if fewer LARGE hourglasses than this
     hg_cost: int = 0,                    # LARGE hourglasses to spend PER pack in PurchaseV2
+    power_id: str = "PACK_POWER_NORMAL", # (wr98) PACK_POWER_NORMAL or PACK_POWER_SPECIAL (SP1)
 ) -> dict:
     """
     Run the full injection flow for one account.
@@ -2430,7 +2491,7 @@ def inject_one(
         # requested 2. Community rule: "1 or 2" packs — if 0, skip.
         last_pack_pulled = account.get("last_pack_pulled", "") or "(unknown)"
         if run_mode == "godpack":
-            power = get_pack_power(sess, tag=tag)
+            power = get_pack_power(sess, tag=tag, target_power_id=power_id)
             # NOTE: -1 = RPC failed (proxy dead). Treat as "unknown power" —
             # smart-mix falls back to always-paid so heal_items refills for
             # every open. free_power_at_start clamps negatives to 0.
@@ -2515,7 +2576,7 @@ def inject_one(
         elif verify_power:
             # packs-only mode with explicit --verify-power: same guard,
             # no FR cleanup needed since we never sent any.
-            power = get_pack_power(sess, tag=tag)
+            power = get_pack_power(sess, tag=tag, target_power_id=power_id)
             # -1 = RPC dead; treat as unknown, don't cooldown, don't skip.
             free_power_at_start = max(0, int(power))
             if power < 0:
@@ -2584,7 +2645,7 @@ def inject_one(
                 # final sweep (or the next run's startup sweep) cleans up.
                 fr_cleanup.ledger_open(account, target_pids)
                 fr_was_sent = True
-                fr_ok = send_friend_requests(sess, target_pids)
+                fr_ok = send_friend_requests(sess, target_pids, tag)
                 if not fr_ok and len(target_pids) > 1:
                     # (2026-11-01) El paquete falla entero (ABORTED) si UNO de los collectors tiene la
                     # lista de amigos llena, y la cuenta se saltaba sin abrir (487 veces en un dia).
@@ -2593,7 +2654,7 @@ def inject_one(
                     # un main lleno con muy pocas cuentas nuestras = acepta solicitudes de otro grupo).
                     ok_pids, full_pids = [], []
                     for pid in target_pids:
-                        (ok_pids if send_friend_requests(sess, [pid]) else full_pids).append(pid)
+                        (ok_pids if send_friend_requests(sess, [pid], tag) else full_pids).append(pid)
                     if ok_pids:
                         if full_pids:
                             _note_full_collectors(full_pids, pid_to_friend_code, tag)
@@ -2709,7 +2770,7 @@ def inject_one(
                 log(f"[pack {i+1}/{packs}] FREE (using recharged power, "
                     f"{remaining} free left after this)", tag=tag)
             outcome = open_pack(sess, pack_id, product_id, tag=tag,
-                                hg_cost=per_pack_hg)
+                                hg_cost=per_pack_hg, power_id=power_id)
             if outcome is None:
                 log(f"pack {i+1}/{packs} did NOT open - breaking out of loop", tag=tag)
                 break
@@ -3246,7 +3307,14 @@ def run_injection(args) -> int:
         except Exception as exc:
             _resolved_hg_cost = 0
             _hg_source = f"fallback (catalog import failed: {exc})"
-    log(f"hg_cost per pack: {_resolved_hg_cost} LARGE (source: {_hg_source})")
+    _resolved_power_id = str(getattr(args, "power_id", "") or "").strip()
+    if not _resolved_power_id:
+        try:
+            from scripts.flow.pack_catalog import power_id_for_pack
+            _resolved_power_id = power_id_for_pack(args.pack_id)
+        except Exception:
+            _resolved_power_id = "PACK_POWER_SPECIAL" if str(args.pack_id).upper().startswith("SP") else "PACK_POWER_NORMAL"
+    log(f"hg_cost per pack: {_resolved_hg_cost} LARGE (source: {_hg_source}) | power_id: {_resolved_power_id}")
     if _resolved_hg_cost > 0 and args.packs > 2:
         # Sanity nudge — 10 paid packs = 120 LARGE. Without --min-hourglass
         # gate, a low-balance account will burn a login before getting
@@ -3448,6 +3516,7 @@ def run_injection(args) -> int:
             dismiss_popups=getattr(args, "dismiss_popups", True),
             min_hourglass=int(getattr(args, "min_hourglass", 0) or 0),
             hg_cost=_resolved_hg_cost,
+            power_id=_resolved_power_id,
         )
         # Record state (touch mtime only on successful attempt)
         gp_state.record_injection(
@@ -3718,6 +3787,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Pack ID to open (default: B4a Team Rocket).")
     p.add_argument("--product-id", default="PC_PS_2608000_01_01_01",
                    help="Product ID matching pack-id.")
+    p.add_argument("--power-id", default="",
+                   help="Pack power pool ID (PACK_POWER_NORMAL or PACK_POWER_SPECIAL). Auto-detected if empty.")
     p.add_argument("--accounts-dir", default=str(PROJECT_ROOT / "accounts"),
                    help="Directory with TR_*.json + .xml pairs (fallback when "
                         "--xml-dir/--json-dir are not set).")
