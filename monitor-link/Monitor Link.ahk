@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.15"
+global VERSION := "ahk-1.9.16"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -36,6 +36,7 @@ global ProxyFile := "", ProxyHuella := "", ProxiesEnviadas := ""
 global CFG_REROLL := CFG_DIR . "\reroll_accounts.txt", CFG_REROLL_LOG := CFG_DIR . "\reroll_log.txt"
 global CuentasReroll := {}, UltimoReroll := ""
 global Baneadas := {}   ; lent accounts the GP farm marked as likely banned (from the ping)
+global BanLocales := "", BtnBanAbrir, BtnBanBorrar   ; banned accounts still on this PC ("" = count again)
 global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global Status, Info, Clave, BtnLink, Inicio, LinkBox, LVCuentas, Barra
@@ -105,7 +106,7 @@ CrearVentana() {
     ; looked frozen and Windows said "Not responding").
     Gui, Add, Progress, xm y+4 w360 h10 c1E8E3E vBarra Hidden, 0
     Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Add, Text, xm y+6 w360 r7 vInfo,
+    Gui, Add, Text, xm y+6 w360 r8 vInfo,
     Gui, Add, GroupBox, xm y+6 w360 h92 vLinkBox, Link this PC
     Gui, Add, Text, xp+12 yp+22 w336, In Discord, type /link in Zenith Rise and paste the key here:
     Gui, Add, Edit, xp y+6 w250 vClave
@@ -117,6 +118,8 @@ CrearVentana() {
     Gui, Add, Button, x+6 yp w177 h30 gDejarProxies, Stop sharing proxies
     Gui, Add, Button, xm y+6 w360 h30 gCompartirCuentas, Share accounts for reroll (96+ packs)
     Gui, Add, Button, xm y+6 w360 h30 gElegirAmigos, Friends who can use my accounts in Discord
+    Gui, Add, Button, xm y+6 w177 h30 gAbrirBaneadas vBtnBanAbrir Disabled, Banned: open folder
+    Gui, Add, Button, x+6 yp w177 h30 gBorrarBaneadas vBtnBanBorrar Disabled, Delete banned XML && JSON
     Gui, Add, Checkbox, xm y+12 vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
     Gui, Show, AutoSize, Monitor Link
@@ -129,6 +132,11 @@ MostrarVinculo(mostrar) {
 }
 
 PintarEstado() {
+    ; Banned accounts still on this PC (counted again only when the list or the files change).
+    if (BanLocales = "")
+        BanLocales := Baneadas.Count() ? ArchivosBaneados().Count() : 0
+    GuiControl, % BanLocales ? "Enable" : "Disable", BtnBanAbrir
+    GuiControl, % BanLocales ? "Enable" : "Disable", BtnBanBorrar
     if (Token = "") {
         Gui, Font, s11 Bold cDA7B00, Segoe UI
         GuiControl, Font, Status
@@ -148,7 +156,7 @@ PintarEstado() {
         . (ProxyFile != "" ? "`nProxies shared: " . (ProxiesEnviadas != "" ? ProxiesEnviadas : "sending...") : "")
         . (CuentasReroll.Count() ? "`nAccounts shared for reroll: " . CuentasReroll.Count() . (UltimoReroll != "" ? " - last opened " . UltimoReroll : "") : "")
         . (CompGP != "" ? "`nGP farm accounts: " . CompGP . "  -  96P pack farm accounts: " . Comp96 : "")
-        . (Baneadas.Count() ? "`nLikely banned (see Share accounts): " . Baneadas.Count() : "")
+        . (BanLocales ? "`nBanned accounts: " . BanLocales . " (buttons below)" : "")
         . (UltimoError != "" ? "`n" . UltimoError : "")
     GuiControl,, Info, %texto%
     Menu, Tray, Tip, % "Monitor Link - " . (Token = "" ? "not linked" : EnLinea ? "connected" : "offline")
@@ -394,9 +402,97 @@ LeerBaneadas(texto) {
     Baneadas := nuevas
     if (avisar != "") {
         TrayTip, Monitor Link, % "Likely banned account(s) - the game refused them on several proxies:" . avisar, 20, 2
+        BanLocales := ""   ; recount the files on this PC
         PintarEstado()
     }
 }
+
+; ---------------------------------------------------------------- banned accounts (Ale 2026-11-06)
+; Banned folder = Accounts\Banned (next to Saved and Cards).
+CarpetaBaneadas() {
+    return CarpetaJson = "" ? "" : CarpetaPadre(CarpetaPadre(CarpetaJson)) . "\Banned"
+}
+
+; Each banned account on this PC: { xml: path or "", json: path or "" } (in Saved or already in Banned).
+ArchivosBaneados() {
+    salida := {}
+    if (!Baneadas.Count() || CarpetaJson = "")
+        return salida
+    jsons := {}
+    Loop, Files, %CarpetaJson%\*.json
+    {
+        FileRead, t, %A_LoopFileFullPath%
+        if RegExMatch(t, """fileName""\s*:\s*""((?:[^""\\]|\\.)*)""", mf)
+            jsons[RegExReplace(JsonUnesc(mf1), "i)\.xml$", "")] := A_LoopFileFullPath
+    }
+    ban := CarpetaBaneadas()
+    for f in Baneadas {
+        base := RegExReplace(f, "i)\.xml$", "")
+        xml := FileExist(ban . "\" . base . ".xml") ? ban . "\" . base . ".xml" : RutaDeXml(f)
+        json := FileExist(ban . "\" . base . ".json") ? ban . "\" . base . ".json" : (jsons.HasKey(base) ? jsons[base] : "")
+        if (xml != "" || json != "")
+            salida[f] := {xml: xml, json: json}
+    }
+    return salida
+}
+
+; Open folder: the banned accounts' XML + JSON move to Accounts\Banned (out of Saved, so no bot uses
+; them) and the folder opens.
+AbrirBaneadas:
+    ban := CarpetaBaneadas()
+    if (ban = "") {
+        MsgBox, 48, Monitor Link, Pick your folder first (Change folder).
+        return
+    }
+    FileCreateDir, %ban%
+    movidas := 0
+    for f, a in ArchivosBaneados() {
+        base := RegExReplace(f, "i)\.xml$", "")
+        if (a.xml != "" && !InStr(a.xml, ban . "\")) {
+            FileMove, % a.xml, % ban . "\" . base . ".xml", 1
+            movidas += !ErrorLevel
+        }
+        if (a.json != "" && !InStr(a.json, ban . "\"))
+            FileMove, % a.json, % ban . "\" . base . ".json", 1
+    }
+    IndiceXml := "", BanLocales := ""
+    PintarEstado()
+    Run, explorer.exe "%ban%"
+    if (movidas)
+        TrayTip, Monitor Link, % movidas . " banned account(s) moved to " . ban, 5, 1
+return
+
+; Delete: the banned accounts' XML + JSON go to the Recycle Bin (recoverable) and stop being shared.
+BorrarBaneadas:
+    archivos := ArchivosBaneados()
+    if (!archivos.Count()) {
+        MsgBox, 64, Monitor Link, No banned account files on this PC.
+        return
+    }
+    MsgBox, 36, Monitor Link, % "Send the XML and JSON of " . archivos.Count() . " likely banned account(s) to the Recycle Bin?`n`nThey stop being shared. You can restore them from the Recycle Bin if it was a mistake."
+    IfMsgBox, No
+        return
+    borradas := 0
+    for f, a in archivos {
+        if (a.xml != "") {
+            FileRecycle, % a.xml
+            borradas += !ErrorLevel
+        }
+        if (a.json != "")
+            FileRecycle, % a.json
+        CuentasReroll.Delete(f)
+    }
+    lista := ""
+    for f in CuentasReroll
+        lista .= f . "`n"
+    FileDelete, %CFG_REROLL%
+    if (lista != "")
+        FileAppend, %lista%, %CFG_REROLL%, UTF-8-RAW
+    IndiceXml := "", BanLocales := ""
+    EnviarCuentasReroll()
+    PintarEstado()
+    MsgBox, 64, Monitor Link, % borradas . " banned account(s) sent to the Recycle Bin."
+return
 
 ElegirAmigos:
     Gui, 3:Destroy
