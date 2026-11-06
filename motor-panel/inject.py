@@ -1123,8 +1123,14 @@ _paused_lock = threading.Lock()
 _paused_cache = {"ts": 0.0, "data": {}}
 
 
+PAUSE_COLLECTORS = False   # 2026-11-06 (Ale): OFF - it paused 10 of 16 Mains in 30 min on any transient
+                           # refusal ("server busy"); every online Main must get every God Pack.
+
+
 def _paused_collectors() -> dict:
     """reports/collectors_paused.json {code: until_epoch}, shared by every inject.py on this PC."""
+    if not PAUSE_COLLECTORS:
+        return {}
     now = time.time()
     if now - _paused_cache["ts"] < 30:
         return _paused_cache["data"]
@@ -1142,7 +1148,7 @@ def _pause_collectors(codes: list[str], tag: str = "") -> None:
     """2026-11-06 (Ale): a Main that refuses our requests (friend soft-ban or full list) is paused 6 h,
     so the farm stops hammering it while it recovers."""
     codes = [str(c or "").replace("-", "").strip() for c in codes if c]
-    if not codes:
+    if not codes or not PAUSE_COLLECTORS:
         return
     path = PROJECT_ROOT / "reports" / "collectors_paused.json"
     until = time.time() + COLLECTOR_PAUSE_SEC

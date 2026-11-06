@@ -39,7 +39,7 @@ function iniciar(d) {
     if (!deps.fastTransfer.rutaMotor()) return;
     instalarPanel(deps.fastTransfer.rutaMotor());
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
-        INJECT_ORIGINAL, '_limit_collectors', 'friend requests to every online Main, max 20 requests/min per Main, Mains refusing requests paused 6 h',
+        INJECT_ORIGINAL, '_limit_collectors', 'friend requests to every online Main, max 20 requests/min per Main',
         // (2026-11-06, Ale) Un Main quedo con soft ban de amigos: un host con su inject.py propio mandaba a 13 Mains
         // por cuenta sin limite. Sin estos limites se instala el nuestro igual (el suyo queda como .bak-propio).
         'FR_MAX_PER_MIN');
