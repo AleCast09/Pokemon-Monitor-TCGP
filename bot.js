@@ -14158,7 +14158,13 @@ async function manejarInteraccionPrincipal(interaction) {
                 embed.addFields({ name: `${emojiTag(mapaEmojisInventario, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: cuenta.d.toLocaleString('en-US'), inline: true });
             }
             if (DASHBOARD_PUBLIC_URL) embed.addFields({ name: '🔗 Pages we mentioned', value: `🌐 [From any network](${DASHBOARD_PUBLIC_URL}/account/${token})` });
-            embed.setFooter({ text: vivo ? 'Live from the game · the link works for 24 hours.' : `Saved data${motivoSinVivo ? ` (live read failed: ${motivoSinVivo})` : ''} · the link works for 24 hours.`.slice(0, 2000) });
+            // (2026-11-06) ABORTED = la cuenta esta abierta en otro lado en ese momento (GP farm, otra instancia):
+            // un aviso claro en vez del error crudo de gRPC.
+            const motivoTexto = !motivoSinVivo ? ''
+                : /ABORTED/i.test(motivoSinVivo) ? ' — couldn\'t read it live: the account is open somewhere else right now (e.g. the GP farm), try again in a few minutes'
+                : /UNAVAILABLE|DEADLINE|timeout|proxy/i.test(motivoSinVivo) ? ' — couldn\'t read it live: connection problem, try again in a few minutes'
+                : ` (live read failed: ${String(motivoSinVivo).split('\n')[0].slice(0, 120)})`;
+            embed.setFooter({ text: vivo ? 'Live from the game · the link works for 24 hours.' : `Saved data${motivoTexto} · the link works for 24 hours.`.slice(0, 2000) });
             const archivosEmbed = [];
             if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
                 embed.setThumbnail('attachment://symbol.png');
