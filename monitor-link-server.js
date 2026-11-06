@@ -35,6 +35,10 @@ async function asegurarTablas() {
     // saliendo solo del Monitor Link del dueño, al momento).
     await db.run(`CREATE TABLE IF NOT EXISTS link_amigos (
         amigo_id TEXT PRIMARY KEY, dueno_id TEXT, ts INTEGER)`);
+    if (!asegurarTablas.amigoJuego) {
+        try { await db.run(`ALTER TABLE link_amigos ADD COLUMN juego_id TEXT`); } catch (e) { /* ya existe */ }
+        asegurarTablas.amigoJuego = true;
+    }
     // Totales de elegibilidad GP de cada miembro (Monitor Link 1.9.8+): solo numeros, para el panel de hosts.
     await db.run(`CREATE TABLE IF NOT EXISTS link_gp (
         discord_id TEXT PRIMARY KEY, n96 INTEGER, ok INTEGER, bloq INTEGER, ts INTEGER)`);
@@ -460,11 +464,17 @@ function registrar(app, dependencias) {
             let datos;
             try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
             const dueno = String(agente.discord_id);
-            const ids = [...new Set((Array.isArray(datos.ids) ? datos.ids : []).map(x => String(x).trim()))]
-                .filter(x => /^\d{17,20}$/.test(x) && x !== dueno).slice(0, 10);
+            // Cada amigo: "discordId" o "discordId:friendIdDelJuego" (16 digitos; Monitor Link 1.9.9+).
+            const juegos = {};
+            const ids = [...new Set((Array.isArray(datos.ids) ? datos.ids : []).map(x => {
+                const m = /^(\d{17,20})(?::(\d{16}))?$/.exec(String(x).replace(/[\s-]/g, ''));
+                if (!m) return null;
+                if (m[2]) juegos[m[1]] = m[2];
+                return m[1];
+            }).filter(Boolean))].filter(x => x !== dueno).slice(0, 10);
             const antes = (await db.all(`SELECT amigo_id FROM link_amigos WHERE dueno_id = ?`, [dueno]) || []).map(f => String(f.amigo_id));
             await db.run(`DELETE FROM link_amigos WHERE dueno_id = ?`, [dueno]);
-            for (const id of ids) await db.run(`INSERT OR REPLACE INTO link_amigos (amigo_id, dueno_id, ts) VALUES (?, ?, ?)`, [id, dueno, Date.now()]);
+            for (const id of ids) await db.run(`INSERT OR REPLACE INTO link_amigos (amigo_id, dueno_id, ts, juego_id) VALUES (?, ?, ?, ?)`, [id, dueno, Date.now(), juegos[id] || null]);
             await cargarAmigos();
             // Rol Monitor (pedido de Ale): el amigo lo recibe al anotarlo (como al vincular) y lo pierde al
             // quitarlo, salvo que tenga su propio Monitor Link o sea amigo de otro miembro.
@@ -572,13 +582,15 @@ const amigos = new Map();
 async function cargarAmigos() {
     try {
         await asegurarTablas();
-        const filas = await db.all(`SELECT amigo_id, dueno_id FROM link_amigos`) || [];
+        const filas = await db.all(`SELECT amigo_id, dueno_id, juego_id FROM link_amigos`) || [];
         amigos.clear();
-        for (const f of filas) amigos.set(String(f.amigo_id), String(f.dueno_id));
+        for (const f of filas) amigos.set(String(f.amigo_id), { dueno: String(f.dueno_id), juego: f.juego_id ? String(f.juego_id) : null });
     } catch (e) { /* sin tablas todavia */ }
 }
 // Dueño cuyas cuentas usa este usuario de Discord (null si no es amigo de nadie).
-const duenoDe = (discordId) => amigos.get(String(discordId)) || null;
+const duenoDe = (discordId) => amigos.get(String(discordId))?.dueno || null;
+// Friend ID del juego que el dueño anoto para ese amigo (null si no puso ninguno).
+const juegoDeAmigo = (discordId) => amigos.get(String(discordId))?.juego || null;
 
 // Status de cuentas de toda la comunidad para el panel de hosts.
 async function estadoCuentasComunidad() {
@@ -938,5 +950,5 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { estadoCuentasComunidad, duenoDe, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
+module.exports = { estadoCuentasComunidad, duenoDe, juegoDeAmigo, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
     usarParteReroll, escribirProxiesMotor, xmlRerollPorHostActivo, pasarSobresAlHostActivo };

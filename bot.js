@@ -747,7 +747,7 @@ async function idsFarmRegistrados(discordId, userId = null) {
     if (comunidad.esComunidad(discordId)) {
         if (!userId) return [];
         try {
-            return (await comunidad.destinosDe(userId)).map(d => ({ friend_id: d.id, alias: d.label }));
+            return (await destinosComunidad(userId)).map(d => ({ friend_id: d.id, alias: d.label }));
         } catch (e) {
             console.error('DEBUG: no se pudo leer el registro de wr98 para Farm Tickets:', e?.message || e);
             return [];
@@ -4926,13 +4926,31 @@ function leerIniInject(rutaIni = RUTA_INJECT_INI_DEFAULT) {
     return datos;
 }
 
+// Destinos de un usuario en la comunidad (Main/secundaria del registro de wr98). Amigo de un miembro
+// (Monitor Link 1.9.9+, pedido de Ale): primero el friend ID del juego que el miembro le anoto (y su
+// propio registro, si tiene), despues los del miembro -- asi ve su ID y el del dueño.
+async function destinosComunidad(userId) {
+    const dueno = monitorLink.duenoDe(userId);
+    if (!dueno) return await comunidad.destinosDe(userId);
+    const salida = [];
+    const juego = monitorLink.juegoDeAmigo(userId);
+    if (juego) {
+        const u = await client.users.fetch(String(userId)).catch(() => null);
+        salida.push({ id: juego, label: `${u?.globalName || u?.username || 'Friend'} — Main` });
+    }
+    salida.push(...await comunidad.destinosDe(userId).catch(() => []));
+    salida.push(...await comunidad.destinosDe(dueno).catch(() => []));
+    const vistos = new Set();
+    return salida.filter(d => d.id && !vistos.has(String(d.id)) && vistos.add(String(d.id)));
+}
+
 // Destinos para Share/Trade. En el server de comunidad (community.js) NO se usa la lista de
 // amigos guardados de esta PC: solo la Main/secundaria que ESE miembro registro en el panel de
 // wr98. Si no esta registrado (o la clave del registro vencio) devuelve [] y el llamador avisa.
 async function amigosParaInteraccion(interaction, rutaIni) {
     if (!comunidad.esComunidad(interaction.guildId)) return parsearListaFriends(rutaIni);
     try {
-        const destinos = await comunidad.destinosDe(interaction.user.id);
+        const destinos = await destinosComunidad(interaction.user.id);
         if (!destinos.length) interaction._sinDestinosMsg = '❌ You\'re not registered yet. Register your **Main** in the community panel first, then try again.';
         return destinos;
     } catch (e) {

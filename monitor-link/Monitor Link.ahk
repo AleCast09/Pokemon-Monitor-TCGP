@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.8"
+global VERSION := "ahk-1.9.9"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -400,24 +400,28 @@ return
 ; Friends (2026-11-06, Ale): Discord IDs of people who can use the bot with THIS member's accounts,
 ; without installing Monitor Link. The .xml files still only leave this PC when the bot asks for one.
 ElegirAmigos:
-    InputBox, nuevos, Friends who can use my accounts, % "Discord user IDs of your friends, separated by commas (max 10).`n`nThey will use the bot in Zenith Rise with YOUR accounts: see your cards, Fast Share/Trade and Extract XML.`nLeave it empty to remove them all.`n`n(Discord: Settings > Advanced > Developer Mode, then right-click the user > Copy User ID)", , 460, 270, , , , , %Amigos%
+    InputBox, nuevos, Friends who can use my accounts, % "One friend per entry, separated by commas (max 10):`n      DiscordUserID:GameFriendID`ne.g. 718835068549857371:1234-5678-9012-3456`n`nThey will use the bot in Zenith Rise with YOUR accounts (cards, Fast Share/Trade, Extract XML). Their game ID shows up next to yours when they pick where to send cards.`nLeave it empty to remove them all.`n`n(Discord: Settings > Advanced > Developer Mode, then right-click the user > Copy User ID)", , 520, 320, , , , , %Amigos%
     if (ErrorLevel)
         return
-    lista := "", malos := ""
-    Loop, Parse, nuevos, `,%A_Space%`n`r
+    lista := "", malos := "", vistos := {}
+    Loop, Parse, nuevos, `,`n`r
     {
-        id := Trim(A_LoopField)
-        if (id = "")
+        par := StrReplace(Trim(A_LoopField), " ")
+        if (par = "")
             continue
-        if !RegExMatch(id, "^\d{17,20}$") {
-            malos .= " " . id
+        partes := StrSplit(par, ":")
+        id := partes[1], juego := RegExReplace(partes.Length() > 1 ? partes[2] : "", "\D")
+        if (!RegExMatch(id, "^\d{17,20}$") || (juego != "" && StrLen(juego) != 16) || partes.Length() > 2) {
+            malos .= "`n" . par
             continue
         }
-        if !InStr("," . lista . ",", "," . id . ",")
-            lista .= (lista = "" ? "" : ",") . id
+        if (vistos.HasKey(id))
+            continue
+        vistos[id] := true
+        lista .= (lista = "" ? "" : ",") . id . (juego != "" ? ":" . juego : "")
     }
     if (malos != "") {
-        MsgBox, 48, Monitor Link, % "These are not Discord user IDs:" . malos . "`n`nA user ID is a long number (17-20 digits)."
+        MsgBox, 48, Monitor Link, % "Check these entries:" . malos . "`n`nWrite each friend as DiscordUserID:GameFriendID`n(Discord ID = 17-20 digits, game friend ID = 16 digits)."
         return
     }
     if (lista != "") {
