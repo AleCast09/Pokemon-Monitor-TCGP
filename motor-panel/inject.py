@@ -2919,7 +2919,9 @@ def _pack_budget_locked():
             # variant so it doesn't linger as dead data.
             state.pop("opens", None)
             yield state
-            tmp = _PACK_BUDGET_FILE + ".tmp"
+            # (2026-11-06) tmp propio por proceso: con tus cuentas + las prestadas corren dos inject.py a la
+            # vez y compartian ".tmp" -> uno renombraba el del otro ([Errno 2] .pack_budget.json.tmp en la Mac).
+            tmp = f"{_PACK_BUDGET_FILE}.{os.getpid()}.tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(state, fh)
             os.replace(tmp, _PACK_BUDGET_FILE)

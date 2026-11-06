@@ -40,6 +40,9 @@ function iniciar(d) {
     instalarPanel(deps.fastTransfer.rutaMotor());
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
         INJECT_ORIGINAL, '_limit_collectors', 'max 5 online collectors per account, rotating');
+    // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
+    instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
+        '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent');
     // La parte de proxies cambia cuando otro host entra o sale: se rehace el .txt cada minuto.
     setInterval(() => deps.ml.escribirProxiesMotor().catch(() => {}), 60 * 1000);
     sincronizarPanel();
