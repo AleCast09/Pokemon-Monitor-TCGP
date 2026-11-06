@@ -27,6 +27,7 @@ const configScript = require('./config.js');
 const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, avisarActualizacionFallidaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion, describirError, notasParaEmbed, obtenerDestinoNotificacion } = require('./update-checker.js');
 const { obtenerMapaEmojisGuild, FUENTES_EMOJIS, obtenerErroresEmojisGuild } = require('./guild-emojis.js');
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
+const { sincronizarDatosCartas } = require('./card-data-sync.js');
 iniciarAutoSyncCardTypes();
 // Fast Share/Trade sin MuMu (2026-10-23): todo en fast-transfer.js, apagado salvo que el .env
 // tenga FAST_TRANSFER_ENGINE_DIR y sea el servidor propio.
@@ -17033,6 +17034,13 @@ async function limpiarPanelesDeOtrosBots(guild) {
 
 client.once('ready', async () => {
     try {
+        // Hosts de la comunidad: datos de cartas al dia (sets nuevos), ver card-data-sync.js.
+        if (comunidad.hayComunidad()) {
+            try {
+                const rutaMaster = (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url;
+                if (sincronizarDatosCartas(rutaMaster).length) _todasCartasCacheBot = null;
+            } catch (e) { console.error('DEBUG: datos de cartas:', e?.message || e); }
+        }
         if (comunidad.hayComunidad()) await adoptarCanalesComunidad();
         await hostComunidad.iniciar({ alTomar: tomarTurnoComunidad, alSoltar: soltarTurnoComunidad, estado: estadoDeEsteHost, panel: actualizarPanelHosts, control: actualizarControlHost });
         await registrarSlashCommands();
