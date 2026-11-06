@@ -3215,7 +3215,10 @@ def run_injection(args) -> int:
         cooldown_hours=args.cooldown_hours,
     )
     if not accounts:
-        log("[!] no eligible accounts. exiting.")
+        # 2026-11-06 (Ale): not an error - every account is resting (opened in the last cooldown hours).
+        # Plain text (no "[!]") so the panel doesn't paint it red; the community farm keeps going.
+        log(f"[info] all your accounts are resting (opened in the last {args.cooldown_hours:g} h) - "
+            f"nothing of yours to open right now. Lent accounts (Community farm) keep being opened.")
         return 0
 
     # Sort BEFORE applying --limit so "oldest first + limit 10" gives you the
