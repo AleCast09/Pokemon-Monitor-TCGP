@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.12"
+global VERSION := "ahk-1.9.13"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -34,6 +34,7 @@ global ProxyFile := "", ProxyHuella := "", ProxiesEnviadas := ""
 ; sent; each .xml is sent when a host is about to open it (like Fast Share) and the host deletes it.
 global CFG_REROLL := CFG_DIR . "\reroll_accounts.txt", CFG_REROLL_LOG := CFG_DIR . "\reroll_log.txt"
 global CuentasReroll := {}, UltimoReroll := ""
+global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global Status, Info, Clave, BtnLink, Inicio, LinkBox, LVCuentas, Barra
 
@@ -102,7 +103,7 @@ CrearVentana() {
     ; looked frozen and Windows said "Not responding").
     Gui, Add, Progress, xm y+4 w360 h10 c1E8E3E vBarra Hidden, 0
     Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Add, Text, xm y+6 w360 r6 vInfo,
+    Gui, Add, Text, xm y+6 w360 r7 vInfo,
     Gui, Add, GroupBox, xm y+6 w360 h92 vLinkBox, Link this PC
     Gui, Add, Text, xp+12 yp+22 w336, In Discord, type /link in Zenith Rise and paste the key here:
     Gui, Add, Edit, xp y+6 w250 vClave
@@ -144,6 +145,7 @@ PintarEstado() {
         . (UltimoEnvio != "" ? "Cards summary: " . CuentasEnviadas . " accounts, sent at " . UltimoEnvio : "Cards summary: not sent yet")
         . (ProxyFile != "" ? "`nProxies shared: " . (ProxiesEnviadas != "" ? ProxiesEnviadas : "sending...") : "")
         . (CuentasReroll.Count() ? "`nAccounts shared for reroll: " . CuentasReroll.Count() . (UltimoReroll != "" ? " - last opened " . UltimoReroll : "") : "")
+        . (CompGP != "" ? "`nGP farm accounts: " . CompGP . "  -  96P pack farm accounts: " . Comp96 : "")
         . (UltimoError != "" ? "`n" . UltimoError : "")
     GuiControl,, Info, %texto%
     Menu, Tray, Tip, % "Monitor Link - " . (Token = "" ? "not linked" : EnLinea ? "connected" : "offline")
@@ -502,7 +504,7 @@ EnviarAmigos() {
 EnviarCuentasReroll() {
     if (Token = "")
         return false
-    datos := {}, bloqueadas := {}
+    datos := {}, bloqueadas := {}, nGP := 0, n96p := 0
     ; Totals for the hosts panel (Ale 2026-11-06): accounts with 96+ packs, how many are God Pack
     ; eligible and how many locked. Only these 3 numbers leave the PC, never the accounts.
     n96 := 0, nOk := 0, nBloq := 0
@@ -532,10 +534,18 @@ EnviarCuentasReroll() {
             l := RegExMatch(t, """lastPackPulled""\s*:\s*""(\d+)""", ml) ? ml1 : ""
             ; e > 0 = locked: hosts open it only in their pack farm (Open Packs Only) until it is eligible.
             datos[f] := "{""f"":""" . JsonEsc(f) . """,""p"":" . p . ",""l"":""" . l . """,""e"":" . e . "}"
+            if (e)
+                n96p++
+            else
+                nGP++
         }
     items := ""
     for f in CuentasReroll
         items .=(items = "" ? "" : ",") . (datos.HasKey(f) ? datos[f] : """" . JsonEsc(f) . """")
+    if (CarpetaJson != "") {
+        CompGP := nGP, Comp96 := n96p   ; shown in the main window (Ale 2026-11-06)
+        PintarEstado()
+    }
     body := "{""accounts"":[" . items . "]"
         . (CarpetaJson != "" ? ",""stats"":{""n96"":" . n96 . ",""ok"":" . nOk . ",""lock"":" . nBloq . "}" : "") . "}"
     try {
