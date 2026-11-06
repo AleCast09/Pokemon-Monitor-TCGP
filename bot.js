@@ -16777,24 +16777,35 @@ async function seccionPrestadas(hosts) {
     const recuadros = farm.slice(0, 8).map(h => {   // 8: Discord admite 10 recuadros (hosts + status de cuentas + farms)
         const sobres = h.farm?.modo === 'packs-only';
         const delModo = (v) => sobres ? (Number(v[3]) || 0) : (v[5] ?? Math.max(0, (Number(v[1]) || 0) - (Number(v[3]) || 0)));
-        const filas = Object.entries(h.prestadas).filter(([, v]) => delModo(v) > 0)
+        // (Ale 2026-11-06) Ordenado como el heartbeat: columnas de ancho fijo (total del modo, abiertas por
+        // este host en 24 h, las que QUEDAN por abrir ahora) y el miembro al final para no correr las columnas.
+        const n = (x) => (Number(x) || 0).toLocaleString('en-US');
+        const datos = Object.entries(h.prestadas).filter(([, v]) => delModo(v) > 0)
             .sort((a, b) => delModo(b[1]) - delModo(a[1]))
-            .map(([id, v]) => `${punto(id)} <@${id}> — ${sobres ? '🔒' : '⭐'} **${delModo(v).toLocaleString('en-US')}** ${sobres ? 'not eligible' : 'GP-eligible'}`
-                + ` · ✅ **${(Number(v[4]) || 0).toLocaleString('en-US')}** opened`);
+            .map(([id, v]) => ({ id, total: n(delModo(v)), abiertas: n(v[4]), quedan: n(v[2]) }));
+        const ancho = (k, titulo) => Math.max(titulo.length, ...datos.map(d => d[k].length));
+        const aT = ancho('total', 'Total'), aA = ancho('abiertas', 'Opened'), aQ = ancho('quedan', 'Left');
+        const icono = sobres ? '🔒' : '⭐';
+        const caja = (texto, w) => '`' + String(texto).padStart(w) + '`';
+        const cabecera = `> ⚪ ${caja('Total', aT)} ${icono} | ${caja('Opened', aA)} ✅ | ${caja('Left', aQ)} ⏳ | Member`;
+        const filas = datos.map(d => `> ${punto(d.id)} ${caja(d.total, aT)} ${icono} | ${caja(d.abiertas, aA)} ✅ | ${caja(d.quedan, aQ)} ⏳ | <@${d.id}>`);
         const totalModo = Object.values(h.prestadas).reduce((a, v) => a + delModo(v), 0);
-        const propias = h.farm?.propias ? `Own accounts: **${h.farm.propias}**\n` : '';
         const modoTexto = sobres ? '📦 Mode: **Only packs** — 96P farm (not-eligible accounts)' : '✨ Mode: **God Pack farm** (eligible accounts)';
+        const resumen = [
+            `> 🖥️ Own accounts: ${caja(n(h.farm?.propias), 1)}`,
+            `> ${icono} This mode on this host: ${caja(n(totalModo), 1)}`,
+            `> ✅ Opened (24 h): ${caja(n(suma(h, 4)), 1)} | ⏳ Left now: ${caja(n(suma(h, 2)), 1)}`
+        ].join('\n');
         return new EmbedBuilder().setColor(sobres ? 0xF0A93A : 0x57F287)
             .setTitle(`🎲 ${h.farm?.nombre || h.nombre} — ${sobres ? '96P pack farm' : 'GP farm'} host`)
-            .setDescription((`${modoTexto}\n${propias}🎴 Available now: **${suma(h, 2).toLocaleString('en-US')}** · ✅ Opened (24 h): **${suma(h, 4).toLocaleString('en-US')}**`
-                + ` · Accounts for this mode on this host: **${totalModo.toLocaleString('en-US')}**\n\n${filas.join('\n') || 'No lent accounts for this mode.'}`).slice(0, 4000))
-            .setFooter({ text: 'opened = opened by this host in the last 24 h · hosts in the same mode split the accounts · 🟢 Monitor Link on · 🔴 off' });
+            .setDescription(`${modoTexto}\n${resumen}\n\n${datos.length ? [cabecera, ...filas].join('\n') : 'No lent accounts for this mode.'}`.slice(0, 4000))
+            .setFooter({ text: `Total = ${sobres ? 'not-eligible' : 'GP-eligible'} accounts on this host · Opened = by this host in the last 24 h · Left = can be opened right now (the rest wait their 24 h or recharge) · 🟢 Monitor Link on · 🔴 off` });
     });
     const ultimo = recuadros[recuadros.length - 1];
     if (ultimo) {
         const desc = ultimo.data.description || '';
-        const pie = `\n\n━━━━━━━━━━\n📦 **All hosts:** **${totalPrestadas.toLocaleString('en-US')}** shared accounts · `
-            + `✅ **${totalAbiertas.toLocaleString('en-US')}** opened in the last 24 h`;
+        const pie = `\n\n━━━━━━━━━━\n> 🌐 **All hosts** | 📦 Shared: \`${totalPrestadas.toLocaleString('en-US')}\``
+            + ` | ✅ Opened (24 h): \`${totalAbiertas.toLocaleString('en-US')}\``;
         ultimo.setDescription(desc.slice(0, 4096 - pie.length) + pie);
     }
     return recuadros;

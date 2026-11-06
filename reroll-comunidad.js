@@ -445,10 +445,26 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
             // ZENITH_ACCOUNT_OWNER: el aviso de God Pack en Zenith menciona al dueño de la cuenta prestada.
             env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8', ZENITH_ACCOUNT_OWNER: String(duenoId || '') }
         });
-        hijo.stdout.on('data', escribir);
+        // God Packs de la tanda (2026-11-06, Arcade: "another one found, no ping to discord"): se leen de la
+        // salida del motor y el bot avisa el mismo, aunque el webhook del panel este vacio o falle.
+        const gps = [];
+        let resto = '';
+        const leer = (d) => {
+            escribir(d);
+            const lineas = (resto + d.toString('utf8')).split(/\r?\n/);
+            resto = lineas.pop();
+            for (const l of lineas) {
+                const m = /\[([^\]]+)\] pack opened .*<-- GOD PACK (\S+) \(WONDER-PICKABLE\)/.exec(l);
+                if (m) gps.push({ cuenta: m[1], nivel: m[2], cartas: '' });
+                const c = /\[([^\]]+)\] cards: (.+)$/.exec(l);
+                const ultimo = gps[gps.length - 1];
+                if (c && ultimo && ultimo.cuenta === c[1] && !ultimo.cartas) ultimo.cartas = c[2];
+            }
+        };
+        hijo.stdout.on('data', leer);
         hijo.stderr.on('data', escribir);
-        hijo.on('error', e => { escribir(`[spawn error] ${e?.message || e}\n`); cerrar(); resolve(false); });
-        hijo.on('close', code => { escribir(`[exit ${code}]\n`); cerrar(); resolve(true); });
+        hijo.on('error', e => { escribir(`[spawn error] ${e?.message || e}\n`); cerrar(); resolve(gps); });
+        hijo.on('close', code => { escribir(`[exit ${code}]\n`); cerrar(); resolve(gps); });
     });
 }
 
@@ -560,7 +576,10 @@ async function ciclo() {
                 log(`opening ${nombres.length} account(s) lent by ${m.discord_id}`);
                 trabajo = true;
                 const inicioTanda = Date.now();
-                await correrInject(motor, dir, s, nombres.length, m.discord_id);
+                const gps = await correrInject(motor, dir, s, nombres.length, m.discord_id);
+                // El aviso en Discord lo hace el webhook de God Pack del panel (publicacion de foro con collage,
+                // discord_notifier.py); aca solo queda en el log del bot.
+                for (const gp of gps || []) log(`GOD PACK ${gp.nivel} on ${gp.cuenta} (lent by ${m.discord_id})`);
                 await revisarBaneadas(motor, inicioTanda, m.discord_id, nombres).catch(e => log('banned check failed:', e?.message || e));
                 let sobres = 0;
                 const abiertasTanda = [];
