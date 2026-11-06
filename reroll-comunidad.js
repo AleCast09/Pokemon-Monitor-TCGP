@@ -12,7 +12,7 @@
 // manda las cartas) a traves de el.
 //
 // Corre solo en un host con motor (FAST_TRANSFER_ENGINE_DIR) y marcado Online para GP farm.
-// Ajustes opcionales del .env: REROLL_CADA_MIN (10), REROLL_COOLDOWN_HORAS (24), REROLL_LOTE (20).
+// Ajustes opcionales del .env: REROLL_CADA_MIN (10), REROLL_COOLDOWN_HORAS (24), REROLL_LOTE (50).
 // (2026-11-01, pedido de Ale: cada 10 min en vez de 30; una vuelta que no termino hace saltar la siguiente.)
 'use strict';
 const fs = require('fs');
@@ -399,13 +399,15 @@ async function ciclo() {
     const parte = await deps.parte().catch(() => null);
     if (!motor) return;
     corriendo = true;
+    let trabajo = false;   // si abrio alguna tanda: la siguiente arranca enseguida
     try {
         await entregarPendientes();
         if (!parte || !panelEncendido(motor)) return;   // Offline: el panel GP no esta en Start
         await deps.ml.escribirProxiesMotor().catch(() => {});
 
         const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
-        const lote = num(process.env.REROLL_LOTE, 20);
+        // (2026-11-06, pedido de Ale: mas PPM) 50 cuentas por miembro y tanda (antes 20).
+        const lote = num(process.env.REROLL_LOTE, 50);
         const s = ajustesPanel(motor);
         const estado = leerEstado(motor);
         const miembros = await deps.ml.cuentasReroll();
@@ -440,6 +442,7 @@ async function ciclo() {
                     fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify({ metadata: {}, pulls: [], registeredCards: [] }));
                 }
                 log(`opening ${nombres.length} account(s) lent by ${m.discord_id}`);
+                trabajo = true;
                 await correrInject(motor, dir, s, nombres.length, m.discord_id);
                 let sobres = 0;
                 for (const nombre of nombres) {
@@ -466,6 +469,10 @@ async function ciclo() {
         log('cycle failed:', e?.message || e);
     } finally {
         corriendo = false;
+        // Tandas seguidas (2026-11-06, pedido de Ale): antes cada tanda terminaba en 2-3 min y el host
+        // quedaba parado hasta los 10 min, y ese tiempo muerto bajaba el PPM. Si hubo trabajo, la
+        // siguiente arranca a los 30 s; si no quedan cuentas listas, se vuelve al intervalo de siempre.
+        if (trabajo && deps?.fastTransfer.rutaMotor() && panelEncendido(deps.fastTransfer.rutaMotor())) setTimeout(ciclo, 30 * 1000);
     }
 }
 
