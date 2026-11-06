@@ -254,7 +254,11 @@ function registrar(app, dependencias) {
     // busca en la libreta la direccion del host que tiene el turno.
     const activo = dependencias.activo || (() => true);
     // Excepcion: el resumen y las proxies se reciben igual en espera (ver anotarHost / espejos).
-    app.use('/link', (req, res, next) => (activo() || (req.method === 'POST' && ['/summary', '/proxies', '/reroll-accounts', '/friends'].includes(req.path)) ? next() : res.status(503).json({ error: 'standby' })));
+    // (2026-11-06, Ale) Tambien en espera: GET /jobs y POST /xml, asi cualquier host (no solo el del turno)
+    // le pide a Monitor Link 1.9.14+ las cuentas prestadas directo y el GP farm no depende del host del turno.
+    app.use('/link', (req, res, next) => (activo()
+        || (req.method === 'POST' && ['/summary', '/proxies', '/reroll-accounts', '/friends', '/xml'].includes(req.path))
+        || (req.method === 'GET' && req.path === '/jobs')) ? next() : res.status(503).json({ error: 'standby' }));
     sincronizarAgentes();
     setInterval(sincronizarAgentes, 10 * 60 * 1000);
     cargarAmigos();

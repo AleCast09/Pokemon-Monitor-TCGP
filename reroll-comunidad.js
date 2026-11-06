@@ -455,9 +455,11 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
 // Cartas que quedaron sin entregar: el host del turno se las manda a cada Monitor Link; otro host se las
 // pasa al del turno.
 async function entregarPendientes(idMiembro) {
-    if (!deps.activo()) return deps.ml.pasarSobresAlHostActivo().catch(() => {});
+    // Directo al Monitor Link de cada miembro (1.9.14+ escucha a todos los hosts). Lo que no se pudo
+    // entregar (Monitor Link viejo o apagado) y este host no tiene el turno, se pasa al host del turno.
     const ids = idMiembro ? [idMiembro] : await deps.ml.miembrosConSobresPendientes();
     for (const id of ids) await deps.ml.entregarSobresReroll(id).catch(() => {});
+    if (!deps.activo()) await deps.ml.pasarSobresAlHostActivo().catch(() => {});
 }
 
 // Entregas pendientes en segundo plano (2026-11-06, Ale: "no abre nada, se quedo asi"): con cientos
@@ -506,11 +508,17 @@ async function ciclo() {
             if (!await deps.fastTransfer.asegurarTunel()) { log('tunnel 9090 is down - skipping this cycle'); return; }
             let xmls;
             try {
-                xmls = deps.activo()
-                    ? await deps.ml.pedirXmlReroll(m.discord_id, listas.map(c => c.f))
-                    : await deps.ml.xmlRerollPorHostActivo(m.discord_id, listas.map(c => c.f));
-            } catch (e) {   // PC del miembro apagada, o el host del turno no contesta
-                log(`${m.discord_id}: could not get the ${listas.length} account file(s) ${deps.activo() ? 'from their Monitor Link' : 'through the host with the turn'}: ${e?.message || e}`);
+                // (2026-11-06, Ale) Siempre directo al Monitor Link del miembro (1.9.14+ escucha a todos los
+                // hosts): el farm ya no depende del host del turno. Si ese Monitor Link es viejo y este host no
+                // tiene el turno, se prueba como antes, por el host del turno.
+                try {
+                    xmls = await deps.ml.pedirXmlReroll(m.discord_id, listas.map(c => c.f));
+                } catch (e) {
+                    if (deps.activo()) throw e;
+                    xmls = await deps.ml.xmlRerollPorHostActivo(m.discord_id, listas.map(c => c.f));
+                }
+            } catch (e) {   // PC del miembro apagada, o Monitor Link viejo y el host del turno no contesta
+                log(`${m.discord_id}: could not get the ${listas.length} account file(s) from their Monitor Link: ${e?.message || e}`);
                 continue;
             }
             const nombres = Object.keys(xmls);

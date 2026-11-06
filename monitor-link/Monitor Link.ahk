@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.13"
+global VERSION := "ahk-1.9.14"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -28,6 +28,7 @@ global JobsReq := "", JobsReintento := 0, IndiceXml := "", IndiceDe := "", Indic
 ; The other community hosts (the ping lists them): they get the same summary, so whichever takes over
 ; already has your accounts -- even if this PC is off by then.
 global Espejos := [], UltimoEspejo := 0
+global JobServer := "", JobsEsp := {}, JobsEspRetry := {}   ; job polling of the other hosts
 ; Share proxies: the member's own proxy list (.txt) for the hosts' reroll. Re-sent when the file changes.
 global ProxyFile := "", ProxyHuella := "", ProxiesEnviadas := ""
 ; Share accounts: the accounts (96+ packs) the member lends to the hosts' reroll. Only their NAMES are
@@ -585,7 +586,7 @@ AtenderReroll(id, lista) {
             faltan .= (faltan = "" ? "" : ",") . """" . JsonEsc(nombre) . """"
         }
     }
-    try Http("POST", ServerUrl . "/link/xml", "{""id"":""" . id . """,""files"":{" . archivos . "},""missing"":[" . faltan . "]}", "text/plain; charset=utf-8", Token, 60)
+    try Http("POST", (JobServer != "" ? JobServer : ServerUrl) . "/link/xml", "{""id"":""" . id . """,""files"":{" . archivos . "},""missing"":[" . faltan . "]}", "text/plain; charset=utf-8", Token, 60)
     FormatTime, ahora,, yyyy-MM-dd HH:mm
     FileAppend, % ahora . "  host opened " . enviados . " account(s) for reroll:" . nombres . (rechazados ? "  (refused " . rechazados . " not shared)" : "") . "`n", %CFG_REROLL_LOG%, UTF-8
     FormatTime, UltimoReroll,, HH:mm
@@ -799,6 +800,7 @@ Arrancar() {
     SetTimer, Ping, 60000
     SetTimer, ResumenPeriodico, 600000
     SetTimer, RevisarTrabajos, 300
+    SetTimer, RevisarTrabajosEspejos, 500
 }
 
 NoVinculado() {
@@ -1056,6 +1058,61 @@ RevisarTrabajos:
         SinConexion()
         return
     }
+    JobServer := ServerUrl   ; the answers go back to the host that asked
+    ProcesarTrabajos(texto)
+return
+
+; Jobs from the OTHER hosts (Ale 2026-11-06: every host can ask for lent accounts directly, not only the
+; one with the turn). One open request per host; each answer goes back to the host that sent the job.
+RevisarTrabajosEspejos:
+    if (Token = "")
+        return
+    for _, espejo in Espejos
+        if (espejo != ServerUrl)
+            RevisarTrabajosDe(espejo)
+return
+
+RevisarTrabajosDe(srv) {
+    global
+    local req, listo, estado, texto
+    if (JobsEspRetry.HasKey(srv) && A_TickCount < JobsEspRetry[srv])
+        return
+    if (!JobsEsp.HasKey(srv)) {
+        try {
+            req := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+            req.SetTimeouts(5000, 10000, 30000, 40000)
+            req.Open("GET", srv . "/link/jobs", true)
+            req.SetRequestHeader("Authorization", "Bearer " . Token)
+            req.Send()
+            JobsEsp[srv] := req
+        } catch e {
+            JobsEspRetry[srv] := A_TickCount + 15000
+        }
+        return
+    }
+    req := JobsEsp[srv]
+    try {
+        listo := req.WaitForResponse(0)
+    } catch e {
+        JobsEsp.Delete(srv), JobsEspRetry[srv] := A_TickCount + 15000
+        return
+    }
+    if (!listo)
+        return
+    estado := req.Status, texto := req.ResponseText
+    JobsEsp.Delete(srv)
+    if (estado != 200) {   ; an older host in standby answers 503: try again later
+        JobsEspRetry[srv] := A_TickCount + 30000
+        return
+    }
+    JobServer := srv
+    ProcesarTrabajos(texto)
+    JobServer := ServerUrl
+}
+
+ProcesarTrabajos(texto) {
+    global
+    local pos, mj, mj1, mj2, mpl, mpl1, mpl2, mpl3, mr, mr1, mr2, mw, mw1, mw2, mw3, mm, mm1, mi, mi1, mi2, mi3, mi4, mjs, mjs1, mjs2, mwj, mwj1, mwj2, mwj3, mfw, mfw1, mfw2
     pos := 1
     while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""files""\s*:\s*\[(.*?)\]", mj, pos)) {
         pos += StrLen(mj)
@@ -1100,8 +1157,7 @@ RevisarTrabajos:
     while (pos := RegExMatch(texto, """id""\s*:\s*""([0-9a-f]+)""\s*,\s*""action""\s*:\s*""ml_file_write""\s*,\s*""content""\s*:\s*""([A-Za-z0-9+/=]+)""", mfw, pos)) {
         pos += StrLen(mfw)
         GuardarAjustes(mfw1, mfw2)
-    }
-return
+    }}
 
 AtenderTrabajo(id, lista) {
     archivos := "", faltan := "", enviados := 0, p := 1
@@ -1121,7 +1177,7 @@ AtenderTrabajo(id, lista) {
         }
     }
     body := "{""id"":""" . id . """,""files"":{" . archivos . "},""missing"":[" . faltan . "]}"
-    try Http("POST", ServerUrl . "/link/xml", body, "text/plain; charset=utf-8", Token, 60)
+    try Http("POST", (JobServer != "" ? JobServer : ServerUrl) . "/link/xml", body, "text/plain; charset=utf-8", Token, 60)
     TrayTip, Monitor Link, % "Sent " . enviados . " account file(s) you asked for in Discord.", 3, 1
 }
 
@@ -1162,7 +1218,7 @@ AgregarAWishlist(id, carta, nombreJson) {
         }
     }
     body := "{""id"":""" . id . """,""ok"":" . ok . ",""already"":" . ya . (error != "" ? ",""error"":""" . JsonEsc(error) . """" : "") . "}"
-    try Http("POST", ServerUrl . "/link/xml", body, "text/plain; charset=utf-8", Token, 30)
+    try Http("POST", (JobServer != "" ? JobServer : ServerUrl) . "/link/xml", body, "text/plain; charset=utf-8", Token, 30)
     if (ok = "true" && ya = "false") {
         TrayTip, Monitor Link, % "Added to your wishlist: " . JsonUnesc(nombreJson), 3, 1
         SubirResumen(false)
@@ -1265,7 +1321,7 @@ InstanciasMuMu(texto) {
 }
 
 ResponderAccion(cuerpo) {
-    try Http("POST", ServerUrl . "/link/xml", cuerpo, "text/plain; charset=utf-8", Token, 30)
+    try Http("POST", (JobServer != "" ? JobServer : ServerUrl) . "/link/xml", cuerpo, "text/plain; charset=utf-8", Token, 30)
 }
 
 ListarMuMu(id) {
