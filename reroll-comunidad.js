@@ -397,6 +397,15 @@ async function entregarPendientes(idMiembro) {
     for (const id of ids) await deps.ml.entregarSobresReroll(id).catch(() => {});
 }
 
+// Entregas pendientes en segundo plano (2026-11-06, Ale: "no abre nada, se quedo asi"): con cientos
+// pendientes (una por una, hasta 30 s cada una) el ciclo no llegaba a abrir sobres. Ahora corren aparte.
+let entregando = false;
+function entregarEnFondo() {
+    if (entregando) return;
+    entregando = true;
+    entregarPendientes().catch(() => {}).finally(() => { entregando = false; });
+}
+
 async function ciclo() {
     if (corriendo || !deps) return;
     const motor = deps.fastTransfer.rutaMotor();
@@ -405,7 +414,7 @@ async function ciclo() {
     corriendo = true;
     let trabajo = false;   // si abrio alguna tanda: la siguiente arranca enseguida
     try {
-        await entregarPendientes();
+        entregarEnFondo();
         if (!parte || !panelEncendido(motor)) return;   // Offline: el panel GP no esta en Start
         await deps.ml.escribirProxiesMotor().catch(() => {});
 
@@ -469,7 +478,7 @@ async function ciclo() {
             } finally {
                 fs.rmSync(dir, { recursive: true, force: true });   // las XML no quedan en el host
             }
-            await entregarPendientes(m.discord_id);
+            entregarEnFondo();   // en segundo plano: no frena la siguiente tanda
         }
     } catch (e) {
         log('cycle failed:', e?.message || e);
