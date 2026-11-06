@@ -7743,7 +7743,8 @@ if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
     db,
     alVincular: (discordId, guildId) => darRolMonitor(guildId, discordId),
     alDesvincular: (discordId, guildId) => quitarRolMonitor(guildId, discordId),
-    alAgregarAmigo: (discordId, guildId) => darRolesAmigo(guildId, discordId),
+    // Amigo anotado en Monitor Link: solo el rol Monitor (Ale 2026-11-06: sin el rol Trainer).
+    alAgregarAmigo: (discordId, guildId) => darRolMonitor(guildId, discordId),
     activo: () => hostComunidad.esActivo(),
     nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null
 });
@@ -16950,20 +16951,7 @@ async function manejarBotonReroll(interaction) {
 }
 
 // Rol Monitor: se da al vincular la PC con /link (y al tomar el turno, a todos los ya vinculados).
-// Amigo anotado en el Monitor Link de un miembro (pedido de Ale): rol Monitor + rol "Trainer" de Zenith
-// (se busca por nombre, sin importar mayusculas ni emojis; si no existe no se crea).
-async function darRolesAmigo(guildId, discordId) {
-    await darRolMonitor(guildId, discordId);
-    const guild = client.guilds.cache.get(String(guildId));
-    if (!guild || !comunidad.esComunidad(guild.id)) return;
-    const trainer = guild.roles.cache.find(r => r.name.toLowerCase().replace(/[^a-z]/g, '') === 'trainer');
-    const miembro = trainer ? await guild.members.fetch(String(discordId)).catch(() => null) : null;
-    if (miembro && !miembro.roles.cache.has(trainer.id)) {
-        await miembro.roles.add(trainer, 'Friend added in Monitor Link').catch(e => console.error('DEBUG: rol Trainer al amigo:', e?.message || e));
-    }
-}
-
-// Amigo quitado de la lista de un miembro (Monitor Link): pierde el rol Monitor (el Trainer se queda).
+// Amigo quitado de la lista de un miembro (Monitor Link): pierde el rol Monitor.
 async function quitarRolMonitor(guildId, discordId) {
     const guild = client.guilds.cache.get(String(guildId));
     if (!guild || !comunidad.esComunidad(guild.id) || comunidad.esStaff(String(discordId))) return;
