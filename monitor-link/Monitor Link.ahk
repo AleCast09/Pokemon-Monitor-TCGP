@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.11"
+global VERSION := "ahk-1.9.12"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -296,8 +296,8 @@ CompartirCuentas:
     Gui, 2:Font, s9 Bold cC62828, Segoe UI
     Gui, 2:Add, Text, w440 y+6, While an account is shared, do NOT open it on your own instances: the same account in two places at once gets errors.
     Gui, 2:Font, s9 Norm cBlack, Segoe UI
-    Gui, 2:Add, Text, w440 y+6, Accounts that are not God Pack eligible are locked: after a 30+ day pause an account needs 96 packs again (GP column = packs still missing).
-    Gui, 2:Add, ListView, w520 r16 y+8 Checked Grid -Multi AltSubmit gLVCuentasClic vLVCuentas, Account|Packs|GP|Since pause
+    Gui, 2:Add, Text, w440 y+6, Locked = not God Pack eligible (a 30+ day pause: it needs 96 packs again; GP column = packs still missing). Locked accounts can be shared too: hosts only open them in their pack farm (Open Packs Only) until they are eligible, never in the God Pack farm.
+    Gui, 2:Add, ListView, w520 r16 y+8 Checked Grid -Multi vLVCuentas, Account|Packs|GP|Since pause
     Gui, 2:Default
     total := 0, noElegibles := 0, compartidas := 0
     Loop, Files, %CarpetaJson%\*.json
@@ -316,9 +316,9 @@ CompartirCuentas:
         desdePausa := sobres >= 96 ? sobres . "/96 OK" : sobres . "/96 (-" . (96 - sobres) . ")"
         if (faltan)
             noElegibles++
-        else if (CuentasReroll.HasKey(f))
+        if (CuentasReroll.HasKey(f))
             compartidas++
-        LV_Add(CuentasReroll.HasKey(f) && !faltan ? "Check" : "", f, mp1 + 0, faltan ? "Locked " . faltan . "p" : "OK", desdePausa)
+        LV_Add(CuentasReroll.HasKey(f) ? "Check" : "", f, mp1 + 0, faltan ? "Locked " . faltan . "p" : "OK", desdePausa)
         total++
     }
     LV_ModifyCol(1, 250), LV_ModifyCol(2, "60 Integer SortDesc"), LV_ModifyCol(3, 80), LV_ModifyCol(4, 105)
@@ -334,33 +334,8 @@ return
 MarcarTodas:
 DesmarcarTodas:
     Gui, 2:Default
-    LV_Modify(0, "-Check")
-    if (A_ThisLabel = "MarcarTodas")
-        Loop % LV_GetCount()
-        {
-            LV_GetText(gp, A_Index, 3)
-            if (gp = "OK")
-                LV_Modify(A_Index, "Check")
-        }
+    LV_Modify(0, A_ThisLabel = "MarcarTodas" ? "Check" : "-Check")
     Gui, 1:Default
-return
-
-; A locked account (not God Pack eligible) can't be ticked.
-LVCuentasClic:
-    if (A_GuiEvent != "I" || !InStr(ErrorLevel, "C", true))
-        return
-    Gui, 2:Default
-    LV_GetText(gp, A_EventInfo, 3)
-    if (gp != "OK") {
-        LV_Modify(A_EventInfo, "-Check")
-        ToolTip, Locked: this account is not God Pack eligible yet.
-        SetTimer, QuitarTipCuentas, -2500
-    }
-    Gui, 1:Default
-return
-
-QuitarTipCuentas:
-    ToolTip
 return
 
 2GuiClose:
@@ -373,9 +348,7 @@ GuardarCompartidas:
     nuevas := {}, fila := 0
     while (fila := LV_GetNext(fila, "Checked")) {
         LV_GetText(f, fila, 1)
-        LV_GetText(gp, fila, 3)
-        if (gp = "OK")
-            nuevas[f] := true
+        nuevas[f] := true
     }
     Gui, 1:Default
     if (nuevas.Count()) {
@@ -557,15 +530,12 @@ EnviarCuentasReroll() {
             if !CuentasReroll.HasKey(f)
                 continue
             l := RegExMatch(t, """lastPackPulled""\s*:\s*""(\d+)""", ml) ? ml1 : ""
-            if (e)   ; not God Pack eligible: locked, not shared (Ale 2026-11-06)
-                bloqueadas[f] := true
-            else
-                datos[f] := "{""f"":""" . JsonEsc(f) . """,""p"":" . p . ",""l"":""" . l . """,""e"":0}"
+            ; e > 0 = locked: hosts open it only in their pack farm (Open Packs Only) until it is eligible.
+            datos[f] := "{""f"":""" . JsonEsc(f) . """,""p"":" . p . ",""l"":""" . l . """,""e"":" . e . "}"
         }
     items := ""
     for f in CuentasReroll
-        if !bloqueadas.HasKey(f)
-            items .=(items = "" ? "" : ",") . (datos.HasKey(f) ? datos[f] : """" . JsonEsc(f) . """")
+        items .=(items = "" ? "" : ",") . (datos.HasKey(f) ? datos[f] : """" . JsonEsc(f) . """")
     body := "{""accounts"":[" . items . "]"
         . (CarpetaJson != "" ? ",""stats"":{""n96"":" . n96 . ",""ok"":" . nOk . ",""lock"":" . nBloq . "}" : "") . "}"
     try {

@@ -1688,7 +1688,11 @@ class GodPackGui(QMainWindow):
             self.COMMUNITY_FILE.parent.mkdir(parents=True, exist_ok=True)
             self.COMMUNITY_FILE.write_text(
                 json.dumps({"on": bool(on), "ts": int(time.time() * 1000),
-                            "own": int(getattr(self, "_own_count", 0))}), encoding="utf-8")
+                            "own": int(getattr(self, "_own_count", 0)),
+                            # busy = this host's OWN accounts are still being opened: the community farm
+                            # waits for them (Ale 2026-11-06: own accounts first, then the lent ones).
+                            "busy": bool(self.proc is not None and self.proc.state() != QProcess.NotRunning)}),
+                encoding="utf-8")
         except Exception as exc:
             self._append_log(f"[gui] couldn't write {self.COMMUNITY_FILE.name}: {exc}\n")
 
@@ -1792,6 +1796,7 @@ class GodPackGui(QMainWindow):
         self.status_label.setText(f"Idle (last exit: {code}).")
         self._set_badge("IDLE", D["TEXT2"])
         if self._community:
+            self._community_mark(True)   # busy=False now: the lent accounts start right away
             self.btn_start.setEnabled(False)
             self.btn_cleanup.setEnabled(False)
             self.btn_stop.setEnabled(True)

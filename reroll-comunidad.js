@@ -150,6 +150,20 @@ function panelEncendido(motor) {
     } catch (e) { return false; }
 }
 
+// El panel todavia esta abriendo las cuentas PROPIAS del host (busy): las prestadas esperan (Ale 2026-11-06).
+function panelOcupado(motor) {
+    try {
+        return JSON.parse(fs.readFileSync(path.join(motor, 'reports', 'community_farm.json'), 'utf8')).busy === true;
+    } catch (e) { return false; }
+}
+
+// Que cuentas prestadas abre este host segun el "Run Mode" del panel (Ale 2026-11-06):
+//   Open Packs Only -> solo las BLOQUEADAS (e > 0), para que junten sus 96 sobres;
+//   God Pack        -> solo las ELEGIBLES confirmadas (e === 0).
+// Sin el dato (Monitor Link viejo) no se abren en ningun modo.
+const soloSobres = (s) => String(s?.run_mode || 'godpack') === 'packs-only';
+const cuentaDelModo = (c, s) => soloSobres(s) ? c.e > 0 : c.e === 0;
+
 // Cada 20 s: el estado Online/Offline del GP farm sigue al panel. Al encenderse arranca una tanda ya.
 let panelAntes = null;
 async function sincronizarPanel() {
@@ -418,6 +432,7 @@ function entregarEnFondo() {
     entregarPendientes().catch(() => {}).finally(() => { entregando = false; });
 }
 
+let esperarPropias = false;   // las propias del host siguen abriendose: se reintenta en 1 min
 async function ciclo() {
     if (corriendo || !deps) return;
     const motor = deps.fastTransfer.rutaMotor();
@@ -428,6 +443,11 @@ async function ciclo() {
     try {
         entregarEnFondo();
         if (!parte || !panelEncendido(motor)) return;   // Offline: el panel GP no esta en Start
+        if (panelOcupado(motor)) {   // primero las cuentas propias del host; las prestadas despues
+            log('own accounts still opening - the lent ones start when they finish');
+            esperarPropias = true;
+            return;
+        }
         await deps.ml.escribirProxiesMotor().catch(() => {});
 
         const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
@@ -443,7 +463,7 @@ async function ciclo() {
             const ahora = Date.now();
             // Ale 2026-11-06: solo se abren cuentas CONFIRMADAS elegibles a God Pack (e === 0, Monitor Link 1.9.6+);
             // sin el dato (Monitor Link viejo) o con dias faltantes (e > 0) quedan bloqueadas.
-            const listas = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte) && c.e === 0
+            const listas = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte) && cuentaDelModo(c, s)
                 && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).slice(0, lote);
             if (!listas.length) { log(`${m.discord_id}: no account ready (cooldown ${cooldown / 3600000} h)`); continue; }
             if (!await deps.fastTransfer.asegurarTunel()) { log('tunnel 9090 is down - skipping this cycle'); return; }
@@ -502,7 +522,8 @@ async function ciclo() {
         // Tandas seguidas (2026-11-06, pedido de Ale): antes cada tanda terminaba en 2-3 min y el host
         // quedaba parado hasta los 10 min, y ese tiempo muerto bajaba el PPM. Si hubo trabajo, la
         // siguiente arranca a los 30 s; si no quedan cuentas listas, se vuelve al intervalo de siempre.
-        if (trabajo && deps?.fastTransfer.rutaMotor() && panelEncendido(deps.fastTransfer.rutaMotor())) setTimeout(ciclo, 30 * 1000);
+        if ((trabajo || esperarPropias) && deps?.fastTransfer.rutaMotor() && panelEncendido(deps.fastTransfer.rutaMotor())) setTimeout(ciclo, (esperarPropias ? 60 : 30) * 1000);
+        esperarPropias = false;
     }
 }
 
@@ -518,11 +539,12 @@ async function resumenPrestadas() {
     const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
     const estado = leerEstado(motor);
     const abiertas = leerAbiertas(motor);
+    const s = ajustesPanel(motor);
     const ahora = Date.now();
     const resumen = {};
     for (const m of await deps.ml.cuentasReroll()) {
         const mias = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte));
-        const listas = mias.filter(c => c.e === 0 && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).length;
+        const listas = mias.filter(c => cuentaDelModo(c, s) && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).length;
         // 4to: de las de este host, cuantas todavia no son elegibles a God Pack (solo aviso, el farm las abre igual).
         const noElegibles = mias.filter(c => c.e > 0).length;
         // 5to: cuantas abrio ESTE host (al menos 1 sobre) en las ultimas 24 h.
