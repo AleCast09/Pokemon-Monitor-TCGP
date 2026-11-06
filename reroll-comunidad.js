@@ -614,6 +614,13 @@ async function ciclo() {
                     fs.writeFileSync(path.join(dir, `${base}.xml`), xmls[nombre]);
                     fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify({ metadata: {}, pulls: [], registeredCards: [] }));
                 }
+                // (2026-11-06, wr98) Un AUTO-STOP del motor (5 fallos seguidos) escribe community_farm.stop y ese
+                // archivo quedaba: cada tanda nueva se cerraba al instante ("stop file detected", 0 cuentas). Si el
+                // panel sigue en Start, ese stop es viejo -> se borra. Un Stop de verdad apaga el panel (on:false).
+                const stopViejo = path.join(motor, 'reports', 'community_farm.stop');
+                if (panelEncendido(motor) && fs.existsSync(stopViejo)) {
+                    try { fs.unlinkSync(stopViejo); log('old AUTO-STOP marker removed - the God Pack UI is still on Start'); } catch (e) { /* nada */ }
+                }
                 log(`opening ${nombres.length} account(s) lent by ${m.discord_id}`);
                 trabajo = true;
                 const inicioTanda = Date.now();
