@@ -7764,6 +7764,7 @@ if (comunidad.hayComunidad()) {
         // Anti doble reroll: aviso en el canal de hosts (lo ve staff), una vez por main aunque lo vean varios hosts.
         hostsFarm: () => hostComunidad.hostsReroll(), primeraVez: hostComunidad.primeraVez,
         marcarBaneada: hostComunidad.marcarBaneada, baneadas: hostComunidad.baneadas, webhookGp: hostComunidad.webhookGp,
+        ultimaRelease: hostComunidad.ultimaRelease, estaAlDia: hostComunidad.estaAlDia,
         avisar: async (texto) => {
             for (const guild of client.guilds.cache.values()) {
                 if (!comunidad.esComunidad(guild.id)) continue;
@@ -16852,10 +16853,14 @@ async function actualizarPanelHosts(hosts) {
         const motorMasNuevo = hosts.map(h => h.versionMotor).filter(Boolean).sort((a, b) => numVersion(b).localeCompare(numVersion(a)))[0];
         const textoMotor = (h) => !h.motor ? '❌' : `✅${h.versionMotor ? ` v${h.versionMotor}` : ''}`
             + (h.versionMotor && motorMasNuevo && numVersion(h.versionMotor) < numVersion(motorMasNuevo) ? ' ⚠️ outdated' : '');
+        const release = await hostComunidad.ultimaRelease().catch(() => null);
         const lineas = hosts.map(h => {
             const estado = !h.enLinea ? `🔴 **${h.nombre}** — offline since ${hace(h.ts)}`
                 : h.turno ? `👑🟢 **${h.nombre}** — **has the turn**` : `⏸️🟢 **${h.nombre}** — standby, ready to take over`;
-            const detalles = [h.bot && `bot ${h.bot}`, h.version && `v${h.version}`, h.enLinea ? `Miguel's bot ${textoMotor(h)}` : null,
+            // (Ale) Version al dia o no, comparada con la ultima publicada (zenith:release).
+            const alDia = hostComunidad.estaAlDia(h.version, release);
+            const textoVersion = h.version ? `v${h.version}${alDia === true ? ' ✅ up to date' : alDia === false ? ' ⚠️ outdated (updating…)' : ''}` : null;
+            const detalles = [h.bot && `bot ${h.bot}`, textoVersion, h.enLinea ? `Miguel's bot ${textoMotor(h)}` : null,
                 h.enLinea && h.turno && typeof h.links === 'number' ? `${h.links} Monitor Link(s) online` : null,
                 h.enLinea && typeof h.reroll === 'number' ? `🎲 GP farm (${h.reroll} proxies)` : null].filter(Boolean).join(' · ');
             return `${estado}\n　${detalles}`;

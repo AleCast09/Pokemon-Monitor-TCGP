@@ -57,6 +57,9 @@ function iniciar(d) {
     setTimeout(revisarPpm, 60 * 1000);
     setInterval(revisarLlenos, 60 * 1000);
     setInterval(() => copiarWebhookGp().catch(() => {}), 60 * 1000);
+    setInterval(() => { try { vigilarGodPacks(); } catch (e) { /* nada */ } }, 20 * 1000);
+    setInterval(() => escribirVersion().catch(() => {}), 60 * 1000);
+    escribirVersion().catch(() => {});
     copiarWebhookGp().catch(() => {});
     setInterval(() => escribirEstadoPanel().catch(() => {}), 30 * 1000);
 }
@@ -547,6 +550,76 @@ async function copiarWebhookGp() {
     fs.mkdirSync(path.dirname(ruta), { recursive: true });
     if (url) fs.writeFileSync(ruta, url); else { try { fs.unlinkSync(ruta); } catch (e) { /* nada */ } }
     log(url ? 'community God Pack webhook updated' : 'community God Pack webhook removed');
+}
+
+// Vigilante de God Packs (2026-11-06, Ale: "un GP sin aviso es inaceptable"). Lee los logs del motor (cuentas
+// propias: god_pack_live.log; GP farm: reroll_comunidad.log). Si se guardo un God Pack (ACCOUNT SUMMARY ... MATCH)
+// y en 2 min no aparece "[discord] God Pack posted" de esa cuenta (motor viejo o modificado, webhook caido...),
+// avisa en 🔒-hosts con los datos para publicarlo a mano. Asi ningun God Pack se pierde sin que nadie se entere.
+const vigilados = {};      // archivo -> posicion leida
+const gpPendientes = {};   // cuenta -> { nivel, cartas, guardado, archivo }
+function vigilarGodPacks() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    if (!motor) return;
+    for (const nombre of ['god_pack_live.log', 'reroll_comunidad.log']) {
+        const ruta = path.join(motor, 'reports', nombre);
+        let tam;
+        try { tam = fs.statSync(ruta).size; } catch (e) { continue; }
+        if (vigilados[ruta] === undefined) { vigilados[ruta] = tam; continue; }   // al arrancar: solo lo nuevo
+        if (tam < vigilados[ruta]) vigilados[ruta] = 0;                          // el panel vacia el log al Start
+        if (tam === vigilados[ruta]) continue;
+        let texto = '';
+        try {
+            const fd = fs.openSync(ruta, 'r');
+            const buf = Buffer.alloc(Math.min(tam - vigilados[ruta], 8 * 1024 * 1024));
+            fs.readSync(fd, buf, 0, buf.length, tam - buf.length);
+            fs.closeSync(fd);
+            texto = buf.toString('utf8');
+        } catch (e) { continue; }
+        vigilados[ruta] = tam;
+        for (const l of texto.split(/\r?\n/)) {
+            let m = /\[([^\]]+)\] pack opened .*<-- GOD PACK (\S+) \(WONDER-PICKABLE\)/.exec(l);
+            if (m) { gpPendientes[m[1]] = { ...(gpPendientes[m[1]] || {}), nivel: m[2], archivo: nombre }; continue; }
+            m = /\[([^\]]+)\] cards: (.+)$/.exec(l);
+            if (m && gpPendientes[m[1]] && !gpPendientes[m[1]].cartas) { gpPendientes[m[1]].cartas = m[2]; continue; }
+            m = /\[([^\]]+)\] -- ACCOUNT SUMMARY: .*MATCH: (.+)$/.exec(l);
+            if (m && gpPendientes[m[1]]) { gpPendientes[m[1]].guardado = Date.now(); gpPendientes[m[1]].match = m[2]; continue; }
+            m = /\[([^\]]+)\] .*\[discord\] God Pack posted/.exec(l);
+            if (m) delete gpPendientes[m[1]];
+        }
+    }
+    for (const [cuenta, gp] of Object.entries(gpPendientes)) {
+        if (!gp.guardado) {   // detectado pero no guardado (debajo del minimo): se olvida a los 10 min
+            if (!gp.visto) gp.visto = Date.now();
+            else if (Date.now() - gp.visto > 10 * 60 * 1000) delete gpPendientes[cuenta];
+            continue;
+        }
+        if (Date.now() - gp.guardado < 2 * 60 * 1000) continue;
+        delete gpPendientes[cuenta];
+        const host = String(ajustesPanel(motor).host_name || '').trim() || 'this host';
+        log(`GOD PACK NOT POSTED to KyuremBot: ${cuenta} (${gp.nivel})`);
+        deps.avisar?.(`🚨 **God Pack NOT posted to KyuremBot** — host **${host}**\n`
+            + `> Account: \`${cuenta}\` · Rarity: \`${gp.nivel}\` · ${gp.match || ''}\n`
+            + (gp.cartas ? `> Cards: ${gp.cartas.slice(0, 700)}\n` : '')
+            + `*The engine kept it but no alert reached Discord. Post it by hand and check this host's God Pack UI (Stop + Start loads the latest notifier).*`).catch(() => {});
+    }
+}
+
+// Version de este host para el God Pack UI (2026-11-06, Ale: "que se vea en todos lados si esta al dia"):
+// reports/monitor_version.json { version, latest, upToDate, ts }. El panel compara con la que tenia al abrirse.
+function versionDeEsteHost() {
+    try { return fs.readFileSync(path.join(__dirname, 'host-version.txt'), 'utf8').trim(); } catch (e) { /* host de Ale */ }
+    try { return require('child_process').execSync('git rev-parse --short HEAD', { cwd: __dirname, windowsHide: true }).toString().trim(); } catch (e) { return 'dev'; }
+}
+async function escribirVersion() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    if (!motor) return;
+    const version = versionDeEsteHost();
+    const release = await (deps.ultimaRelease?.() || Promise.resolve(null)).catch(() => null);
+    const alDia = deps.estaAlDia?.(version, release);
+    fs.mkdirSync(path.join(motor, 'reports'), { recursive: true });
+    fs.writeFileSync(path.join(motor, 'reports', 'monitor_version.json'),
+        JSON.stringify({ version, latest: release?.version || null, upToDate: alDia, ts: Date.now() }));
 }
 
 let esperarPropias = false;   // las propias del host siguen abriendose: se reintenta en 1 min

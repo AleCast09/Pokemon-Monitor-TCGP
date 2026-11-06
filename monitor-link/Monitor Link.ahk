@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.16"
+global VERSION := "ahk-1.9.17"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -36,6 +36,7 @@ global ProxyFile := "", ProxyHuella := "", ProxiesEnviadas := ""
 global CFG_REROLL := CFG_DIR . "\reroll_accounts.txt", CFG_REROLL_LOG := CFG_DIR . "\reroll_log.txt"
 global CuentasReroll := {}, UltimoReroll := ""
 global Baneadas := {}   ; lent accounts the GP farm marked as likely banned (from the ping)
+global UltimaVersionAhk := ""   ; newest Monitor Link published (from the ping)
 global BanLocales := "", BtnBanAbrir, BtnBanBorrar   ; banned accounts still on this PC ("" = count again)
 global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
@@ -106,7 +107,7 @@ CrearVentana() {
     ; looked frozen and Windows said "Not responding").
     Gui, Add, Progress, xm y+4 w360 h10 c1E8E3E vBarra Hidden, 0
     Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Add, Text, xm y+6 w360 r8 vInfo,
+    Gui, Add, Text, xm y+6 w360 r9 vInfo,
     Gui, Add, GroupBox, xm y+6 w360 h92 vLinkBox, Link this PC
     Gui, Add, Text, xp+12 yp+22 w336, In Discord, type /link in Zenith Rise and paste the key here:
     Gui, Add, Edit, xp y+6 w250 vClave
@@ -150,7 +151,10 @@ PintarEstado() {
         GuiControl, Font, Status
         GuiControl,, Status, Can't reach the bot - retrying
     }
-    texto := (UserName != "" ? "Discord user: " . UserName . "`n" : "")
+    ; Version line (Ale 2026-11-06): up to date, or updating to the newest one (it installs by itself).
+    estadoVer := UltimaVersionAhk = "" ? "" : VersionMasNueva(UltimaVersionAhk, VERSION) ? "  -  updating to " . UltimaVersionAhk . "..." : "  -  up to date"
+    texto := "Version: " . VERSION . estadoVer . "`n"
+        . (UserName != "" ? "Discord user: " . UserName . "`n" : "")
         . "Folder: " . (Ruta != "" ? Ruta : "(not chosen yet - press Change folder)") . "`n"
         . (UltimoEnvio != "" ? "Cards summary: " . CuentasEnviadas . " accounts, sent at " . UltimoEnvio : "Cards summary: not sent yet")
         . (ProxyFile != "" ? "`nProxies shared: " . (ProxiesEnviadas != "" ? ProxiesEnviadas : "sending...") : "")
@@ -1589,6 +1593,10 @@ VersionMasNueva(a, b) {
 ActualizarSiHayVersion(texto) {
     if !RegExMatch(texto, """ahk""\s*:\s*\{[^}]*""version""\s*:\s*""([^""]+)""[^}]*""url""\s*:\s*""([^""]+)""", ma)
         return
+    if (UltimaVersionAhk != ma1) {   ; shown in the main window: up to date or updating
+        UltimaVersionAhk := ma1
+        PintarEstado()
+    }
     ; Only to a NEWER version (never back to an older published one).
     if (!VersionMasNueva(ma1, VERSION) || !RegExMatch(ma2, "^https://github\.com/"))
         return

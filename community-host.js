@@ -255,6 +255,21 @@ async function webhookGp() {
     try { return String(await redis('GET', 'zenith:gp_webhook') || ''); } catch (e) { return ''; }
 }
 
+// Ultima version publicada para los hosts ({ version, commit, ... } de zenith:release), cacheada 60 s.
+let _release = { ts: 0, valor: null };
+async function ultimaRelease() {
+    if (!configurado()) return null;
+    if (Date.now() - _release.ts < 60 * 1000) return _release.valor;
+    _release.ts = Date.now();
+    try { _release.valor = JSON.parse(await redis('GET', 'zenith:release') || 'null'); } catch (e) { /* sin red */ }
+    return _release.valor;
+}
+// "dev"/commit (host de Ale, corre del repo) o la version publicada: ¿es la ultima?
+function estaAlDia(version, release) {
+    if (!version || !release) return null;
+    return version === release.version || (release.commit && version === release.commit);
+}
+
 async function primeraVez(clave, segundos) {
     if (!configurado()) return true;
     try { return (await redis('SET', clave, '1', 'NX', 'EX', String(segundos))) === 'OK'; } catch (e) { return false; }
@@ -264,4 +279,4 @@ const anotarMiembros = (registro) => configurado()
     ? redis('SET', 'zenith:miembros', JSON.stringify(registro)).catch(() => {}) : Promise.resolve();
 
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
-    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, guardarWebhookGp, webhookGp };
+    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, guardarWebhookGp, webhookGp, ultimaRelease, estaAlDia };

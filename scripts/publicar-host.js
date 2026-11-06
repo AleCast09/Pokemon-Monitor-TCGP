@@ -52,7 +52,9 @@ try {
 execFileSync('gh', ['release', 'upload', TAG_FIJO, ahk, '--clobber'], { cwd: RAIZ, stdio: 'inherit' });
 
 const base = `https://github.com/${repo}/releases/download/${tag}`;
-const release = { version, url: `${base}/MonitorPokemon-Host.zip`, ahk: { version: versionAhk, url: `${base}/MonitorLink.ahk`,
+// commit: el host de Ale corre del repo (su version es el commit corto) y lo compara con este.
+const commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: RAIZ }).toString().trim();
+const release = { version, commit, url: `${base}/MonitorPokemon-Host.zip`, ahk: { version: versionAhk, url: `${base}/MonitorLink.ahk`,
     fija: `https://github.com/${repo}/releases/download/${TAG_FIJO}/MonitorLink.ahk` } };
 (async () => {
     const r = await fetch(process.env.LINK_REDIS_URL, {

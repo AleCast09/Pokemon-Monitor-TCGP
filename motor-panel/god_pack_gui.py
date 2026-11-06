@@ -469,6 +469,16 @@ class GodPackGui(QMainWindow):
         lbl_sub.setStyleSheet(f"color: {D['TEXT3']}; font-size: 11px;")
         title_box.addWidget(lbl_title)
         title_box.addWidget(lbl_sub)
+        # Ale 2026-11-06: Monitor Pokemon version of this host, up to date or not, and a warning when the host
+        # updated after this window was opened (close and reopen it to load the new panel/notifier).
+        self.lbl_version = QLabel("Monitor Pokemon: checking version…")
+        self.lbl_version.setStyleSheet(f"color: {D['TEXT3']}; font-size: 10px;")
+        title_box.addWidget(self.lbl_version)
+        self._version_al_abrir = None
+        self._version_timer = QTimer(self)
+        self._version_timer.timeout.connect(self._update_version_label)
+        self._version_timer.start(30000)
+        QTimer.singleShot(1500, self._update_version_label)
         header_row.addLayout(title_box, 1)
 
         self.badge_status = QLabel("● IDLE")
@@ -1111,6 +1121,26 @@ class GodPackGui(QMainWindow):
         w = QWidget()
         w.setLayout(row)
         layout.addWidget(w)
+
+    def _update_version_label(self):
+        try:
+            st = json.loads((ROOT / "reports" / "monitor_version.json").read_text("utf-8"))
+        except Exception:
+            self.lbl_version.setText("Monitor Pokemon: version unknown (bot not running?)")
+            return
+        ver = str(st.get("version") or "?")
+        if self._version_al_abrir is None:
+            self._version_al_abrir = ver
+        if ver != self._version_al_abrir:
+            txt, color = f"⚠️ Monitor Pokemon updated to v{ver} — close and reopen this window", D.get("GOLD", "#f5c542")
+        elif st.get("upToDate") is True:
+            txt, color = f"✅ Monitor Pokemon v{ver} — up to date", D.get("GREEN", "#34d399")
+        elif st.get("upToDate") is False:
+            txt, color = f"⏳ Monitor Pokemon v{ver} — updating to v{st.get('latest')}…", D.get("GOLD", "#f5c542")
+        else:
+            txt, color = f"Monitor Pokemon v{ver}", D["TEXT3"]
+        self.lbl_version.setText(txt)
+        self.lbl_version.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: 700;")
 
     def _set_badge(self, text: str, color: str):
         self.badge_status.setText(f"● {text}")

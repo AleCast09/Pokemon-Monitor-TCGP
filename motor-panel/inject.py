@@ -2725,7 +2725,15 @@ def inject_one(
                     # so no later sweep can unfriend a real god pack.
                     fr_cleanup.ledger_close(account["account_key"])
                     # ── ENVÍO AUTOMÁTICO A DISCORD (IMAGEN + TEXTO) ──
+                    # 2026-11-06 (Arcade): a long run keeps the notifier it loaded at start; if Monitor
+                    # Pokemon updated discord_notifier.py meanwhile, the alert used the old code and the GP
+                    # never reached KyuremBot. Reload it right before every God Pack.
                     if gp_discord is not None:
+                        try:
+                            import importlib
+                            importlib.reload(gp_discord)   # updates the same module object in place
+                        except Exception:
+                            pass
                         gp_discord.notify_god_pack_async(
                             account=account,
                             card_ids=outcome["cards"],
