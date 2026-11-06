@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.10"
+global VERSION := "ahk-1.9.11"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -296,7 +296,7 @@ CompartirCuentas:
     Gui, 2:Font, s9 Bold cC62828, Segoe UI
     Gui, 2:Add, Text, w440 y+6, While an account is shared, do NOT open it on your own instances: the same account in two places at once gets errors.
     Gui, 2:Font, s9 Norm cBlack, Segoe UI
-    Gui, 2:Add, Text, w440 y+6, Accounts that are not God Pack eligible are locked (GP column = days of packs still missing): they can't be shared until they are eligible.
+    Gui, 2:Add, Text, w440 y+6, Accounts that are not God Pack eligible are locked: after a 30+ day pause an account needs 96 packs again (GP column = packs still missing).
     Gui, 2:Add, ListView, w520 r16 y+8 Checked Grid -Multi AltSubmit gLVCuentasClic vLVCuentas, Account|Packs|GP|Since pause
     Gui, 2:Default
     total := 0, noElegibles := 0, compartidas := 0
@@ -310,15 +310,15 @@ CompartirCuentas:
         if (mp1 < 96)
             continue
         f := RegExMatch(t, """fileName""\s*:\s*""((?:[^""\\]|\\.)*)""", mf) ? JsonUnesc(mf1) : A_LoopFileName
-        ; GP column: OK = God Pack eligible; "N days" = still needs packs on N more different days.
-        faltan := DiasFaltanGP(t, sobres)
+        ; GP column: OK = God Pack eligible; "Locked N" = still needs N packs after its last 30-day pause.
+        faltan := SobresFaltanGP(t, sobres)
         ; Since pause: packs opened after the last 30-day pause out of 96, and how many are missing to reach 96 again.
         desdePausa := sobres >= 96 ? sobres . "/96 OK" : sobres . "/96 (-" . (96 - sobres) . ")"
         if (faltan)
             noElegibles++
         else if (CuentasReroll.HasKey(f))
             compartidas++
-        LV_Add(CuentasReroll.HasKey(f) && !faltan ? "Check" : "", f, mp1 + 0, faltan ? "Locked " . faltan . "d" : "OK", desdePausa)
+        LV_Add(CuentasReroll.HasKey(f) && !faltan ? "Check" : "", f, mp1 + 0, faltan ? "Locked " . faltan . "p" : "OK", desdePausa)
         total++
     }
     LV_ModifyCol(1, 250), LV_ModifyCol(2, "60 Integer SortDesc"), LV_ModifyCol(3, 80), LV_ModifyCol(4, 105)
@@ -545,8 +545,8 @@ EnviarCuentasReroll() {
             p := RegExMatch(t, """packCount""\s*:\s*(\d+)", mp) ? mp1 : 0
             if (p < 96 && !CuentasReroll.HasKey(f))
                 continue
-            ; e = days still missing to be God Pack eligible (0 = eligible); locked accounts are not shared.
-            e := DiasFaltanGP(t)
+            ; e = packs still missing to be God Pack eligible (0 = eligible); locked accounts are not shared.
+            e := SobresFaltanGP(t)
             if (p >= 96) {
                 n96++
                 if (e)
@@ -1496,10 +1496,10 @@ Http(metodo, url, body := "", tipo := "", bearer := "", segundos := 30) {
 }
 
 ; God Pack eligibility (2026-11-06, Ale's rule): if 30+ days passed between two packs in a row of the
-; account (pulls[] of its .json), it stops being eligible; it is eligible again once it opened packs on
-; 30 different days after the LAST such gap (a new 30-day gap restarts the count). 30+ days since the
-; last pack until today also counts as a gap. Returns the days still missing (0 = eligible).
-DiasFaltanGP(t, ByRef sobres := 0) {
+; account (pulls[] of its .json), it stops being eligible; it is eligible again once it opened 96 PACKS
+; after the LAST such pause (a new 30-day pause restarts the count from 0). 30+ days since the last pack
+; until today also counts as a pause. Returns the packs still missing (0 = eligible).
+SobresFaltanGP(t, ByRef sobres := 0) {
     dias := {}, pos := 1, sobres := 0
     while (pos := RegExMatch(t, """timestamp""\s*:\s*""(\d{4})-(\d{2})-(\d{2})[^""]*""\s*,\s*""pack""", m, pos)) {
         k := (m1 . m2 . m3) + 0
@@ -1523,11 +1523,11 @@ DiasFaltanGP(t, ByRef sobres := 0) {
     EnvSub, hoy, %y%, Days
     if (hoy >= 30) {
         sobres := 0   ; the pause is now: counting starts again from 0
-        return 30
+        return 96
     }
     if (!hueco)
         return 0
-    return desde >= 30 ? 0 : 30 - desde
+    return sobres >= 96 ? 0 : 96 - sobres
 }
 
 JsonEsc(s) {

@@ -503,8 +503,8 @@ function registrar(app, dependencias) {
                 if (!/^[^\\/:*?"<>|]{1,120}\.xml$/i.test(f) || vistas.has(f)) return null;
                 vistas.add(f);
                 return { f, p: Number.isInteger(c?.p) ? c.p : null, l: /^\d{14}$/.test(String(c?.l || '')) ? String(c.l) : null,
-                    // e = dias que le faltan para ser elegible a God Pack (0 = elegible; lo calcula Monitor Link 1.9.5+).
-                    e: Number.isInteger(c?.e) && c.e >= 0 && c.e <= 30 ? c.e : null };
+                    // e = sobres que le faltan para ser elegible a God Pack (0 = elegible; Monitor Link 1.9.11+: 96 sobres tras una pausa de 30+ dias).
+                    e: Number.isInteger(c?.e) && c.e >= 0 && c.e <= 96 ? c.e : null };
             }).filter(Boolean).slice(0, 20000);
             const st = datos.stats;
             const entero = (x) => Number.isInteger(x) && x >= 0 && x < 1e6;

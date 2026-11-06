@@ -16770,7 +16770,7 @@ async function seccionPrestadas(hosts) {
         return new EmbedBuilder().setColor(0x57F287)
             .setTitle(`🎲 ${h.farm?.nombre || h.nombre} — GP farm host`)
             .setDescription(`${propias}Shared accounts: **${listas}**/${mias} ready\n\n${filas.join('\n') || 'No lent accounts.'}`.slice(0, 4000))
-            .setFooter({ text: 'ready/total · ready = can open packs now · 🟢 Monitor Link on · 🔴 off · ⚠️ not GP-eligible = a 30+ day pause, needs packs on 30 different days' });
+            .setFooter({ text: 'ready/total · ready = can open packs now · 🟢 Monitor Link on · 🔴 off · ⚠️ not GP-eligible = a 30+ day pause, needs 96 packs again' });
     });
 }
 
@@ -16793,7 +16793,7 @@ async function seccionCuentasComunidad() {
             ``,
             `-# GP totals from ${n(e.conGp)} of ${n(e.miembros)} members (Monitor Link 1.9.8+, sent every 10 min).`
         ].join('\n'))
-        .setFooter({ text: 'Not eligible = a 30+ day pause; it needs packs on 30 different days again' });
+        .setFooter({ text: 'Not eligible = a 30+ day pause; it needs 96 packs again (a new pause restarts from 0)' });
 }
 
 // Panel de hosts en el canal 🔒-hosts (lo arma y lo mantiene el host que tiene el turno).

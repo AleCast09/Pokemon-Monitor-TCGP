@@ -61,6 +61,7 @@ function iniciar(d) {
 // main lleno tiene casi todos sus amigos de AFUERA: acepta solicitudes de otro grupo. Por ahora solo se
 // avisa (en el canal de hosts); un aviso por main cada 6 h aunque lo detecten varios hosts.
 const TOPE_AMIGOS = 99, NUESTRAS_POR_HOST = 14, TOLERANCIA = 5;
+const AVISAR_LLENOS = false;   // aviso "Possible double reroll" en 🔒-hosts: apagado (falsos positivos)
 let posLlenos = null;
 async function revisarLlenos() {
     const motor = deps?.fastTransfer.rutaMotor();
@@ -89,6 +90,9 @@ async function revisarLlenos() {
         if (!await deps.primeraVez?.(`zenith:lleno:${codigo}`, 6 * 3600).catch(() => false)) continue;
         const legible = /^\d{16}$/.test(codigo) ? codigo.replace(/(\d{4})(?=\d)/g, '$1-') : codigo;
         log(`friend list full: ${legible} (double reroll?)`);
+        // 2026-11-06 (Ale): el aviso en Discord daba falsos positivos (el propio reroll de cada miembro tambien
+        // agrega su Main, y con varios hosts en paralelo hay mas de 14 cuentas nuestras a la vez). Solo log.
+        if (!AVISAR_LLENOS) continue;
         await deps.avisar?.(`⚠️ **Possible double reroll** — main \`${legible}\` rejected our friend request because its friend list is **full (${TOPE_AMIGOS})**, while the other mains accepted.\n`
             + `Right now at most **${nuestrasMax}** of its friends can be ours (${hosts} farm host${hosts === 1 ? '' : 's'}), so at least **${deAfuera}** come from outside — this main is probably accepting another group's requests.\n`
             + `*Warning only — nobody was set offline.*`).catch(() => {});

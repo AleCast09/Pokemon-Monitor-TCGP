@@ -397,6 +397,10 @@ def notify_god_pack_async(
 
             webhook, mencion = _config_discord()
             if not webhook:
+                # 2026-11-06 (Arcade): antes se salia callado y el God Pack no se posteaba sin que nadie supiera.
+                if log_fn:
+                    log_fn("[discord] GOD PACK NOT POSTED: 'God Pack Hit Webhook URL' is empty in the God Pack UI "
+                           "(Collectors / Discord tab) - fill it and press Save Settings")
                 return
             msg = (f"<@{mencion}>\n" if mencion else "") + f"{nickname} ({user_16_id})\n{header_tags}"
             # Cuenta prestada por un miembro (reroll de la comunidad, Monitor Pokemon pone su id):
@@ -411,7 +415,7 @@ def notify_god_pack_async(
             payload_json = {"content": msg, "allowed_mentions": {"parse": ["users"]}}
 
             with open(img_path, "rb") as f:
-                requests.post(
+                r = requests.post(
                     webhook,
                     files={
                         "payload_json": (None, json.dumps(payload_json), "application/json"),
@@ -419,6 +423,12 @@ def notify_god_pack_async(
                     },
                     timeout=20,
                 )
+            if log_fn:
+                if r.ok:
+                    log_fn("[discord] God Pack posted")
+                else:
+                    log_fn(f"[discord] GOD PACK NOT POSTED: Discord answered HTTP {r.status_code} "
+                           "(check the 'God Pack Hit Webhook URL')")
         except Exception as e:
             if log_fn:
                 log_fn(f"[discord] error: {e}")
