@@ -242,6 +242,7 @@ function registrar(app, dependencias) {
     db = dependencias.db;
     const alVincular = dependencias.alVincular || (async () => {});
     const alDesvincular = dependencias.alDesvincular || (async () => {});
+    const alAgregarAmigo = dependencias.alAgregarAmigo || alVincular;
     // Host en espera (community-host.js): no atiende a ningun Monitor Link; al recibir 503 cada uno
     // busca en la libreta la direccion del host que tiene el turno.
     const activo = dependencias.activo || (() => true);
@@ -464,7 +465,7 @@ function registrar(app, dependencias) {
             await cargarAmigos();
             // Rol Monitor (pedido de Ale): el amigo lo recibe al anotarlo (como al vincular) y lo pierde al
             // quitarlo, salvo que tenga su propio Monitor Link o sea amigo de otro miembro.
-            for (const id of ids) alVincular(id, agente.guild_id).catch(e => console.error('DEBUG: rol al amigo:', e?.message || e));
+            for (const id of ids) alAgregarAmigo(id, agente.guild_id).catch(e => console.error('DEBUG: rol al amigo:', e?.message || e));
             for (const id of antes.filter(x => !ids.includes(x) && !duenoDe(x))) {
                 const propio = await db.get(`SELECT 1 AS si FROM link_agentes WHERE discord_id = ?`, [id]);
                 if (!propio) alDesvincular(id, agente.guild_id).catch(e => console.error('DEBUG: quitar rol al amigo:', e?.message || e));
