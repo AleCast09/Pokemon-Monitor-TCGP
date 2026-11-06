@@ -229,6 +229,20 @@ async function iniciar(opciones) {
 // LatiasBot (wr98). Clave zenith:miembros = JSON { discordId: { monitorLink, lent, ready, ts } }.
 // true solo para el PRIMER host que anota esta clave en `segundos` (SET NX EX): un aviso por evento
 // aunque lo detecten varios hosts a la vez.
+// Cuentas prestadas probablemente baneadas (2026-11-06, Ale): hash zenith:baneadas, campo "discordId|archivo.xml".
+// Las comparten los 3 hosts: ninguno la vuelve a abrir y el Monitor Link del dueño la marca "Banned?".
+async function marcarBaneada(discordId, archivo) {
+    if (!configurado()) return;
+    await redis('HSET', 'zenith:baneadas', `${discordId}|${archivo}`, String(Date.now()));
+}
+async function baneadas() {
+    if (!configurado()) return new Set();
+    const plano = await redis('HGETALL', 'zenith:baneadas').catch(() => []) || [];
+    const s = new Set();
+    for (let i = 0; i < plano.length; i += 2) s.add(plano[i]);
+    return s;
+}
+
 async function primeraVez(clave, segundos) {
     if (!configurado()) return true;
     try { return (await redis('SET', clave, '1', 'NX', 'EX', String(segundos))) === 'OK'; } catch (e) { return false; }
@@ -238,4 +252,4 @@ const anotarMiembros = (registro) => configurado()
     ? redis('SET', 'zenith:miembros', JSON.stringify(registro)).catch(() => {}) : Promise.resolve();
 
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
-    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez };
+    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas };

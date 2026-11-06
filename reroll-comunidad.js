@@ -471,6 +471,27 @@ function entregarEnFondo() {
     entregarPendientes().catch(() => {}).finally(() => { entregando = false; });
 }
 
+// Despues de cada tanda: las cuentas que el motor anoto como probablemente baneadas (reports/banned_accounts.jsonl,
+// inject.py) pasan a la lista compartida de los hosts y se avisa en 🔒-hosts mencionando al dueño.
+async function revisarBaneadas(motor, desde, duenoId, nombres) {
+    let lineas = [];
+    try { lineas = fs.readFileSync(path.join(motor, 'reports', 'banned_accounts.jsonl'), 'utf8').split('\n'); } catch (e) { return; }
+    const enTanda = new Map(nombres.map(n => [path.basename(n).toLowerCase(), n]));
+    const vistas = new Set();
+    for (const linea of lineas) {
+        let ev;
+        try { ev = JSON.parse(linea); } catch (e) { continue; }
+        if (Number(ev.ts) < desde) continue;
+        const nombre = enTanda.get(String(ev.xml || '').toLowerCase());
+        if (!nombre || vistas.has(nombre)) continue;
+        vistas.add(nombre);
+        await deps.marcarBaneada?.(duenoId, nombre).catch(() => {});
+        log(`likely banned: ${nombre} (lent by ${duenoId})`);
+        await deps.avisar?.(`⛔ **Likely banned** — <@${duenoId}>'s account \`${nombre}\`: the game refused it on ${ev.proxies || 2}+ different proxies. `
+            + `The GP farm won't open it again, and it shows as **Banned?** in their Monitor Link.`).catch(() => {});
+    }
+}
+
 let esperarPropias = false;   // las propias del host siguen abriendose: se reintenta en 1 min
 async function ciclo() {
     if (corriendo || !deps) return;
@@ -495,6 +516,8 @@ async function ciclo() {
         const s = ajustesPanel(motor);
         const estado = leerEstado(motor);
         const miembros = await deps.ml.cuentasReroll();
+        // Probablemente baneadas (lista compartida de los hosts): no se vuelven a abrir.
+        const baneadasSet = await (deps.baneadas?.() || Promise.resolve(new Set())).catch(() => new Set());
         // Resumen de cada vuelta (2026-11-01: el ciclo fallaba en silencio y parecia que no hacia nada).
         log(`cycle: host ${parte.i + 1}/${parte.n}, ${miembros.length} member(s) lending, ${miembros.reduce((a, m) => a + m.cuentas.length, 0)} account(s)`);
         for (const m of miembros) {
@@ -503,6 +526,7 @@ async function ciclo() {
             // Ale 2026-11-06: solo se abren cuentas CONFIRMADAS elegibles a God Pack (e === 0, Monitor Link 1.9.6+);
             // sin el dato (Monitor Link viejo) o con dias faltantes (e > 0) quedan bloqueadas.
             const listas = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte) && cuentaDelModo(c, s)
+                && !baneadasSet.has(`${m.discord_id}|${c.f}`)
                 && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).slice(0, lote);
             if (!listas.length) { log(`${m.discord_id}: no account ready (cooldown ${cooldown / 3600000} h)`); continue; }
             if (!await deps.fastTransfer.asegurarTunel()) { log('tunnel 9090 is down - skipping this cycle'); return; }
@@ -535,7 +559,9 @@ async function ciclo() {
                 }
                 log(`opening ${nombres.length} account(s) lent by ${m.discord_id}`);
                 trabajo = true;
+                const inicioTanda = Date.now();
                 await correrInject(motor, dir, s, nombres.length, m.discord_id);
+                await revisarBaneadas(motor, inicioTanda, m.discord_id, nombres).catch(e => log('banned check failed:', e?.message || e));
                 let sobres = 0;
                 const abiertasTanda = [];
                 for (const nombre of nombres) {

@@ -168,6 +168,19 @@ async function ultimoAhk() {
     return _ahk.valor;
 }
 
+// Cuentas del miembro marcadas como probablemente baneadas por el GP farm (zenith:baneadas, community-host.js).
+// Van en el ping: su Monitor Link las muestra "Banned?". Cacheado 60 s (un HGETALL para todos los pings).
+let _baneadas = { ts: 0, plano: [] };
+async function baneadasDe(discordId) {
+    if (Date.now() - _baneadas.ts > 60 * 1000) {
+        _baneadas.ts = Date.now();
+        try { _baneadas.plano = await redisLibreta('HGETALL', 'zenith:baneadas') || []; } catch (e) { /* sin libreta */ }
+    }
+    const prefijo = `${discordId}|`, salida = [];
+    for (let i = 0; i < _baneadas.plano.length; i += 2) if (String(_baneadas.plano[i]).startsWith(prefijo)) salida.push(String(_baneadas.plano[i]).slice(prefijo.length));
+    return salida.slice(0, 500);
+}
+
 async function redisLibreta(...comando) {
     const url = process.env.LINK_REDIS_URL, token = process.env.LINK_REDIS_TOKEN;
     if (!url || !token) return null;
@@ -380,7 +393,7 @@ function registrar(app, dependencias) {
                 pedido.carpeta_pedida = null;
             }
             res.json({ ok: true, user: (await nombreUsuario(agente.discord_id)) || agente.discord_id, folder: pedido?.carpeta_pedida || null, ahk: await ultimoAhk(),
-                mirrors: await espejos() });
+                mirrors: await espejos(), banned: await baneadasDe(agente.discord_id) });
         } catch (e) {
             res.status(500).json({ error: 'server_error' });
         }

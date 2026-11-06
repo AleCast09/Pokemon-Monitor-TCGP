@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.14"
+global VERSION := "ahk-1.9.15"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -35,6 +35,7 @@ global ProxyFile := "", ProxyHuella := "", ProxiesEnviadas := ""
 ; sent; each .xml is sent when a host is about to open it (like Fast Share) and the host deletes it.
 global CFG_REROLL := CFG_DIR . "\reroll_accounts.txt", CFG_REROLL_LOG := CFG_DIR . "\reroll_log.txt"
 global CuentasReroll := {}, UltimoReroll := ""
+global Baneadas := {}   ; lent accounts the GP farm marked as likely banned (from the ping)
 global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global Status, Info, Clave, BtnLink, Inicio, LinkBox, LVCuentas, Barra
@@ -147,6 +148,7 @@ PintarEstado() {
         . (ProxyFile != "" ? "`nProxies shared: " . (ProxiesEnviadas != "" ? ProxiesEnviadas : "sending...") : "")
         . (CuentasReroll.Count() ? "`nAccounts shared for reroll: " . CuentasReroll.Count() . (UltimoReroll != "" ? " - last opened " . UltimoReroll : "") : "")
         . (CompGP != "" ? "`nGP farm accounts: " . CompGP . "  -  96P pack farm accounts: " . Comp96 : "")
+        . (Baneadas.Count() ? "`nLikely banned (see Share accounts): " . Baneadas.Count() : "")
         . (UltimoError != "" ? "`n" . UltimoError : "")
     GuiControl,, Info, %texto%
     Menu, Tray, Tip, % "Monitor Link - " . (Token = "" ? "not linked" : EnLinea ? "connected" : "offline")
@@ -321,7 +323,7 @@ CompartirCuentas:
             noElegibles++
         if (CuentasReroll.HasKey(f))
             compartidas++
-        LV_Add(CuentasReroll.HasKey(f) ? "Check" : "", f, mp1 + 0, faltan ? "Locked " . faltan . "p" : "OK", desdePausa)
+        LV_Add(CuentasReroll.HasKey(f) ? "Check" : "", f, mp1 + 0, Baneadas.HasKey(f) ? "Banned?" : faltan ? "Locked " . faltan . "p" : "OK", desdePausa)
         total++
     }
     LV_ModifyCol(1, 250), LV_ModifyCol(2, "60 Integer SortDesc"), LV_ModifyCol(3, 80), LV_ModifyCol(4, 105)
@@ -376,6 +378,26 @@ return
 ; Friends (2026-11-06, Ale): Discord IDs of people who can use the bot with THIS member's accounts,
 ; without installing Monitor Link. The .xml files still only leave this PC when the bot asks for one.
 ; Window with two boxes (Ale): Discord ID on top, Pokemon game friend ID below, and the list of friends.
+; Likely banned accounts (the hosts' GP farm saw the game refuse them on 2+ proxies): marked "Banned?"
+; in Share accounts, and a notification the first time each one shows up.
+LeerBaneadas(texto) {
+    if !RegExMatch(texto, """banned""\s*:\s*\[([^\]]*)\]", mb)
+        return
+    nuevas := {}, avisar := "", p := 1
+    while (p := RegExMatch(mb1, """((?:[^""\\]|\\.)*)""", mn, p)) {
+        p += StrLen(mn)
+        f := JsonUnesc(mn1)
+        nuevas[f] := true
+        if !Baneadas.HasKey(f)
+            avisar .= "`n" . f
+    }
+    Baneadas := nuevas
+    if (avisar != "") {
+        TrayTip, Monitor Link, % "Likely banned account(s) - the game refused them on several proxies:" . avisar, 20, 2
+        PintarEstado()
+    }
+}
+
 ElegirAmigos:
     Gui, 3:Destroy
     Gui, 3:+Owner1 +ToolWindow
@@ -974,6 +996,7 @@ Ping:
         PintarEstado()
     }
     ActualizarSiHayVersion(r.text)
+    LeerBaneadas(r.text)
     ; A host appeared (or changed address): it gets the summary right away.
     nuevos := [], antes := "", ahora := "", pm := 1
     if RegExMatch(r.text, """mirrors""\s*:\s*\[([^\]]*)\]", mm)

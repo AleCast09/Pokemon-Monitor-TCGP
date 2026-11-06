@@ -7763,6 +7763,7 @@ if (comunidad.hayComunidad()) {
         marcar: async (online, modo) => { await hostComunidad.marcarReroll(online, modo); hostComunidad.refrescarControl(); },
         // Anti doble reroll: aviso en el canal de hosts (lo ve staff), una vez por main aunque lo vean varios hosts.
         hostsFarm: () => hostComunidad.hostsReroll(), primeraVez: hostComunidad.primeraVez,
+        marcarBaneada: hostComunidad.marcarBaneada, baneadas: hostComunidad.baneadas,
         avisar: async (texto) => {
             for (const guild of client.guilds.cache.values()) {
                 if (!comunidad.esComunidad(guild.id)) continue;

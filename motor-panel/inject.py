@@ -874,8 +874,12 @@ def login_account(account: dict, max_retries: int = 2) -> Optional[object]:
             result = sess.login()
             if result.get("success"):
                 healthy = True
+                en_uso = False
                 for check_index in range(_proxy_checks):
                     power = get_pack_power(sess, max_retries=1, tag=tag)
+                    if power == -2:   # account open elsewhere: the proxy is fine, skip the account
+                        en_uso = True
+                        break
                     if power < 0:
                         healthy = False
                         log(f"[proxy] post-login health check "
@@ -889,6 +893,16 @@ def login_account(account: dict, max_retries: int = 2) -> Optional[object]:
                             f"{check_index + 1}/{_proxy_checks} passed",
                             tag=tag)
                         break
+                if en_uso:
+                    try:
+                        sess.close()
+                    except Exception:
+                        pass
+                    last_err = "account_in_use (ABORTED: open somewhere else)"
+                    last_err_obj = last_err
+                    log("[info] skipping this account for now - it is open somewhere else "
+                        "(its owner, another bot or another host). It is retried next run.", tag=tag)
+                    break
                 if not healthy:
                     _mark_proxy_unhealthy(proxy)
                     log(f"[proxy] marking current proxy unhealthy for "
@@ -913,8 +927,9 @@ def login_account(account: dict, max_retries: int = 2) -> Optional[object]:
             last_err_obj = exc
             log(f"login exception: {str(exc)[:200]}", tag=tag)
         time.sleep(3)
-    log(f"[X] login exhausted after {max_retries} attempts (last: {str(last_err)[:120]})",
-        tag=account["nickname"])
+    if not str(last_err).startswith("account_in_use"):
+        log(f"[X] login exhausted after {max_retries} attempts (last: {str(last_err)[:120]})",
+            tag=account["nickname"])
     # Expose failure metadata for the quarantine classifier upstream.
     account["_login_failure"] = {
         "last_error_obj": last_err_obj,
@@ -1103,6 +1118,22 @@ _full_lock = threading.Lock()
 
 
 _FULL_POWER_ONLY = False   # set from --full-power-only in main()
+_banned_lock = threading.Lock()
+
+
+def _note_banned(account: dict, err_str: str, proxies_tried: int, tag: str = "") -> None:
+    """Likely banned (the game refused the account with real auth details on 2+ proxies): one line in
+    reports/banned_accounts.jsonl. The Monitor Pokemon bot reads it (GP farm) and warns the owner."""
+    try:
+        xml = Path(account.get("xml_path") or account.get("json_path") or "").name
+        path = PROJECT_ROOT / "reports" / "banned_accounts.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _banned_lock, open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": int(time.time() * 1000), "xml": xml, "account": tag,
+                                "proxies": proxies_tried, "error": (err_str or "")[:300]}) + "\n")
+        log(f"[!] LIKELY BANNED: the game refused this account on {proxies_tried} proxies", tag=tag)
+    except Exception as exc:
+        log(f"[!] could not write banned_accounts.jsonl: {str(exc)[:120]}", tag=tag)
 
 
 def _skip_partial_power(power: int, packs: int, hg_cost, result: dict, tag: str = "") -> bool:
@@ -1771,6 +1802,12 @@ def get_pack_power(sess, max_retries: int = 3, tag: str = "",
                 time.sleep(delay)
                 continue
             break
+    # 2026-11-06 (Ale): ABORTED with no HTML = the account has another session open right now (its owner,
+    # another bot or another host), NOT a dead proxy. -2 so the login health check doesn't burn the proxy;
+    # plain info line (no "[!]") so the panel doesn't fill with red.
+    if "ABORTED" in last_err and "<html" not in last_err.lower() and "<!doctype" not in last_err.lower():
+        log("[info] GetPackPowerV1 ABORTED - this account seems to be open somewhere else right now", tag=tag)
+        return -2
     log(f"[!] GetPackPowerV1 failed after {attempt} attempt(s): {last_err[:200]}",
         tag=tag)
     # -1 = RPC unavailable, NOT "0 power". Callers use this to skip the
@@ -2200,7 +2237,9 @@ def inject_one(
         # Classify + quarantine if the caller enabled it. Transient errors
         # (proxy / tunnel issues) are left alone so the account retries
         # next run — only real auth blocks or unknown failures get moved.
-        if getattr(_qopts, "enabled", False):
+        # Classified ALWAYS (2026-11-06, Ale): a likely ban is written to reports/banned_accounts.jsonl even
+        # when quarantine is off (GP farm lent accounts), so Monitor Pokemon can warn the owner.
+        if True:
             try:
                 from scripts.flow.errors import classify_login_failure
             except ImportError:
@@ -2219,9 +2258,15 @@ def inject_one(
             # server sees the account, so it says nothing about a ban: retry next run instead of
             # moving the file. 2026-11-06 (Ale): BaaS refused every login and 159 good accounts
             # were sent to QUARANTINE/unknown_failure.
-            if "BaaS login failed" in err_str:
-                classification = "transient"
-            if classification != "transient":
+            if "BaaS login failed" in err_str or err_str.startswith("account_in_use"):
+                classification = "transient"   # account open elsewhere: never quarantine it
+            if err_str.startswith("account_in_use"):
+                # Not a failure of this run (no auto-stop count, no red): the account is just busy elsewhere.
+                result["error"] = "account_in_use"
+                return result
+            if classification == "likely_banned":
+                _note_banned(account, err_str, proxies_tried_n, tag)
+            if classification != "transient" and getattr(_qopts, "enabled", False):
                 reason_text = (
                     f"Classification: {classification}\n"
                     f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -2234,6 +2279,7 @@ def inject_one(
                     account, classification, reason_text,
                     skip_list_path=_qopts.skip_list_path, tag=tag,
                 )
+            if classification != "transient":
                 result["error"] = f"login_failed ({classification})"
         return result
 
