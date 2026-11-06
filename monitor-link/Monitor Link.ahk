@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.9"
+global VERSION := "ahk-1.9.10"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -399,36 +399,101 @@ return
 
 ; Friends (2026-11-06, Ale): Discord IDs of people who can use the bot with THIS member's accounts,
 ; without installing Monitor Link. The .xml files still only leave this PC when the bot asks for one.
+; Window with two boxes (Ale): Discord ID on top, Pokemon game friend ID below, and the list of friends.
 ElegirAmigos:
-    InputBox, nuevos, Friends who can use my accounts, % "One friend per entry, separated by commas (max 10):`n      DiscordUserID:GameFriendID`ne.g. 718835068549857371:1234-5678-9012-3456`n`nThey will use the bot in Zenith Rise with YOUR accounts (cards, Fast Share/Trade, Extract XML). Their game ID shows up next to yours when they pick where to send cards.`nLeave it empty to remove them all.`n`n(Discord: Settings > Advanced > Developer Mode, then right-click the user > Copy User ID)", , 520, 320, , , , , %Amigos%
-    if (ErrorLevel)
-        return
-    lista := "", malos := "", vistos := {}
-    Loop, Parse, nuevos, `,`n`r
+    Gui, 3:Destroy
+    Gui, 3:+Owner1 +ToolWindow
+    Gui, 3:Margin, 14, 12
+    Gui, 3:Font, s9, Segoe UI
+    Gui, 3:Add, Text, w400, Friends who can use the bot in Zenith Rise with YOUR accounts (cards, Fast Share/Trade, Extract XML). Only add people you trust.
+    Gui, 3:Font, s9 Bold, Segoe UI
+    Gui, 3:Add, Text, w400 y+10, Discord user ID
+    Gui, 3:Font, s9 Norm, Segoe UI
+    Gui, 3:Add, Edit, w400 y+3 Number vAmigoDiscord
+    Gui, 3:Add, Text, w400 y+2 cGray, Discord: Settings > Advanced > Developer Mode, then right-click the user > Copy User ID
+    Gui, 3:Font, s9 Bold, Segoe UI
+    Gui, 3:Add, Text, w400 y+10, Pokemon TCG Pocket friend ID (optional)
+    Gui, 3:Font, s9 Norm, Segoe UI
+    Gui, 3:Add, Edit, w400 y+3 vAmigoJuego
+    Gui, 3:Add, Text, w400 y+2 cGray, 16 digits, e.g. 1234-5678-9012-3456. It shows up next to yours when they pick where to send cards.
+    Gui, 3:Add, Button, w400 h28 y+8 gAgregarAmigo, Add friend
+    Gui, 3:Add, ListView, w400 r6 y+10 Grid -Multi vLVAmigos, Discord ID|Pokemon ID
+    Gui, 3:Default
+    Loop, Parse, Amigos, `,
     {
-        par := StrReplace(Trim(A_LoopField), " ")
-        if (par = "")
+        if (A_LoopField = "")
             continue
-        partes := StrSplit(par, ":")
-        id := partes[1], juego := RegExReplace(partes.Length() > 1 ? partes[2] : "", "\D")
-        if (!RegExMatch(id, "^\d{17,20}$") || (juego != "" && StrLen(juego) != 16) || partes.Length() > 2) {
-            malos .= "`n" . par
-            continue
+        partes := StrSplit(A_LoopField, ":")
+        LV_Add("", partes[1], partes.Length() > 1 ? partes[2] : "")
+    }
+    LV_ModifyCol(1, 190), LV_ModifyCol(2, 190)
+    Gui, 3:Add, Button, xm y+8 w140 h28 gQuitarAmigo, Remove selected
+    Gui, 3:Add, Button, x+120 yp w140 h28 Default gGuardarAmigos, Save
+    Gui, 1:Default
+    Gui, 3:Show, AutoSize, Friends who can use my accounts
+return
+
+3GuiClose:
+3GuiEscape:
+    Gui, 3:Destroy
+return
+
+AgregarAmigo:
+    Gui, 3:Submit, NoHide
+    Gui, 3:Default
+    id := Trim(AmigoDiscord), juego := RegExReplace(AmigoJuego, "\D")
+    if !RegExMatch(id, "^\d{17,20}$") {
+        Gui, 1:Default
+        MsgBox, 48, Monitor Link, The Discord user ID is a long number (17-20 digits).
+        return
+    }
+    if (juego != "" && StrLen(juego) != 16) {
+        Gui, 1:Default
+        MsgBox, 48, Monitor Link, The Pokemon friend ID has 16 digits (e.g. 1234-5678-9012-3456).
+        return
+    }
+    Loop % LV_GetCount()
+    {
+        LV_GetText(ya, A_Index, 1)
+        if (ya = id) {
+            LV_Delete(A_Index)
+            break
         }
-        if (vistos.HasKey(id))
-            continue
-        vistos[id] := true
+    }
+    if (LV_GetCount() >= 10) {
+        Gui, 1:Default
+        MsgBox, 48, Monitor Link, You can add up to 10 friends.
+        return
+    }
+    LV_Add("", id, juego)
+    GuiControl, 3:, AmigoDiscord
+    GuiControl, 3:, AmigoJuego
+    Gui, 1:Default
+return
+
+QuitarAmigo:
+    Gui, 3:Default
+    if (fila := LV_GetNext(0))
+        LV_Delete(fila)
+    Gui, 1:Default
+return
+
+GuardarAmigos:
+    Gui, 3:Default
+    lista := ""
+    Loop % LV_GetCount()
+    {
+        LV_GetText(id, A_Index, 1)
+        LV_GetText(juego, A_Index, 2)
         lista .= (lista = "" ? "" : ",") . id . (juego != "" ? ":" . juego : "")
     }
-    if (malos != "") {
-        MsgBox, 48, Monitor Link, % "Check these entries:" . malos . "`n`nWrite each friend as DiscordUserID:GameFriendID`n(Discord ID = 17-20 digits, game friend ID = 16 digits)."
-        return
-    }
+    Gui, 1:Default
     if (lista != "") {
         MsgBox, 36, Monitor Link, % "Let these Discord users use the bot with your accounts?`n`n" . StrReplace(lista, ",", "`n") . "`n`nThey can see your cards, do Fast Share/Trade and Extract XML with your accounts. Only add people you trust."
         IfMsgBox, No
             return
     }
+    Gui, 3:Destroy
     Amigos := lista
     IniWrite, %Amigos%, %CFG%, friends, ids
     if !EnviarAmigos()
