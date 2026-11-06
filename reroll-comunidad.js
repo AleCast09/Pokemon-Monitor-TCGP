@@ -43,6 +43,9 @@ function iniciar(d) {
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent');
+    // (2026-11-06) PPM del panel de wr98: sigue 15 min despues de un Stop y cuenta tambien el GP farm.
+    instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'ppm_monitor.py', ['scripts', 'god_pack', 'ppm_monitor.py'],
+        '2d3767ae2968a2c66e9ac2ec0fb8c0331d486839486a6e1921c756b35299a8f3', 'CACHE_TTL_SEC = 15 * 60', 'PPM kept 15 min after Stop');
     // La parte de proxies cambia cuando otro host entra o sale: se rehace el .txt cada minuto.
     setInterval(() => deps.ml.escribirProxiesMotor().catch(() => {}), 60 * 1000);
     sincronizarPanel();
