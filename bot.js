@@ -4930,14 +4930,19 @@ function leerIniInject(rutaIni = RUTA_INJECT_INI_DEFAULT) {
 // (Monitor Link 1.9.9+, pedido de Ale): primero el friend ID del juego que el miembro le anoto (y su
 // propio registro, si tiene), despues los del miembro -- asi ve su ID y el del dueño.
 async function destinosComunidad(userId) {
+    const nombre = async (id) => { const u = await client.users.fetch(String(id)).catch(() => null); return u?.globalName || u?.username || 'Friend'; };
     const dueno = monitorLink.duenoDe(userId);
-    if (!dueno) return await comunidad.destinosDe(userId);
+    // Dueño (pedido de Ale): sus IDs y, despues, los de los amigos que anoto en Monitor Link.
+    if (!dueno) {
+        const propios = await comunidad.destinosDe(userId);
+        const deAmigos = [];
+        for (const a of monitorLink.amigosDe(userId).filter(a => a.juego)) deAmigos.push({ id: a.juego, label: `${await nombre(a.discordId)} — Main` });
+        const vistos = new Set();
+        return [...propios, ...deAmigos].filter(d => d.id && !vistos.has(String(d.id)) && vistos.add(String(d.id)));
+    }
     const salida = [];
     const juego = monitorLink.juegoDeAmigo(userId);
-    if (juego) {
-        const u = await client.users.fetch(String(userId)).catch(() => null);
-        salida.push({ id: juego, label: `${u?.globalName || u?.username || 'Friend'} — Main` });
-    }
+    if (juego) salida.push({ id: juego, label: `${await nombre(userId)} — Main` });
     salida.push(...await comunidad.destinosDe(userId).catch(() => []));
     salida.push(...await comunidad.destinosDe(dueno).catch(() => []));
     const vistos = new Set();

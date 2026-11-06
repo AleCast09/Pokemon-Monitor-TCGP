@@ -156,10 +156,10 @@ async function espejos() {
 const CLAVE_AGENTES = process.env.ML_AGENTES_KEY || 'ml:agentes';
 
 // Ultima version publicada de Monitor Link.ahk ({ version, url }), de zenith:release (lo anota
-// scripts/publicar-host.js). Cacheada 10 min para no gastar consultas en cada ping.
+// scripts/publicar-host.js). Cacheada 1 min (Ale 2026-11-06: antes 10 min y las versiones nuevas tardaban).
 let _ahk = { ts: 0, valor: null };
 async function ultimoAhk() {
-    if (Date.now() - _ahk.ts < 10 * 60 * 1000) return _ahk.valor;
+    if (Date.now() - _ahk.ts < 60 * 1000) return _ahk.valor;
     _ahk.ts = Date.now();
     try {
         const r = JSON.parse(await redisLibreta('GET', 'zenith:release') || 'null');
@@ -591,6 +591,8 @@ async function cargarAmigos() {
 const duenoDe = (discordId) => amigos.get(String(discordId))?.dueno || null;
 // Friend ID del juego que el dueño anoto para ese amigo (null si no puso ninguno).
 const juegoDeAmigo = (discordId) => amigos.get(String(discordId))?.juego || null;
+// Amigos que anoto un miembro, con su friend ID del juego: [{ discordId, juego }].
+const amigosDe = (duenoId) => [...amigos].filter(([, a]) => a.dueno === String(duenoId)).map(([id, a]) => ({ discordId: id, juego: a.juego }));
 
 // Status de cuentas de toda la comunidad para el panel de hosts.
 async function estadoCuentasComunidad() {
@@ -950,5 +952,5 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { estadoCuentasComunidad, duenoDe, juegoDeAmigo, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
+module.exports = { estadoCuentasComunidad, duenoDe, juegoDeAmigo, amigosDe, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
     usarParteReroll, escribirProxiesMotor, xmlRerollPorHostActivo, pasarSobresAlHostActivo };
