@@ -1390,6 +1390,9 @@ def _discover_send_requests_field(Request) -> tuple[Optional[str], Optional[bool
     return None, None
 
 
+_fr_state = threading.local()   # proxy_blocked: the last send failed because the proxy returned a web page
+
+
 def send_friend_requests(sess, target_pids: list[str], tag: str = "") -> bool:
     """
     Send friend request to one or more player_ids using batched helper.
@@ -1397,6 +1400,7 @@ def send_friend_requests(sess, target_pids: list[str], tag: str = "") -> bool:
     if not target_pids:
         return True
 
+    _fr_state.proxy_blocked = False
     helper = getattr(sess, "send_friend_requests", None)
     if callable(helper):
         import time
@@ -1409,6 +1413,14 @@ def send_friend_requests(sess, target_pids: list[str], tag: str = "") -> bool:
                     err_str = str(r.get("error", ""))
                     if "ABORTED" in err_str:
                         log(f"[!] SendRequestsV1 ABORTED en lote. Servidor saturado.", tag=tag)
+                        return False
+                    # 2026-11-06 (Arcade): a web page instead of a game answer = the proxy/firewall blocks
+                    # friend requests from this IP. Every next batch fails the same way: stop here (one line,
+                    # not one per batch) and the caller doesn't retry one by one from this proxy.
+                    if "<!doctype" in err_str.lower() or "<html" in err_str.lower():
+                        _fr_state.proxy_blocked = True
+                        log(f"[!] SendRequestsV1 blocked by the proxy (web page) - stopping friend requests "
+                            f"for this account", tag=tag)
                         return False
                     log(f"[!] SendRequestsV1 helper error: {err_str[:200]}", tag=tag)
             except Exception as exc:
@@ -2652,7 +2664,8 @@ def inject_one(
                 fr_cleanup.ledger_open(account, target_pids)
                 fr_was_sent = True
                 fr_ok = send_friend_requests(sess, target_pids, tag)
-                if not fr_ok and len(target_pids) > 1:
+                # One by one only when a Main refused (full list); not when the proxy itself is blocked.
+                if not fr_ok and len(target_pids) > 1 and not getattr(_fr_state, "proxy_blocked", False):
                     # (2026-11-01) El paquete falla entero (ABORTED) si UNO de los collectors tiene la
                     # lista de amigos llena, y la cuenta se saltaba sin abrir (487 veces en un dia).
                     # Se reintenta de a uno: la cuenta sigue con los que aceptaron, y los que rechazan
