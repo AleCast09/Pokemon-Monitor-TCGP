@@ -453,7 +453,9 @@ function registrar(app, dependencias) {
                 const f = String((typeof c === 'string' ? c : c?.f) || '').trim();
                 if (!/^[^\\/:*?"<>|]{1,120}\.xml$/i.test(f) || vistas.has(f)) return null;
                 vistas.add(f);
-                return { f, p: Number.isInteger(c?.p) ? c.p : null, l: /^\d{14}$/.test(String(c?.l || '')) ? String(c.l) : null };
+                return { f, p: Number.isInteger(c?.p) ? c.p : null, l: /^\d{14}$/.test(String(c?.l || '')) ? String(c.l) : null,
+                    // e = dias que le faltan para ser elegible a God Pack (0 = elegible; lo calcula Monitor Link 1.9.5+).
+                    e: Number.isInteger(c?.e) && c.e >= 0 && c.e <= 30 ? c.e : null };
             }).filter(Boolean).slice(0, 20000);
             if (cuentas.length) {
                 await db.run(`INSERT INTO link_reroll (discord_id, cuentas, n, ts) VALUES (?, ?, ?, ?)

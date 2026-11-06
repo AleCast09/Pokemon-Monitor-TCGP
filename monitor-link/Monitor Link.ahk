@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.4"
+global VERSION := "ahk-1.9.5"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -293,9 +293,9 @@ CompartirCuentas:
     Gui, 2:Font, s9 Bold cC62828, Segoe UI
     Gui, 2:Add, Text, w440 y+6, While an account is shared, do NOT open it on your own instances: the same account in two places at once gets errors.
     Gui, 2:Font, s9 Norm cBlack, Segoe UI
-    Gui, 2:Add, ListView, w440 r16 y+8 Checked Grid -Multi vLVCuentas, Account|Packs
+    Gui, 2:Add, ListView, w440 r16 y+8 Checked Grid -Multi vLVCuentas, Account|Packs|GP
     Gui, 2:Default
-    total := 0
+    total := 0, noElegibles := 0
     Loop, Files, %CarpetaJson%\*.json
     {
         if (Mod(A_Index, 20) = 0)
@@ -306,11 +306,16 @@ CompartirCuentas:
         if (mp1 < 96)
             continue
         f := RegExMatch(t, """fileName""\s*:\s*""((?:[^""\\]|\\.)*)""", mf) ? JsonUnesc(mf1) : A_LoopFileName
-        LV_Add(CuentasReroll.HasKey(f) ? "Check" : "", f, mp1 + 0)
+        ; GP column: OK = God Pack eligible; "N days" = still needs packs on N more different days.
+        faltan := DiasFaltanGP(t)
+        if (faltan)
+            noElegibles++
+        LV_Add(CuentasReroll.HasKey(f) ? "Check" : "", f, mp1 + 0, faltan ? faltan . " days" : "OK")
         total++
     }
-    LV_ModifyCol(1, 330), LV_ModifyCol(2, "80 Integer SortDesc")
+    LV_ModifyCol(1, 270), LV_ModifyCol(2, "70 Integer SortDesc"), LV_ModifyCol(3, 80)
     Gui, 2:Add, Text, w440 y+6, % total . " accounts with 96+ packs - " . CuentasReroll.Count() . " shared now."
+    Gui, 2:Add, Text, w440 y+2, % "God Pack eligible: " . (total - noElegibles) . " - not eligible yet: " . noElegibles . " (GP column: days of packs still missing)."
     Gui, 2:Add, Button, xm y+8 w100 h28 gMarcarTodas, Tick all
     Gui, 2:Add, Button, x+6 yp w100 h28 gDesmarcarTodas, Untick all
     Gui, 2:Add, Button, x+40 yp w188 h28 Default gGuardarCompartidas, Save and share
@@ -376,7 +381,8 @@ EnviarCuentasReroll() {
                 continue
             p := RegExMatch(t, """packCount""\s*:\s*(\d+)", mp) ? mp1 : 0
             l := RegExMatch(t, """lastPackPulled""\s*:\s*""(\d+)""", ml) ? ml1 : ""
-            datos[f] := "{""f"":""" . JsonEsc(f) . """,""p"":" . p . ",""l"":""" . l . """}"
+            ; e = days still missing to be God Pack eligible (0 = eligible); only this number leaves the PC.
+            datos[f] := "{""f"":""" . JsonEsc(f) . """,""p"":" . p . ",""l"":""" . l . """,""e"":" . DiasFaltanGP(t) . "}"
         }
     items := ""
     for f in CuentasReroll
@@ -1304,6 +1310,38 @@ Http(metodo, url, body := "", tipo := "", bearer := "", segundos := 30) {
     else
         req.Send()
     return {status: req.Status, text: req.ResponseText}
+}
+
+; God Pack eligibility (2026-11-06, Ale's rule): if 30+ days passed between two packs in a row of the
+; account (pulls[] of its .json), it stops being eligible; it is eligible again once it opened packs on
+; 30 different days after the LAST such gap (a new 30-day gap restarts the count). 30+ days since the
+; last pack until today also counts as a gap. Returns the days still missing (0 = eligible).
+DiasFaltanGP(t) {
+    dias := {}, pos := 1
+    while (pos := RegExMatch(t, """timestamp""\s*:\s*""(\d{4})-(\d{2})-(\d{2})[^""]*""\s*,\s*""pack""", m, pos)) {
+        dias[(m1 . m2 . m3) + 0] := true
+        pos += StrLen(m)
+    }
+    if (!dias.Count())
+        return 0   ; no pack history: nothing to judge
+    hueco := false, desde := 0, anterior := ""
+    for d in dias {   ; integer keys: AutoHotkey walks them in order
+        if (anterior != "") {
+            x := d . "", y := anterior . ""
+            EnvSub, x, %y%, Days
+            if (x >= 30)
+                hueco := true, desde := 0
+        }
+        desde++
+        anterior := d
+    }
+    hoy := A_YYYY . A_MM . A_DD, y := anterior . ""
+    EnvSub, hoy, %y%, Days
+    if (hoy >= 30)
+        return 30
+    if (!hueco)
+        return 0
+    return desde >= 30 ? 0 : 30 - desde
 }
 
 JsonEsc(s) {

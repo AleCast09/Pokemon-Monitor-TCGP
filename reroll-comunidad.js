@@ -492,7 +492,9 @@ async function resumenPrestadas() {
     for (const m of await deps.ml.cuentasReroll()) {
         const mias = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte));
         const listas = mias.filter(c => ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).length;
-        resumen[m.discord_id] = [m.cuentas.length, mias.length, listas];
+        // 4to: de las de este host, cuantas todavia no son elegibles a God Pack (solo aviso, el farm las abre igual).
+        const noElegibles = mias.filter(c => c.e > 0).length;
+        resumen[m.discord_id] = [m.cuentas.length, mias.length, listas, noElegibles];
     }
     return resumen;
 }

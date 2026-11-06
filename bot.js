@@ -16703,10 +16703,11 @@ async function seccionPrestadas(hosts) {
     if (!farm.length) return null;
     const miembros = {};
     for (const h of farm) {
-        for (const [id, [total, mias, listas]] of Object.entries(h.prestadas)) {
-            const m = (miembros[id] ||= { total: 0, listas: 0, porHost: [] });
+        for (const [id, [total, mias, listas, noElegibles]] of Object.entries(h.prestadas)) {
+            const m = (miembros[id] ||= { total: 0, listas: 0, noElegibles: 0, porHost: [] });
             m.total = Math.max(m.total, total);
             m.listas += listas;
+            m.noElegibles += noElegibles || 0;
             m.porHost.push(`${h.nombre} ${mias}`);
         }
     }
@@ -16716,7 +16717,7 @@ async function seccionPrestadas(hosts) {
     try { enLinea = new Map((await monitorLink.vinculados()).map(v => [String(v.discordId), v.enLinea])); } catch (e) { /* sin tablas */ }
     const ahora = Date.now();
     const registro = Object.fromEntries(ids.map(id => [id, {
-        monitorLink: enLinea.get(id) === true, lent: miembros[id].total, ready: miembros[id].listas, ts: ahora
+        monitorLink: enLinea.get(id) === true, lent: miembros[id].total, ready: miembros[id].listas, notGpEligible: miembros[id].noElegibles, ts: ahora
     }]));
     hostComunidad.anotarMiembros?.(registro);
     // Un recuadro por host (pedido de Ale: "cada host con las cuentas que esta abriendo, por separado"):
@@ -16725,14 +16726,15 @@ async function seccionPrestadas(hosts) {
     return farm.slice(0, 9).map(h => {
         const filas = Object.entries(h.prestadas).filter(([, [, mias]]) => mias > 0)
             .sort((a, b) => b[1][1] - a[1][1])
-            .map(([id, [, mias, listas]]) => `${punto(id)} <@${id}> — **${listas}**/${mias}`);
+            .map(([id, [, mias, listas, noElegibles]]) => `${punto(id)} <@${id}> — **${listas}**/${mias}`
+                + (noElegibles ? ` · ⚠️ ${noElegibles} not GP-eligible` : ''));
         const mias = Object.values(h.prestadas).reduce((a, [, m]) => a + m, 0);
         const listas = Object.values(h.prestadas).reduce((a, [, , l]) => a + l, 0);
         const propias = h.farm?.propias ? `Own accounts: **${h.farm.propias}**\n` : '';
         return new EmbedBuilder().setColor(0x57F287)
             .setTitle(`🎲 ${h.farm?.nombre || h.nombre} — GP farm host`)
             .setDescription(`${propias}Shared accounts: **${listas}**/${mias} ready\n\n${filas.join('\n') || 'No lent accounts.'}`.slice(0, 4000))
-            .setFooter({ text: 'ready/total · ready = can open packs now · 🟢 Monitor Link on · 🔴 off' });
+            .setFooter({ text: 'ready/total · ready = can open packs now · 🟢 Monitor Link on · 🔴 off · ⚠️ not GP-eligible = a 30+ day pause, needs packs on 30 different days' });
     });
 }
 
