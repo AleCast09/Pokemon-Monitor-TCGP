@@ -39,11 +39,11 @@ function iniciar(d) {
     if (!deps.fastTransfer.rutaMotor()) return;
     instalarPanel(deps.fastTransfer.rutaMotor());
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
-        INJECT_ORIGINAL, '_limit_collectors', 'own accounts follow the Run Mode (GP: eligible only, Only Pack: locked only) + ~36 packs/min in total',
+        INJECT_ORIGINAL, '_limit_collectors', 'own accounts follow the Run Mode, ~36 packs/min in total, packs saved as their set (C1)',
         // (2026-11-06, Ale) Un Main quedo con soft ban de amigos: un host con su inject.py propio mandaba a 13 Mains
         // por cuenta sin limite. Sin estos limites se instala el nuestro igual (el suyo queda como .bak-propio).
         // (2026-11-07) Ahora el obligatorio es el tope de PPM de la comunidad (lee reports/ppm_cap.json).
-        'GP_ELIGIBILITY_V1');
+        'PACK_SET_CODES_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent',
@@ -68,6 +68,21 @@ function iniciar(d) {
     setInterval(() => escribirEstadoPanel().catch(() => {}), 30 * 1000);
     setInterval(() => escribirTopePpm().catch(() => {}), 30 * 1000);
     escribirTopePpm().catch(() => {});
+    setInterval(() => escribirSetsSobres().catch(() => {}), 6 * 3600 * 1000);
+    escribirSetsSobres().catch(() => {});
+}
+
+// Codigo de set de cada sobre (2026-11-07, Ale: el historial de las cuentas mostraba los sobres de Dual Fusion
+// como "indefinido"): reports/pack_sets.json { pack_id: "C1" } desde el packmaster de Leanny. inject.py lo usa
+// para anotar pulls[] con el set, igual que PTCGPB, y para corregir los que quedaron con el id crudo.
+async function escribirSetsSobres() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    if (!motor) return;
+    const pm = await (await fetch(`${LEANNY}/packmaster.json`, { signal: AbortSignal.timeout(30000) })).json();
+    const sets = Object.fromEntries(Object.entries(pm).filter(([, p]) => p?.ExpansionID).map(([id, p]) => [id, p.ExpansionID]));
+    if (!Object.keys(sets).length) return;
+    fs.mkdirSync(path.join(motor, 'reports'), { recursive: true });
+    fs.writeFileSync(path.join(motor, 'reports', 'pack_sets.json'), JSON.stringify(sets));
 }
 
 // Tope de PPM de la comunidad (2026-11-07, Ale: soft ban de amigos en su Main; "que no pase de 35 o 38 PPM").

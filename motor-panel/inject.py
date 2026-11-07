@@ -79,6 +79,42 @@ from scripts.god_pack import fr_cleanup  # noqa: E402
 from scripts.god_pack import likes as gp_likes  # noqa: E402
 from scripts.god_pack import popups as gp_popups  # noqa: E402
 from scripts.god_pack import resources as gp_resources  # noqa: E402
+
+# 2026-11-07 (Ale): pulls[] must say the set code ("C1") like PTCGPB/Lean writes it. The engine wrote the raw
+# pack id ("CN001_0020_00_000") and account viewers showed those packs as "undefined" with the wrong cards.
+# The Monitor bot keeps reports/pack_sets.json {pack_id: set} from Leanny's packmaster; this is the fallback.
+PACK_SET_CODES_V1 = True
+_PACK_SETS = {
+    "BN001_0010_00_000": "B1", "BN001_0020_00_000": "B1", "BN001_0030_00_000": "B1",
+    "CN001_0010_00_000": "C1", "CN001_0020_00_000": "C1",
+}
+try:
+    _PACK_SETS.update({str(k): str(v) for k, v in json.loads(
+        (PROJECT_ROOT / "reports" / "pack_sets.json").read_text("utf-8")).items() if v})
+except Exception:
+    pass
+_short_pack_name_engine = gp_json.short_pack_name
+
+
+def _pack_set_code(pack_id: str) -> str:
+    return _PACK_SETS.get(str(pack_id or "")) or _short_pack_name_engine(pack_id)
+
+
+gp_json.short_pack_name = _pack_set_code   # json_writer looks it up at call time
+
+
+def _fix_pack_labels(json_path: str, jdata) -> None:
+    """Rewrite old pulls[] entries saved with the raw pack id to the set code (once per JSON)."""
+    pulls = jdata.get("pulls") if isinstance(jdata, dict) else None
+    if not json_path or not isinstance(pulls, list):
+        return
+    changed = 0
+    for p in pulls:
+        if isinstance(p, dict) and p.get("pack") in _PACK_SETS:
+            p["pack"] = _PACK_SETS[p["pack"]]
+            changed += 1
+    if changed:
+        gp_json._atomic_write_json(Path(json_path), jdata)
 try:
     from scripts.god_pack import discord_notifier as gp_discord
 except Exception:
@@ -550,6 +586,10 @@ def discover_accounts(
             except Exception as exc:
                 log(f"[!] {os.path.basename(json_path)} JSON parse failed: {exc}")
                 continue
+            try:
+                _fix_pack_labels(json_path, jdata)
+            except Exception:
+                pass
 
         # PTCGPB-leannew writes account state under `metadata`.
         meta = jdata.get("metadata", {}) if isinstance(jdata, dict) else {}
