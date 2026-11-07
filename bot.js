@@ -11652,6 +11652,15 @@ async function manejarInteraccionPrincipal(interaction) {
             );
         return await interaction.editReply({ embeds: [embed], components: [] });
     }
+    // (2026-11-07, Ale) Los botones de la lista de Shinedust de OTRO miembro (Refresh, Claim, Bulk, paginas)
+    // no se pueden usar: cada uno usa los de la lista que pidio. (Igual usaban las cuentas de quien tocaba.)
+    if ((interaction.isButton() || interaction.isStringSelectMenu())
+        && (interaction.customId.startsWith('fast_') || interaction.customId.startsWith('shinedust_reporte::'))) {
+        const dueno = interaction.message?.interactionMetadata?.user?.id || interaction.message?.interaction?.user?.id;
+        if (dueno && dueno !== interaction.user.id) {
+            return interaction.reply({ content: `🔒 This list belongs to <@${dueno}>. Use **/shinedust** to get your own.`, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => {});
+        }
+    }
     if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith('fast_')) {
         if (await fastTransfer.manejarInteraccion(interaction)) return;
     }
