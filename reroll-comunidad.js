@@ -285,6 +285,13 @@ async function revisarPpm() {
             if (!ppm?.pausa || Date.now() - ppm.pausa.at >= PPM_PAUSA_MS) ppm = null;
             return;
         }
+        // (2026-11-07, Ale) Only Pack (96P de cuentas bloqueadas) no es PPM real de God Packs: no se reporta.
+        // Si venia de GP farm, se manda una vez Offline/0 PPM para que LatiasBot no siga mostrando el anterior.
+        if (soloSobres(s)) {
+            if (ppm && !ppm.pausa) await enviarPpm(motor, s, true).catch(() => {});
+            ppm = null;
+            return;
+        }
         if (!ppm) { ppm = { desde: Date.now(), sobres: 0 }; sumarPropios(motor); }
         await enviarPpm(motor, s, false);
     } catch (e) {
