@@ -4930,18 +4930,25 @@ function leerIniInject(rutaIni = RUTA_INJECT_INI_DEFAULT) {
 // Destinos de un usuario en la comunidad (Main/secundaria del registro de wr98). Amigo de un miembro
 // (Monitor Link 1.9.9+, pedido de Ale): primero el friend ID del juego que el miembro le anoto (y su
 // propio registro, si tiene), despues los del miembro -- asi ve su ID y el del dueño.
+// Sin Main registrada (ni en Monitor Link ni en el panel de wr98): donde registrarla (Ale 2026-11-07).
+const MSG_SIN_MAIN = '❌ You haven\'t registered your Main yet. Open **Monitor Link**, press **My Main ID**, type your Main\'s friend ID (16 digits) and save — then try again.';
+
 async function destinosComunidad(userId) {
     const nombre = async (id) => { const u = await client.users.fetch(String(id)).catch(() => null); return u?.globalName || u?.username || 'Friend'; };
     const dueno = monitorLink.duenoDe(userId);
     // Dueño (pedido de Ale): sus IDs y, despues, los de los amigos que anoto en Monitor Link.
+    // Main que el usuario registro en su propio Monitor Link (Ale 2026-11-07): va primero, aunque no este en
+    // el registro de wr98 (Dragonite).
+    const mainPropia = monitorLink.mainDe?.(userId);
+    const deMonitorLink = mainPropia ? [{ id: mainPropia, label: `${await nombre(userId)} — Main` }] : [];
     if (!dueno) {
-        const propios = await comunidad.destinosDe(userId);
+        const propios = [...deMonitorLink, ...await comunidad.destinosDe(userId).catch(() => [])];
         const deAmigos = [];
         for (const a of monitorLink.amigosDe(userId).filter(a => a.juego)) deAmigos.push({ id: a.juego, label: `${await nombre(a.discordId)} — Main` });
         const vistos = new Set();
         return [...propios, ...deAmigos].filter(d => d.id && !vistos.has(String(d.id)) && vistos.add(String(d.id)));
     }
-    const salida = [];
+    const salida = [...deMonitorLink];
     const juego = monitorLink.juegoDeAmigo(userId);
     if (juego) salida.push({ id: juego, label: `${await nombre(userId)} — Main` });
     salida.push(...await comunidad.destinosDe(userId).catch(() => []));
@@ -4957,7 +4964,7 @@ async function amigosParaInteraccion(interaction, rutaIni) {
     if (!comunidad.esComunidad(interaction.guildId)) return parsearListaFriends(rutaIni);
     try {
         const destinos = await destinosComunidad(interaction.user.id);
-        if (!destinos.length) interaction._sinDestinosMsg = '❌ You\'re not registered yet. Register your **Main** in the community panel first, then try again.';
+        if (!destinos.length) interaction._sinDestinosMsg = MSG_SIN_MAIN;
         return destinos;
     } catch (e) {
         console.error('DEBUG: no se pudo leer el registro de wr98:', e?.message || e);
@@ -12641,7 +12648,7 @@ async function manejarInteraccionPrincipal(interaction) {
         await interaction.deferUpdate();
         const propios = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
         if (!propios.length) {
-            return await interaction.followUp({ content: '❌ You\'re not registered yet. Register your **Main** in the community panel first.', ephemeral: true });
+            return await interaction.followUp({ content: MSG_SIN_MAIN, ephemeral: true });
         }
         return await mostrarPerfilFarm(interaction, propios[0].friend_id, propios[0].alias);
     }

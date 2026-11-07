@@ -39,6 +39,10 @@ async function asegurarTablas() {
         try { await db.run(`ALTER TABLE link_amigos ADD COLUMN juego_id TEXT`); } catch (e) { /* ya existe */ }
         asegurarTablas.amigoJuego = true;
     }
+    // Main propia del miembro (Monitor Link 1.9.18+, Ale 2026-11-07): destino de Share/Trade y para ver sus
+    // cartas aunque no este en el registro de wr98 (Dragonite). Despues se migra a Dragonite.
+    await db.run(`CREATE TABLE IF NOT EXISTS link_main (
+        discord_id TEXT PRIMARY KEY, main_id TEXT, ts INTEGER)`);
     // Totales de elegibilidad GP de cada miembro (Monitor Link 1.9.8+): solo numeros, para el panel de hosts.
     await db.run(`CREATE TABLE IF NOT EXISTS link_gp (
         discord_id TEXT PRIMARY KEY, n96 INTEGER, ok INTEGER, bloq INTEGER, ts INTEGER)`);
@@ -506,6 +510,25 @@ function registrar(app, dependencias) {
         }
     });
 
+    // Main propia: { main: "16 digitos" } (vacio = la quita).
+    app.post('/link/main', express.text({ type: 'text/plain', limit: '4kb' }), async (req, res) => {
+        try {
+            await asegurarTablas();
+            const agente = await agenteDe(req);
+            if (!agente) return res.status(401).json({ error: 'not_linked' });
+            let datos;
+            try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
+            const main = String(datos.main || '').replace(/\D/g, '');
+            if (main && main.length !== 16) return res.status(400).json({ error: 'bad_main' });
+            if (main) await db.run(`INSERT OR REPLACE INTO link_main (discord_id, main_id, ts) VALUES (?, ?, ?)`, [String(agente.discord_id), main, Date.now()]);
+            else await db.run(`DELETE FROM link_main WHERE discord_id = ?`, [String(agente.discord_id)]);
+            await cargarAmigos();
+            res.json({ ok: true, main: main || null });
+        } catch (e) {
+            res.status(500).json({ error: 'error' });
+        }
+    });
+
     app.post('/link/reroll-accounts', express.text({ type: 'text/plain', limit: '2mb' }), async (req, res) => {
         try {
             await asegurarTablas();
@@ -596,14 +619,21 @@ async function pasarSobresAlHostActivo() {
 // Cuentas prestadas al reroll: [{ discord_id, cuentas: [{ f, p, l }], ts }].
 // amigo -> dueño, en memoria (se lee en cada interaccion del bot, sin ir a la base).
 const amigos = new Map();
+// Main que el miembro registro en SU Monitor Link (null si no puso ninguna).
+const mainsPropias = new Map();
+const mainDe = (discordId) => mainsPropias.get(String(discordId)) || null;
 async function cargarAmigos() {
     try {
         await asegurarTablas();
         const filas = await db.all(`SELECT amigo_id, dueno_id, juego_id FROM link_amigos`) || [];
         amigos.clear();
         for (const f of filas) amigos.set(String(f.amigo_id), { dueno: String(f.dueno_id), juego: f.juego_id ? String(f.juego_id) : null });
+        const propias = await db.all(`SELECT discord_id, main_id FROM link_main`) || [];
+        mainsPropias.clear();
+        for (const f of propias) if (f.main_id) mainsPropias.set(String(f.discord_id), String(f.main_id));
     } catch (e) { /* sin tablas todavia */ }
 }
+
 // Dueño cuyas cuentas usa este usuario de Discord (null si no es amigo de nadie).
 const duenoDe = (discordId) => amigos.get(String(discordId))?.dueno || null;
 // Friend ID del juego que el dueño anoto para ese amigo (null si no puso ninguno).
@@ -969,5 +999,5 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { estadoCuentasComunidad, duenoDe, juegoDeAmigo, amigosDe, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
+module.exports = { estadoCuentasComunidad, duenoDe, juegoDeAmigo, amigosDe, mainDe, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
     usarParteReroll, escribirProxiesMotor, xmlRerollPorHostActivo, pasarSobresAlHostActivo };

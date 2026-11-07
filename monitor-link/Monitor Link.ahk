@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.17"
+global VERSION := "ahk-1.9.18"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -40,7 +40,8 @@ global UltimaVersionAhk := ""   ; newest Monitor Link published (from the ping)
 global BanLocales := "", BtnBanAbrir, BtnBanBorrar   ; banned accounts still on this PC ("" = count again)
 global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
-global Status, Info, Clave, BtnLink, Inicio, LinkBox, LVCuentas, Barra
+global MiMain := ""   ; this member's own Main friend ID (16 digits): Share/Trade destination in the bot
+global Status, Info, Clave, BtnLink, Inicio, LinkBox, LVCuentas, Barra, BtnMain
 
 CargarConfig()
 CrearVentana()
@@ -62,6 +63,7 @@ CargarConfig() {
     IniRead, Ruta, %CFG%, folder, mainPath, %A_Space%
     IniRead, ProxyFile, %CFG%, proxies, file, %A_Space%
     IniRead, Amigos, %CFG%, friends, ids, %A_Space%
+    IniRead, MiMain, %CFG%, main, id, %A_Space%
     CuentasReroll := {}
     Loop, Read, %CFG_REROLL%
         if (Trim(A_LoopReadLine) != "")
@@ -118,6 +120,7 @@ CrearVentana() {
     Gui, Add, Button, xm y+6 w177 h30 gCompartirProxies, Share proxies
     Gui, Add, Button, x+6 yp w177 h30 gDejarProxies, Stop sharing proxies
     Gui, Add, Button, xm y+6 w360 h30 gCompartirCuentas, Share accounts for reroll (96+ packs)
+    Gui, Add, Button, xm y+6 w360 h30 gRegistrarMain vBtnMain, % TextoMain()
     Gui, Add, Button, xm y+6 w360 h30 gElegirAmigos, Friends who can use my accounts in Discord
     Gui, Add, Button, xm y+6 w177 h30 gAbrirBaneadas vBtnBanAbrir Disabled, Banned: open folder
     Gui, Add, Button, x+6 yp w177 h30 gBorrarBaneadas vBtnBanBorrar Disabled, Delete banned XML && JSON
@@ -600,6 +603,49 @@ GuardarAmigos:
         MsgBox, 64, Monitor Link, % lista = "" ? "Done: no friends can use your accounts now." : "Done: your friends can use the bot with your accounts now."
 return
 
+; My Main ID (Ale 2026-11-07): the member's own Main, so the bot can send cards to it (Share/Trade) and show
+; their cards even if they are not in wR98's registration panel yet.
+TextoMain() {
+    return MiMain = "" ? "My Main ID (needed for Share/Trade) - not set" : "My Main ID: " . RegExReplace(MiMain, "(\d{4})(?=\d)", "$1-")
+}
+
+RegistrarMain:
+    actual := MiMain = "" ? "" : RegExReplace(MiMain, "(\d{4})(?=\d)", "$1-")
+    InputBox, nuevo, My Main ID, Your Main's Pokemon TCG Pocket friend ID (16 digits`, e.g. 1234-5678-9012-3456).`nThe bot sends your cards there (Share/Trade).`n`nLeave it empty and press OK to remove it., , 420, 190, , , , , %actual%
+    if ErrorLevel
+        return
+    nuevo := RegExReplace(nuevo, "\D")
+    if (nuevo != "" && StrLen(nuevo) != 16) {
+        MsgBox, 48, Monitor Link, The friend ID has 16 digits (e.g. 1234-5678-9012-3456).
+        return
+    }
+    MiMain := nuevo
+    IniWrite, %MiMain%, %CFG%, main, id
+    GuiControl,, BtnMain, % TextoMain()
+    if !EnviarMain()
+        MsgBox, 48, Monitor Link, Saved, but could not reach the bot. It will be sent when it shows Connected.
+    else
+        MsgBox, 64, Monitor Link, % MiMain = "" ? "Done: your Main was removed." : "Done: the bot will send your cards to this Main."
+return
+
+EnviarMain() {
+    if (Token = "")
+        return false
+    body := "{""main"":""" . MiMain . """}"
+    try {
+        r := Http("POST", ServerUrl . "/link/main", body, "text/plain; charset=utf-8", Token, 30)
+    } catch e {
+        return false
+    }
+    if (r.status = 401) {
+        NoVinculado()
+        return false
+    }
+    for _, espejo in Espejos
+        try Http("POST", espejo . "/link/main", body, "text/plain; charset=utf-8", Token, 30)
+    return r.status = 200
+}
+
 EnviarAmigos() {
     if (Token = "")
         return false
@@ -919,6 +965,8 @@ Arrancar() {
     EnviarCuentasReroll()   ; always: it also sends the eligibility totals
     if (Amigos != "")
         EnviarAmigos()
+    if (MiMain != "")
+        EnviarMain()
     SetTimer, Ping, 60000
     SetTimer, ResumenPeriodico, 600000
     SetTimer, RevisarTrabajos, 300
@@ -943,6 +991,8 @@ ResumenPeriodico:
     EnviarCuentasReroll()   ; always: it also sends the eligibility totals
     if (Amigos != "")
         EnviarAmigos()
+    if (MiMain != "")
+        EnviarMain()
 return
 
 SubirResumen(forzar, folderError := "") {
@@ -1113,6 +1163,8 @@ Ping:
         EnviarCuentasReroll()   ; always: it also sends the eligibility totals
         if (Amigos != "")
             EnviarAmigos()
+        if (MiMain != "")
+            EnviarMain()
     }
     if RegExMatch(r.text, """folder""\s*:\s*""((?:[^""\\]|\\.)*)""", mp) {
         pedida := JsonUnesc(mp1)
