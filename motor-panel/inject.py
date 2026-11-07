@@ -3168,6 +3168,28 @@ def _pack_budget_locked():
                     pass
 
 
+COMMUNITY_PPM_CAP_V1 = True
+_community_cap_cache = {"at": 0.0, "cap": None}
+
+
+def _community_ppm_cap():
+    """2026-11-07 (Ale): the community GP farm keeps ~36 packs/min per Main IN TOTAL. The Monitor bot writes
+    reports/ppm_cap.json {cap, hosts, ts} = that total split among the hosts farming God Packs (one host alone
+    gets all of it). None when missing or older than 5 min (then only the panel's own cap applies)."""
+    now = time.time()
+    if now - _community_cap_cache["at"] < 15:
+        return _community_cap_cache["cap"]
+    cap = None
+    try:
+        data = json.loads((PROJECT_ROOT / "reports" / "ppm_cap.json").read_text("utf-8")) or {}
+        if now - float(data.get("ts", 0)) / 1000.0 < 300 and float(data.get("cap", 0)) > 0:
+            cap = int(float(data["cap"]))
+    except Exception:
+        cap = None
+    _community_cap_cache.update(at=now, cap=cap)
+    return cap
+
+
 def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "") -> None:
     """Block until `n_packs` reservations fit in the last-60s window for
     EVERY collector pid in `target_pids`, then reserve `n_packs` on each.
@@ -3178,12 +3200,16 @@ def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "")
     No-op when the budget is disabled (max_per_min <= 0), when the caller
     isn't going to open any packs (n_packs <= 0), or when no target pids
     are provided (packs-only mode)."""
-    if _pack_budget_max_per_min <= 0 or n_packs <= 0:
+    community_cap = _community_ppm_cap()
+    if (_pack_budget_max_per_min <= 0 and community_cap is None) or n_packs <= 0:
         return
     pids = [p for p in (target_pids or []) if p]
     if not pids:
         return
-    cap = int(_pack_budget_max_per_min)
+    cap = int(_pack_budget_max_per_min) if _pack_budget_max_per_min > 0 else 10 ** 6
+    if community_cap is not None:
+        cap = min(cap, community_cap)
+    cap = max(cap, int(n_packs))   # a cap below one account's packs would never open a slot
     logged_wait = False
     busiest_pid = ""
     while True:

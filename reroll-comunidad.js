@@ -39,10 +39,11 @@ function iniciar(d) {
     if (!deps.fastTransfer.rutaMotor()) return;
     instalarPanel(deps.fastTransfer.rutaMotor());
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
-        INJECT_ORIGINAL, '_limit_collectors', 'friend requests to every online Main, max 20 requests/min per Main',
+        INJECT_ORIGINAL, '_limit_collectors', 'God Pack farm capped at ~36 packs/min in total, split among the hosts',
         // (2026-11-06, Ale) Un Main quedo con soft ban de amigos: un host con su inject.py propio mandaba a 13 Mains
         // por cuenta sin limite. Sin estos limites se instala el nuestro igual (el suyo queda como .bak-propio).
-        'FR_MAX_PER_MIN');
+        // (2026-11-07) Ahora el obligatorio es el tope de PPM de la comunidad (lee reports/ppm_cap.json).
+        'COMMUNITY_PPM_CAP_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent',
@@ -65,6 +66,26 @@ function iniciar(d) {
     escribirVersion().catch(() => {});
     copiarWebhookGp().catch(() => {});
     setInterval(() => escribirEstadoPanel().catch(() => {}), 30 * 1000);
+    setInterval(() => escribirTopePpm().catch(() => {}), 30 * 1000);
+    escribirTopePpm().catch(() => {});
+}
+
+// Tope de PPM de la comunidad (2026-11-07, Ale: soft ban de amigos en su Main; "que no pase de 35 o 38 PPM").
+// Cada cuenta en GP farm manda solicitud a todos los Mains, asi que el PPM total de los hosts = solicitudes
+// por minuto que recibe cada Main. Se reparte PPM_COMUNIDAD (36) entre los hosts en modo God Pack con Start;
+// uno solo se lleva todo. inject.py lo lee de reports/ppm_cap.json (si tiene mas de 5 min, no lo usa).
+async function escribirTopePpm() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    if (!motor) return;
+    const total = num(process.env.PPM_COMUNIDAD, 36);
+    const hosts = await deps.hostsFarm?.('godpack').catch(() => null);
+    if (!Array.isArray(hosts)) return;
+    const parte = await deps.parte('godpack').catch(() => null);
+    // Este host farmeando sin "Community farm" no figura en la lista: cuenta igual como uno mas.
+    const n = Math.max(1, hosts.length + (parte ? 0 : 1));
+    fs.mkdirSync(path.join(motor, 'reports'), { recursive: true });
+    fs.writeFileSync(path.join(motor, 'reports', 'ppm_cap.json'),
+        JSON.stringify({ cap: Math.floor(total / n), total, hosts: n, ts: Date.now() }));
 }
 
 // Anti doble reroll (2026-11-01, plan de Ale): inject.py anota en reports/collectors_full.jsonl cada main

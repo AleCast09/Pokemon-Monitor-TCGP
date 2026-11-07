@@ -7762,7 +7762,7 @@ if (comunidad.hayComunidad()) {
         // El GP farm sigue al panel GP (Start/Stop con "Community farm"); al cambiar se refresca el mensaje de control.
         marcar: async (online, modo) => { await hostComunidad.marcarReroll(online, modo); hostComunidad.refrescarControl(); },
         // Anti doble reroll: aviso en el canal de hosts (lo ve staff), una vez por main aunque lo vean varios hosts.
-        hostsFarm: () => hostComunidad.hostsReroll(), primeraVez: hostComunidad.primeraVez,
+        hostsFarm: (modo) => hostComunidad.hostsReroll(modo), primeraVez: hostComunidad.primeraVez,
         marcarBaneada: hostComunidad.marcarBaneada, baneadas: hostComunidad.baneadas, webhookGp: hostComunidad.webhookGp,
         nombreMain: (codigo) => comunidad.nombreDeFriendId(codigo),
         ultimaRelease: hostComunidad.ultimaRelease, estaAlDia: hostComunidad.estaAlDia,
