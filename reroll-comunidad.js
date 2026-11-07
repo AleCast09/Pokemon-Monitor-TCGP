@@ -761,7 +761,8 @@ async function ciclo() {
     const parte = await deps.parte(modoPanel(motor)).catch(() => null);
     if (!motor) return;
     corriendo = true;
-    let trabajo = false;   // si abrio alguna tanda: la siguiente arranca enseguida
+    let trabajo = false;
+    let pendiente = null;   // tanda siguiente ya preparada (sus XML en una carpeta temporal)   // si abrio alguna tanda: la siguiente arranca enseguida
     try {
         entregarEnFondo();
         if (!parte || !panelEncendido(motor)) return;   // Offline: el panel GP no esta en Start
@@ -783,16 +784,19 @@ async function ciclo() {
         const baneadasSet = await (deps.baneadas?.() || Promise.resolve(new Set())).catch(() => new Set());
         // Resumen de cada vuelta (2026-11-01: el ciclo fallaba en silencio y parecia que no hacia nada).
         log(`cycle: host ${parte.i + 1}/${parte.n}, ${miembros.length} member(s) lending, ${miembros.reduce((a, m) => a + m.cuentas.length, 0)} account(s)`);
-        for (const m of miembros) {
-            if (!panelEncendido(motor)) { log('stopped from the God Pack UI'); break; }
+        // (2026-11-07, Arcade: "every time a batch of lent accounts completes, the bot pauses") Las XML de un miembro
+        // se piden a su Monitor Link al momento (nunca quedan guardadas en el host), y eso tardaba de 1 s a varios
+        // minutos con la tanda anterior ya terminada. Ahora, mientras una tanda abre sobres, ya se piden las XML del
+        // siguiente miembro: al terminar, la siguiente arranca enseguida. Cada carpeta temporal se borra igual.
+        let idx = 0;
+        const preparar = async (m) => {
             const ahora = Date.now();
             // Ale 2026-11-06: solo se abren cuentas CONFIRMADAS elegibles a God Pack (e === 0, Monitor Link 1.9.6+);
             // sin el dato (Monitor Link viejo) o con dias faltantes (e > 0) quedan bloqueadas.
             const listas = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte) && cuentaDelModo(c, s)
                 && !baneadasSet.has(`${m.discord_id}|${c.f}`)
                 && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).slice(0, lote);
-            if (!listas.length) { log(`${m.discord_id}: no account ready (cooldown ${cooldown / 3600000} h)`); continue; }
-            if (!await deps.fastTransfer.asegurarTunel()) { log('tunnel 9090 is down - skipping this cycle'); return; }
+            if (!listas.length) { log(`${m.discord_id}: no account ready (cooldown ${cooldown / 3600000} h)`); return null; }
             let xmls;
             try {
                 // (2026-11-06, Ale) Siempre directo al Monitor Link del miembro (1.9.14+ escucha a todos los
@@ -806,20 +810,37 @@ async function ciclo() {
                 }
             } catch (e) {   // PC del miembro apagada, o Monitor Link viejo y el host del turno no contesta
                 log(`${m.discord_id}: could not get the ${listas.length} account file(s) from their Monitor Link: ${e?.message || e}`);
-                continue;
+                return null;
             }
-            const nombres = Object.keys(xmls);
-            if (!nombres.length) { log(`${m.discord_id}: asked for ${listas.length} account file(s), got none back`); continue; }
-
+            const nombres = Object.keys(xmls || {});
+            if (!nombres.length) { log(`${m.discord_id}: asked for ${listas.length} account file(s), got none back`); return null; }
             const dir = path.join(os.tmpdir(), `ml_reroll_${crypto.randomBytes(6).toString('hex')}`);
             fs.mkdirSync(dir, { recursive: true });
+            // XML con su nombre original + un JSON vacio al lado: inject.py anota ahi lo que sale.
+            for (const nombre of nombres) {
+                const base = path.basename(nombre).replace(/\.xml$/i, '');
+                fs.writeFileSync(path.join(dir, `${base}.xml`), xmls[nombre]);
+                fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify({ metadata: {}, pulls: [], registeredCards: [] }));
+            }
+            return { m, nombres, dir };
+        };
+        const prepararSiguiente = async () => {
+            while (idx < miembros.length && panelEncendido(motor)) {
+                const t = await preparar(miembros[idx++]).catch(e => { log('could not prepare a batch:', e?.message || e); return null; });
+                if (t) return t;
+            }
+            return null;
+        };
+        pendiente = prepararSiguiente();
+        while (true) {
+            const t = await pendiente;
+            pendiente = null;
+            if (!t) break;
+            const { m, nombres, dir } = t;
             try {
-                // XML con su nombre original + un JSON vacio al lado: inject.py anota ahi lo que sale.
-                for (const nombre of nombres) {
-                    const base = path.basename(nombre).replace(/\.xml$/i, '');
-                    fs.writeFileSync(path.join(dir, `${base}.xml`), xmls[nombre]);
-                    fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify({ metadata: {}, pulls: [], registeredCards: [] }));
-                }
+                if (!panelEncendido(motor)) { log('stopped from the God Pack UI'); break; }
+                if (!await deps.fastTransfer.asegurarTunel()) { log('tunnel 9090 is down - skipping this cycle'); break; }
+                pendiente = prepararSiguiente();   // las XML del siguiente miembro, mientras esta tanda abre
                 // (2026-11-06, wr98) Un AUTO-STOP del motor (5 fallos seguidos) escribe community_farm.stop y ese
                 // archivo quedaba: cada tanda nueva se cerraba al instante ("stop file detected", 0 cuentas). Si el
                 // panel sigue en Start, ese stop es viejo -> se borra. Un Stop de verdad apaga el panel (on:false).
@@ -863,6 +884,8 @@ async function ciclo() {
     } catch (e) {
         log('cycle failed:', e?.message || e);
     } finally {
+        // Una tanda que quedo preparada y no se abrio (Stop, tunel caido, error): su carpeta con XML se borra.
+        if (pendiente) pendiente.then(t => { if (t) fs.rmSync(t.dir, { recursive: true, force: true }); }).catch(() => {});
         corriendo = false;
         // Tandas seguidas (2026-11-06, pedido de Ale): antes cada tanda terminaba en 2-3 min y el host
         // quedaba parado hasta los 10 min, y ese tiempo muerto bajaba el PPM. Si hubo trabajo, la
