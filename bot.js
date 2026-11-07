@@ -9693,6 +9693,70 @@ async function iniciarTunelDashboard(puerto) {
     }
 }
 
+// ---- Vigilante del enlace de Monitor Link (2026-11-07, Ale: el tunel de ZenithBot se cayo con el turno y
+// nadie podia conectar su Monitor Link por una hora) ----
+// 1) Cada host prueba SU direccion publica cada 2 min. Si no tiene direccion por 3 min, o falla 3 veces
+//    seguidas, cierra su cloudflared y abre otro (direccion nueva, que se publica sola).
+// 2) Un host en espera, con su enlace sano, prueba la direccion del host del turno: si no responde en 3
+//    revisiones seguidas (~6 min), toma el turno y avisa en el canal de hosts.
+// "Responde" = cualquier respuesta de nuestro servidor (401 sin clave, 503 "standby"...); los errores de
+// Cloudflare (502, 521-524, 530) o no conectar = caido.
+let tunelFallos = 0, tunelSinUrlDesde = 0, reiniciandoTunel = false, turnoAjenoFallos = 0;
+async function direccionResponde(url) {
+    try {
+        const r = await fetch(String(url).replace(/\/$/, '') + '/link/ping', { signal: AbortSignal.timeout(15000) });
+        return ![502, 521, 522, 523, 524, 530].includes(r.status);
+    } catch (e) { return false; }
+}
+async function reiniciarTunelLink(motivo) {
+    if (reiniciandoTunel || !DASHBOARD_PORT_ACTUAL) return;
+    reiniciandoTunel = true;
+    tunelFallos = 0; tunelSinUrlDesde = 0;
+    console.log(`🌐 Monitor Link tunnel restarted (${motivo})`);
+    try {
+        const r = await asegurarCloudflaredBot();
+        if (r) matarCloudflaredPrevios(r.ruta);
+        DASHBOARD_PUBLIC_URL = null;
+        await new Promise((res) => setTimeout(res, 3000));
+        await iniciarTunelDashboard(DASHBOARD_PORT_ACTUAL);
+    } catch (e) {
+        console.log('DEBUG: no se pudo reiniciar el tunel:', e?.message || e);
+    } finally {
+        reiniciandoTunel = false;
+    }
+}
+async function avisarCanalHostsBot(texto) {
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]).catch(() => null);
+        const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+        if (canal) await canal.send({ content: texto.slice(0, 1900), allowedMentions: { parse: [] } }).catch(() => {});
+    }
+}
+setInterval(async () => {
+    if (!DASHBOARD_PORT_ACTUAL || reiniciandoTunel || !comunidad.hayComunidad()) return;
+    // 1) Mi propio enlace
+    if (!DASHBOARD_PUBLIC_URL) {
+        if (!tunelSinUrlDesde) tunelSinUrlDesde = Date.now();
+        else if (Date.now() - tunelSinUrlDesde > 3 * 60 * 1000) await reiniciarTunelLink('no public address');
+        return;
+    }
+    tunelSinUrlDesde = 0;
+    if (await direccionResponde(DASHBOARD_PUBLIC_URL)) tunelFallos = 0;
+    else if (++tunelFallos >= 3) { await reiniciarTunelLink('public address not answering'); return; }
+    if (tunelFallos) return;
+    // 2) El enlace del host del turno (solo si este host esta en espera y sano)
+    if (hostComunidad.esActivo()) { turnoAjenoFallos = 0; return; }
+    const turno = await monitorLink.direccionPublicada?.().catch(() => null);
+    if (!turno || turno === DASHBOARD_PUBLIC_URL || await direccionResponde(turno)) { turnoAjenoFallos = 0; return; }
+    if (++turnoAjenoFallos < 3) return;
+    turnoAjenoFallos = 0;
+    console.log('🔁 The host on turn has an unreachable Monitor Link address - taking the turn');
+    await hostComunidad.tomarTurnoYa().catch(() => {});
+    await monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL).catch(() => {});
+    await avisarCanalHostsBot(`🔁 **Turn moved to ${hostComunidad.nombre()}** — the Monitor Link connection of the host on turn wasn't answering for ~6 min, so members couldn't reach the bot. It's back now (Monitor Links reconnect by themselves).`);
+}, 2 * 60 * 1000);
+
 let DASHBOARD_PORT_ACTUAL = null;
 // Mismo mecanismo de "Ports in use.txt" que ya usan s4t.js/heartbeat.js (2026-08-21, bug
 // real reportado en vivo: el boton "Tutorials" del Panel de Control abria

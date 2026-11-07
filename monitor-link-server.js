@@ -121,6 +121,12 @@ async function publicarDireccion(urlPublica) {
     }
 }
 
+// Direccion que la libreta da hoy a los Monitor Link (la del host del turno). null si no se pudo leer.
+async function direccionPublicada() {
+    if (!hayLibreta()) return null;
+    try { return String(await redisLibreta('GET', CLAVE_LIBRETA) || '') || null; } catch (e) { return null; }
+}
+
 // ---- Todos los hosts reciben los resumenes (2026-10-25, bug real: al apagarse la PC de Ale el host
 // de wr98 tomo el turno con la base vacia y "desaparecio la info de todos") ----
 // Cada host, activo o en espera, anota su direccion en monitor_link:hosts. El ping le pasa a cada
@@ -999,5 +1005,5 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { estadoCuentasComunidad, duenoDe, juegoDeAmigo, amigosDe, mainDe, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
+module.exports = { estadoCuentasComunidad, duenoDe, juegoDeAmigo, amigosDe, mainDe, direccionPublicada, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
     usarParteReroll, escribirProxiesMotor, xmlRerollPorHostActivo, pasarSobresAlHostActivo };
