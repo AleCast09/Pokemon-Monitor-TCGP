@@ -1055,6 +1055,7 @@ def login_account(account: dict, max_retries: int = 2) -> Optional[object]:
                 log(f"login OK player_id={sess.player_id}", tag=tag)
                 # Clear any previous failure snapshot on success.
                 account.pop("_login_failure", None)
+                _clear_in_use(account.get("account_key", ""))
                 return sess
             last_err = result.get("error", "unknown")
             last_err_obj = result.get("error_obj") or last_err
@@ -1246,8 +1247,9 @@ _paused_lock = threading.Lock()
 _paused_cache = {"ts": 0.0, "data": {}}
 
 
-PAUSE_COLLECTORS = True    # 2026-11-06 (Ale): only after 3 refusals in 30 min (a single "server busy" no
-                           # longer pauses a healthy Main), and only for 30 min.
+PAUSE_COLLECTORS = False   # 2026-11-07 (Arcade): OFF. A one-by-one retry also "fails" on server busy /
+                           # UNAVAILABLE / rate limits, so healthy Mains (5 friends) were paused and stopped
+                           # getting God Packs. The community PPM cap (~36/min in total) already protects them.
 
 
 def _paused_collectors() -> dict:
@@ -1328,6 +1330,55 @@ _full_lock = threading.Lock()
 
 _FULL_POWER_ONLY = False   # set from --full-power-only in main()
 _banned_lock = threading.Lock()
+
+
+IN_USE_STRIKES_V1 = True
+IN_USE_STRIKE_GAP_SEC = 60 * 60          # strikes count once per hour (one per run, not per retry)
+IN_USE_LOCKED_AFTER_SEC = 6 * 60 * 60    # ...and the first one must be 6+ hours old
+_in_use_lock = threading.Lock()
+
+
+def _in_use_strike(account_key: str, tag: str = "") -> bool:
+    """Record one 'open somewhere else' answer for this account (reports/in_use_strikes.json, shared by every
+    inject.py on this PC). True when it now has 3 strikes, an hour apart, the oldest 6+ hours ago = locked."""
+    if not account_key:
+        return False
+    path = PROJECT_ROOT / "reports" / "in_use_strikes.json"
+    now = time.time()
+    with _in_use_lock:
+        try:
+            data = json.loads(path.read_text("utf-8")) if path.exists() else {}
+        except Exception:
+            data = {}
+        data = {k: [t for t in v if now - float(t) < 3 * 24 * 3600] for k, v in data.items()}
+        strikes = data.setdefault(account_key, [])
+        if not strikes or now - float(strikes[-1]) >= IN_USE_STRIKE_GAP_SEC:
+            strikes.append(now)
+        locked = len(strikes) >= 3 and now - float(strikes[0]) >= IN_USE_LOCKED_AFTER_SEC
+        if locked:
+            data.pop(account_key, None)
+        data = {k: v for k, v in data.items() if v}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
+    return locked
+
+
+def _clear_in_use(account_key: str) -> None:
+    """The account logged in and answered normally: forget its 'open somewhere else' strikes."""
+    path = PROJECT_ROOT / "reports" / "in_use_strikes.json"
+    if not account_key or not path.exists():
+        return
+    with _in_use_lock:
+        try:
+            data = json.loads(path.read_text("utf-8")) or {}
+            if account_key in data:
+                data.pop(account_key)
+                path.write_text(json.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
 
 
 def _note_banned(account: dict, err_str: str, proxies_tried: int, tag: str = "") -> None:
@@ -2530,6 +2581,21 @@ def inject_one(
             if err_str.startswith("account_in_use"):
                 # Not a failure of this run (no auto-stop count, no red): the account is just busy elsewhere.
                 result["error"] = "account_in_use"
+                # 2026-11-07 (Arcade): a LOCKED account ("This account is currently locked") answers exactly
+                # like one that is open elsewhere, so it was retried forever. Still "in use" on 3 runs over
+                # 6+ hours = treated as likely banned (banned list for lent accounts, QUARANTINE for own ones).
+                if _in_use_strike(account.get("account_key", ""), tag):
+                    _note_banned(account, "account_in_use on 3 runs over 6+ hours (account locked?)", 0, tag)
+                    result["error"] = "login_failed (likely_banned)"
+                    if getattr(_qopts, "enabled", False):
+                        _quarantine_account(
+                            account, "likely_banned",
+                            "Classification: likely_banned\n"
+                            f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                            "The game answered 'open somewhere else' (ABORTED) on 3 runs over 6+ hours: "
+                            "the account is most likely locked.\n",
+                            skip_list_path=_qopts.skip_list_path, tag=tag,
+                        )
                 return result
             if classification == "likely_banned":
                 _note_banned(account, err_str, proxies_tried_n, tag)

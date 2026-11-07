@@ -43,7 +43,7 @@ function iniciar(d) {
         // (2026-11-06, Ale) Un Main quedo con soft ban de amigos: un host con su inject.py propio mandaba a 13 Mains
         // por cuenta sin limite. Sin estos limites se instala el nuestro igual (el suyo queda como .bak-propio).
         // (2026-11-07) Ahora el obligatorio es el tope de PPM de la comunidad (lee reports/ppm_cap.json).
-        'PACK_SET_CODES_V1');
+        'IN_USE_STRIKES_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent',
@@ -508,7 +508,7 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
             for (const l of lineas) {
                 const m = /\[([^\]]+)\] pack opened .*<-- GOD PACK (\S+) \(WONDER-PICKABLE\)/.exec(l);
                 if (m) gps.push({ cuenta: m[1], nivel: m[2], cartas: '' });
-                const c = /\[([^\]]+)\] cards: (.+)$/.exec(l);
+                const c = /\[([^\]]+)\]\s+cards: (.+)$/.exec(l);
                 const ultimo = gps[gps.length - 1];
                 if (c && ultimo && ultimo.cuenta === c[1] && !ultimo.cartas) ultimo.cartas = c[2];
             }
@@ -603,11 +603,12 @@ function vigilarGodPacks() {
         for (const l of texto.split(/\r?\n/)) {
             let m = /\[([^\]]+)\] pack opened .*<-- GOD PACK (\S+) \(WONDER-PICKABLE\)/.exec(l);
             if (m) { gpPendientes[m[1]] = { ...(gpPendientes[m[1]] || {}), nivel: m[2], archivo: nombre }; continue; }
-            m = /\[([^\]]+)\] cards: (.+)$/.exec(l);
+            m = /\[([^\]]+)\]\s+cards: (.+)$/.exec(l);
             if (m && gpPendientes[m[1]] && !gpPendientes[m[1]].cartas) { gpPendientes[m[1]].cartas = m[2]; continue; }
             m = /\[([^\]]+)\] -- ACCOUNT SUMMARY: .*MATCH: (.+)$/.exec(l);
             if (m && gpPendientes[m[1]]) { gpPendientes[m[1]].guardado = Date.now(); gpPendientes[m[1]].match = m[2]; continue; }
-            m = /\[([^\]]+)\] .*\[discord\] God Pack posted/.exec(l);
+            // (2026-11-07, Arcade: aviso falso) ".*" dejaba que el 1er corchete fuera la HORA, no la cuenta: nunca se borraba.
+            m = /\[([^\]]+)\]\s+\[discord\] God Pack posted/.exec(l);
             if (m) delete gpPendientes[m[1]];
         }
     }
@@ -617,7 +618,7 @@ function vigilarGodPacks() {
             else if (Date.now() - gp.visto > 10 * 60 * 1000) delete gpPendientes[cuenta];
             continue;
         }
-        if (Date.now() - gp.guardado < 2 * 60 * 1000) continue;
+        if (Date.now() - gp.guardado < 5 * 60 * 1000) continue;   // la foto + el post pueden tardar
         delete gpPendientes[cuenta];
         const host = String(ajustesPanel(motor).host_name || '').trim() || 'this host';
         log(`GOD PACK NOT POSTED to KyuremBot: ${cuenta} (${gp.nivel})`);
