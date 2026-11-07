@@ -1373,9 +1373,9 @@ _paused_lock = threading.Lock()
 _paused_cache = {"ts": 0.0, "data": {}}
 
 
-PAUSE_COLLECTORS = True    # 2026-11-07 (wr98: ~1000 "server busy" alerts with it OFF): back ON, 15 min. A Main
-                           # refuses when its friend list is full (99) or it has too many pending requests;
-                           # without the pause EVERY account hit it again (and logged an error).
+PAUSE_COLLECTORS = False   # 2026-11-07 (Arcade, Ale): OFF for good. It paused healthy Mains again and again; with
+                           # every friend request cleaned up (FR ledger) a Main's list can't fill up, so every
+                           # online Main always gets every request.
 
 
 def _paused_collectors() -> dict:
@@ -3543,6 +3543,7 @@ def _community_ppm_cap():
 SPACING_V1 = True
 FR_RETRY_ONLY_UNSENT_V1 = True
 MAIN_BLAME_V1 = True
+NO_MAIN_PAUSE_V1 = True
 
 
 def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "") -> None:
