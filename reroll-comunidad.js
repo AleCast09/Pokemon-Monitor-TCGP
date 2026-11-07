@@ -46,7 +46,7 @@ function iniciar(d) {
         // (2026-11-06, Ale) Un Main quedo con soft ban de amigos: un host con su inject.py propio mandaba a 13 Mains
         // por cuenta sin limite. Sin estos limites se instala el nuestro igual (el suyo queda como .bak-propio).
         // (2026-11-07) Ahora el obligatorio es el tope de PPM de la comunidad (lee reports/ppm_cap.json).
-        'FR_RETRY_ONLY_UNSENT_V1');
+        'MAIN_BLAME_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent',
@@ -118,10 +118,10 @@ async function revisarLlenos() {
     const motor = deps?.fastTransfer.rutaMotor();
     if (!motor) return;
     // (2026-11-06, Ale) Mains con la lista de amigos llena (o bloqueo de amigos): el motor los saltea 30 min despues
-    // de 3 rechazos (reports/collectors_paused_v2.json). Aca se avisa en 🔒-hosts, una vez cada 6 h por Main, para que
+    // de 3 rechazos (reports/collectors_paused_v3.json). Aca se avisa en 🔒-hosts, una vez cada 6 h por Main, para que
     // el dueño borre amigos. (Reemplaza el aviso de "doble reroll", que daba falsos positivos.)
     let pausados = {};
-    try { pausados = JSON.parse(fs.readFileSync(path.join(motor, 'reports', 'collectors_paused_v2.json'), 'utf8')).paused || {}; } catch (e) { return; }
+    try { pausados = JSON.parse(fs.readFileSync(path.join(motor, 'reports', 'collectors_paused_v3.json'), 'utf8')).paused || {}; } catch (e) { return; }
     for (const [codigo, hasta] of Object.entries(pausados)) {
         if (Number(hasta) * 1000 < Date.now()) continue;
         if (!await deps.primeraVez?.(`zenith:lleno2:${codigo}`, 6 * 3600).catch(() => false)) continue;

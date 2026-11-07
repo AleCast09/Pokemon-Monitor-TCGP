@@ -1379,7 +1379,7 @@ PAUSE_COLLECTORS = True    # 2026-11-07 (wr98: ~1000 "server busy" alerts with i
 
 
 def _paused_collectors() -> dict:
-    """reports/collectors_paused_v2.json {code: until_epoch}, shared by every inject.py on this PC."""
+    """reports/collectors_paused_v3.json {code: until_epoch}, shared by every inject.py on this PC."""
     if not PAUSE_COLLECTORS:
         return {}
     now = time.time()
@@ -1387,7 +1387,7 @@ def _paused_collectors() -> dict:
         return _paused_cache["data"]
     data = {}
     try:
-        raw = json.loads((PROJECT_ROOT / "reports" / "collectors_paused_v2.json").read_text("utf-8")) or {}
+        raw = json.loads((PROJECT_ROOT / "reports" / "collectors_paused_v3.json").read_text("utf-8")) or {}
         raw = raw.get("paused", {}) if "paused" in raw else {}   # old format: ignored (it was too eager)
         data = {str(k): float(v) for k, v in raw.items() if float(v) > now}
     except Exception:
@@ -1399,11 +1399,11 @@ def _paused_collectors() -> dict:
 def _pause_collectors(codes: list[str], tag: str = "") -> None:
     """2026-11-06 (Ale): a Main that refuses our request while other Mains accept it (full friend list or
     friend soft-ban) gets a strike; 3 strikes within 30 min = skipped for 30 min. Shared by every inject.py
-    on this PC (reports/collectors_paused_v2.json: {"paused": {code: until}, "fails": {code: [ts, ...]}})."""
+    on this PC (reports/collectors_paused_v3.json: {"paused": {code: until}, "fails": {code: [ts, ...]}})."""
     codes = [str(c or "").replace("-", "").strip() for c in codes if c]
     if not codes or not PAUSE_COLLECTORS:
         return
-    path = PROJECT_ROOT / "reports" / "collectors_paused_v2.json"   # v2: old file had false pauses
+    path = PROJECT_ROOT / "reports" / "collectors_paused_v3.json"   # v2: old file had false pauses
     now = time.time()
     nuevos = []
     with _paused_lock:
@@ -3027,7 +3027,14 @@ def inject_one(
                     for pid in [p for p in target_pids if p not in ok_pids]:
                         (ok_pids if send_friend_requests(sess, [pid], tag) else full_pids).append(pid)
                     if ok_pids:
-                        if full_pids:
+                        # 2026-11-07 (Arcade: 14 of 21 Mains paused, his own with 4 friends): one account failing
+                        # against MANY Mains at the same second is a problem of that account or its proxy, not of
+                        # the Mains. A Main only gets a strike when most Mains accept and it refuses.
+                        culpa_main = len(full_pids) <= max(1, len(target_pids) // 4)
+                        if full_pids and not culpa_main:
+                            log(f"[fr] {len(full_pids)} of {len(target_pids)} Mains failed for this account at once - "
+                                f"account/proxy problem, no Main is penalized", tag=tag)
+                        if full_pids and culpa_main:
                             _note_full_collectors(full_pids, pid_to_friend_code, tag)
                             _pause_collectors([pid_to_friend_code.get(p, "") for p in full_pids], tag)
                             log(f"[fr] {len(full_pids)} collector(s) rejected the request (friend list full?); "
@@ -3535,6 +3542,7 @@ def _community_ppm_cap():
 
 SPACING_V1 = True
 FR_RETRY_ONLY_UNSENT_V1 = True
+MAIN_BLAME_V1 = True
 
 
 def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "") -> None:
