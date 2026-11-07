@@ -3025,7 +3025,16 @@ def inject_one(
                     ok_pids = list(getattr(_fr_state, "sent_ok", []) or [])
                     full_pids = []
                     for pid in [p for p in target_pids if p not in ok_pids]:
-                        (ok_pids if send_friend_requests(sess, [pid], tag) else full_pids).append(pid)
+                        if send_friend_requests(sess, [pid], tag):
+                            ok_pids.append(pid)
+                        elif getattr(_fr_state, "proxy_blocked", False):
+                            # 2026-11-07 (Arcade: 6 red lines per account): the proxy started blocking friend
+                            # requests mid-retry - every next Main would fail the same way and push the IP block
+                            # further. Stop here: keep the Mains already reached, blame none.
+                            full_pids = []
+                            break
+                        else:
+                            full_pids.append(pid)
                     if ok_pids:
                         # 2026-11-07 (Arcade: 14 of 21 Mains paused, his own with 4 friends): one account failing
                         # against MANY Mains at the same second is a problem of that account or its proxy, not of
@@ -3544,6 +3553,7 @@ SPACING_V1 = True
 FR_RETRY_ONLY_UNSENT_V1 = True
 MAIN_BLAME_V1 = True
 NO_MAIN_PAUSE_V1 = True
+PROXY_BLOCK_STOP_V1 = True
 
 
 def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "") -> None:
