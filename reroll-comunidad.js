@@ -27,7 +27,7 @@ const num = (v, def) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v)
 let deps = null;
 let corriendo = false;
 let expansionDePack = null;   // pack_id -> codigo del set ("CN001_0010_00_000" -> "C1")
-let ppm = null;               // { desde, sobres, basePropios?, pausado?, reanudado?, pausa? } del GP farm
+let ppm = null;               // { desde, sobres, propios?, logPos?, pausado?, pausa? } del GP farm
 const PPM_PAUSA_MS = 15 * 60 * 1000;   // tras un Stop, el PPM se guarda 15 min por si vuelve a dar Start
 
 const log = (...a) => console.log('[reroll]', ...a);
@@ -253,18 +253,18 @@ async function sincronizarPanel() {
         inicioOn = Date.now();   // el cuadro del panel cuenta las abiertas desde este Start
         // Start de nuevo antes de 15 min: el PPM sigue desde donde iba (2026-11-01, idea de wr98).
         if (ppm?.pausa && Date.now() - ppm.pausa.at < PPM_PAUSA_MS) {
-            ppm.basePropios = (ppm.basePropios || 0) + ppm.pausa.propios;
             ppm.pausado = (ppm.pausado || 0) + (Date.now() - ppm.pausa.at);
-            ppm.reanudado = Date.now();
             delete ppm.pausa;
         } else ppm = null;
+        if (!ppm) { ppm = { desde: Date.now(), sobres: 0 }; sumarPropios(motor); }
         setTimeout(ciclo, 15 * 1000);
     } else {
         // Stop: ultimo heartbeat en Offline y 0 PPM (solo si estaba farmeando, no al arrancar el bot).
         if (ppm) {
             await enviarPpm(motor, ajustesPanel(motor), true).catch(e => log('PPM report failed:', e?.message || e));
             // Se guarda 15 min por si vuelve a dar Start (cambiar algo del panel no reinicia el PPM).
-            ppm.pausa = { at: Date.now(), propios: sobresPropios(motor, ppm.reanudado || ppm.desde) };
+            sumarPropios(motor);
+            ppm.pausa = { at: Date.now() };
         }
     }
 }
@@ -285,7 +285,7 @@ async function revisarPpm() {
             if (!ppm?.pausa || Date.now() - ppm.pausa.at >= PPM_PAUSA_MS) ppm = null;
             return;
         }
-        if (!ppm) ppm = { desde: Date.now(), sobres: 0 };
+        if (!ppm) { ppm = { desde: Date.now(), sobres: 0 }; sumarPropios(motor); }
         await enviarPpm(motor, s, false);
     } catch (e) {
         log('PPM report failed:', e?.message || e);
@@ -300,8 +300,9 @@ async function enviarPpm(motor, s, final) {
     const webhook = String(s.ppm_webhook || '').trim();
     if (!ppm || !/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\//.test(webhook)) return;
     // Con Community farm el panel no manda su PPM: aca va todo junto (tus cuentas + las prestadas).
-    // Tus sobres: los de antes de un Stop/Start (basePropios) + los del log actual del panel.
-    const sobres = ppm.sobres + (ppm.basePropios || 0) + (ppm.pausa ? ppm.pausa.propios : sobresPropios(motor, ppm.reanudado || ppm.desde));
+    // Tus sobres: los que el panel anoto en su log desde el Start (sumarPropios, solo lineas nuevas).
+    if (!ppm.pausa) sumarPropios(motor);
+    const sobres = ppm.sobres + (ppm.propios || 0);
     const minutos = Math.max(1, (Date.now() - ppm.desde - (ppm.pausado || 0)) / 60000);
     const instancias = 'Main, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10';
     const mensaje = [s.host_name || 'Host', `Online: ${final ? 'none' : instancias}`, `Offline: ${final ? instancias : 'none'}`,
@@ -410,14 +411,28 @@ function productoDeSobre(motor, packId) {
     } catch (e) { return ''; }
 }
 
-// Sobres de TUS cuentas que abrio el panel desde que se encendio el Community farm: cada sobre deja
-// una linea "  cards: ..." en reports/god_pack_live.log (el panel lo vacia en cada Start).
-function sobresPropios(motor, desde) {
+// Sobres de TUS cuentas que abrio el panel desde el Start: cada sobre deja una linea "  cards: ..." en
+// reports/god_pack_live.log. (2026-11-07, Ale: wR98 salio con 318 PPM / 6.376 sobres en 20 min.) Antes se contaba
+// el log ENTERO, y un log que no se vacia en el Start (panel modificado a mano) sumaba sobres de dias anteriores.
+// Ahora se cuenta solo lo nuevo: se recuerda hasta donde se leyo (ppm.logPos) y se suma a ppm.propios. La primera
+// lectura solo marca la posicion; si el log se vacio (Start del panel), se vuelve a leer desde el principio.
+function sumarPropios(motor) {
+    if (!ppm || !motor) return;
+    const ruta = path.join(motor, 'reports', 'god_pack_live.log');
+    let tam;
+    try { tam = fs.statSync(ruta).size; } catch (e) { return; }
+    if (ppm.logPos == null) { ppm.logPos = tam; return; }
+    if (tam < ppm.logPos) ppm.logPos = 0;
+    if (tam === ppm.logPos) return;
     try {
-        const ruta = path.join(motor, 'reports', 'god_pack_live.log');
-        if (fs.statSync(ruta).mtimeMs < desde) return 0;
-        return (fs.readFileSync(ruta, 'utf8').match(/\] {2,}cards: /g) || []).length;
-    } catch (e) { return 0; }
+        const desde = Math.max(ppm.logPos, tam - 64 * 1024 * 1024);
+        const buf = Buffer.alloc(tam - desde);
+        const fd = fs.openSync(ruta, 'r');
+        fs.readSync(fd, buf, 0, buf.length, desde);
+        fs.closeSync(fd);
+        ppm.propios = (ppm.propios || 0) + (buf.toString('utf8').match(/\] {2,}cards: /g) || []).length;
+        ppm.logPos = tam;
+    } catch (e) { /* se reintenta en el proximo reporte */ }
 }
 
 // Para el recuadro del host en Discord: nombre del panel ("Ale Cast") y cuantas cuentas propias tiene.
