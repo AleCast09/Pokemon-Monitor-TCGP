@@ -416,6 +416,38 @@ def _bump_pack_count(account: dict, opened: int) -> None:
         log(f"[packs] could not rename {stem}: {exc}", tag=account.get("nickname", ""))
 
 
+GP_ELIGIBILITY_V1 = True
+_gp_eligibility = ""   # "" = all, "eligible" = God Pack mode, "locked" = Open Packs Only (set from --gp-eligibility)
+
+
+def _gp_packs_missing(jdata) -> int:
+    """Same rule as Monitor Link (SobresFaltanGP): after a pause of 30+ days an account needs 96 packs again
+    to be God Pack eligible; a new 30-day pause (also one still going on today) restarts from 0.
+    0 = eligible (or no pack history), otherwise how many packs are still missing."""
+    import collections, datetime as _dt
+    pulls = jdata.get("pulls", []) if isinstance(jdata, dict) else []
+    days = collections.Counter()
+    for p in pulls if isinstance(pulls, list) else []:
+        ts = str(p.get("timestamp", "") if isinstance(p, dict) else "")
+        try:
+            days[_dt.date.fromisoformat(ts[:10])] += 1
+        except Exception:
+            continue
+    if not days:
+        return 0
+    gap, packs, prev = False, 0, None
+    for d in sorted(days):
+        if prev is not None and (d - prev).days >= 30:
+            gap, packs = True, 0
+        packs += days[d]
+        prev = d
+    if (_dt.date.today() - prev).days >= 30:
+        return 96
+    if not gap:
+        return 0
+    return 0 if packs >= 96 else 96 - packs
+
+
 def discover_accounts(
     xml_dir: Optional[str],
     json_dir: Optional[str],
@@ -465,6 +497,7 @@ def discover_accounts(
     skipped_missing_json = 0
     skipped_missing_creds = 0
     skipped_banned = 0
+    skipped_gp_mode = 0
     now = time.time()
     cooldown_seconds = cooldown_hours * 3600.0
     # Bot's own "packs used / 0 power" record (reports/god_pack_state.json),
@@ -545,6 +578,14 @@ def discover_accounts(
                     f"(need {cooldown_hours}h)")
             continue
 
+        # 2026-11-07 (Ale): the host's own accounts follow the panel's Run Mode like the lent ones:
+        # God Pack -> only GP-eligible accounts; Open Packs Only -> only the locked ones (still missing packs).
+        if _gp_eligibility:
+            locked = _gp_packs_missing(jdata) > 0
+            if locked != (_gp_eligibility == "locked"):
+                skipped_gp_mode += 1
+                continue
+
         # Nickname — prefer metadata.nickname (leannew schema), fall back to
         # root-level `nickname` (older schema), then to the base filename.
         nickname = (
@@ -568,8 +609,12 @@ def discover_accounts(
             "authorize_device_account": jdata.get("authorize_device_account", ""),
         })
 
+    if _gp_eligibility:
+        log(f"run mode filter: {skipped_gp_mode} account(s) skipped - this run opens only "
+            + ("GP-eligible accounts (96 packs since the last 30-day pause)" if _gp_eligibility == "eligible"
+               else "accounts NOT yet GP-eligible (still missing packs to 96)"))
     total_scanned = (len(eligible) + skipped_cooldown
-                     + skipped_missing_creds + skipped_banned)
+                     + skipped_missing_creds + skipped_banned + skipped_gp_mode)
     log(f"discovered: eligible={len(eligible)} "
         f"skipped offline (cooldown)={skipped_cooldown} "
         f"xml_only(no json, still used)={skipped_missing_json} "
@@ -3429,7 +3474,8 @@ def run_injection(args) -> int:
     # NEW: global pack-open budget (per-minute, ALL collectors + ALL
     # inject.py processes combined). File-locked via .pack_budget.json at
     # the project root. 0 = disabled (falls back to fr_per_min behavior).
-    global _pack_budget_max_per_min, _max_collectors
+    global _pack_budget_max_per_min, _max_collectors, _gp_eligibility
+    _gp_eligibility = str(getattr(args, "gp_eligibility", "") or "")
     _max_collectors = int(getattr(args, "max_collectors", 0) or 0)
     ppm = float(getattr(args, "packs_per_min", 0) or 0)
     if ppm > 0:
@@ -3846,6 +3892,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Pack ID to open (default: B4a Team Rocket).")
     p.add_argument("--product-id", default="PC_PS_2608000_01_01_01",
                    help="Product ID matching pack-id.")
+    p.add_argument("--gp-eligibility", default="", choices=["", "eligible", "locked"],
+                   help="Only open GP-eligible accounts (God Pack mode) or only the locked ones (Open Packs Only). "
+                        "Empty = all accounts.")
     p.add_argument("--power-id", default="",
                    help="Pack power pool ID (PACK_POWER_NORMAL or PACK_POWER_SPECIAL). Auto-detected if empty.")
     p.add_argument("--accounts-dir", default=str(PROJECT_ROOT / "accounts"),

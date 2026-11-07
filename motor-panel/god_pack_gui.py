@@ -1382,6 +1382,14 @@ class GodPackGui(QMainWindow):
             "--farming-mode", self.w_farming_mode.currentData() or "only_gp",
             "--pack-power-min", self.w_pack_power_min.currentData() or "1/5",
         ]
+        # 2026-11-07 (Ale): with Community farm, the host's OWN accounts follow the Run Mode like the lent ones:
+        # God Pack opens only GP-eligible accounts, Open Packs Only only the locked ones (still missing packs).
+        try:
+            inject_ok = "--gp-eligibility" in Path(INJECT_SCRIPT).read_text("utf-8", errors="ignore")
+        except Exception:
+            inject_ok = False
+        if inject_ok and self.w_community.isChecked():
+            cmd += ["--gp-eligibility", "locked" if run_mode == "packs-only" else "eligible"]
         if self.w_dry_run.isChecked():
             cmd.append("--dry-run")
         if self.w_verify_power.isChecked():
