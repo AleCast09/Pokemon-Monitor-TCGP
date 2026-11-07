@@ -1367,15 +1367,15 @@ _collector_turn = itertools.count()
 
 
 FR_MAX_PER_MIN = 20.0            # friend requests per minute to any one collector (Main), ceiling
-COLLECTOR_PAUSE_SEC = 30 * 60    # a Main refusing requests again and again is skipped 30 min
+COLLECTOR_PAUSE_SEC = 15 * 60    # a Main refusing requests again and again is skipped 15 min
 COLLECTOR_FAILS_TO_PAUSE = 3     # ...after this many refusals within COLLECTOR_PAUSE_SEC (full list / soft-ban)
 _paused_lock = threading.Lock()
 _paused_cache = {"ts": 0.0, "data": {}}
 
 
-PAUSE_COLLECTORS = False   # 2026-11-07 (Arcade): OFF. A one-by-one retry also "fails" on server busy /
-                           # UNAVAILABLE / rate limits, so healthy Mains (5 friends) were paused and stopped
-                           # getting God Packs. The community PPM cap (~36/min in total) already protects them.
+PAUSE_COLLECTORS = True    # 2026-11-07 (wr98: ~1000 "server busy" alerts with it OFF): back ON, 15 min. A Main
+                           # refuses when its friend list is full (99) or it has too many pending requests;
+                           # without the pause EVERY account hit it again (and logged an error).
 
 
 def _paused_collectors() -> dict:
@@ -1725,7 +1725,8 @@ def send_friend_requests(sess, target_pids: list[str], tag: str = "") -> bool:
                 if isinstance(r, dict) and not r.get("success", True):
                     err_str = str(r.get("error", ""))
                     if "ABORTED" in err_str:
-                        log(f"[!] SendRequestsV1 ABORTED en lote. Servidor saturado.", tag=tag)
+                        log(f"[info] friend request refused by a Main (full friend list or too many pending "
+                            f"requests) - retrying Main by Main", tag=tag)
                         return False
                     # 2026-11-06 (Arcade): a web page instead of a game answer = the proxy/firewall blocks
                     # friend requests from this IP. Every next batch fails the same way: stop here (one line,

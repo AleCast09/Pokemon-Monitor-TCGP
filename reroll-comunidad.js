@@ -128,9 +128,9 @@ async function revisarLlenos() {
         const legible = /^\d{16}$/.test(codigo) ? codigo.replace(/(\d{4})(?=\d)/g, '$1-') : codigo;
         const nombre = await Promise.resolve(deps.nombreMain?.(codigo)).catch(() => null);
         log(`main refusing friend requests: ${legible}${nombre ? ` (${nombre})` : ''}`);
-        await deps.avisar?.(`⚠️ **Main refusing friend requests** — \`${legible}\`${nombre ? ` (**${nombre}**)` : ''} refused our requests 3 times in 30 min. `
-            + `Its **friend list is probably full (99)** or it has a temporary friend soft-ban.\n`
-            + `> The farm skips it for 30 min. The owner should **remove friends** (keep only God Packs still to pick) — otherwise it can't get new God Packs.`).catch(() => {});
+        await deps.avisar?.(`⚠️ **Main refusing friend requests** — \`${legible}\`${nombre ? ` (**${nombre}**)` : ''} refused our requests 3 times in 15 min. `
+            + `Its **friend list is probably full (99)**, it has too many pending requests (not accepting), or a temporary friend soft-ban.\n`
+            + `> The farm skips it for 15 min. The owner should check the Main is accepting requests and **remove friends** (keep only God Packs still to pick).`).catch(() => {});
     }
 }
 
