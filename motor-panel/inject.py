@@ -3014,7 +3014,12 @@ def inject_one(
                 # final sweep (or the next run's startup sweep) cleans up.
                 fr_cleanup.ledger_open(account, target_pids)
                 fr_was_sent = True
-                fr_ok = send_friend_requests(sess, target_pids, tag)
+                # Healthy Mains first (batches of 2); Mains that refused recently go last, one by one.
+                _todos = list(target_pids)
+                _sus = _suspect_codes()
+                _sospechosos = [p for p in target_pids if pid_to_friend_code.get(p, "") in _sus]
+                target_pids = [p for p in target_pids if p not in _sospechosos]
+                fr_ok = send_friend_requests(sess, target_pids, tag) if target_pids else False
                 # One by one only when a Main refused (full list); not when the proxy itself is blocked.
                 if not fr_ok and len(target_pids) > 1 and not getattr(_fr_state, "proxy_blocked", False):
                     # (2026-11-01) El paquete falla entero (ABORTED) si UNO de los collectors tiene la
@@ -3044,13 +3049,32 @@ def inject_one(
                             log(f"[fr] {len(full_pids)} of {len(target_pids)} Mains failed for this account at once - "
                                 f"account/proxy problem, no Main is penalized", tag=tag)
                         if full_pids and culpa_main:
+                            _mark_suspects([pid_to_friend_code.get(p, "") for p in full_pids])
                             _note_full_collectors(full_pids, pid_to_friend_code, tag)
                             _pause_collectors([pid_to_friend_code.get(p, "") for p in full_pids], tag)
                             log(f"[fr] {len(full_pids)} collector(s) rejected the request (friend list full?); "
                                 f"continuing with {len(ok_pids)}", tag=tag)
                         target_pids = ok_pids
                         fr_ok = True
+                # Suspect Mains: last, one by one. A refusal keeps them suspect; a success clears them.
+                if _sospechosos and not getattr(_fr_state, "proxy_blocked", False):
+                    _extra, _siguen = [], []
+                    for pid in _sospechosos:
+                        if send_friend_requests(sess, [pid], tag):
+                            _extra.append(pid)
+                        elif getattr(_fr_state, "proxy_blocked", False):
+                            break
+                        else:
+                            _siguen.append(pid)
+                    _mark_suspects([pid_to_friend_code.get(p, "") for p in _extra], refused=False)
+                    _mark_suspects([pid_to_friend_code.get(p, "") for p in _siguen])
+                    if _extra:
+                        target_pids = (target_pids if fr_ok else []) + _extra
+                        fr_ok = True
+                    log(f"[fr] Mains that refused recently, tried last: {len(_extra)} of {len(_sospechosos)} accepted now",
+                        tag=tag)
                 if not fr_ok:
+                    target_pids = _todos   # withdraw from every Main, whatever landed
                     result["error"] = "friend_request_failed"
                     # Some FRs may have landed (pending OR accepted) before the
                     # error. Withdraw/delete all of them.
@@ -3547,6 +3571,57 @@ def _community_ppm_cap():
         cap = None
     _community_cap_cache.update(at=now, cap=cap)
     return cap
+
+
+# 2026-11-07 (Ale/Arcade: "sent to 11 of 20 Mains"): friend requests go in batches of 2 and a batch fails whole
+# when ONE Main refuses (full list / soft-ban). The Main-by-Main retry that follows is many calls in a row from the
+# same IP, the proxy gets blocked and the remaining healthy Mains never get the request. Mains that refused in the
+# last 30 min are "suspects": they are NOT excluded, they just get their request last and one by one, so the
+# healthy Mains' batches go through first, with no retry. Shared by every inject.py on this PC.
+SUSPECT_MAINS_V1 = True
+SUSPECT_SEC = 30 * 60
+_suspect_lock = threading.Lock()
+_suspect_cache = {"ts": 0.0, "data": {}}
+
+
+def _suspect_file() -> Path:
+    return PROJECT_ROOT / "reports" / "collectors_suspect.json"
+
+
+def _suspect_codes() -> set:
+    now = time.time()
+    with _suspect_lock:
+        if now - _suspect_cache["ts"] > 10:
+            try:
+                raw = json.loads(_suspect_file().read_text("utf-8")) or {}
+            except Exception:
+                raw = {}
+            _suspect_cache.update(ts=now, data={str(k): float(v) for k, v in raw.items()})
+        return {k for k, v in _suspect_cache["data"].items() if now - v < SUSPECT_SEC}
+
+
+def _mark_suspects(codes: list, refused: bool = True) -> None:
+    codes = [str(c or "").replace("-", "").strip() for c in codes if c]
+    if not codes:
+        return
+    now = time.time()
+    with _suspect_lock:
+        try:
+            raw = json.loads(_suspect_file().read_text("utf-8")) or {}
+        except Exception:
+            raw = {}
+        raw = {k: v for k, v in raw.items() if now - float(v) < SUSPECT_SEC}
+        for c in codes:
+            if refused:
+                raw[c] = now
+            else:
+                raw.pop(c, None)
+        try:
+            _suspect_file().parent.mkdir(parents=True, exist_ok=True)
+            _suspect_file().write_text(json.dumps(raw), encoding="utf-8")
+        except Exception:
+            pass
+        _suspect_cache["ts"] = 0.0
 
 
 SPACING_V1 = True
