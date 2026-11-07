@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.18"
+global VERSION := "ahk-1.9.19"
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -312,7 +312,7 @@ CompartirCuentas:
     Gui, 2:+Owner1 +ToolWindow
     Gui, 2:Margin, 14, 12
     Gui, 2:Font, s9, Segoe UI
-    Gui, 2:Add, Text, w440, Tick the accounts the hosts can use for the God Pack reroll (only accounts with 96+ packs opened are listed).
+    Gui, 2:Add, Text, w440, Tick the accounts the hosts can use for the reroll. Accounts with fewer than 96 packs are listed too: hosts open them in their pack farm until they reach 96, then they move to the God Pack farm by themselves.
     Gui, 2:Font, s9 Bold cC62828, Segoe UI
     Gui, 2:Add, Text, w440 y+6, While an account is shared, do NOT open it on your own instances: the same account in two places at once gets errors.
     Gui, 2:Font, s9 Norm cBlack, Segoe UI
@@ -327,8 +327,6 @@ CompartirCuentas:
         FileRead, t, %A_LoopFileFullPath%
         if !RegExMatch(t, """packCount""\s*:\s*(\d+)", mp)
             continue
-        if (mp1 < 96)
-            continue
         f := RegExMatch(t, """fileName""\s*:\s*""((?:[^""\\]|\\.)*)""", mf) ? JsonUnesc(mf1) : A_LoopFileName
         ; GP column: OK = God Pack eligible; "Locked N" = still needs N packs after its last 30-day pause.
         faltan := SobresFaltanGP(t, sobres)
@@ -342,7 +340,7 @@ CompartirCuentas:
         total++
     }
     LV_ModifyCol(1, 250), LV_ModifyCol(2, "60 Integer SortDesc"), LV_ModifyCol(3, 80), LV_ModifyCol(4, 105)
-    Gui, 2:Add, Text, w440 y+6, % total . " accounts with 96+ packs - " . compartidas . " shared now."
+    Gui, 2:Add, Text, w440 y+6, % total . " accounts - " . compartidas . " shared now."
     Gui, 2:Add, Text, w440 y+2, % "God Pack eligible: " . (total - noElegibles) . " - locked (not eligible yet): " . noElegibles . "."
     Gui, 2:Add, Button, xm y+8 w100 h28 gMarcarTodas, Tick all
     Gui, 2:Add, Button, x+6 yp w100 h28 gDesmarcarTodas, Untick all
@@ -1715,6 +1713,11 @@ Http(metodo, url, body := "", tipo := "", bearer := "", segundos := 30) {
 ; after the LAST such pause (a new 30-day pause restarts the count from 0). 30+ days since the last pack
 ; until today also counts as a pause. Returns the packs still missing (0 = eligible).
 SobresFaltanGP(t, ByRef sobres := 0) {
+    ; (Ale 2026-11-07) An account with fewer than 96 packs IN TOTAL is not eligible either: it needs to reach 96.
+    if RegExMatch(t, """packCount""\s*:\s*(\d+)", mpc) && (mpc1 + 0 < 96) {
+        sobres := mpc1 + 0
+        return 96 - sobres
+    }
     dias := {}, pos := 1, sobres := 0
     while (pos := RegExMatch(t, """timestamp""\s*:\s*""(\d{4})-(\d{2})-(\d{2})[^""]*""\s*,\s*""pack""", m, pos)) {
         k := (m1 . m2 . m3) + 0

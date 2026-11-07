@@ -624,6 +624,13 @@ def _gp_packs_missing(jdata) -> int:
     to be God Pack eligible; a new 30-day pause (also one still going on today) restarts from 0.
     0 = eligible (or no pack history), otherwise how many packs are still missing."""
     import collections, datetime as _dt
+    # 2026-11-07 (Ale): fewer than 96 packs IN TOTAL = not eligible either (it needs to reach 96 first).
+    try:
+        _pc = int(((jdata.get("metadata") or {}) if isinstance(jdata, dict) else {}).get("packCount"))
+    except Exception:
+        _pc = -1
+    if 0 <= _pc < 96:
+        return 96 - _pc
     pulls = jdata.get("pulls", []) if isinstance(jdata, dict) else []
     days = collections.Counter()
     for p in pulls if isinstance(pulls, list) else []:
@@ -3579,6 +3586,7 @@ def _community_ppm_cap():
 # last 30 min are "suspects": they are NOT excluded, they just get their request last and one by one, so the
 # healthy Mains' batches go through first, with no retry. Shared by every inject.py on this PC.
 SUSPECT_MAINS_V1 = True
+UNDER_96_LOCKED_V1 = True
 SUSPECT_SEC = 30 * 60
 _suspect_lock = threading.Lock()
 _suspect_cache = {"ts": 0.0, "data": {}}
