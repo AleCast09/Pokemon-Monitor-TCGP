@@ -115,10 +115,47 @@ def _fix_pack_labels(json_path: str, jdata) -> None:
             changed += 1
     if changed:
         gp_json._atomic_write_json(Path(json_path), jdata)
-try:
-    from scripts.god_pack import discord_notifier as gp_discord
-except Exception:
-    gp_discord = None
+NOTIFIER_LOAD_CHECK_V1 = True
+_gp_discord_error = ""
+
+
+def _load_gp_discord():
+    """2026-11-07 (Arcade's Mac): the engine's requirements.txt has no Pillow, so on a fresh install the God Pack
+    notifier failed to import, was silently set to None and NO God Pack was ever posted. Now a missing module is
+    installed once with pip (Pillow), and any other failure is kept so every God Pack logs why it wasn't posted."""
+    global _gp_discord_error
+    for attempt in range(2):
+        try:
+            from scripts.god_pack import discord_notifier as mod
+            _gp_discord_error = ""
+            return mod
+        except ModuleNotFoundError as exc:
+            _gp_discord_error = f"{exc}"
+            missing = (getattr(exc, "name", "") or "").split(".")[0]
+            pkg = {"PIL": "pillow", "google": "protobuf"}.get(missing, missing)
+            if attempt or not pkg:
+                break
+            try:
+                import subprocess
+                subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", pkg],
+                               timeout=300, check=False)
+            except Exception:
+                break
+        except Exception as exc:
+            _gp_discord_error = f"{type(exc).__name__}: {exc}"
+            break
+    return None
+
+
+gp_discord = _load_gp_discord()
+
+
+def _gp_notifier():
+    """The notifier module, retrying the import when it failed at start (e.g. Pillow installed meanwhile)."""
+    global gp_discord
+    if gp_discord is None:
+        gp_discord = _load_gp_discord()
+    return gp_discord
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2960,13 +2997,18 @@ def inject_one(
                     # 2026-11-06 (Arcade): a long run keeps the notifier it loaded at start; if Monitor
                     # Pokemon updated discord_notifier.py meanwhile, the alert used the old code and the GP
                     # never reached KyuremBot. Reload it right before every God Pack.
-                    if gp_discord is not None:
+                    _notifier = _gp_notifier()
+                    if _notifier is None:
+                        log(f"[discord] GOD PACK NOT POSTED: the God Pack notifier could not load "
+                            f"({_gp_discord_error or 'unknown error'}) - run: python -m pip install -r requirements.txt pillow",
+                            tag=tag)
+                    else:
                         try:
                             import importlib
-                            importlib.reload(gp_discord)   # updates the same module object in place
+                            importlib.reload(_notifier)   # updates the same module object in place
                         except Exception:
                             pass
-                        gp_discord.notify_god_pack_async(
+                        _notifier.notify_god_pack_async(
                             account=account,
                             card_ids=outcome["cards"],
                             pack_label=_tier_label,
@@ -3664,7 +3706,7 @@ def run_injection(args) -> int:
             power_id=_resolved_power_id,
         )
         # Record state (touch mtime only on successful attempt)
-        gp_state.record_injection(
+        _record_kwargs = dict(
             account_key=r["account_key"],
             account_id=r["account_id"],
             nickname=r["nickname"],
@@ -3676,6 +3718,23 @@ def run_injection(args) -> int:
             friend_status=r["friend_status"],
             error=r["error"],
         )
+        try:
+            gp_state.record_injection(**_record_kwargs)
+        except KeyError:
+            # 2026-11-07 (Arcade): an account already in god_pack_state.json from mark_power_used() has no
+            # "god_pack_hits" list, so recording its God Pack crashed the worker ("worker exception:
+            # 'god_pack_hits'") and the hit was lost from the run summary. Add the missing list and retry.
+            try:
+                _st = gp_state.load_state()
+                _entry = _st.setdefault("accounts", {}).setdefault(r["account_key"], {})
+                _entry.setdefault("god_pack_hits", [])
+                _entry.setdefault("injections", 0)
+                gp_state.save_state(_st)
+                gp_state.record_injection(**_record_kwargs)
+            except Exception as exc:
+                log(f"[!] could not record this account in god_pack_state.json: {exc}", tag=r.get("account_key", ""))
+        except Exception as exc:
+            log(f"[!] could not record this account in god_pack_state.json: {exc}", tag=r.get("account_key", ""))
         if not args.dry_run:
             _bump_pack_count(acct, int(r.get("packs_opened") or 0))
         # Cooldown gate is `metadata.lastPackPulled` in each JSON, which the
