@@ -95,7 +95,7 @@ async function escribirSetsSobres() {
 async function escribirTopePpm() {
     const motor = deps?.fastTransfer.rutaMotor();
     if (!motor) return;
-    const total = num(process.env.PPM_COMUNIDAD, 36);
+    const total = num(process.env.PPM_COMUNIDAD, 20);   // 2026-11-07: 36 -> 20, varios Mains con soft ban de amigos
     const hosts = await deps.hostsFarm?.('godpack').catch(() => null);
     if (!Array.isArray(hosts)) return;
     const parte = await deps.parte('godpack').catch(() => null);
