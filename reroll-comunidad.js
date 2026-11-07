@@ -436,12 +436,27 @@ function agregarSobresExtra(motor) {
     } catch (e) { /* sin catalogo en este motor */ }
 }
 
-// Ajustes recomendados del God Pack UI (2026-11-07, Naja: mismo motor en su server, sin soft bans): tope de 35
-// sobres/min por Main, 20 s de espera para que acepten, 2 s entre cuentas y 1 s entre sobres (el servidor abre
+// Ajustes recomendados del God Pack UI (2026-11-07, Naja + Arcade: mismo motor, sin soft bans): tope de 35
+// sobres/min por Main, 6 s de espera para que acepten, 2 s entre cuentas y 1 s entre sobres (el servidor abre
 // los dos sobres igual y no da el segundo si el primero es God Pack). Se aplican UNA vez por host (despues cada
 // uno puede cambiarlos); el panel los toma al abrirse. El tope de la comunidad (ppm_cap.json) sigue mandando.
-const AJUSTES_RECOMENDADOS = { packs_per_min: 35, wait_accept: 20, account_delay: 2, pack_delay: 1 };
+const AJUSTES_RECOMENDADOS = { packs_per_min: 35, wait_accept: 6, account_delay: 2, pack_delay: 1 };
 function aplicarAjustesRecomendados(motor) {
+    // (2026-11-07, Arcade) 20 s de espera bajaba el PPM de 17 a 12 y con 6 s no se perdia ninguna solicitud:
+    // a quien todavia tiene los 20 s que puso la v1, se le baja a 6 (si lo cambio a mano, no se toca).
+    try {
+        const marca2 = path.join(motor, 'reports', 'ajustes_recomendados_v2.done');
+        const ruta = path.join(motor, 'tools', 'god_pack_gui', 'settings.json');
+        if (!fs.existsSync(marca2) && fs.existsSync(path.join(motor, 'reports', 'ajustes_recomendados_v1.done'))) {
+            const s = JSON.parse(fs.readFileSync(ruta, 'utf8'));
+            if (Number(s.wait_accept) === 20) {
+                s.wait_accept = 6;
+                fs.writeFileSync(ruta, JSON.stringify(s, null, 2));
+                log('God Pack UI accept wait back to 6 s (20 s was too slow) - reopen the God Pack UI to load it');
+            }
+            fs.writeFileSync(marca2, new Date().toISOString());
+        }
+    } catch (e) { /* sin panel en este motor */ }
     try {
         const marca = path.join(motor, 'reports', 'ajustes_recomendados_v1.done');
         if (fs.existsSync(marca)) return;
