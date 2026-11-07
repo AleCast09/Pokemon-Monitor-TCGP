@@ -63,7 +63,15 @@ except Exception:
 _EXTRA_PACKS = [
     {"pack_id": "BN011_0010_00_000", "sku_id": "B4b_1", "name": "Deluxe Mega",
      "product_id": "PC_PS_2609000_01_01_01"},
+    # 2026-11-07 (Ale, from wr98): special pack, own energy (PACK_POWER_SPECIAL), 1 pack per account.
+    {"pack_id": "SP001_0010_00_000", "sku_id": "SP1_1", "name": "Special Pack: First Partners",
+     "product_id": "PC_PS_2610010_01_01_01"},
 ]
+
+
+def packs_for(pack_id, wanted):
+    """Special packs (SP...) open 1 per account: they use their own energy, not the normal 2-pack power."""
+    return 1 if str(pack_id or "").upper().startswith("SP") else wanted
 
 _catalog_paid_pack_options = paid_pack_options
 _catalog_product_id_for_pack = product_id_for_pack
@@ -1363,7 +1371,7 @@ class GodPackGui(QMainWindow):
             sys.executable, str(INJECT_SCRIPT),
             "--collector-codes", ",".join(codes) if codes else "dummy",
             "--worker-url", worker_url,
-            "--packs", str(self.w_packs.value()),
+            "--packs", str(packs_for(pack_id, self.w_packs.value())),
             "--pack-id", pack_id,
             "--product-id", product_id,
             "--accounts-dir", self.w_accounts_dir.text().strip(),

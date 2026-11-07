@@ -38,6 +38,7 @@ function iniciar(d) {
     deps = d;
     if (!deps.fastTransfer.rutaMotor()) return;
     instalarPanel(deps.fastTransfer.rutaMotor());
+    agregarSobresExtra(deps.fastTransfer.rutaMotor());
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
         INJECT_ORIGINAL, '_limit_collectors', 'own accounts follow the Run Mode, ~36 packs/min in total, packs saved as their set (C1)',
         // (2026-11-06, Ale) Un Main quedo con soft ban de amigos: un host con su inject.py propio mandaba a 13 Mains
@@ -410,6 +411,28 @@ async function codigoSet(packId) {
 // Ticket de compra (product_id) del sobre, sacado de scripts/flow/pack_catalog.py del motor. Sin
 // --product-id, inject.py usa el de Team Rocket y el juego rechaza cualquier otro sobre con
 // PurchaseV2 INTERNAL (2026-11-01: el GP farm nunca abria Dual Fusion por esto; el panel si lo pasa).
+// Sobres que el catalogo del motor (scripts/flow/pack_catalog.py, de Miguel) todavia no trae. Se agregan a
+// PAID_HOURGLASS_PACKS de cada host al arrancar (asi salen en el God Pack UI y el farm sabe su product_id).
+const SOBRES_EXTRA = [
+    // 2026-11-07 (Ale, datos de wr98): sobre especial, energia propia (PACK_POWER_SPECIAL), 1 por cuenta.
+    '{"name": "Special Pack: First Partners", "expansion_id": "sp1", "sku_id": "SP1_1", "pack_id": "SP001_0010_00_000", "product_id": "PC_PS_2610010_01_01_01", "hg_cost": 0, "power_id": "PACK_POWER_SPECIAL", "default_packs": 1},',
+];
+function agregarSobresExtra(motor) {
+    try {
+        const ruta = path.join(motor, 'scripts', 'flow', 'pack_catalog.py');
+        let texto = fs.readFileSync(ruta, 'utf8');
+        const faltan = SOBRES_EXTRA.filter(l => !texto.includes(`"${JSON.parse(l.replace(/,$/, '')).pack_id}"`));
+        if (!faltan.length) return;
+        const ini = texto.indexOf('PAID_HOURGLASS_PACKS = [');
+        const fin = ini < 0 ? -1 : texto.indexOf('\n]', ini);
+        if (fin < 0) { log('pack_catalog.py: PAID_HOURGLASS_PACKS not found - special pack not added'); return; }
+        fs.copyFileSync(ruta, `${ruta}.bak-sobres`);
+        texto = texto.slice(0, fin) + '\n    # Monitor Pokemon (sobres extra)\n' + faltan.map(l => `    ${l}`).join('\n') + texto.slice(fin);
+        fs.writeFileSync(ruta, texto);
+        log(`pack_catalog.py: added ${faltan.length} pack(s) (Special Pack: First Partners)`);
+    } catch (e) { /* sin catalogo en este motor */ }
+}
+
 function productoDeSobre(motor, packId) {
     try {
         const catalogo = fs.readFileSync(path.join(motor, 'scripts', 'flow', 'pack_catalog.py'), 'utf8');
@@ -479,7 +502,8 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
         const args = [path.join(motor, 'scripts', 'god_pack', 'inject.py'),
             '--collector-codes', (s.collectors || []).join(',') || 'dummy',
             '--worker-url', s.worker_url || 'https://onlineids.zenithrise.workers.dev/elite',
-            '--packs', String(s.packs || 2),
+            // Sobre especial (SP1): 1 por cuenta, usa su propia energia (2026-11-07).
+            '--packs', String(/^SP/i.test(s.pack_id || '') ? 1 : (s.packs || 2)),
             '--pack-id', s.pack_id || 'CN001_0010_00_000',
             '--accounts-dir', dirCuentas, '--xml-dir', dirCuentas, '--json-dir', dirCuentas,
             '--proxy-file', archivoProxies(motor, s),
