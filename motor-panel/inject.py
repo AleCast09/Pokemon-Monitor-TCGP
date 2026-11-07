@@ -80,6 +80,132 @@ from scripts.god_pack import likes as gp_likes  # noqa: E402
 from scripts.god_pack import popups as gp_popups  # noqa: E402
 from scripts.god_pack import resources as gp_resources  # noqa: E402
 
+# ══════════════════════════════════════════════════════════════════════
+# FR ledger (2026-11-07, Ale: Mains' friend lists filling up to 99 again)
+# The engine's fr_cleanup.py ships the ledger as empty stubs, so an account cut off between "friend
+# requests sent" and "links removed" (Stop, closing the panel, a bot restart/update, a crash) stayed a
+# friend of every online Main forever. Real ledger: one file per account in reports/fr_pending/.
+#   - Every inject.py writes reports/fr_pending/_alive_<run> every 30 s. Entries of a run that stopped
+#     writing (2+ min) are leftovers; a sweep never touches accounts another running process still uses.
+#   - Lent accounts (GP farm) never keep their XML on the host: only the owner + file name are stored, and
+#     Monitor Pokemon asks the owner's Monitor Link for the XML again to clean them (--cleanup-only).
+# ══════════════════════════════════════════════════════════════════════
+FR_LEDGER_V1 = True
+_FR_DIR = PROJECT_ROOT / "reports" / "fr_pending"
+_RUN_ID = f"{os.getpid()}_{int(time.time())}"
+_FR_ALIVE_STALE_SEC = 120
+_fr_alive_started = False
+_fr_lock = threading.Lock()
+_SWEEP_XML_DIR = ""   # set by run_injection: lent entries are resolved against this folder
+
+
+def _fr_owner() -> str:
+    return os.environ.get("ZENITH_ACCOUNT_OWNER", "").strip()
+
+
+def _fr_file(key: str, owner: str = None) -> Path:
+    owner = _fr_owner() if owner is None else owner
+    safe = re.sub(r"[^A-Za-z0-9_.()-]", "_", f"{owner}__{key}" if owner else key)
+    return _FR_DIR / f"{safe}.json"
+
+
+def _fr_alive_loop() -> None:
+    while True:
+        try:
+            _FR_DIR.mkdir(parents=True, exist_ok=True)
+            (_FR_DIR / f"_alive_{_RUN_ID}").write_text(str(time.time()), encoding="utf-8")
+        except Exception:
+            pass
+        time.sleep(30)
+
+
+def _fr_start_alive() -> None:
+    global _fr_alive_started
+    with _fr_lock:
+        if _fr_alive_started:
+            return
+        _fr_alive_started = True
+    threading.Thread(target=_fr_alive_loop, daemon=True).start()
+    time.sleep(0.05)
+
+
+def _fr_ledger_open(account: dict, target_pids: list) -> None:
+    try:
+        _fr_start_alive()
+        owner = _fr_owner()
+        xml_path = account.get("xml_path", "") or ""
+        entry = {
+            "account_key": account.get("account_key", ""), "nickname": account.get("nickname", ""),
+            "account_id": account.get("account_id", ""), "target_pids": list(target_pids or []),
+            "owner": owner, "xml_file": os.path.basename(xml_path),
+            # a lent account's XML lives in a temporary folder: never store its path/credentials
+            "xml_path": "" if owner else xml_path, "json_path": "" if owner else account.get("json_path", ""),
+            "device_identifier": account.get("device_identifier", ""),
+            "authorize_device_account": account.get("authorize_device_account", ""),
+            "run": _RUN_ID, "ts": time.time(),
+        }
+        _FR_DIR.mkdir(parents=True, exist_ok=True)
+        _fr_file(entry["account_key"]).write_text(json.dumps(entry), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _fr_ledger_close(account_key: str) -> None:
+    try:
+        _fr_file(account_key).unlink()
+    except Exception:
+        pass
+
+
+def _fr_run_alive(run: str) -> bool:
+    if run == _RUN_ID:
+        return True
+    try:
+        return time.time() - (_FR_DIR / f"_alive_{run}").stat().st_mtime < _FR_ALIVE_STALE_SEC
+    except Exception:
+        return False
+
+
+def _fr_scan(scope: str = "all") -> dict:
+    """scope: 'all', 'mine' (this process) or 'stale' (left by a process that is gone)."""
+    out = {}
+    try:
+        files = list(_FR_DIR.glob("*.json"))
+    except Exception:
+        files = []
+    for f in files:
+        try:
+            e = json.loads(f.read_text("utf-8"))
+        except Exception:
+            continue
+        run = str(e.get("run", ""))
+        if scope == "mine" and run != _RUN_ID:
+            continue
+        if scope == "stale" and _fr_run_alive(run):
+            continue
+        if time.time() - float(e.get("ts", 0) or 0) > 3 * 24 * 3600:   # gave up after 3 days (XML gone)
+            try:
+                f.unlink()
+            except Exception:
+                pass
+            continue
+        e["_file"] = str(f)
+        out[f.stem] = e
+    if scope != "mine":   # old heartbeat files of dead runs
+        try:
+            for a in _FR_DIR.glob("_alive_*"):
+                if time.time() - a.stat().st_mtime > 24 * 3600:
+                    a.unlink()
+        except Exception:
+            pass
+    return out
+
+
+fr_cleanup.ledger_open = _fr_ledger_open
+fr_cleanup.ledger_close = _fr_ledger_close
+fr_cleanup.ledger_entries = lambda: _fr_scan("all")
+fr_cleanup.ledger_path = lambda: _FR_DIR
+
 # 2026-11-07 (Ale): pulls[] must say the set code ("C1") like PTCGPB/Lean writes it. The engine wrote the raw
 # pack id ("CN001_0020_00_000") and account viewers showed those packs as "undefined" with the wrong cards.
 # The Monitor bot keeps reports/pack_sets.json {pack_id: set} from Leanny's packmaster; this is the fallback.
@@ -2449,15 +2575,27 @@ def _cleanup_links(sess, account: dict, target_pids: list[str], tag: str) -> boo
     return ok
 
 
-def sweep_fr_ledger(reason: str) -> tuple[int, int]:
+def sweep_fr_ledger(reason: str, scope: str = "stale") -> tuple[int, int]:
     """
-    Log back into every account still in reports/fr_ledger.json and remove
+    Log back into every account still in the FR ledger (reports/fr_pending/) and remove
     all collector links. Runs at startup (leftovers from a crash / force-kill)
     and once more right before the process exits. Ignores the stop event on
     purpose — this IS the stop cleanup.
+    scope 'stale' = left by a process that is gone; 'mine' = this process (final sweep). Accounts another
+    running inject.py is still using are never touched. Lent accounts are only cleaned when their XML is
+    in this run's --xml-dir (Monitor Pokemon brings it back from the owner's Monitor Link).
     Returns (cleaned, still_dirty).
     """
-    entries = fr_cleanup.ledger_entries()
+    entries = {}
+    for key, e in _fr_scan(scope).items():
+        if e.get("owner"):
+            xml = os.path.join(_SWEEP_XML_DIR, e.get("xml_file", "")) if _SWEEP_XML_DIR else ""
+            if not (xml and e.get("xml_file") and os.path.isfile(xml)):
+                continue   # lent account whose XML isn't here: Monitor Pokemon cleans it with its owner's XML
+            if e.get("owner") != _fr_owner():
+                continue
+            e["xml_path"] = xml
+        entries[key] = e
     if not entries:
         log(f"[fr-sweep] {reason}: nothing to clean")
         return 0, 0
@@ -2476,7 +2614,7 @@ def sweep_fr_ledger(reason: str) -> tuple[int, int]:
             dirty += 1
             continue
         acct = {
-            "account_key": key, "nickname": tag, "account_id": acct_id,
+            "account_key": e.get("account_key") or key, "nickname": tag, "account_id": acct_id,
             "password": pwd, "xml_path": e.get("xml_path", ""),
             "json_path": e.get("json_path", ""),
             "device_identifier": e.get("device_identifier", ""),
@@ -2491,6 +2629,10 @@ def sweep_fr_ledger(reason: str) -> tuple[int, int]:
         try:
             if _cleanup_links(sess, acct, e.get("target_pids", []), tag):
                 cleaned += 1
+                try:
+                    Path(e["_file"]).unlink()   # entry of another (dead) run: close it by its own file
+                except Exception:
+                    pass
             else:
                 dirty += 1
         finally:
@@ -3515,6 +3657,8 @@ def run_injection(args) -> int:
         log(f"[log_file] mirroring all output to {args.log_file}")
 
     # --cleanup-only: just sweep leftover FRs from earlier runs, then exit.
+    global _SWEEP_XML_DIR
+    _SWEEP_XML_DIR = str(getattr(args, "xml_dir", "") or getattr(args, "accounts_dir", "") or "")
     if getattr(args, "cleanup_only", False):
         load_proxies(args.proxy_file, args.proxy_scheme)
         _, dirty = sweep_fr_ledger("cleanup-only")
@@ -3954,7 +4098,7 @@ def run_injection(args) -> int:
         # account still in the ledger has leftover FRs/friendships.
         if not args.dry_run:
             log("=" * 70)
-            sweep_fr_ledger("final cleanup before exit")
+            sweep_fr_ledger("final cleanup before exit", scope="mine")
 
     duration = time.time() - started_at
 

@@ -39,12 +39,14 @@ function iniciar(d) {
     if (!deps.fastTransfer.rutaMotor()) return;
     instalarPanel(deps.fastTransfer.rutaMotor());
     agregarSobresExtra(deps.fastTransfer.rutaMotor());
+    borrarTemporalesViejas();
+    setInterval(borrarTemporalesViejas, 60 * 60 * 1000);
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
         INJECT_ORIGINAL, '_limit_collectors', 'own accounts follow the Run Mode, ~36 packs/min in total, packs saved as their set (C1)',
         // (2026-11-06, Ale) Un Main quedo con soft ban de amigos: un host con su inject.py propio mandaba a 13 Mains
         // por cuenta sin limite. Sin estos limites se instala el nuestro igual (el suyo queda como .bak-propio).
         // (2026-11-07) Ahora el obligatorio es el tope de PPM de la comunidad (lee reports/ppm_cap.json).
-        'IN_USE_STRIKES_V1');
+        'FR_LEDGER_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent',
@@ -496,7 +498,66 @@ function motorConoce(motor, opcion) {
     } catch (e) { return false; }
 }
 
-function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
+// Amistades que quedaron (2026-11-07, Ale: "tienen lista de 99 otra vez"). Si el motor se corta entre mandar las
+// solicitudes y borrarlas (Stop, reinicio o actualizacion del bot, un error), la cuenta queda amiga de TODOS los
+// Mains. inject.py anota cada cuenta en reports/fr_pending/ y limpia solo las suyas al arrancar; las PRESTADAS no
+// pueden (su XML no queda en el host), asi que aca se le vuelve a pedir la XML al Monitor Link del dueño, se corre
+// el motor con --cleanup-only (sin abrir sobres) y la XML se borra otra vez.
+async function limpiarPrestadasPendientes(motor) {
+    const dir = path.join(motor, 'reports', 'fr_pending');
+    let archivos;
+    try { archivos = fs.readdirSync(dir); } catch (e) { return; }
+    const vivo = run => { try { return Date.now() - fs.statSync(path.join(dir, `_alive_${run}`)).mtimeMs < 2 * 60 * 1000; } catch (e) { return false; } };
+    const porDueno = {};
+    for (const a of archivos) {
+        if (!a.endsWith('.json')) continue;
+        let e;
+        try { e = JSON.parse(fs.readFileSync(path.join(dir, a), 'utf8')); } catch (err) { continue; }
+        if (!e.owner || !e.xml_file || vivo(e.run)) continue;
+        (porDueno[e.owner] = porDueno[e.owner] || new Set()).add(e.xml_file);
+    }
+    const s = ajustesPanel(motor);
+    for (const [dueno, set] of Object.entries(porDueno)) {
+        if (!panelEncendido(motor)) return;
+        const pedidos = [...set];
+        let xmls;
+        try {
+            try { xmls = await deps.ml.pedirXmlReroll(dueno, pedidos); }
+            catch (e) { xmls = await deps.ml.xmlRerollPorHostActivo(dueno, pedidos); }
+        } catch (e) {
+            log(`${dueno}: ${pedidos.length} lent account(s) still friends with the Mains - Monitor Link offline, retrying later`);
+            continue;
+        }
+        const nombres = Object.keys(xmls || {});
+        if (!nombres.length) continue;
+        if (!await deps.fastTransfer.asegurarTunel()) return;
+        const tmp = path.join(os.tmpdir(), `ml_reroll_${crypto.randomBytes(6).toString('hex')}`);
+        fs.mkdirSync(tmp, { recursive: true });
+        try {
+            for (const nombre of nombres) {
+                const base = path.basename(nombre).replace(/\.xml$/i, '');
+                fs.writeFileSync(path.join(tmp, `${base}.xml`), xmls[nombre]);
+            }
+            log(`removing leftover Main friendships of ${nombres.length} lent account(s) of ${dueno}`);
+            await correrInject(motor, tmp, s, nombres.length, dueno, true);
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });   // las XML no quedan en el host
+        }
+    }
+}
+
+// Carpetas temporales de tandas cortadas a la fuerza (reinicio del bot): sus XML no deben quedar en el host.
+function borrarTemporalesViejas() {
+    try {
+        for (const d of fs.readdirSync(os.tmpdir())) {
+            if (!/^ml_reroll_[0-9a-f]{12}$/.test(d)) continue;
+            const ruta = path.join(os.tmpdir(), d);
+            if (Date.now() - fs.statSync(ruta).mtimeMs > 2 * 3600 * 1000) fs.rmSync(ruta, { recursive: true, force: true });
+        }
+    } catch (e) { /* nada */ }
+}
+
+function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = false) {
     return new Promise(resolve => {
         const python = deps.fastTransfer.pythonMotor();
         const args = [path.join(motor, 'scripts', 'god_pack', 'inject.py'),
@@ -523,6 +584,7 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId) {
             '--stop-after-fails', String(s.stop_after_fails || 5),
             // Stop del panel GP: corta la tanda despues de la cuenta en curso (con su limpieza)
             '--stop-file', path.join(motor, 'reports', 'community_farm.stop')];
+        if (soloLimpiar) args.push('--cleanup-only');   // solo borra amistades que quedaron (no abre sobres)
         if (s.packs_per_min > 0) args.push('--packs-per-min', String(s.packs_per_min));
         const producto = productoDeSobre(motor, s.pack_id || 'CN001_0010_00_000');
         if (producto) args.push('--product-id', producto);
@@ -709,6 +771,7 @@ async function ciclo() {
             return;
         }
         await deps.ml.escribirProxiesMotor().catch(() => {});
+        await limpiarPrestadasPendientes(motor).catch(e => log('lent cleanup failed:', e?.message || e));
 
         const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
         // (2026-11-06, pedido de Ale: mas PPM) 50 cuentas por miembro y tanda (antes 20).
