@@ -1379,7 +1379,7 @@ PAUSE_COLLECTORS = True    # 2026-11-07 (wr98: ~1000 "server busy" alerts with i
 
 
 def _paused_collectors() -> dict:
-    """reports/collectors_paused.json {code: until_epoch}, shared by every inject.py on this PC."""
+    """reports/collectors_paused_v2.json {code: until_epoch}, shared by every inject.py on this PC."""
     if not PAUSE_COLLECTORS:
         return {}
     now = time.time()
@@ -1387,7 +1387,7 @@ def _paused_collectors() -> dict:
         return _paused_cache["data"]
     data = {}
     try:
-        raw = json.loads((PROJECT_ROOT / "reports" / "collectors_paused.json").read_text("utf-8")) or {}
+        raw = json.loads((PROJECT_ROOT / "reports" / "collectors_paused_v2.json").read_text("utf-8")) or {}
         raw = raw.get("paused", {}) if "paused" in raw else {}   # old format: ignored (it was too eager)
         data = {str(k): float(v) for k, v in raw.items() if float(v) > now}
     except Exception:
@@ -1399,11 +1399,11 @@ def _paused_collectors() -> dict:
 def _pause_collectors(codes: list[str], tag: str = "") -> None:
     """2026-11-06 (Ale): a Main that refuses our request while other Mains accept it (full friend list or
     friend soft-ban) gets a strike; 3 strikes within 30 min = skipped for 30 min. Shared by every inject.py
-    on this PC (reports/collectors_paused.json: {"paused": {code: until}, "fails": {code: [ts, ...]}})."""
+    on this PC (reports/collectors_paused_v2.json: {"paused": {code: until}, "fails": {code: [ts, ...]}})."""
     codes = [str(c or "").replace("-", "").strip() for c in codes if c]
     if not codes or not PAUSE_COLLECTORS:
         return
-    path = PROJECT_ROOT / "reports" / "collectors_paused.json"
+    path = PROJECT_ROOT / "reports" / "collectors_paused_v2.json"   # v2: old file had false pauses
     now = time.time()
     nuevos = []
     with _paused_lock:
@@ -1714,12 +1714,18 @@ def send_friend_requests(sess, target_pids: list[str], tag: str = "") -> bool:
         return True
 
     _fr_state.proxy_blocked = False
+    # 2026-11-07 (Arcade: 15 of 19 Mains paused): Mains of the batches that DID go through before a batch
+    # failed. The caller retries Main by Main only the others; re-sending to these got "already sent",
+    # which was counted as a refusal and paused healthy Mains.
+    _fr_state.sent_ok = []
     helper = getattr(sess, "send_friend_requests", None)
     if callable(helper):
         import time
         batch_size = 2
         for i in range(0, len(target_pids), batch_size):
             batch = target_pids[i:i + batch_size]
+            if i:
+                _fr_state.sent_ok.extend(target_pids[i - batch_size:i])
             try:
                 r = helper(list(batch))
                 if isinstance(r, dict) and not r.get("success", True):
@@ -3016,8 +3022,9 @@ def inject_one(
                     # Se reintenta de a uno: la cuenta sigue con los que aceptaron, y los que rechazan
                     # mientras otros aceptan quedan en reports/collectors_full.jsonl (anti doble reroll:
                     # un main lleno con muy pocas cuentas nuestras = acepta solicitudes de otro grupo).
-                    ok_pids, full_pids = [], []
-                    for pid in target_pids:
+                    ok_pids = list(getattr(_fr_state, "sent_ok", []) or [])
+                    full_pids = []
+                    for pid in [p for p in target_pids if p not in ok_pids]:
                         (ok_pids if send_friend_requests(sess, [pid], tag) else full_pids).append(pid)
                     if ok_pids:
                         if full_pids:
@@ -3527,6 +3534,7 @@ def _community_ppm_cap():
 
 
 SPACING_V1 = True
+FR_RETRY_ONLY_UNSENT_V1 = True
 
 
 def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "") -> None:
