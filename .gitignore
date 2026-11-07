@@ -88,3 +88,12 @@ MonitorPokemonPanel.exe
 # lo copia igual al paquete distribuido (dist/bin), asi el tunel funciona
 # para todos, no solo en esta PC.
 bin/
+
+# MonitorLink.exe (se regenera con scripts/build-monitor-link.js)
+dist-link/
+
+# Clave de host (secretos cifrados de Zenith Bot) - nunca al repo
+host-key.txt
+
+# Paquete de host para wr98 (se regenera con git archive)
+dist-host/
