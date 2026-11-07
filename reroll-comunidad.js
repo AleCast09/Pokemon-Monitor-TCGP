@@ -39,6 +39,7 @@ function iniciar(d) {
     if (!deps.fastTransfer.rutaMotor()) return;
     instalarPanel(deps.fastTransfer.rutaMotor());
     agregarSobresExtra(deps.fastTransfer.rutaMotor());
+    aplicarAjustesRecomendados(deps.fastTransfer.rutaMotor());
     borrarTemporalesViejas();
     setInterval(borrarTemporalesViejas, 60 * 60 * 1000);
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
@@ -433,6 +434,26 @@ function agregarSobresExtra(motor) {
         fs.writeFileSync(ruta, texto);
         log(`pack_catalog.py: added ${faltan.length} pack(s) (Special Pack: First Partners)`);
     } catch (e) { /* sin catalogo en este motor */ }
+}
+
+// Ajustes recomendados del God Pack UI (2026-11-07, Naja: mismo motor en su server, sin soft bans): tope de 35
+// sobres/min por Main, 20 s de espera para que acepten, 2 s entre cuentas y 1 s entre sobres (el servidor abre
+// los dos sobres igual y no da el segundo si el primero es God Pack). Se aplican UNA vez por host (despues cada
+// uno puede cambiarlos); el panel los toma al abrirse. El tope de la comunidad (ppm_cap.json) sigue mandando.
+const AJUSTES_RECOMENDADOS = { packs_per_min: 35, wait_accept: 20, account_delay: 2, pack_delay: 1 };
+function aplicarAjustesRecomendados(motor) {
+    try {
+        const marca = path.join(motor, 'reports', 'ajustes_recomendados_v1.done');
+        if (fs.existsSync(marca)) return;
+        const ruta = path.join(motor, 'tools', 'god_pack_gui', 'settings.json');
+        const s = JSON.parse(fs.readFileSync(ruta, 'utf8'));
+        fs.copyFileSync(ruta, `${ruta}.bak-ajustes`);
+        Object.assign(s, AJUSTES_RECOMENDADOS);
+        fs.writeFileSync(ruta, JSON.stringify(s, null, 2));
+        fs.mkdirSync(path.dirname(marca), { recursive: true });
+        fs.writeFileSync(marca, new Date().toISOString());
+        log('God Pack UI settings set to the recommended ones (35 packs/min, 20 s accept wait, 2 s between accounts, 1 s between packs) - reopen the God Pack UI to load them');
+    } catch (e) { /* sin panel en este motor */ }
 }
 
 function productoDeSobre(motor, packId) {
