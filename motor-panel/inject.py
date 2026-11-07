@@ -3526,6 +3526,9 @@ def _community_ppm_cap():
     return cap
 
 
+SPACING_V1 = True
+
+
 def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "") -> None:
     """Block until `n_packs` reservations fit in the last-60s window for
     EVERY collector pid in `target_pids`, then reserve `n_packs` on each.
@@ -3561,6 +3564,16 @@ def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "")
                 ]
             # Check EVERY pid — batch reserve only fires if all fit.
             max_wait = 0.0
+            # 2026-11-07 (Ale/Arcade): spread the accounts evenly over the minute instead of releasing
+            # several in the same second when the 60 s window frees up (bursts on every Main). Each account
+            # waits n_packs * 60 / cap seconds after the previous one (cap 10, 2 packs -> one every 12 s).
+            gap = SPACING_V1 and (60.0 * n_packs / max(cap, 1))
+            for pid in pids:
+                if per_pid[pid] and gap:
+                    wait_gap = max(per_pid[pid]) + gap - now
+                    if wait_gap > max_wait:
+                        max_wait = wait_gap
+                        busiest_pid = pid
             for pid in pids:
                 used = len(per_pid[pid])
                 if used + n_packs > cap:
@@ -3584,9 +3597,8 @@ def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "")
                 return
         # Wait outside the lock (short slices so Stop is responsive).
         if not logged_wait:
-            log(f"[pack-budget] collector {busiest_pid[:8]}… at cap "
-                f"({len(per_pid[busiest_pid])}/{cap} in last 60s); "
-                f"holding FR-send ~{max_wait:.1f}s", tag=tag)
+            log(f"[pack-budget] pacing: friend requests in ~{max_wait:.1f}s "
+                f"(max {cap} packs/min, one account every ~{60.0 * n_packs / max(cap, 1):.0f}s)", tag=tag)
             logged_wait = True
         time.sleep(min(max_wait + 0.1, 2.0))
 
