@@ -15,8 +15,10 @@ Ale usa **dos cuentas de Claude** en esta misma PC (la de siempre y una nueva, C
 | Proyecto | Carpeta | Chat en la app (Code) | Estado |
 |---|---|---|---|
 | Bot Pokémon (Monitor Pokemon) | `C:\Users\Ale TCG\Documents\Monitor Pokemon` | "Headless BOT" | En producción; ver `CLAUDE.md` |
-| GD Art Agent (Geometry Dash) | `C:\Users\Ale TCG\Documents\gd-art-agent` | "Geometry dash AI" | Mod Geode + servidor 127.0.0.1:3939; detalles en la memoria `project_gd_art_agent.md` |
-| Mundo de Roblox | (anotar la carpeta aquí) | "Roblox mundo" | El chat "Roblox mundo" debe completar esta fila y su entrada abajo |
+| GD Art Agent (Geometry Dash) | `C:\Users\Ale TCG\Documents\gd-art-agent` | "Geometry dash AI" | Su propio `CLAUDE.md` + `docs\AVANCES.md` en esa carpeta |
+| Mundo de Roblox (G1113) | `C:\Users\Ale TCG\Documents\G1113` | "Roblox mundo" | Su propio `CLAUDE.md` + `AVANCES.md` + `RESUMEN_G1113.md` en esa carpeta |
+
+Cada proyecto tiene **su propio cuaderno de avances** en su carpeta; este de aquí es el del bot.
 
 Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TCG\.claude-cuenta2\projects\...`, se abren con `/resume` en la terminal). La memoria de la cuenta vieja se copió a la nueva el 2026-11-08 (41 archivos); desde ahí cada una sigue por su lado, por eso lo nuevo se anota **aquí**.
 
