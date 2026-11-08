@@ -13,6 +13,7 @@ Este archivo resume lo que hace falta saber para trabajar acá con cualquier cue
 - **Nunca** pegar en Discord ni en chats tokens, webhooks, claves de proxies ni contraseñas. No leer archivos `.pem` ni de credenciales.
 - Las cuentas (XML) de los miembros **nunca se guardan en un host** y su JSON nunca sale de su PC.
 - Hay más memoria local en `C:\Users\Ale TCG\.claude\projects\C--Users-Ale-TCG-Documents-Monitor-Pokemon\memory\` (solo en esta PC).
+- **Cómo funciona por dentro** (turno, Monitor Link, GP farm, PPM, solicitudes, limpieza, motor, publicar): leer `docs/COMO-FUNCIONA.md` antes de tocar esas partes.
 
 ## Procesos (PM2, en la PC de Ale)
 
@@ -42,17 +43,28 @@ Carpeta en la PC de Ale: `C:\Users\Ale TCG\Desktop\ptcgp-capturedeluxe`. Habla d
 ## Comunidad Zenith Rise
 
 **Hosts** (nombre del host / bot de Discord):
-- Ale → `DESKTOP-SLADB1P` / Pokedex! (corre desde este repo, no se autoactualiza)
-- wr98 → `ZenithBot` / TradeBot (Windows). wr98 también maneja **LatiasBot** (telemetría/PPM de Zenith).
-- Arcade → `ArcaMac` / GengarBot (Mac M2, carpeta `/Users/arcade/Documents/PokemonBot/`)
+- Ale → `DESKTOP-SLADB1P` / Pokedex! (corre desde este repo, no se autoactualiza). Su Monitor Link es `C:\POKEMON\PTCGPB-ALE\Monitor Link.ahk`, vinculado a Discord **alecast_09** (Ale Cast).
+- wr98 → `ZenithBot` / TradeBot (Windows). wr98 también maneja **LatiasBot** (telemetría/PPM de Zenith) y **Dragonite** (registro de Mains, Upstash `users:<grupo>`).
+- Arcade → `ArcaWindows` / GengarBot (Windows desde 2026-11-07; la Mac `ArcaMac` se desinstaló: daba demasiados problemas).
 
 Un host tiene el **turno** (atiende los comandos y los Monitor Link); los demás quedan en espera. Los comandos exigen el rol **Monitor**, que da el bot del turno al vincular: el rol de ese bot debe estar **por encima** de "Monitor" en Discord.
+- El turno es la clave `zenith:host` en Upstash (candado de 90 s que renueva el dueño). Pasarlo a mano: `SET zenith:host <nombre> PX 90000`.
+- **Vigilante del enlace** (bot.js): cada host prueba su dirección pública de Monitor Link cada 2 min y reinicia cloudflared si no responde; un host en espera toma el turno si la del turno no responde ~6 min (avisa en 🔒-hosts).
+- El turno **no tiene que ver con el reroll**: un host puede tener el turno sin farmear.
 
-**GP farm** (abrir sobres de las cuentas que los miembros prestan por Monitor Link):
-- Al prender la PC el host queda **Offline**. Se prende solo con **Start** en el God Pack UI con la casilla *"Also open the community's lent accounts"*: abre las cuentas propias (XML dir) **y** las prestadas. **Stop** o cerrar el panel lo apaga. **Nunca hacer que farmee solo.**
-- Las prestadas se reparten entre los hosts que están en Start. Cada cuenta va en **un solo lugar**: en el XML dir (propia) **o** compartida en Monitor Link.
-- Cada vuelta: cada 10 min, hasta 20 cuentas por miembro, 5 collectors online por cuenta (rotando), y el PPM se manda al "PPM webhook" del panel (con Stop: Offline y 0 PPM).
-- Detecta mains con la lista de amigos llena y avisa en 🔒-hosts como posible **doble reroll** (por ahora solo aviso).
+**GP farm** (abrir sobres de cuentas prestadas por Monitor Link + las propias del host):
+- Al prender la PC el host queda **Offline**. Se prende solo con **Start** en el God Pack UI con *Community farm*. **Stop** o cerrar el panel lo apaga. **Nunca hacer que farmee solo.**
+- **Run Mode**: *God Pack* abre solo cuentas **elegibles**; *Open Packs Only* abre solo las **bloqueadas** (no manda solicitudes y no reporta PPM). Primero las propias del host, después las prestadas; el panel vuelve a revisar las propias cada 15 min.
+- **Elegible** (regla de Ale, en Monitor Link `SobresFaltanGP` y en `inject.py` `_gp_packs_missing`): 96+ sobres en total y 96 sobres desde la última pausa de 30+ días. Monitor Link 1.9.19 deja compartir también cuentas con menos de 96 (van a Only Pack hasta llegar).
+- Las prestadas se reparten entre los hosts del mismo modo. Cada cuenta va en **un solo lugar**: XML dir (propia) **o** compartida. Las XML prestadas se piden al Monitor Link del dueño al momento y se borran (mientras una tanda abre, ya se piden las del siguiente miembro).
+- **Velocidad (para no dar soft-ban de amigos a los Mains)**: tope total **40 PPM** entre todos los hosts en God Pack (`PPM_COMUNIDAD` en `reroll-comunidad.js` → `reports/ppm_cap.json`, se reparte entre los hosts en Start); las cuentas mandan solicitudes **espaciadas** (no en ráfagas); una cuenta que falla devuelve su lugar.
+- **Solicitudes de amistad**: cada cuenta las manda a **todos** los Mains en línea (lista del worker `onlineids.zenithrise.workers.dev`). **No se pausan Mains** (dio falsos positivos); los que rechazaron hace poco reciben al final y de a uno. Si el proxy se bloquea ("blocked by the proxy (web page)"), se corta para esa cuenta.
+- **Limpieza**: cada cuenta queda anotada en `reports/fr_pending/` antes de mandar solicitudes; si el motor se corta, la siguiente corrida borra esas amistades (las prestadas pidiendo la XML otra vez). Así las listas de los Mains no llegan a 99.
+- Avisos de God Pack: el motor los manda al webhook de la comunidad (KyuremBot crea el post). Necesita Pillow (el motor lo instala solo si falta).
+
+**Monitor Link** (versión actual ahk-1.9.19): cartas, proxies, cuentas para reroll, amigos (ID de Discord + ID del juego), **"My Main ID"** (destino de Share/Trade; todavía no se escribe en Dragonite: esperando formato/permiso de wr98), baneadas.
+
+**Fast Farm / Shinedust / Fast Share-Trade**: corren en el host del turno; si el juego bloquea su IP, reintentan por 1-2 proxies del host (`scripts/respaldo_proxy.py`; Share/Trade solo reintenta el login).
 
 ## Publicar a los hosts
 
@@ -66,10 +78,16 @@ git stash pop -q
 ```
 
 Los hosts se actualizan solos en ~2 min. El bot de Ale no se actualiza solo: hay que reiniciarlo (ver arriba).
+- Un cambio en `motor-panel/inject.py` llega a los hosts solo si se cambia también la marca obligatoria (`'..._V1'`, último argumento de `instalarArchivoMotor` para inject.py en `reroll-comunidad.js`) por una que exista en el inject nuevo.
+- Después de publicar, cada host debe **cerrar y abrir** (o Stop/Start) el God Pack UI para usar el motor nuevo.
+- El clasificador de seguridad a veces bloquea `publicar-host.js` aunque Ale haya dicho que sí: pedirle el OK otra vez en el chat.
 
 ## Pendientes conocidos
 
 - `inject.py` de wr98 tiene cambios propios: armarle una versión con sus cambios + los arreglos de `motor-panel/inject.py`.
-- Sobre especial **First Partners (SP1)**: el motor no tiene la llamada nueva del juego; esperar a Lean.
+- Sobre especial **First Partners (SP1)**: agregado 2026-11-07 con el protocolo que pasó **Naja** (`SpecialPack/GetUnpackRightV1` + `SpecialPack/PurchaseV1`, product_id `SP1_001`, 1 gratis por semana, se renueva sábados 01:00 UTC). Probado solo con sesión simulada: falta abrir uno real y publicar a los hosts.
+- "My Main ID" de Monitor Link → escribir en Dragonite (`users:<grupo>`, mismo formato que el bot de wr98: name, heartbeatName, aliases, main_id, sec_id; grupo por rol de Discord).
+- Reordenar la ventana de Monitor Link (agrupar por tema, puede ser más ancha).
+- Ideas de Arcade para el God Pack UI: elegir varios sobres a la vez, el "&" de los títulos, ancho del panel, ocultar la ventana negra del log, separar el log.
 - Revisar la automatización de MuMu (el juego cambió imágenes) y el **REPETIR** de Gold Trade en `automation/_DonorOfferCard.ahk`.
 - El bot público (versión para todos) todavía no tiene el arreglo de tipos de Dual Fusion.
