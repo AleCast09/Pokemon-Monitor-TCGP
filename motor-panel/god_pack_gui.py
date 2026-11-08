@@ -1505,20 +1505,25 @@ class GodPackGui(QMainWindow):
             pass
         cmd = cmd + ["--stop-file", str(self._stop_f)]
 
-        self.log_view.clear()
-        self._stdout_raw_pending.clear()
-        self._stdout_line_tail = ""
-        self._live_tail = ""
-        self._last_pack_line.clear()
-        self._pending_hit_header.clear()
-        self._live = {"accounts": 0, "packs": 0, "matches": 0, "errors": 0, "t0": time.time()}
+        # 2026-11-08 (Arcade): the 15-min re-check of own accounts must not wipe the session stats
+        # (time, packs opened) nor the log on screen; only a real Start does.
+        rescan = bool(getattr(self, "_rescan_propias", False))
+        if not rescan:
+            self.log_view.clear()
+            self._stdout_raw_pending.clear()
+            self._stdout_line_tail = ""
+            self._live_tail = ""
+            self._last_pack_line.clear()
+            self._pending_hit_header.clear()
+            self._live = {"accounts": 0, "packs": 0, "matches": 0, "errors": 0, "t0": time.time()}
+            self._log_pending = []
         self._own_total = 0; self._own_done = 0; self._own_opened = 0
         self._update_live_label(running=True)
-        self._log_pending = []
         self._append_log(f"[gui] launching: {' '.join(cmd)}\n")
         self._append_log(f"[gui] raw log: {log_path}\n")
 
-        self._spawn_powershell_tail(log_path)
+        if not rescan:   # the re-check doesn't pop the external log window again every 15 min
+            self._spawn_powershell_tail(log_path)
 
         self.proc = QProcess(self)
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
