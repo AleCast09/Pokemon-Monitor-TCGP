@@ -793,10 +793,13 @@ async function escribirVersion() {
 let esperarPropias = false;   // las propias del host siguen abriendose: se reintenta en 1 min
 async function ciclo() {
     if (corriendo || !deps) return;
+    // (2026-11-08) El candado se toma ANTES de cualquier await: antes se tomaba despues de leer la parte del
+    // host, y dos llamadas casi juntas (el temporizador + el reinicio de 30 s) pasaban las dos y abrian la
+    // MISMA tanda del mismo miembro dos veces a la vez (la segunda: ABORTED / sin sobres).
+    corriendo = true;
     const motor = deps.fastTransfer.rutaMotor();
     const parte = await deps.parte(modoPanel(motor)).catch(() => null);
-    if (!motor) return;
-    corriendo = true;
+    if (!motor) { corriendo = false; return; }
     let trabajo = false;
     let pendiente = null;   // tanda siguiente ya preparada (sus XML en una carpeta temporal)   // si abrio alguna tanda: la siguiente arranca enseguida
     try {
