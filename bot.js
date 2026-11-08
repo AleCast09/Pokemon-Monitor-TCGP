@@ -949,7 +949,9 @@ async function construirPanelFarmTickets(discordId, userId = null) {
     // ya sale en el menu de arriba, asi que no lleva atajo aparte.
     if (comunidad.esComunidad(discordId)) {
         filaBotonesFarm.addComponents(
-            new ButtonBuilder().setCustomId('farm_regalo').setLabel('🎁 Gift to a member').setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('farm_regalo').setLabel('🎁 Gift to a member').setStyle(ButtonStyle.Primary),
+            // (Ale 2026-11-07) Cualquier perfil, pegando su ID de 16 digitos (aunque no este en el registro).
+            new ButtonBuilder().setCustomId('farm_pegar_id').setLabel('📋 Paste an ID').setStyle(ButtonStyle.Primary)
         );
     }
     filaBotonesFarm.addComponents(
@@ -12771,6 +12773,23 @@ async function manejarInteraccionPrincipal(interaction) {
             new ButtonBuilder().setCustomId('farm_regalo').setLabel('🔙 Groups').setStyle(ButtonStyle.Secondary)
         ));
         return await interaction.editReply({ content: '', embeds: [embed], components: filas });
+    }
+    // 📋 Paste an ID (Ale 2026-11-07): el mismo panel de Fast Farm para cualquier ID de 16 digitos.
+    if (interaction.isButton() && interaction.customId === 'farm_pegar_id') {
+        const modal = new ModalBuilder().setCustomId('farm_pegar_id_modal').setTitle('Farm tickets for an ID');
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('friend_id')
+            .setLabel('Friend ID (16 digits)').setPlaceholder('1234-5678-9012-3456').setStyle(TextInputStyle.Short)
+            .setMinLength(16).setMaxLength(19).setRequired(true)));
+        return await interaction.showModal(modal);
+    }
+    if (interaction.isModalSubmit() && interaction.customId === 'farm_pegar_id_modal') {
+        const friendId = interaction.fields.getTextInputValue('friend_id').replace(/\D/g, '');
+        if (friendId.length !== 16) {
+            return await interaction.reply({ content: '❌ The friend ID has 16 digits (e.g. 1234-5678-9012-3456).', ephemeral: true });
+        }
+        await interaction.deferUpdate();
+        const nombre = await comunidad.nombreDeFriendId(friendId).catch(() => null);
+        return await mostrarPerfilFarm(interaction, friendId, nombre ? `🎁 ${nombre}` : `📋 ${formatearFriendId(friendId)}`);
     }
     if (interaction.isStringSelectMenu() && interaction.customId === 'farm_regalo_miembro') {
         await interaction.deferUpdate();
