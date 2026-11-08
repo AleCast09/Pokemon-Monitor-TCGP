@@ -3081,6 +3081,7 @@ def inject_one(
                     log(f"[fr] Mains that refused recently, tried last: {len(_extra)} of {len(_sospechosos)} accepted now",
                         tag=tag)
                 if not fr_ok:
+                    _refund_pack_budget(tag)   # nothing opens for this account: free its slot
                     target_pids = _todos   # withdraw from every Main, whatever landed
                     result["error"] = "friend_request_failed"
                     # Some FRs may have landed (pending OR accepted) before the
@@ -3632,6 +3633,30 @@ def _mark_suspects(codes: list, refused: bool = True) -> None:
         _suspect_cache["ts"] = 0.0
 
 
+
+PACK_BUDGET_REFUND_V1 = True
+
+
+def _refund_pack_budget(tag: str = "") -> None:
+    """2026-11-07 (wr98: 0.8 PPM, budget "20/20" full of accounts whose friend requests the proxy blocked):
+    an account that books its packs/min slot but then fails to send its friend requests opens nothing, so
+    the slot is given back at once for the next account instead of staying taken for a minute."""
+    res = getattr(_fr_state, "reserved", None)
+    _fr_state.reserved = None
+    if not res or _pack_budget_max_per_min <= 0 and _community_ppm_cap() is None:
+        return
+    ts, n, pids = res
+    try:
+        with _pack_budget_locked() as state:
+            per_pid = state.get("per_pid", {})
+            for pid in pids:
+                lst = per_pid.get(pid, [])
+                for _ in range(n):
+                    if ts in lst:
+                        lst.remove(ts)
+    except Exception:
+        pass
+
 SPACING_V1 = True
 FR_RETRY_ONLY_UNSENT_V1 = True
 MAIN_BLAME_V1 = True
@@ -3699,6 +3724,7 @@ def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "")
                 # All targets have room — reserve on each.
                 for pid in pids:
                     per_pid[pid].extend([now] * n_packs)
+                _fr_state.reserved = (now, int(n_packs), list(pids))
                 if logged_wait:
                     log(f"[pack-budget] slot opened; sending FR "
                         f"({len(per_pid[busiest_pid])}/{cap} "
