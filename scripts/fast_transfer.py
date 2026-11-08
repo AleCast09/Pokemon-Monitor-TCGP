@@ -187,6 +187,7 @@ def main():
     p.add_argument("--target", required=True)
     p.add_argument("--mode", choices=["share", "trade"], required=True)
     p.add_argument("--proxy-file", default="")
+    p.add_argument("--backup-proxy-file", default="", help="proxies del host: respaldo si el juego bloquea la IP al entrar")
     p.add_argument("--stop-file", default="")
     a = p.parse_args()
     ESTADO["stop_file"] = a.stop_file
@@ -266,14 +267,25 @@ def main():
         emitir("cancel", "ok", "nothing to undo")
         return 2
     emitir("login", "start")
-    try:
-        sess = at.login_bot(cuenta, clave)
-    except Cancelado:
-        emitir("cancel", "ok", "nothing to undo")
-        return 2
-    except Exception as e:
-        emitir("login", "error", error_legible(e))
-        return 1
+    # (Ale 2026-11-07) Si el juego bloquea la IP del host AL ENTRAR, se reintenta el login por 1-2 proxies
+    # del host. Solo el login: todavia no se mando ninguna carta, asi que nunca se repite un trade.
+    import respaldo_proxy as rp
+    plan = rp.intentos(rp.cargar(a.backup_proxy_file))
+    sess = None
+    for n_intento, proxy in enumerate(plan):
+        try:
+            if proxy:
+                print("[proxy] IP blocked - logging in through a proxy", flush=True)
+            sess = at.login_bot(cuenta, clave, proxy_url=proxy, max_retries=1 if proxy else 3)
+            break
+        except Cancelado:
+            emitir("cancel", "ok", "nothing to undo")
+            return 2
+        except Exception as e:
+            if rp.ip_bloqueada(e) and n_intento < len(plan) - 1:
+                continue
+            emitir("login", "error", error_legible(e))
+            return 1
     emitir("login", "ok", getattr(sess, "nickname", "") or "")
     usar_idioma_de_la_cuenta(at, sess)
 

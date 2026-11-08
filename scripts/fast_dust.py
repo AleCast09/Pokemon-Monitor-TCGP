@@ -152,7 +152,10 @@ def main():
     p.add_argument("--with-cards", action="store_true")
     p.add_argument("--with-gifts", action="store_true")
     p.add_argument("--claim", action="store_true")
+    p.add_argument("--proxy-file", default="", help="proxies del host: respaldo si el juego bloquea la IP")
     a = p.parse_args()
+    import respaldo_proxy as rp
+    proxies = rp.cargar(a.proxy_file)
 
     cuentas = json.load(open(a.accounts_file, encoding="utf-8"))
 
@@ -170,7 +173,17 @@ def main():
         sess = None
         try:
             usuario, clave = leer_credenciales(c["xml"])
-            sess = at.login_bot(usuario, clave)
+            # (Ale 2026-11-07) Si el juego bloquea la IP del host, se entra por 1-2 proxies (solo lectura).
+            plan = rp.intentos(proxies)
+            for n_intento, proxy in enumerate(plan):
+                try:
+                    if proxy:
+                        print(f"[proxy] IP blocked - retrying {c['key']} through a proxy", flush=True)
+                    sess = at.login_bot(usuario, clave, proxy_url=proxy, max_retries=1 if proxy else 3)
+                    break
+                except Exception as e_login:
+                    if not rp.ip_bloqueada(e_login) or n_intento == len(plan) - 1:
+                        raise
             cobrado = cobrar(sess) if a.claim else None
             inv = leer_inventario(sess)
             cartas = None

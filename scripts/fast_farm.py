@@ -57,7 +57,10 @@ def main():
     p.add_argument("--target", required=True)
     p.add_argument("--account", action="append", default=[], help="nombre|ruta_xml")
     p.add_argument("--stop-file", default="")
+    p.add_argument("--proxy-file", default="", help="proxies del host: respaldo si el juego bloquea la IP")
     a = p.parse_args()
+    import respaldo_proxy as rp
+    proxies = rp.cargar(a.proxy_file)
 
     os.chdir(a.engine_dir)
     sys.path.insert(0, a.engine_dir)
@@ -75,28 +78,40 @@ def main():
             break
         nombre, _, ruta = entrada.partition("|")
         emitir(account=nombre, state="start")
-        sess = None
-        try:
-            cuenta, clave = leer_credenciales(ruta)
-            sess = at.login_bot(cuenta, clave)
-            if not pid_objetivo:
-                pid_objetivo = at.resolve_player_id(sess, codigo)
-            ok, err = likes.send_like(sess, pid_objetivo, friend_code=codigo, tag=nombre,
-                                      log_fn=lambda m: print(m, flush=True))
-            if ok:
-                dieron_like.append(nombre)
-                emitir(account=nombre, state="ok")
-            else:
+        # (Ale 2026-11-07) Si el juego bloquea la IP del host, se reintenta la cuenta por 1-2 proxies.
+        plan = rp.intentos(proxies)
+        for n_intento, proxy in enumerate(plan):
+            ultimo = n_intento == len(plan) - 1
+            if proxy:
+                print(f"[proxy] IP blocked - retrying {nombre} through a proxy", flush=True)
+            sess = None
+            try:
+                cuenta, clave = leer_credenciales(ruta)
+                sess = at.login_bot(cuenta, clave, proxy_url=proxy, max_retries=1 if proxy else 3)
+                if not pid_objetivo:
+                    pid_objetivo = at.resolve_player_id(sess, codigo)
+                ok, err = likes.send_like(sess, pid_objetivo, friend_code=codigo, tag=nombre,
+                                          log_fn=lambda m: print(m, flush=True))
+                if ok:
+                    dieron_like.append(nombre)
+                    emitir(account=nombre, state="ok")
+                    break
+                if rp.ip_bloqueada(err) and not ultimo:
+                    continue
                 emitir(account=nombre, state="error", msg=error_legible(err),
                        rejected=likes.is_server_rejection(err))
-        except Exception as e:
-            emitir(account=nombre, state="error", msg=error_legible(e))
-        finally:
-            try:
-                if sess is not None and hasattr(sess, "close"):
-                    sess.close()
-            except Exception:
-                pass
+                break
+            except Exception as e:
+                if rp.ip_bloqueada(e) and not ultimo:
+                    continue
+                emitir(account=nombre, state="error", msg=error_legible(e))
+                break
+            finally:
+                try:
+                    if sess is not None and hasattr(sess, "close"):
+                        sess.close()
+                except Exception:
+                    pass
 
     print("@@FF_RESULT " + json.dumps({"liked": dieron_like}, ensure_ascii=False), flush=True)
     return 0 if dieron_like else 1

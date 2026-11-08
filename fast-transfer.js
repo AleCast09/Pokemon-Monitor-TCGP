@@ -298,6 +298,7 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
 
         const args = ['--engine-dir', rutaMotor(), '--xml', rutaXml, '--card-id', cartaId, '--target', friendId, '--mode', fast, '--stop-file', stopFile];
         if (process.env.FAST_TRANSFER_PROXY_FILE) args.push('--proxy-file', process.env.FAST_TRANSFER_PROXY_FILE);
+        if (proxiesDelHost()) args.push('--backup-proxy-file', proxiesDelHost());   // solo si el juego bloquea la IP al entrar
 
         // Las ediciones se encadenan para no pisarse (Discord limita la frecuencia).
         let ultimaEdicion = Promise.resolve();
@@ -428,10 +429,23 @@ function filaBotonFarm(guildId, friendId) {
     );
 }
 
+
+// Lista de proxies del host (la del GP farm): respaldo de Fast Farm / Shinedust / Fast Share-Trade cuando el
+// juego bloquea un rato la IP del host del turno (Ale 2026-11-07, Isaac: "IP temporarily blocked").
+function proxiesDelHost() {
+    const motor = rutaMotor();
+    if (!motor) return '';
+    const llena = (r) => { try { return fs.readFileSync(r, 'utf8').trim() ? r : ''; } catch (e) { return ''; } };
+    let delPanel = '';
+    try { delPanel = JSON.parse(fs.readFileSync(path.join(motor, 'tools', 'god_pack_gui', 'settings.json'), 'utf8')).proxy_file || ''; } catch (e) { /* sin panel */ }
+    return llena(path.join(motor, 'proxies_reroll.txt')) || llena(delPanel) || llena(path.join(motor, 'proxies_comunidad.txt')) || llena(path.join(motor, 'proxies.txt'));
+}
+
 function correrFarm(runId, args, alEvento) {
     return new Promise(resolve => {
         const python = pythonMotor();
-        const hijo = spawn(python, ['-X', 'utf8', RUTA_SCRIPT_FARM, ...args], {
+        const respaldo = proxiesDelHost();
+        const hijo = spawn(python, ['-X', 'utf8', RUTA_SCRIPT_FARM, ...args, ...(respaldo ? ['--proxy-file', respaldo] : [])], {
             cwd: rutaMotor(), windowsHide: true,
             env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8' }
         });
@@ -745,7 +759,7 @@ function correrDust(runId, cuentas, alEvento, cobrar = false) {
         const corrida = corridas.get(runId);
         const hijo = spawn(python, ['-X', 'utf8', RUTA_SCRIPT_DUST, '--engine-dir', rutaMotor(),
             '--accounts-file', archivoCuentas, '--delay', String(DUST_DELAY_S), '--stop-file', corrida.stopFile, '--with-cards', '--with-gifts',
-            ...(cobrar ? ['--claim'] : [])], {
+            ...(cobrar ? ['--claim'] : []), ...(proxiesDelHost() ? ['--proxy-file', proxiesDelHost()] : [])], {
             cwd: rutaMotor(), windowsHide: true,
             env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8' }
         });
@@ -1272,6 +1286,7 @@ async function ejecutarBulk(interaction, { fileName, cartas, friendId, miembro, 
         if (!(await puertoAbierto(PUERTO_TUNEL)) && !(await asegurarTunel())) { final = `${icono('error', mapa)} Could not start the tunnel (port 9090)`; return; }
         const args = ['--engine-dir', rutaMotor(), '--xml', rutaXml, '--card-ids', cartas.join(','), '--target', friendId, '--mode', 'trade', '--stop-file', stopFile];
         if (process.env.FAST_TRANSFER_PROXY_FILE) args.push('--proxy-file', process.env.FAST_TRANSFER_PROXY_FILE);
+        if (proxiesDelHost()) args.push('--backup-proxy-file', proxiesDelHost());   // solo si el juego bloquea la IP al entrar
         let edicion = Promise.resolve();
         const { resultado } = await correrMotor(runId, args, ev => {
             if (ev.step === 'card') {
