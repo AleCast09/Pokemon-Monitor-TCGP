@@ -14,6 +14,7 @@ Este archivo resume lo que hace falta saber para trabajar acá con cualquier cue
 - Las cuentas (XML) de los miembros **nunca se guardan en un host** y su JSON nunca sale de su PC.
 - Hay más memoria local en `C:\Users\Ale TCG\.claude\projects\C--Users-Ale-TCG-Documents-Monitor-Pokemon\memory\` (solo en esta PC).
 - **Cómo funciona por dentro** (turno, Monitor Link, GP farm, PPM, solicitudes, limpieza, motor, publicar): leer `docs/COMO-FUNCIONA.md` antes de tocar esas partes.
+- **Ale usa dos cuentas de Claude** que no comparten la conversación. **Al empezar, leer `docs/AVANCES.md`**; al terminar algo (o antes de quedarse sin uso), **anotar ahí** qué se hizo y en qué quedó (lo más nuevo arriba). Ahí también están los otros proyectos (Geometry Dash, Roblox).
 
 ## Procesos (PM2, en la PC de Ale)
 
