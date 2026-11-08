@@ -4935,7 +4935,9 @@ function leerIniInject(rutaIni = RUTA_INJECT_INI_DEFAULT) {
 // Sin Main registrada (ni en Monitor Link ni en el panel de wr98): donde registrarla (Ale 2026-11-07).
 const MSG_SIN_MAIN = '❌ You haven\'t registered your Main yet. Open **Monitor Link**, press **My Main ID**, type your Main\'s friend ID (16 digits) and save — then try again.';
 
-async function destinosComunidad(userId) {
+// (Ale 2026-11-08) Share/Trade/Farm Tickets: cada uno ve SOLO sus propios IDs (el dueño no ve los de sus
+// amigos y el amigo no ve los del dueño). conAmigos = true (Friend Trade): se suman los de la otra parte.
+async function destinosComunidad(userId, conAmigos = false) {
     const nombre = async (id) => { const u = await client.users.fetch(String(id)).catch(() => null); return u?.globalName || u?.username || 'Friend'; };
     const dueno = monitorLink.duenoDe(userId);
     // Dueño (pedido de Ale): sus IDs y, despues, los de los amigos que anoto en Monitor Link.
@@ -4946,7 +4948,7 @@ async function destinosComunidad(userId) {
     if (!dueno) {
         const propios = [...deMonitorLink, ...await comunidad.destinosDe(userId).catch(() => [])];
         const deAmigos = [];
-        for (const a of monitorLink.amigosDe(userId).filter(a => a.juego)) deAmigos.push({ id: a.juego, label: `${await nombre(a.discordId)} — Main` });
+        if (conAmigos) for (const a of monitorLink.amigosDe(userId).filter(a => a.juego)) deAmigos.push({ id: a.juego, label: `${await nombre(a.discordId)} — Main` });
         const vistos = new Set();
         return [...propios, ...deAmigos].filter(d => d.id && !vistos.has(String(d.id)) && vistos.add(String(d.id)));
     }
@@ -4954,7 +4956,7 @@ async function destinosComunidad(userId) {
     const juego = monitorLink.juegoDeAmigo(userId);
     if (juego) salida.push({ id: juego, label: `${await nombre(userId)} — Main` });
     salida.push(...await comunidad.destinosDe(userId).catch(() => []));
-    salida.push(...await comunidad.destinosDe(dueno).catch(() => []));
+    if (conAmigos) salida.push(...await comunidad.destinosDe(dueno).catch(() => []));
     const vistos = new Set();
     return salida.filter(d => d.id && !vistos.has(String(d.id)) && vistos.add(String(d.id)));
 }
@@ -4962,10 +4964,10 @@ async function destinosComunidad(userId) {
 // Destinos para Share/Trade. En el server de comunidad (community.js) NO se usa la lista de
 // amigos guardados de esta PC: solo la Main/secundaria que ESE miembro registro en el panel de
 // wr98. Si no esta registrado (o la clave del registro vencio) devuelve [] y el llamador avisa.
-async function amigosParaInteraccion(interaction, rutaIni) {
+async function amigosParaInteraccion(interaction, rutaIni, conAmigos = false) {
     if (!comunidad.esComunidad(interaction.guildId)) return parsearListaFriends(rutaIni);
     try {
-        const destinos = await destinosComunidad(interaction.user.id);
+        const destinos = await destinosComunidad(interaction.user.id, conAmigos);
         if (!destinos.length) interaction._sinDestinosMsg = MSG_SIN_MAIN;
         return destinos;
     } catch (e) {
@@ -5092,7 +5094,8 @@ async function reenviarCartaATrading(interaction, cartaId, datosGold, componente
 // configuración nueva para esto.
 async function actualizarConSeleccionFriendId(interaction, cartaId, origen, modo = 'friend') {
     const { rutaIni } = await obtenerRutasInject(interaction.guildId);
-    const friends = await amigosParaInteraccion(interaction, rutaIni);  // comunidad: registro de wr98
+    // Friend Trade: tambien los IDs de los amigos / del dueño (Ale 2026-11-08).
+    const friends = await amigosParaInteraccion(interaction, rutaIni, modo === 'friend');  // comunidad: registro de wr98
     if (!friends.length) { if (interaction._sinDestinosMsg) return await interaction.editReply({ content: interaction._sinDestinosMsg, components: [] });
         return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.', components: [] });
     }
