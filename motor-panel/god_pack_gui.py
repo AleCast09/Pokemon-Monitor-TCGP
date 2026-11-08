@@ -1474,7 +1474,7 @@ class GodPackGui(QMainWindow):
             QMessageBox.information(self, "Already running",
                                     "An injection process is already running.")
             return
-        if self._community:
+        if self._community and not getattr(self, "_rescan_propias", False):
             return
         comunidad = self.w_community.isChecked() and not isinstance(cmd_override, list)
         propias = bool(self.w_xml_dir.text().strip() or self.w_accounts_dir.text().strip())
@@ -1550,7 +1550,7 @@ class GodPackGui(QMainWindow):
         if getattr(self, "_ppm_stop", None) is not None:
             self._ppm_stop.set()
         self._ppm_stop = Event()
-        if comunidad:
+        if comunidad and not self._community:
             self._start_community(limpiar=False)
         webhook_target = "" if comunidad else self.w_ppm_webhook.text().strip()
         if webhook_target:
@@ -1783,6 +1783,12 @@ class GodPackGui(QMainWindow):
         self._community_beat = QTimer(self)
         self._community_beat.timeout.connect(lambda: self._community_mark(True))
         self._community_beat.start(30000)
+        # 2026-11-07 (Arcade): own accounts that were on their 24 h wait at Start were never picked up again
+        # while the lent ones kept going (only a Stop + Start opened them). Every 15 min the own accounts are
+        # scanned again; the ones that are ready open first (the farm waits: busy=True).
+        self._own_rescan_timer = QTimer(self)
+        self._own_rescan_timer.timeout.connect(self._rescan_own_accounts)
+        self._own_rescan_timer.start(15 * 60 * 1000)
         self.btn_start.setEnabled(False)
         self.btn_cleanup.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -1790,6 +1796,20 @@ class GodPackGui(QMainWindow):
         self.w_community.setEnabled(False)
         self.status_label.setText("Community farm running.")
         self._set_badge("COMMUNITY", D["CYAN"])
+
+    def _rescan_own_accounts(self):
+        if not self._community or self._stopping:
+            return
+        if self.proc is not None and self.proc.state() != QProcess.NotRunning:
+            return
+        if not (self.w_xml_dir.text().strip() or self.w_accounts_dir.text().strip()):
+            return
+        self._append_log("\n[gui] Checking own accounts again (the ones off their wait open first)...\n")
+        self._rescan_propias = True
+        try:
+            self._start_injection()
+        finally:
+            self._rescan_propias = False
 
     def _community_tick(self):
         if int(time.time()) % 5 == 0:
@@ -1816,7 +1836,7 @@ class GodPackGui(QMainWindow):
             self.COMMUNITY_STOP.write_text("stop", encoding="utf-8")
         except Exception:
             pass
-        for nombre in ("_community_timer", "_community_beat"):
+        for nombre in ("_community_timer", "_community_beat", "_own_rescan_timer"):
             timer = getattr(self, nombre, None)
             if timer is not None:
                 timer.stop()

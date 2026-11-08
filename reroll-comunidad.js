@@ -916,6 +916,9 @@ async function ciclo() {
                 fs.rmSync(dir, { recursive: true, force: true });   // las XML no quedan en el host
             }
             entregarEnFondo();   // en segundo plano: no frena la siguiente tanda
+            // (2026-11-07, Arcade) El panel volvio a abrir cuentas PROPIAS (las que salieron de su espera de 24 h):
+            // van primero. Se corta despues de esta tanda y el ciclo sigue cuando el panel termina.
+            if (panelOcupado(motor)) { log('own accounts are opening again - lent accounts wait'); esperarPropias = true; break; }
         }
     } catch (e) {
         log('cycle failed:', e?.message || e);
