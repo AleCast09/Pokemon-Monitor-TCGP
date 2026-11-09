@@ -7,7 +7,9 @@ require('dotenv').config({ quiet: true });
 
 const GUILD = '1483615153743462571';
 const FOROS = ['1497179653276827720', '1501347022773686483'];   // elite_gp_list, gym_leader_gp_list
-const HASTA = Date.parse('2026-11-09T11:48:00Z');               // lo de despues ya lo anota cada host
+// (Ale 2026-11-09) Solo desde ayer (8 de noviembre, hora de esta PC) hasta ahora; nada mas viejo.
+const DESDE = new Date(2026, 10, 8).getTime();
+const HASTA = Date.now();
 const SECO = process.argv.includes('--dry');
 
 const H = { Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}` };
@@ -90,7 +92,7 @@ async function leer(t) {
     {
         {
             const creado = Date.parse(t.thread_metadata?.create_timestamp || '') || Number((BigInt(t.id) >> 22n) + 1420070400000n);
-            if (creado >= HASTA) return null;
+            if (creado >= HASTA || creado < DESDE) return null;
             const m = t.name.match(/^(\S*)\s*\[(\d)\/5\]\s*\[(\d+)P\]\s*(.+?)\s*\[(\d{16})\]/);
             if (!m) return null;
             const inicio = await api(`/channels/${t.id}/messages/${t.id}`);
@@ -113,7 +115,12 @@ async function leer(t) {
     }
 }
 
-async function terminar(todos) {
+async function terminar(lista) {
+    let todos = lista;
+    todos = todos.filter(h => h.ts >= DESDE);
+    // Los que ya estan en la lista nueva (los subio su host) no se repiten.
+    const ya = new Set(((await redis('LRANGE', 'zenith:gp_hits', '0', '-1')) || []).map(x => { try { return JSON.parse(x).id; } catch (e) { return ''; } }));
+    todos = todos.filter(h => !ya.has(h.id));
     todos.sort((a, b) => b.ts - a.ts);
     console.log(`God Packs found: ${todos.length} (with image: ${todos.filter(h => h.img).length}, with XML: ${todos.filter(h => h.xml).length})`);
     console.log('example:', JSON.stringify(todos[0]));
