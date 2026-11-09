@@ -28,6 +28,7 @@ let deps = null;
 let corriendo = false;
 let expansionDePack = null;   // pack_id -> codigo del set ("CN001_0010_00_000" -> "C1")
 let ppm = null;               // { desde, sobres, propios?, logPos?, pausado?, pausa? } del GP farm
+let only = null;              // aviso de Open Packs Only en 🔒-hosts: { id, desde, sobres, propios?, logPos?, miembros }
 const PPM_PAUSA_MS = 15 * 60 * 1000;   // tras un Stop, el PPM se guarda 15 min por si vuelve a dar Start
 
 const log = (...a) => console.log('[reroll]', ...a);
@@ -64,6 +65,7 @@ function iniciar(d) {
     setInterval(() => deps.ml.escribirProxiesMotor().catch(() => {}), 60 * 1000);
     sincronizarPanel();
     setInterval(sincronizarPanel, 20 * 1000);
+    setInterval(() => { if (only) actualizarAvisoOnly(false).catch(e => log('Only Pack notice failed:', e?.message || e)); }, AVISO_ONLY_MS);
     setInterval(ciclo, num(process.env.REROLL_CADA_MIN, 10) * 60 * 1000);
     setTimeout(revisarPpm, 60 * 1000);
     setInterval(revisarLlenos, 60 * 1000);
@@ -324,6 +326,7 @@ async function sincronizarPanel() {
         modoAntes = modo;
         await deps.marcar?.(true, modo).catch(() => {});
         log(`Run Mode changed to ${modo} - sharing accounts with the hosts in that mode`);
+        await cambiarAvisoOnly(modo === 'packs-only');
         return;
     }
     if (on === panelAntes) return;
@@ -340,7 +343,9 @@ async function sincronizarPanel() {
         } else ppm = null;
         if (!ppm) { ppm = { desde: Date.now(), sobres: 0 }; sumarPropios(motor); }
         setTimeout(ciclo, 15 * 1000);
+        await cambiarAvisoOnly(modo === 'packs-only');
     } else {
+        await cambiarAvisoOnly(false);
         // Stop: ultimo heartbeat en Offline y 0 PPM (solo si estaba farmeando, no al arrancar el bot).
         if (ppm) {
             await enviarPpm(motor, ajustesPanel(motor), true).catch(e => log('PPM report failed:', e?.message || e));
@@ -349,6 +354,57 @@ async function sincronizarPanel() {
             ppm.pausa = { at: Date.now() };
         }
     }
+}
+
+// Aviso de Open Packs Only en 🔒-hosts (Ale 2026-11-09): al dar Start en Only Pack se manda una tarjeta (imagen)
+// con el sobre, el PPM de Only Pack y las cuentas que le faltan abrir a cada miembro; se edita cada 5 min
+// (los numeros bajan) y al dar Stop o cambiar de modo queda en gris, STOPPED. Este PPM no va a LatiasBot.
+const AVISO_ONLY_MS = 5 * 60 * 1000;
+const nombresMiembros = new Map();
+async function nombreMiembro(id) {
+    if (!nombresMiembros.has(id)) nombresMiembros.set(id, await deps.nombreMiembro?.(id).catch(() => null) || id);
+    return nombresMiembros.get(id);
+}
+async function cambiarAvisoOnly(encender) {
+    try {
+        if (encender && !only) {
+            only = { id: null, desde: Date.now(), sobres: 0, miembros: [] };
+            sumarPropios(deps.fastTransfer.rutaMotor(), only);   // marca desde donde contar los sobres propios
+            await actualizarAvisoOnly(false);
+        } else if (!encender && only) {
+            await actualizarAvisoOnly(true);
+            only = null;
+        }
+    } catch (e) { log('Only Pack notice failed:', e?.message || e); }
+}
+async function actualizarAvisoOnly(terminado) {
+    if (!deps?.avisoOnlyPack || !only) return;
+    const motor = deps.fastTransfer.rutaMotor();
+    if (!motor) return;
+    const s = { ...ajustesPanel(motor), run_mode: 'packs-only' };
+    sumarPropios(motor, only);
+    if (!terminado) {
+        // Cuentas que le faltan abrir a cada miembro en ESTE host (las abiertas entran en su espera de 24 h).
+        const parte = await deps.parte('packs-only').catch(() => null);
+        if (parte) {
+            const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
+            const estado = leerEstado(motor), ahora = Date.now();
+            const baneadasSet = await (deps.baneadas?.() || Promise.resolve(new Set())).catch(() => new Set());
+            const miembros = [];
+            for (const m of await deps.ml.cuentasReroll()) {
+                const quedan = m.cuentas.filter(c => miCuenta(m.discord_id, c.f, parte) && cuentaDelModo(c, s)
+                    && !baneadasSet.has(`${m.discord_id}|${c.f}`)
+                    && ahora - Math.max(msDeLean(c.l), estado[`${m.discord_id}|${c.f}`] || 0) >= cooldown).length;
+                if (quedan) miembros.push({ nombre: await nombreMiembro(m.discord_id), cuentas: quedan });
+            }
+            only.miembros = miembros;
+        }
+    }
+    const { armarAvisoImagen } = require('./aviso-only-pack.js');
+    const { embed, archivo } = await armarAvisoImagen({ motor, packId: s.pack_id || 'CN001_0010_00_000',
+        host: s.host_name || os.hostname(), miembros: only.miembros,
+        progreso: { sobres: only.sobres + (only.propios || 0), minutos: (Date.now() - only.desde) / 60000 }, terminado });
+    only.id = await deps.avisoOnlyPack({ id: only.id, embed, archivo }) || only.id;
 }
 
 // PPM del GP farm (2026-11-01, pedido de Ale): Zenith (LatiasBot de wr98) toma el PPM de los mensajes
@@ -562,22 +618,22 @@ function productoDeSobre(motor, packId) {
 // el log ENTERO, y un log que no se vacia en el Start (panel modificado a mano) sumaba sobres de dias anteriores.
 // Ahora se cuenta solo lo nuevo: se recuerda hasta donde se leyo (ppm.logPos) y se suma a ppm.propios. La primera
 // lectura solo marca la posicion; si el log se vacio (Start del panel), se vuelve a leer desde el principio.
-function sumarPropios(motor) {
-    if (!ppm || !motor) return;
+function sumarPropios(motor, obj = ppm) {
+    if (!obj || !motor) return;
     const ruta = path.join(motor, 'reports', 'god_pack_live.log');
     let tam;
     try { tam = fs.statSync(ruta).size; } catch (e) { return; }
-    if (ppm.logPos == null) { ppm.logPos = tam; return; }
-    if (tam < ppm.logPos) ppm.logPos = 0;
-    if (tam === ppm.logPos) return;
+    if (obj.logPos == null) { obj.logPos = tam; return; }
+    if (tam < obj.logPos) obj.logPos = 0;
+    if (tam === obj.logPos) return;
     try {
-        const desde = Math.max(ppm.logPos, tam - 64 * 1024 * 1024);
+        const desde = Math.max(obj.logPos, tam - 64 * 1024 * 1024);
         const buf = Buffer.alloc(tam - desde);
         const fd = fs.openSync(ruta, 'r');
         fs.readSync(fd, buf, 0, buf.length, desde);
         fs.closeSync(fd);
-        ppm.propios = (ppm.propios || 0) + (buf.toString('utf8').match(/\] {2,}cards: /g) || []).length;
-        ppm.logPos = tam;
+        obj.propios = (obj.propios || 0) + (buf.toString('utf8').match(/\] {2,}cards: /g) || []).length;
+        obj.logPos = tam;
     } catch (e) { /* se reintenta en el proximo reporte */ }
 }
 
@@ -1002,6 +1058,7 @@ async function ciclo() {
                 anotarAbiertas(motor, abiertasTanda);
                 escribirEstadoPanel().catch(() => {});
                 if (ppm) ppm.sobres += sobres;
+                if (only) only.sobres += sobres;
                 log(`${sobres} pack(s) opened for ${m.discord_id}`);
             } finally {
                 fs.rmSync(dir, { recursive: true, force: true });   // las XML no quedan en el host

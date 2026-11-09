@@ -7780,6 +7780,30 @@ if (comunidad.hayComunidad()) {
         versionesGodPacks: hostComunidad.versionesGodPacks, guardarWebhookGp: hostComunidad.guardarWebhookGp,
         nombreMain: (codigo) => comunidad.nombreDeFriendId(codigo),
         ultimaRelease: hostComunidad.ultimaRelease, estaAlDia: hostComunidad.estaAlDia,
+        // Aviso de Open Packs Only (Ale 2026-11-09): tarjeta en el canal 🔒-hosts; con id se edita esa.
+        avisoOnlyPack: async ({ id, embed, archivo }) => {
+            for (const guild of client.guilds.cache.values()) {
+                if (!comunidad.esComunidad(guild.id)) continue;
+                const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
+                const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+                if (!canal) continue;
+                const datos = { embeds: [embed], files: archivo ? [{ attachment: archivo.buffer, name: archivo.nombre }] : [],
+                    attachments: [], allowedMentions: { parse: [] } };
+                const previo = id ? await canal.messages.fetch(id).catch(() => null) : null;
+                if (previo) { await previo.edit(datos); return previo.id; }
+                const { attachments, ...nuevo } = datos;
+                return (await canal.send(nuevo)).id;
+            }
+            return null;
+        },
+        nombreMiembro: async (discordId) => {
+            for (const guild of client.guilds.cache.values()) {
+                if (!comunidad.esComunidad(guild.id)) continue;
+                const m = await guild.members.fetch(discordId).catch(() => null);
+                if (m) return m.displayName;
+            }
+            return null;
+        },
         avisar: async (texto) => {
             for (const guild of client.guilds.cache.values()) {
                 if (!comunidad.esComunidad(guild.id)) continue;
