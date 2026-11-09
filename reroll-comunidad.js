@@ -923,12 +923,24 @@ function versionDeEsteHost() {
     try { return fs.readFileSync(path.join(__dirname, 'host-version.txt'), 'utf8').trim(); } catch (e) { /* host de Ale */ }
     try { return require('child_process').execSync('git rev-parse --short HEAD', { cwd: __dirname, windowsHide: true }).toString().trim(); } catch (e) { return 'dev'; }
 }
+// (2026-11-09, Ale) En la PC de Ale (corre desde el repo, sin host-version.txt) la version se lee UNA vez al
+// arrancar: es la del codigo que corre. Antes se leia el commit actual cada minuto, y cada commit nuevo hacia
+// que el panel dijera "updated - close and reopen" o "updating to..." (su bot no se autoactualiza).
+const VERSION_AL_ARRANCAR = versionDeEsteHost();
+const ES_HOST_DEV = !fs.existsSync(path.join(__dirname, 'host-version.txt'));
 async function escribirVersion() {
     const motor = deps?.fastTransfer.rutaMotor();
     if (!motor) return;
-    const version = versionDeEsteHost();
+    const version = VERSION_AL_ARRANCAR;
     const release = await (deps.ultimaRelease?.() || Promise.resolve(null)).catch(() => null);
-    const alDia = deps.estaAlDia?.(version, release);
+    let alDia = deps.estaAlDia?.(version, release);
+    // Host de Ale: si su codigo ya incluye lo publicado (va igual o adelante), esta al dia.
+    if (alDia === false && ES_HOST_DEV && /^[0-9a-f]{7,40}$/.test(release?.commit || '') && /^[0-9a-f]{7,40}$/.test(version)) {
+        try {
+            require('child_process').execSync(`git merge-base --is-ancestor ${release.commit} ${version}`, { cwd: __dirname, windowsHide: true, stdio: 'ignore' });
+            alDia = true;
+        } catch (e) { /* no la incluye: atrasado de verdad */ }
+    }
     fs.mkdirSync(path.join(motor, 'reports'), { recursive: true });
     fs.writeFileSync(path.join(motor, 'reports', 'monitor_version.json'),
         JSON.stringify({ version, latest: release?.version || null, upToDate: alDia, ts: Date.now() }));
