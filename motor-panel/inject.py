@@ -2205,10 +2205,11 @@ def get_pack_power(sess, max_retries: int = 3, tag: str = "",
             if next_wait_parts:
                 log(f"  next recharge: {' | '.join(next_wait_parts)}", tag=tag)
             if want_special:
-                if total_special > 0:
-                    return total_special
-                # (wr98) The server may not list the special power: return 1 so PurchaseV2 tries the free claim.
-                log("[sp1] special pack selected; attempting 1 free pack claim", tag=tag)
+                # Sobre especial: el derecho semanal se pregunta a SpecialPack/GetUnpackRightV1
+                disponible = special_pack_available(sess, tag=tag)
+                if disponible >= 0:
+                    return disponible
+                log("[sp1] could not read the special pack right; trying 1 open anyway", tag=tag)
                 return 1
             if total_normal > 0:
                 return total_normal
@@ -2377,6 +2378,219 @@ def _pack_get_detail(sess, pack_id: str, max_retries: int = 3, tag: str = ""):
     return None
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Sobre especial (SP1 First Partners): servicio SpecialPack
+# ══════════════════════════════════════════════════════════════════════
+# Protocolo capturado por Naja (app 1.8.1, captura 20261101T131435Z). El sobre especial NO se
+# abre con PackShop/PurchaseV2 (eso daba PurchaseV2 INTERNAL): tiene su propio servicio.
+#   SpecialPack/GetUnpackRightV1 -> cuándo vuelve a estar disponible el sobre gratis (semanal,
+#                                   se renueva los sábados 01:00 UTC)
+#   SpecialPack/PurchaseV1       -> lo abre con product_id "SP1_001", gastando ese derecho
+# Las clases protobuf se arman en un pool aparte desde el descriptor embebido (así no chocan
+# con los pb2 del motor y los hosts no necesitan archivos nuevos).
+_SPECIAL_PACK_PROTO_ZB64 = (
+    "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"
+)
+SPECIAL_PACK_PRODUCTS = {"SP001_0010_00_000": "SP1_001"}
+_SP_RPC = "/takasho.schema.lettuce_server.player_api.SpecialPack/"
+_SP_PKG = "takasho.schema.lettuce_server.player_api."
+_sp_classes_cache = None
+
+
+def _special_pack_classes():
+    """Devuelve (PurchaseReq, PurchaseResp, RightReq, RightResp) armadas desde el descriptor."""
+    global _sp_classes_cache
+    if _sp_classes_cache is not None:
+        return _sp_classes_cache
+    import base64 as _b64
+    import zlib as _zlib
+    from google.protobuf import descriptor_pb2, descriptor_pool
+    fds = descriptor_pb2.FileDescriptorSet()
+    fds.ParseFromString(_zlib.decompress(_b64.b64decode(_SPECIAL_PACK_PROTO_ZB64)))
+    pool = descriptor_pool.DescriptorPool()
+    pendientes = list(fds.file)
+    while pendientes:   # los archivos no vienen en orden de dependencias
+        resto = []
+        for f in pendientes:
+            try:
+                pool.Add(f)
+            except TypeError:
+                resto.append(f)
+        if len(resto) == len(pendientes):
+            raise RuntimeError("special pack descriptor: unresolved " + ", ".join(f.name for f in resto))
+        pendientes = resto
+    try:
+        from google.protobuf.message_factory import GetMessageClass as _get
+    except ImportError:   # protobuf viejo
+        from google.protobuf import message_factory as _mf
+        _fac = _mf.MessageFactory(pool)
+        _get = _fac.GetPrototype
+    def clase(nombre):
+        return _get(pool.FindMessageTypeByName(_SP_PKG + nombre))
+    _sp_classes_cache = (
+        clase("SpecialPackPurchaseV1.Request"),
+        clase("SpecialPackPurchaseV1.Response"),
+        clase("SpecialPackGetUnpackRightV1.Request"),
+        clase("SpecialPackGetUnpackRightV1.Response"),
+    )
+    return _sp_classes_cache
+
+
+def special_pack_available(sess, tag: str = "") -> int:
+    """1 = el sobre especial gratis está disponible, 0 = ya se usó esta semana, -1 = no se pudo preguntar."""
+    try:
+        _, _, RightReq, RightResp = _special_pack_classes()
+        resp = sess._call(_SP_RPC + "GetUnpackRightV1", RightReq(), RightResp)
+        nxt = int(resp.special_pack_unpack_right.next_available_at.seconds or 0)
+        if nxt <= int(time.time()):
+            log("[sp1] special pack right available", tag=tag)
+            return 1
+        eta = time.strftime("%Y-%m-%d %H:%M", time.localtime(nxt))
+        log(f"[sp1] special pack already opened this week; next one at {eta}", tag=tag)
+        return 0
+    except Exception as exc:
+        log(f"[sp1] [!] GetUnpackRightV1 failed: {str(exc)[:200]}", tag=tag)
+        return -1
+
+
+def _purchase_special_pack(sess, pack_id: str, consistent_token: str, tag: str = ""):
+    """Abre 1 sobre especial con SpecialPack/PurchaseV1. Devuelve (respuesta, transaction_id)."""
+    PurchaseReq, PurchaseResp, _, _ = _special_pack_classes()
+    product = SPECIAL_PACK_PRODUCTS.get(pack_id, "SP1_001")
+    req = PurchaseReq(
+        product_id=product,
+        amount=1,                    # Amount.ONE
+        pack_consistent_token=consistent_token,
+        consumed_resource=1,         # ConsumedResource.SPECIAL_PACK_UNPACK_RIGHT
+        consumed_ticket_amount=0,
+    )
+    log(f"[sp1] SpecialPack/PurchaseV1 product_id={product}", tag=tag)
+    result = sess._call(_SP_RPC + "PurchaseV1", req, PurchaseResp)
+    tx = ""
+    for order in result.unpack_orders:
+        if order.transaction_id:
+            tx = order.transaction_id
+            break
+    return result, tx
+
+
 def open_pack(sess, pack_id: str, product_id: str, tag: str = "",
               hg_cost: int = 0, power_id: str = "PACK_POWER_NORMAL") -> Optional[dict]:
     """
@@ -2420,52 +2634,12 @@ def open_pack(sess, pack_id: str, product_id: str, tag: str = "",
                     if discovered:
                         effective_power_id = discovered
                 
-                # --- LOGICA SP1 CORREGIDA ---
+                # --- SOBRE ESPECIAL (SP1): servicio SpecialPack, no PackShop ---
+                share_tx = purchase_req.transaction_id
                 if pack_id.startswith("SP"):
-                    log(f"[sp1] Procesando sobre especial de bienvenida {pack_id}", tag=tag)
-                    purchase_req.product_id = product_id if product_id else "PC_PS_2610010_01_01_01"
-                    try:
-                        result = sess._call(
-                            "/takasho.schema.lettuce_server.player_api.PackShop/PurchaseV2",
-                            _apply_do_share(purchase_req, tag=tag),
-                            Response,
-                        )
-                    except Exception as first_exc:
-                        if "INTERNAL" in str(first_exc):
-                            log(f"[sp1] Advertencia en compra directa, intentando método alternativo: {first_exc}", tag=tag)
-                            alt_candidates = [
-                                ("PC_PS_2610000_01_01_01", effective_power_id),
-                                ("PC_PS_2610010_01_01_01", "PACK_POWER_NORMAL"),
-                                ("PC_PS_2609000_01_01_01", effective_power_id),
-                            ]
-                            for alt_prod, alt_pow in alt_candidates:
-                                try:
-                                    detail_alt = _pack_get_detail(sess, pack_id, max_retries=1, tag=tag)
-                                    if detail_alt is not None:
-                                        consistent_token = getattr(detail_alt, "pack_consistent_token", consistent_token)
-                                    req_alt = Request(
-                                        pack_consistent_token=consistent_token,
-                                        transaction_id=str(uuid.uuid4()),
-                                        product_id=alt_prod,
-                                        amount=Request.Types.Amount.AMOUNT_ONE,
-                                    )
-                                    u_alt = req_alt.use_powers.add()
-                                    u_alt.power_id = alt_pow
-                                    u_alt.amount = 1
-                                    result = sess._call(
-                                        "/takasho.schema.lettuce_server.player_api.PackShop/PurchaseV2",
-                                        _apply_do_share(req_alt, tag=tag),
-                                        Response,
-                                    )
-                                    purchase_req = req_alt
-                                    log(f"[sp1] PurchaseV2 OK with fallback product_id={alt_prod} power_id={alt_pow}", tag=tag)
-                                    break
-                                except Exception:
-                                    continue
-                            if result is None:
-                                raise first_exc
-                        else:
-                            raise first_exc
+                    result, sp_tx = _purchase_special_pack(sess, pack_id, consistent_token, tag=tag)
+                    if sp_tx:
+                        share_tx = sp_tx
                 else:
                     use = purchase_req.use_powers.add()
                     use.power_id = effective_power_id
@@ -2489,10 +2663,10 @@ def open_pack(sess, pack_id: str, product_id: str, tag: str = "",
                         request_to_send,
                         Response,
                     )
-                # --- FIN LOGICA SP1 ---
+                # --- FIN SOBRE ESPECIAL ---
 
                 # Feed/ShareV1
-                _feed_share(sess, purchase_req.transaction_id, tag=tag)
+                _feed_share(sess, share_tx, tag=tag)
                 break
             except Exception as exc:
                 last_err = str(exc)[:200]
@@ -3281,6 +3455,24 @@ def inject_one(
                             sess=sess,
                             log_fn=lambda m: log(str(m), tag=tag),
                         )
+            elif run_mode == "packs-only" and not dry_run:
+                # GP_LIST_V1 (Ale 2026-11-09): a God Pack opened in Open Packs Only can't be used (no Main
+                # was added) - it is not posted, but it is listed with ❌ in the God Pack UI (GOD PACK HITS).
+                try:
+                    if gp_cards.matches_wishlist(info, farming_mode, pack_power_min):
+                        log(f"GOD PACK in Open Packs Only (not usable, no Mains added): {info.get('label', '?')}",
+                            tag=tag)
+                        _notifier = _gp_notifier()
+                        if _notifier is not None:
+                            import importlib
+                            importlib.reload(_notifier)
+                        if _notifier is not None and hasattr(_notifier, "record_god_pack_async"):
+                            _notifier.record_god_pack_async(
+                                account=account, card_ids=outcome["cards"], pack_label=info.get("label", "?"),
+                                packs_count=packs, pack_id=pack_id, sess=sess, mode="packs-only",
+                                log_fn=lambda m: log(str(m), tag=tag))
+                except Exception as exc:
+                    log(f"[gp-list] couldn't check the pack: {exc}", tag=tag)
 
             if i < packs - 1:
                 # Adjustable pack-open delay: base value ±20% jitter.

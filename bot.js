@@ -7776,6 +7776,7 @@ if (comunidad.hayComunidad()) {
         // Anti doble reroll: aviso en el canal de hosts (lo ve staff), una vez por main aunque lo vean varios hosts.
         hostsFarm: (modo) => hostComunidad.hostsReroll(modo), primeraVez: hostComunidad.primeraVez,
         marcarBaneada: hostComunidad.marcarBaneada, baneadas: hostComunidad.baneadas, webhookGp: hostComunidad.webhookGp,
+        subirGodPacks: hostComunidad.subirGodPacks, godPacksComunidad: hostComunidad.godPacksComunidad,
         nombreMain: (codigo) => comunidad.nombreDeFriendId(codigo),
         ultimaRelease: hostComunidad.ultimaRelease, estaAlDia: hostComunidad.estaAlDia,
         avisar: async (texto) => {

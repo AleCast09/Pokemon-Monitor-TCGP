@@ -255,6 +255,21 @@ async function webhookGp() {
     try { return String(await redis('GET', 'zenith:gp_webhook') || ''); } catch (e) { return ''; }
 }
 
+// God Packs de todos los hosts (Ale 2026-11-09): cada host sube los suyos y el God Pack UI de todos los ve.
+// Lista zenith:gp_hits, lo mas nuevo primero, se guardan los ultimos 1000.
+const CLAVE_GP_HITS = 'zenith:gp_hits';
+async function subirGodPacks(lista) {
+    if (!configurado() || !lista.length) return false;
+    await redis('LPUSH', CLAVE_GP_HITS, ...lista.map(h => JSON.stringify({ ...h, host: YO })));
+    await redis('LTRIM', CLAVE_GP_HITS, '0', '999');
+    return true;
+}
+async function godPacksComunidad() {
+    if (!configurado()) return null;
+    const plano = await redis('LRANGE', CLAVE_GP_HITS, '0', '999') || [];
+    return plano.map(t => { try { return JSON.parse(t); } catch (e) { return null; } }).filter(Boolean);
+}
+
 // Ultima version publicada para los hosts ({ version, commit, ... } de zenith:release), cacheada 60 s.
 let _release = { ts: 0, valor: null };
 async function ultimaRelease() {
@@ -279,4 +294,5 @@ const anotarMiembros = (registro) => configurado()
     ? redis('SET', 'zenith:miembros', JSON.stringify(registro)).catch(() => {}) : Promise.resolve();
 
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
-    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, guardarWebhookGp, webhookGp, ultimaRelease, estaAlDia };
+    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, guardarWebhookGp, webhookGp, ultimaRelease, estaAlDia,
+    subirGodPacks, godPacksComunidad };

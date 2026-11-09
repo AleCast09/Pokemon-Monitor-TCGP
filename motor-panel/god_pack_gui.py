@@ -576,6 +576,17 @@ class GodPackGui(QMainWindow):
         # Ale 2026-11-06: accounts still to open (own + lent of this host, in the panel's Run Mode) | opened.
         self.stat_left = self._create_stat_card("ACCOUNTS LEFT | OPENED", "0 | 0", D["CYAN"])
         self._own_total = 0; self._own_done = 0; self._own_opened = 0
+        # Ale 2026-11-09: estimated time to finish the accounts left, at this session's speed.
+        self.stat_left._eta = QLabel("Time left: —")
+        self.stat_left._eta.setStyleSheet(f"color: {D['TEXT2']}; font-size: 11px; font-weight: 700;")
+        self.stat_left.layout().addWidget(self.stat_left._eta)
+        # Ale 2026-11-09: click on GOD PACK HITS = window with this session's God Packs (name, ID, XML, cards).
+        self.stat_matches.setCursor(Qt.PointingHandCursor)
+        self.stat_matches.setToolTip("Click to see the God Packs of this session")
+        self.stat_matches.mousePressEvent = lambda _e: self._show_gp_hits_dialog()
+        hint = QLabel("click to view ▸")
+        hint.setStyleSheet(f"color: {D['TEXT2']}; font-size: 11px; font-weight: 700;")
+        self.stat_matches.layout().addWidget(hint)
         stats_row.addWidget(self.stat_left)
         stats_row.addWidget(self.stat_accounts)
         stats_row.addWidget(self.stat_packs)
@@ -700,6 +711,7 @@ class GodPackGui(QMainWindow):
         self.w_run_mode.addItem("God Pack Farming (Send FR + Wishlist Match)", "godpack")
         self.w_run_mode.addItem("Open Packs Only (No FR, No Wishlist)", "packs-only")
         self.w_run_mode.currentIndexChanged.connect(self._update_mode_enabled)
+        self.w_run_mode.currentIndexChanged.connect(self._apply_mode_timing)
         self._add_field(l_pack, "Run Mode", self.w_run_mode)
 
         self.w_pack = QComboBox()
@@ -1284,8 +1296,11 @@ class GodPackGui(QMainWindow):
                 self.w_stop_after_fails.setValue(int(data.get("stop_after_fails", 0)))
                 mode = str(data.get("run_mode", "godpack"))
                 mi = self.w_run_mode.findData(mode)
+                self._mode_timing = data.get("mode_timing") if isinstance(data.get("mode_timing"), dict) else {}
+                self._timing_mode = None   # loading: the saved values stay as they are
                 if mi >= 0:
                     self.w_run_mode.setCurrentIndex(mi)
+                self._timing_mode = self.w_run_mode.currentData() or "godpack"
                 fm = str(data.get("farming_mode", "only_gp"))
                 fi = self.w_farming_mode.findData(fm)
                 if fi >= 0:
@@ -1298,6 +1313,8 @@ class GodPackGui(QMainWindow):
                 self._update_mode_enabled()
         except Exception:
             pass
+        if not getattr(self, "_timing_mode", None):
+            self._timing_mode = self.w_run_mode.currentData() or "godpack"
 
     def _save_settings(self):
         data = {
@@ -1344,6 +1361,7 @@ class GodPackGui(QMainWindow):
             "farming_mode": self.w_farming_mode.currentData() or "only_gp",
             "pack_power_min": self.w_pack_power_min.currentData() or "1/5",
             "verbose": self.w_verbose.isChecked(),
+            "mode_timing": self._remember_mode_timing(),
         }
         SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -1447,6 +1465,40 @@ class GodPackGui(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
         except Exception as exc:
             QMessageBox.warning(self, "Like targets file", str(exc))
+
+    # Ale 2026-11-09: each Run Mode keeps its own speed settings. Open Packs Only sends no friend requests
+    # (no Mains, no 40 PPM cap), so the first time it starts at Parallel 15 / 1 s / 2 s (~120 PPM, Ale);
+    # God Pack mode gets back the values it had. Values changed by hand are remembered per mode.
+    MODE_TIMING_DEFAULTS = {"packs-only": {"parallel": 15, "account_delay": 1.0, "pack_delay": 2.0}}
+
+    def _remember_mode_timing(self) -> dict:
+        tabla = getattr(self, "_mode_timing", None)
+        if not isinstance(tabla, dict):
+            tabla = self._mode_timing = {}
+        modo = getattr(self, "_timing_mode", None)
+        if modo:
+            tabla[modo] = {"parallel": self.w_parallel.value(),
+                           "account_delay": self.w_account_delay.value(),
+                           "pack_delay": self.w_pack_delay.value()}
+        return tabla
+
+    def _apply_mode_timing(self):
+        nuevo = self.w_run_mode.currentData() or "godpack"
+        anterior = getattr(self, "_timing_mode", None)
+        if anterior is None or anterior == nuevo:   # still loading the settings
+            return
+        tabla = self._remember_mode_timing()          # keep the values of the mode being left
+        self._timing_mode = nuevo
+        valores = tabla.get(nuevo) or self.MODE_TIMING_DEFAULTS.get(nuevo)
+        if not valores:
+            return
+        self.w_parallel.setValue(int(valores.get("parallel", self.w_parallel.value())))
+        self.w_account_delay.setValue(float(valores.get("account_delay", self.w_account_delay.value())))
+        self.w_pack_delay.setValue(float(valores.get("pack_delay", self.w_pack_delay.value())))
+        self.status_label.setText(
+            f"Speed set for {'Open Packs Only' if nuevo == 'packs-only' else 'God Pack'}: "
+            f"Parallel {self.w_parallel.value()} · {self.w_account_delay.value():.1f}s between accounts "
+            f"· {self.w_pack_delay.value():.1f}s between packs (Timing tab).")
 
     def _update_mode_enabled(self):
         try:
@@ -1884,10 +1936,30 @@ class GodPackGui(QMainWindow):
         except Exception:
             pass
         own_left = max(0, self._own_total - self._own_done)
+        left = own_left + lent_left
         try:
-            self.stat_left._val_label.setText(f"{own_left + lent_left:,} | {self._own_opened + lent_opened:,}")
+            self.stat_left._val_label.setText(f"{left:,} | {self._own_opened + lent_opened:,}")
+            self.stat_left._eta.setText(f"Time left: {self._eta_text(left)}")
         except Exception:
             pass
+
+    def _eta_text(self, left: int) -> str:
+        """Accounts left ÷ accounts finished per minute in this session (own + lent)."""
+        t0 = self._live.get("t0")
+        if not left:
+            return "done" if t0 else "—"
+        if not t0:
+            return "—"
+        mins = (time.time() - t0) / 60.0
+        done = self._live.get("accounts", 0)
+        if mins < 2 or done < 3:
+            return "calculating…"
+        rest = int(left / (done / mins))
+        h, m = divmod(rest, 60)
+        d, h = divmod(h, 24)
+        if d:
+            return f"~{d}d {h}h"
+        return f"~{h}h {m:02d}m" if h else f"~{m}m"
 
     def _on_finished(self, code, _status):
         self._append_log(f"\n[gui] process finished exit_code={code}\n")
@@ -2158,6 +2230,179 @@ class GodPackGui(QMainWindow):
         else:
             txt.setPlainText("(no pool report file found yet)")
         vbox.addWidget(txt)
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dlg.accept)
+        vbox.addWidget(btn_close, 0, Qt.AlignRight)
+        dlg.exec_()
+
+    # ── God Packs of this session (Ale 2026-11-09) ────────────────
+    GP_HITS_FILE = ROOT / "reports" / "gp_hits.jsonl"
+
+    GP_HITS_ALL_FILE = ROOT / "reports" / "gp_hits_all.json"
+
+    def _all_gp_hits(self) -> list[dict]:
+        """God Packs of every host (reports/gp_hits_all.json, written by Monitor Pokemon from Upstash) plus
+        this PC's own list (reports/gp_hits.jsonl, written by discord_notifier.py), newest first.
+        mode "packs-only" = opened in Open Packs Only (no Mains added, not usable); anything else = usable."""
+        vistos, hits = set(), []
+        try:
+            comunidad = json.loads(self.GP_HITS_ALL_FILE.read_text("utf-8"))
+        except Exception:
+            comunidad = []
+        locales = []
+        try:
+            for ln in self.GP_HITS_FILE.read_text("utf-8").splitlines():
+                try:
+                    locales.append(json.loads(ln))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        for h in locales:   # first this PC's own ones: they keep their local collage
+            h.setdefault("host", "this PC")
+        for h in list(locales) + list(comunidad):
+            if not isinstance(h, dict):
+                continue
+            clave = (str(h.get("id", "")), int(h.get("ts", 0) or 0))
+            if clave in vistos:
+                if h.get("host") and h.get("host") != "this PC":   # same God Pack: show the real host name
+                    for x in hits:
+                        if (str(x.get("id", "")), int(x.get("ts", 0) or 0)) == clave and x.get("host") == "this PC":
+                            x["host"] = h["host"]
+                continue
+            vistos.add(clave)
+            hits.append(dict(h))
+        hits.sort(key=lambda h: int(h.get("ts", 0) or 0), reverse=True)
+        return hits
+
+    def _gp_collage_path(self, h: dict) -> str:
+        """The local collage, or one built here from the card IDs (God Packs of other hosts)."""
+        local = str(h.get("image") or "")
+        if local and Path(local).is_file():
+            return local
+        cards = h.get("cards") or []
+        if not cards:
+            return ""
+        try:
+            from scripts.god_pack import discord_notifier as dn
+            nombre = f"gp_list_{re.sub(r'[^0-9A-Za-z]', '', str(h.get('id', '')))}_{int(h.get('ts', 0) or 0)}.png"
+            out = dn.build_collage_for_hit(cards, nombre) if hasattr(dn, "build_collage_for_hit") else None
+            return str(out) if out else ""
+        except Exception:
+            return ""
+
+    def _show_gp_hits_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("God Packs")
+        dlg.resize(1040, 760)
+        vbox = QVBoxLayout(dlg)
+
+        barra = QHBoxLayout()
+        head = QLabel("🌟 God Packs")
+        head.setStyleSheet(f"color: {D['GOLD']}; font-size: 18px; font-weight: 900;")
+        barra.addWidget(head)
+        barra.addStretch(1)
+        w_when = QComboBox()
+        w_when.addItem("This session", "session")
+        w_when.addItem("Today", "today")
+        w_when.addItem("Last 7 days", "week")
+        w_when.addItem("All", "all")
+        w_when.setCurrentIndex(0 if self._live.get("t0") else 1)
+        w_hosts = QComboBox()
+        w_hosts.addItem("All hosts", "all")
+        w_hosts.addItem("Only this PC", "mine")
+        w_kind = QComboBox()
+        w_kind.addItem("✅ + ❌", "all")
+        w_kind.addItem("Only ✅ usable", "ok")
+        w_kind.addItem("Only ❌ not usable", "bad")
+        for w in (w_when, w_hosts, w_kind):
+            w.setMinimumWidth(150)
+            barra.addWidget(w)
+        vbox.addLayout(barra)
+
+        nota = QLabel("✅ = GP farm (God Pack mode, Mains were added)   ·   "
+                      "❌ = Open Packs Only (no Mains added, can't be used)")
+        nota.setStyleSheet(f"color: {D['TEXT2']}; font-size: 11px;")
+        vbox.addWidget(nota)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        vbox.addWidget(scroll)
+        todos = self._all_gp_hits()
+        mi_host = (self.w_host_name.text().strip() if hasattr(self, "w_host_name") else "") or ""
+
+        def pintar():
+            when, hosts, kind = w_when.currentData(), w_hosts.currentData(), w_kind.currentData()
+            ahora = time.time()
+            if when == "session":
+                desde = (self._live.get("t0") or ahora - 24 * 3600) * 1000
+            elif when == "today":
+                lt = time.localtime(ahora)
+                desde = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1)) * 1000
+            elif when == "week":
+                desde = (ahora - 7 * 24 * 3600) * 1000
+            else:
+                desde = 0
+            hits = []
+            for h in todos:
+                if int(h.get("ts", 0) or 0) < desde:
+                    continue
+                es_mio = h.get("host") in ("this PC", mi_host) or bool(h.get("image") and Path(str(h["image"])).is_file())
+                if hosts == "mine" and not es_mio:
+                    continue
+                malo = h.get("mode") == "packs-only"
+                if (kind == "ok" and malo) or (kind == "bad" and not malo):
+                    continue
+                hits.append(h)
+            ok = sum(1 for h in hits if h.get("mode") != "packs-only")
+            head.setText(f"🌟 {len(hits)} God Pack(s)  ·  ✅ {ok}  ·  ❌ {len(hits) - ok}")
+
+            inner = QWidget()
+            lista = QVBoxLayout(inner)
+            lista.setSpacing(12)
+            if not hits:
+                vacio = QLabel("No God Packs here yet. They show up as soon as one is found (on any host).")
+                vacio.setStyleSheet(f"color: {D['TEXT2']}; font-size: 13px;")
+                lista.addWidget(vacio)
+            for h in hits[:100]:
+                malo = h.get("mode") == "packs-only"
+                card = QFrame(objectName="statCard")
+                card.setStyleSheet(f"QFrame#statCard {{ border: 1px solid {D['RED'] if malo else D['GREEN']}; }}")
+                cv = QVBoxLayout(card)
+                cv.setContentsMargins(12, 10, 12, 10)
+                hora = time.strftime("%d/%m %H:%M", time.localtime(int(h.get("ts", 0) or 0) / 1000))
+                estado = (f"<b style='color:{D['RED']}'>❌ NOT USABLE — Open Packs Only (no Mains added)</b>" if malo
+                          else f"<b style='color:{D['GREEN']}'>✅ USABLE — GP farm (Mains added)</b>")
+                extra = "  ·  🎁 lent account" if h.get("lent") else ""
+                txt = QLabel(
+                    f"{estado}<br>"
+                    f"<b style='color:{D['GOLD']}; font-size:15px'>{_html.escape(str(h.get('name') or '?'))}</b>"
+                    f"  <span style='color:{D['TEXT2']}'>{_html.escape(str(h.get('tags') or ''))}  ·  {hora}"
+                    f"  ·  🖥 {_html.escape(str(h.get('host') or '?'))}{extra}</span><br>"
+                    f"<span style='color:{D['TEXT']}'>ID: <b>{_html.escape(str(h.get('id') or '?'))}</b></span><br>"
+                    f"<span style='color:{D['TEXT']}'>XML: <b>{_html.escape(str(h.get('xml') or '?'))}</b></span>")
+                txt.setTextInteractionFlags(Qt.TextSelectableByMouse)   # the ID / XML can be copied
+                cv.addWidget(txt)
+                img = QLabel()
+                pm = QPixmap(self._gp_collage_path(h))
+                if pm.isNull():
+                    img.setText("(cards image not available)")
+                    img.setStyleSheet(f"color: {D['TEXT3']};")
+                else:
+                    img.setPixmap(pm.scaledToWidth(940, Qt.SmoothTransformation))
+                cv.addWidget(img)
+                lista.addWidget(card)
+            if len(hits) > 100:
+                mas = QLabel(f"… and {len(hits) - 100} older. Pick a shorter time to see them.")
+                mas.setStyleSheet(f"color: {D['TEXT2']};")
+                lista.addWidget(mas)
+            lista.addStretch(1)
+            scroll.setWidget(inner)
+
+        for w in (w_when, w_hosts, w_kind):
+            w.currentIndexChanged.connect(lambda _i: pintar())
+        pintar()
+
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(dlg.accept)
         vbox.addWidget(btn_close, 0, Qt.AlignRight)

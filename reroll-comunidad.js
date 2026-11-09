@@ -42,15 +42,17 @@ function iniciar(d) {
     aplicarAjustesRecomendados(deps.fastTransfer.rutaMotor());
     borrarTemporalesViejas();
     setInterval(borrarTemporalesViejas, 60 * 60 * 1000);
+    setInterval(() => sincronizarGodPacks().catch(e => log('God Pack list sync failed:', e?.message || e)), 30 * 1000);
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
         INJECT_ORIGINAL, '_limit_collectors', 'own accounts follow the Run Mode, ~36 packs/min in total, packs saved as their set (C1)',
         // (2026-11-06, Ale) Un Main quedo con soft ban de amigos: un host con su inject.py propio mandaba a 13 Mains
         // por cuenta sin limite. Sin estos limites se instala el nuestro igual (el suyo queda como .bak-propio).
         // (2026-11-07) Ahora el obligatorio es el tope de PPM de la comunidad (lee reports/ppm_cap.json).
-        'PACK_BUDGET_REFUND_V1');
+        // (2026-11-09) God Packs de Open Packs Only tambien se anotan (con ❌) en la lista del panel.
+        'GP_LIST_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
-        '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent',
+        '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',
         // (2026-11-06, Arcade) Sin el webhook de la comunidad sus God Packs no le llegan a KyuremBot: se instala igual
         // aunque este modificado a mano (el suyo queda como .bak-propio).
         'community_gp_webhook');
@@ -210,6 +212,31 @@ const soloSobres = (s) => String(s?.run_mode || 'godpack') === 'packs-only';
 const modoPanel = (motor) => (motor && ajustesPanel(motor).run_mode) || 'godpack';
 let modoAntes = null;
 const cuentaDelModo = (c, s) => soloSobres(s) ? c.e > 0 : c.e === 0;
+
+// God Packs de todos los hosts en el God Pack UI (Ale 2026-11-09). discord_notifier.py anota cada God Pack
+// de este motor en reports/gp_hits.jsonl; aca se suben los nuevos a Upstash (con el nombre del host) y se
+// baja la lista de la comunidad a reports/gp_hits_all.json, que el panel muestra al dar clic en GOD PACK HITS.
+async function sincronizarGodPacks() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    if (!motor || !deps.subirGodPacks) return;
+    const reportes = path.join(motor, 'reports');
+    const marca = path.join(reportes, 'gp_hits_synced.txt');   // ts del ultimo God Pack ya subido
+    let ultimo = 0;
+    try { ultimo = Number(fs.readFileSync(marca, 'utf8')) || 0; } catch (e) { /* primera vez */ }
+    let nuevos = [];
+    try {
+        nuevos = fs.readFileSync(path.join(reportes, 'gp_hits.jsonl'), 'utf8').split('\n')
+            .map(l => { try { return JSON.parse(l); } catch (e) { return null; } })
+            .filter(h => h && Number(h.ts) > ultimo);
+    } catch (e) { /* todavia no salio ninguno */ }
+    if (nuevos.length) {
+        // Sin la ruta de la foto: es de esta PC. Los demas arman el collage con las cartas.
+        const subidos = await deps.subirGodPacks(nuevos.map(({ image, ...h }) => h));
+        if (subidos) fs.writeFileSync(marca, String(Math.max(...nuevos.map(h => Number(h.ts)))));
+    }
+    const todos = await deps.godPacksComunidad();
+    if (todos) fs.writeFileSync(path.join(reportes, 'gp_hits_all.json'), JSON.stringify(todos));
+}
 
 // Cuadro "ACCOUNTS LEFT · OPENED" del God Pack UI (Ale 2026-11-06): las prestadas de ESTE host que quedan
 // para abrir en el modo del panel y las que abrio desde el ultimo Start. Va a reports/community_farm_status.json.
