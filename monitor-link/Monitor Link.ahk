@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.20"
+global VERSION := "ahk-1.9.21"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -42,7 +42,7 @@ global BanLocales := "", BtnBanAbrir, BtnBanBorrar   ; banned accounts still on 
 global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global MiMain := ""   ; this member's own Main friend ID (16 digits): Share/Trade destination in the bot
-global Status, Info, Clave, BtnLink, Inicio, LinkBox, LVCuentas, Barra, BtnMain
+global Status, Info, Clave, BtnLink, Inicio, LinkBox, LinkTxt, LVCuentas, Barra, BtnMain
 
 CargarConfig()
 CrearVentana()
@@ -112,7 +112,7 @@ CrearVentana() {
     Gui, Font, s9 Norm cBlack, Segoe UI
     Gui, Add, Text, xm y+6 w360 r9 vInfo,
     Gui, Add, GroupBox, xm y+6 w360 h92 vLinkBox, Link this PC
-    Gui, Add, Text, xp+12 yp+22 w336, In Discord, type /link in Zenith Rise and paste the key here:
+    Gui, Add, Text, xp+12 yp+22 w336 vLinkTxt, In Discord, type /link in Zenith Rise and paste the key here:
     Gui, Add, Edit, xp y+6 w250 vClave
     Gui, Add, Button, x+8 yp-1 w78 h24 gVincular vBtnLink, Link
     Gui, Add, Button, xm y+28 w116 h30 gCambiarCarpeta, Change folder
@@ -130,9 +130,12 @@ CrearVentana() {
     Gui, Show, AutoSize, Monitor Link
 }
 
+; (2026-11-09, Ale) The key box is never locked: when the bot moved to a new database the old
+; Monitor Links could not find it, and members could not paste a new key without editing the .ini.
+; Already linked -> the same box links again with a new key (/link -> Get a new key).
 MostrarVinculo(mostrar) {
-    for _, ctl in ["LinkBox", "Clave", "BtnLink"]
-        GuiControl, % mostrar ? "Enable" : "Disable", %ctl%
+    GuiControl,, LinkBox, % mostrar ? "Link this PC" : "Link again (only if it can't connect)"
+    GuiControl,, LinkTxt, % mostrar ? "In Discord, type /link in Zenith Rise and paste the key here:" : "In Discord: /link -> Get a new key, and paste it here:"
     PintarEstado()
 }
 
