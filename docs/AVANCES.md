@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-09 (13:22) — cuenta extra — Monitor Link 1.9.21 publicado
+- El cuadro de la clave ya no se bloquea: un Monitor Link vinculado puede pegar una clave nueva (`/link` → Get a new key). Publicado `host-2026.11.09-1322`.
+- Los que siguen en 1.9.19 (base vieja) deben borrar la línea `token=` de `%APPDATA%\MonitorLink\monitor-link-ahk.ini`, abrir Monitor Link y pegar la clave nueva (texto dado a Ale).
+- Arcade ya está en la base nueva; wr98 recibió `Actualizar-Upstash-Host.bat` (escritorio de Ale; borrarlo cuando lo use).
+- Pendiente (idea de Ale, a medias): aviso en el chat de Zenith al arrancar Open Packs Only (total de cuentas, cada miembro con sus no elegibles, nombre e imagen del sobre). Falta la fuente de la imagen del sobre.
+
 ### 2026-11-09 (12:35) — cuenta extra — Upstash: base nueva en uso (PC de Ale)
 - Base nueva gratis **zenitth** (`present-joey-109243.upstash.io`, cuenta Upstash "Ale Cast"). `.env` de Ale actualizado (respaldo `.env.antes-zenitth`), publicado `host-2026.11.09-1233` (ML 1.9.20) y bot de Ale reiniciado (4 procesos, tomó el turno).
 - **Backfill de los 1,883 God Packs viejos: CANCELADO por Ale** (no correr `gp-backfill-discord.js`). La lista de God Packs arranca vacía en la base nueva.
