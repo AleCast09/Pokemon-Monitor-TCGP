@@ -290,7 +290,9 @@ async function subirGodPacks(lista) {
 async function versionesGodPacks() {
     if (!configurado()) return null;
     const [nuevos, viejos] = await redis('MGET', `${CLAVE_GP_HITS}_v`, 'zenith:gp_hits_old_v') || [];
-    return { nuevos: String(nuevos || 0), viejos: String(viejos || 0) };
+    // (2026-11-09) Un host con codigo viejo sube sin sumar el contador: tambien cuenta cuantos hay.
+    const cuantos = await redis('LLEN', CLAVE_GP_HITS).catch(() => 0);
+    return { nuevos: `${nuevos || 0}:${cuantos || 0}`, viejos: String(viejos || 0) };
 }
 async function godPacksComunidad(viejos = false) {
     if (!configurado()) return null;
