@@ -86,7 +86,8 @@ Los hosts se actualizan solos en ~2 min. El bot de Ale no se actualiza solo: hay
 ## Pendientes conocidos
 
 - `inject.py` de wr98 tiene cambios propios: armarle una versión con sus cambios + los arreglos de `motor-panel/inject.py`.
-- Sobre especial **First Partners (SP1)**: agregado 2026-11-07 con el protocolo que pasó **Naja** (`SpecialPack/GetUnpackRightV1` + `SpecialPack/PurchaseV1`, product_id `SP1_001`, 1 gratis por semana, se renueva sábados 01:00 UTC). Probado solo con sesión simulada: falta abrir uno real y publicar a los hosts.
+- Sobre especial **First Partners (SP1)**: protocolo de **Naja** (`SpecialPack/GetUnpackRightV1` + `SpecialPack/PurchaseV1`, product_id `SP1_001`, 1 gratis por semana, se renueva sábados 01:00 UTC). Publicado a los hosts 2026-11-09.
+- **Lista de God Packs** (clic en GOD PACK HITS del panel, 2026-11-09): `reports/gp_hits.jsonl` → Upstash `zenith:gp_hits` → `reports/gp_hits_all.json`. Falta confirmar con el primer God Pack real entre hosts.
 - "My Main ID" de Monitor Link → escribir en Dragonite (`users:<grupo>`, mismo formato que el bot de wr98: name, heartbeatName, aliases, main_id, sec_id; grupo por rol de Discord).
 - Reordenar la ventana de Monitor Link (agrupar por tema, puede ser más ancha).
 - Ideas de Arcade para el God Pack UI: elegir varios sobres a la vez, el "&" de los títulos, ancho del panel, ocultar la ventana negra del log, separar el log.
