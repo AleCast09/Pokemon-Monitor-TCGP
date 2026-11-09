@@ -2275,11 +2275,41 @@ class GodPackGui(QMainWindow):
         hits.sort(key=lambda h: int(h.get("ts", 0) or 0), reverse=True)
         return hits
 
-    def _gp_collage_path(self, h: dict) -> str:
-        """The local collage, or one built here from the card IDs (God Packs of other hosts)."""
+    GP_IMG_URLS_FILE = ROOT / "reports" / "gp_img_urls.json"
+    GP_RENDERS_DIR = ROOT / "reports" / "gp_renders"
+
+    def _gp_discord_photo(self, h: dict, urls: dict) -> str:
+        """God Packs from before the list existed: their photo is the KyuremBot post's image. Monitor Pokemon
+        keeps fresh links in gp_img_urls.json; it's downloaded once (small size) and kept as a PNG."""
+        base = str(h.get("img") or "")
+        if not base:
+            return ""
+        out = self.GP_RENDERS_DIR / f"gp_old_{re.sub(r'[^0-9A-Za-z]', '', str(h.get('id', '')))}_{int(h.get('ts', 0) or 0)}.png"
+        if out.is_file():
+            return str(out)
+        url = urls.get(base)
+        if not url:
+            return ""
+        try:
+            import io
+            import urllib.request
+            from PIL import Image
+            pequeno = url.replace("cdn.discordapp.com", "media.discordapp.net") + "&width=960&height=415&format=webp"
+            req = urllib.request.Request(pequeno, headers={"User-Agent": "Mozilla/5.0"})
+            data = urllib.request.urlopen(req, timeout=15).read()
+            self.GP_RENDERS_DIR.mkdir(parents=True, exist_ok=True)
+            Image.open(io.BytesIO(data)).convert("RGB").save(out, "PNG")
+            return str(out)
+        except Exception:
+            return ""
+
+    def _gp_collage_path(self, h: dict, urls: dict = None) -> str:
+        """The local collage, the Discord photo (old God Packs), or one built here from the card IDs."""
         local = str(h.get("image") or "")
         if local and Path(local).is_file():
             return local
+        if h.get("img"):
+            return self._gp_discord_photo(h, urls or {})
         cards = h.get("cards") or []
         if not cards:
             return ""
@@ -2360,44 +2390,82 @@ class GodPackGui(QMainWindow):
             inner = QWidget()
             lista = QVBoxLayout(inner)
             lista.setSpacing(12)
+            estado_pag["hits"], estado_pag["shown"], estado_pag["lista"] = hits, 0, lista
             if not hits:
                 vacio = QLabel("No God Packs here yet. They show up as soon as one is found (on any host).")
                 vacio.setStyleSheet(f"color: {D['TEXT2']}; font-size: 13px;")
                 lista.addWidget(vacio)
-            for h in hits[:100]:
-                malo = h.get("mode") == "packs-only"
-                card = QFrame(objectName="statCard")
-                card.setStyleSheet(f"QFrame#statCard {{ border: 1px solid {D['RED'] if malo else D['GREEN']}; }}")
-                cv = QVBoxLayout(card)
-                cv.setContentsMargins(12, 10, 12, 10)
-                hora = time.strftime("%d/%m %H:%M", time.localtime(int(h.get("ts", 0) or 0) / 1000))
-                estado = (f"<b style='color:{D['RED']}'>❌ NOT USABLE — Open Packs Only (no Mains added)</b>" if malo
-                          else f"<b style='color:{D['GREEN']}'>✅ USABLE — GP farm (Mains added)</b>")
-                extra = "  ·  🎁 lent account" if h.get("lent") else ""
-                txt = QLabel(
-                    f"{estado}<br>"
-                    f"<b style='color:{D['GOLD']}; font-size:15px'>{_html.escape(str(h.get('name') or '?'))}</b>"
-                    f"  <span style='color:{D['TEXT2']}'>{_html.escape(str(h.get('tags') or ''))}  ·  {hora}"
-                    f"  ·  🖥 {_html.escape(str(h.get('host') or '?'))}{extra}</span><br>"
-                    f"<span style='color:{D['TEXT']}'>ID: <b>{_html.escape(str(h.get('id') or '?'))}</b></span><br>"
-                    f"<span style='color:{D['TEXT']}'>XML: <b>{_html.escape(str(h.get('xml') or '?'))}</b></span>")
-                txt.setTextInteractionFlags(Qt.TextSelectableByMouse)   # the ID / XML can be copied
-                cv.addWidget(txt)
-                img = QLabel()
-                pm = QPixmap(self._gp_collage_path(h))
-                if pm.isNull():
-                    img.setText("(cards image not available)")
-                    img.setStyleSheet(f"color: {D['TEXT3']};")
-                else:
-                    img.setPixmap(pm.scaledToWidth(940, Qt.SmoothTransformation))
-                cv.addWidget(img)
-                lista.addWidget(card)
-            if len(hits) > 100:
-                mas = QLabel(f"… and {len(hits) - 100} older. Pick a shorter time to see them.")
-                mas.setStyleSheet(f"color: {D['TEXT2']};")
-                lista.addWidget(mas)
+            estado_pag["mas"] = QPushButton("Load 30 more")
+            estado_pag["mas"].clicked.connect(lambda: agregar())
+            lista.addWidget(estado_pag["mas"], 0, Qt.AlignHCenter)
             lista.addStretch(1)
             scroll.setWidget(inner)
+            agregar()
+
+        def tarjeta(h: dict, foto: str) -> QFrame:
+            malo = h.get("mode") == "packs-only"
+            card = QFrame(objectName="statCard")
+            card.setStyleSheet(f"QFrame#statCard {{ border: 1px solid {D['RED'] if malo else D['GREEN']}; }}")
+            cv = QVBoxLayout(card)
+            cv.setContentsMargins(12, 10, 12, 10)
+            hora = time.strftime("%d/%m/%y %H:%M", time.localtime(int(h.get("ts", 0) or 0) / 1000))
+            estado = (f"<b style='color:{D['RED']}'>❌ NOT USABLE — Open Packs Only (no Mains added)</b>" if malo
+                      else f"<b style='color:{D['GREEN']}'>✅ USABLE — GP farm (Mains added)</b>")
+            vivo = {"alive": f"  <b style='color:{D['GREEN']}'>🟢 verified alive</b>",
+                    "dead": f"  <b style='color:{D['RED']}'>💀 dead</b>"}.get(str(h.get("status") or ""), "")
+            if h.get("host") == "Discord":
+                donde = "📜 from the Discord posts"
+                if h.get("found_by"):
+                    donde += f" · 👤 found by {_html.escape(str(h['found_by']))}"
+            else:
+                donde = f"🖥 {_html.escape(str(h.get('host') or '?'))}"
+            extra = "  ·  🎁 lent account" if h.get("lent") else ""
+            post = (f"  ·  <a style='color:{D['CYAN']}' href='{_html.escape(str(h['post']))}'>open post ↗</a>"
+                    if h.get("post") else "")
+            txt = QLabel(
+                f"{estado}{vivo}<br>"
+                f"<b style='color:{D['GOLD']}; font-size:15px'>{_html.escape(str(h.get('name') or '?'))}</b>"
+                f"  <span style='color:{D['TEXT2']}'>{_html.escape(str(h.get('tags') or ''))}  ·  {hora}"
+                f"  ·  {donde}{extra}</span>{post}<br>"
+                f"<span style='color:{D['TEXT']}'>ID: <b>{_html.escape(str(h.get('id') or '?'))}</b></span><br>"
+                f"<span style='color:{D['TEXT']}'>XML: <b>{_html.escape(str(h.get('xml') or '?'))}</b></span>")
+            txt.setTextInteractionFlags(Qt.TextBrowserInteraction)   # ID / XML can be copied, the link opens
+            txt.setOpenExternalLinks(True)
+            cv.addWidget(txt)
+            img = QLabel()
+            pm = QPixmap(foto) if foto else QPixmap()
+            if pm.isNull():
+                img.setText("(cards image not available yet)")
+                img.setStyleSheet(f"color: {D['TEXT3']};")
+            else:
+                img.setPixmap(pm.scaledToWidth(940, Qt.SmoothTransformation))
+            cv.addWidget(img)
+            return card
+
+        def agregar():
+            hits, desde, lista = estado_pag["hits"], estado_pag["shown"], estado_pag["lista"]
+            lote = hits[desde:desde + 30]
+            if lote:
+                try:
+                    urls = json.loads(self.GP_IMG_URLS_FILE.read_text("utf-8"))
+                except Exception:
+                    urls = {}
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                try:
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(max_workers=8) as pool:   # photos download in parallel
+                        fotos = list(pool.map(lambda h: self._gp_collage_path(h, urls), lote))
+                finally:
+                    QApplication.restoreOverrideCursor()
+                pos = lista.indexOf(estado_pag["mas"])
+                for i, (h, foto) in enumerate(zip(lote, fotos)):
+                    lista.insertWidget(pos + i, tarjeta(h, foto))
+            estado_pag["shown"] = desde + len(lote)
+            faltan = len(hits) - estado_pag["shown"]
+            estado_pag["mas"].setVisible(faltan > 0)
+            estado_pag["mas"].setText(f"Load {min(30, faltan)} more ({faltan} left)")
+
+        estado_pag = {}
 
         for w in (w_when, w_hosts, w_kind):
             w.currentIndexChanged.connect(lambda _i: pintar())

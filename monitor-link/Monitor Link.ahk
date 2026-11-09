@@ -19,7 +19,8 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.19"
+global VERSION := "ahk-1.9.20"
+global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
@@ -1145,6 +1146,12 @@ Ping:
     }
     ActualizarSiHayVersion(r.text)
     LeerBaneadas(r.text)
+    ; The address book (Upstash) can move to a new database: the bot sends the current one and it's kept.
+    if (RegExMatch(r.text, """lib""\s*:\s*\{\s*""u""\s*:\s*""(https://[^""]+)""\s*,\s*""t""\s*:\s*""([^""]+)""", mlib)
+        && (mlib1 != LibUrl || mlib2 != LibToken)) {
+        LibUrl := mlib1, LibToken := mlib2, LibUltima := ""
+        GuardarConfig()
+    }
     ; A host appeared (or changed address): it gets the summary right away.
     nuevos := [], antes := "", ahora := "", pm := 1
     if RegExMatch(r.text, """mirrors""\s*:\s*\[([^\]]*)\]", mm)
@@ -1181,8 +1188,12 @@ return
 
 ; The bot's address changes when it restarts: look it up in the address book.
 SinConexion() {
+    global LibUltima
     EnLinea := false
-    if (LibUrl != "" && LibToken != "") {
+    ; 2026-11-09: without a limit every Monitor Link that couldn't reach the bot asked the address book
+    ; every 5 s (~17,000 times a day each) and used up the month of Upstash in 9 days. Now once every 2 min.
+    if (LibUrl != "" && LibToken != "" && (LibUltima = "" || A_TickCount - LibUltima >= 120000)) {
+        LibUltima := A_TickCount
         try {
             r := Http("GET", LibUrl . "/get/monitor_link:url", "", "", LibToken, 15)
             if (RegExMatch(r.text, """result""\s*:\s*""([^""]+)""", ml) && RTrim(ml1, "/") != ServerUrl) {

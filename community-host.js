@@ -13,8 +13,9 @@ const os = require('os');
 const comunidad = require('./community.js');
 
 const CLAVE = 'zenith:host';
-const VIDA_MS = 90 * 1000;
-const CADA_MS = 30 * 1000;
+// Turno cada 60 s con candado de 3 min (antes 30 s / 90 s: la mitad de los pedidos a Upstash).
+const VIDA_MS = 180 * 1000;
+const CADA_MS = 60 * 1000;
 // Fijo por PC (no por arranque): si el bot se reinicia, recupera su turno al instante.
 const YO = String(process.env.HOST_NAME || os.hostname()).trim();
 
@@ -38,7 +39,26 @@ const CLAVE_HOSTS = 'zenith:hosts';
 
 const configurado = () => comunidad.hayComunidad() && !!process.env.LINK_REDIS_URL && !!process.env.LINK_REDIS_TOKEN;
 
+// Cuota de Upstash (2026-11-09: el plan gratis, 500k pedidos al mes, se acabo el dia 9). Las lecturas se
+// guardan 5 min en memoria: muchas partes leen lo mismo cada 20-60 s en cada host. Una escritura a una
+// clave borra lo guardado de esa clave, asi este host siempre ve lo que el mismo escribio.
+const LECTURAS = new Set(['GET', 'HGET', 'HGETALL', 'MGET', 'LRANGE', 'LLEN']);
+const LECTURA_MS = 5 * 60 * 1000;
+const leidas = new Map();
 async function redis(...comando) {
+    const op = String(comando[0]).toUpperCase();
+    if (LECTURAS.has(op)) {
+        const k = JSON.stringify(comando), g = leidas.get(k);
+        if (g && Date.now() - g.t < LECTURA_MS) return g.v;
+        const v = await redisDirecto(...comando);
+        leidas.set(k, { t: Date.now(), v });
+        return v;
+    }
+    const clave = String(op === 'EVAL' ? comando[3] : comando[1]);
+    for (const k of leidas.keys()) if (JSON.parse(k).slice(1).map(String).includes(clave)) leidas.delete(k);
+    return redisDirecto(...comando);
+}
+async function redisDirecto(...comando) {
     const r = await fetch(process.env.LINK_REDIS_URL.replace(/\/+$/, ''), {
         method: 'POST',
         headers: { Authorization: `Bearer ${process.env.LINK_REDIS_TOKEN}`, 'Content-Type': 'application/json' },
@@ -80,9 +100,9 @@ async function ciclo() {
         await alSoltar().catch(() => {});
     }
     iniciado = true;
-    // Estado cada 60 s y panel cada 2 min (la cuota gratis de Upstash es de 500k consultas al mes).
+    // Estado cada 3 min y panel cada 4 min (la cuota gratis de Upstash es de 500k consultas al mes).
     vueltas++;
-    if (vueltas % 2 !== 1) return;
+    if (vueltas % 3 !== 1) return;
     try {
         const estado = await estadoPropio();
         await redis('HSET', CLAVE_HOSTS, YO, JSON.stringify({ ...estado, nombre: YO, turno: activo, ts: Date.now() }));
@@ -127,7 +147,7 @@ async function hostsConocidos() {
         try {
             const h = JSON.parse(plano[i + 1]);
             if (Date.now() - (h.ts || 0) > 30 * 24 * 60 * 60 * 1000) { redis('HDEL', CLAVE_HOSTS, plano[i]).catch(() => {}); continue; }
-            lista.push({ ...h, enLinea: Date.now() - (h.ts || 0) < 2 * VIDA_MS });
+            lista.push({ ...h, enLinea: Date.now() - (h.ts || 0) < 10 * 60 * 1000 });
         } catch (e) { /* entrada rota */ }
     }
     return lista.sort((a, b) => (b.turno && b.enLinea) - (a.turno && a.enLinea) || b.enLinea - a.enLinea || (b.ts || 0) - (a.ts || 0));
@@ -258,15 +278,23 @@ async function webhookGp() {
 // God Packs de todos los hosts (Ale 2026-11-09): cada host sube los suyos y el God Pack UI de todos los ve.
 // Lista zenith:gp_hits, lo mas nuevo primero, se guardan los ultimos 1000.
 const CLAVE_GP_HITS = 'zenith:gp_hits';
+// zenith:gp_hits_old = los God Packs de antes (cargados una vez de los foros de KyuremBot,
+// scripts/gp-backfill-discord.js). Cada lista tiene un contador (_v): los hosts solo la bajan si cambio.
 async function subirGodPacks(lista) {
     if (!configurado() || !lista.length) return false;
     await redis('LPUSH', CLAVE_GP_HITS, ...lista.map(h => JSON.stringify({ ...h, host: YO })));
     await redis('LTRIM', CLAVE_GP_HITS, '0', '999');
+    await redis('INCR', `${CLAVE_GP_HITS}_v`);
     return true;
 }
-async function godPacksComunidad() {
+async function versionesGodPacks() {
     if (!configurado()) return null;
-    const plano = await redis('LRANGE', CLAVE_GP_HITS, '0', '999') || [];
+    const [nuevos, viejos] = await redis('MGET', `${CLAVE_GP_HITS}_v`, 'zenith:gp_hits_old_v') || [];
+    return { nuevos: String(nuevos || 0), viejos: String(viejos || 0) };
+}
+async function godPacksComunidad(viejos = false) {
+    if (!configurado()) return null;
+    const plano = await redis('LRANGE', viejos ? 'zenith:gp_hits_old' : CLAVE_GP_HITS, '0', viejos ? '-1' : '999') || [];
     return plano.map(t => { try { return JSON.parse(t); } catch (e) { return null; } }).filter(Boolean);
 }
 
@@ -295,4 +323,4 @@ const anotarMiembros = (registro) => configurado()
 
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
     tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, guardarWebhookGp, webhookGp, ultimaRelease, estaAlDia,
-    subirGodPacks, godPacksComunidad };
+    subirGodPacks, godPacksComunidad, versionesGodPacks };

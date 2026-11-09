@@ -42,7 +42,8 @@ function iniciar(d) {
     aplicarAjustesRecomendados(deps.fastTransfer.rutaMotor());
     borrarTemporalesViejas();
     setInterval(borrarTemporalesViejas, 60 * 60 * 1000);
-    setInterval(() => sincronizarGodPacks().catch(e => log('God Pack list sync failed:', e?.message || e)), 30 * 1000);
+    // Cada 5 min (cuota de Upstash: 3 hosts cada 1 min eran ~130k pedidos al mes solo para esto).
+    setInterval(() => sincronizarGodPacks().catch(e => log('God Pack list sync failed:', e?.message || e)), 5 * 60 * 1000);
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
         INJECT_ORIGINAL, '_limit_collectors', 'own accounts follow the Run Mode, ~36 packs/min in total, packs saved as their set (C1)',
         // (2026-11-06, Ale) Un Main quedo con soft ban de amigos: un host con su inject.py propio mandaba a 13 Mains
@@ -234,8 +235,58 @@ async function sincronizarGodPacks() {
         const subidos = await deps.subirGodPacks(nuevos.map(({ image, ...h }) => h));
         if (subidos) fs.writeFileSync(marca, String(Math.max(...nuevos.map(h => Number(h.ts)))));
     }
-    const todos = await deps.godPacksComunidad();
-    if (todos) fs.writeFileSync(path.join(reportes, 'gp_hits_all.json'), JSON.stringify(todos));
+    // Solo se baja una lista cuando cambio su contador (la de antes pesa ~700 KB).
+    const v = deps.versionesGodPacks ? await deps.versionesGodPacks() : null;
+    const archivo = path.join(reportes, 'gp_hits_all.json');
+    if (!v) return;
+    if (gpCache.nuevosV !== v.nuevos || !fs.existsSync(archivo)) {
+        const l = await deps.godPacksComunidad(false);
+        if (l) { gpCache.nuevos = l; gpCache.nuevosV = v.nuevos; gpCache.cambio = true; }
+    }
+    if (gpCache.viejosV !== v.viejos || !fs.existsSync(archivo)) {
+        const l = v.viejos === '0' ? [] : await deps.godPacksComunidad(true);
+        if (l) { gpCache.viejos = l; gpCache.viejosV = v.viejos; gpCache.cambio = true; }
+    }
+    if (gpCache.cambio) {
+        fs.writeFileSync(archivo, JSON.stringify([...gpCache.nuevos, ...gpCache.viejos]));
+        gpCache.cambio = false;
+    }
+    await renovarFotosGp(reportes).catch(e => log('God Pack photos links:', e?.message || e));
+}
+const gpCache = { nuevos: [], viejos: [], nuevosV: null, viejosV: null, cambio: false, fotos: 0 };
+
+// Las fotos de los God Packs de antes estan en Discord (posts de KyuremBot) y sus links vencen a las 24 h:
+// cada 12 h este bot pide links nuevos (50 por llamada) y los deja en reports/gp_img_urls.json para el panel.
+async function renovarFotosGp(reportes) {
+    const token = process.env.DISCORD_BOT_TOKEN;
+    const archivo = path.join(reportes, 'gp_img_urls.json');
+    if (!token) return;
+    const bases = [...new Set([...gpCache.nuevos, ...gpCache.viejos].map(h => h.img).filter(Boolean))];
+    if (!bases.length) return;
+    let previo = {}, edad = Infinity;
+    try { previo = JSON.parse(fs.readFileSync(archivo, 'utf8')); edad = Date.now() - fs.statSync(archivo).mtimeMs; } catch (e) { /* no existe */ }
+    const faltan = bases.some(b => !previo[b]);
+    // Todo renovado hace < 12 h: nada. Faltan algunos: se reintenta, pero no mas de una vez cada 10 min.
+    if (edad < 12 * 3600 * 1000 && (!faltan || edad < 10 * 60 * 1000 || Date.now() - gpCache.fotos < 10 * 60 * 1000)) return;
+    const mapa = {};
+    for (let i = 0; i < bases.length; i += 50) {
+        for (let intento = 0; intento < 5; intento++) {
+            const r = await fetch('https://discord.com/api/v10/attachments/refresh-urls', {
+                method: 'POST', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ attachment_urls: bases.slice(i, i + 50) }), signal: AbortSignal.timeout(15000)
+            });
+            if (r.status === 429) {
+                const espera = ((await r.json().catch(() => ({}))).retry_after || 1) * 1000 + 250;
+                await new Promise(s => setTimeout(s, espera));
+                continue;
+            }
+            const j = await r.json().catch(() => ({}));
+            for (const u of j.refreshed_urls || []) if (u.refreshed) mapa[u.original.split('?')[0]] = u.refreshed;
+            break;
+        }
+    }
+    fs.writeFileSync(archivo, JSON.stringify(mapa));
+    gpCache.fotos = Date.now();
 }
 
 // Cuadro "ACCOUNTS LEFT · OPENED" del God Pack UI (Ale 2026-11-06): las prestadas de ESTE host que quedan
@@ -741,9 +792,19 @@ async function copiarWebhookGp() {
     let actual = '';
     try { actual = fs.readFileSync(ruta, 'utf8').trim(); } catch (e) { /* no existe */ }
     if (url === actual) return;
+    // 2026-11-09: Upstash sin cuota (o una base nueva vacia) devolvia "" y se BORRABA el webhook del motor:
+    // los God Packs dejaban de postearse. Ahora una respuesta vacia nunca lo borra; si la base esta vacia
+    // y aca hay uno, se vuelve a guardar en Upstash.
+    if (!url) {
+        if (actual && deps.guardarWebhookGp && await deps.versionesGodPacks?.().catch(() => null)) {
+            await deps.guardarWebhookGp(actual).catch(() => {});
+            log('community God Pack webhook was empty in Upstash - saved again from this PC');
+        }
+        return;
+    }
     fs.mkdirSync(path.dirname(ruta), { recursive: true });
-    if (url) fs.writeFileSync(ruta, url); else { try { fs.unlinkSync(ruta); } catch (e) { /* nada */ } }
-    log(url ? 'community God Pack webhook updated' : 'community God Pack webhook removed');
+    fs.writeFileSync(ruta, url);
+    log('community God Pack webhook updated');
 }
 
 // Vigilante de God Packs (2026-11-06, Ale: "un GP sin aviso es inaceptable"). Lee los logs del motor (cuentas

@@ -7777,6 +7777,7 @@ if (comunidad.hayComunidad()) {
         hostsFarm: (modo) => hostComunidad.hostsReroll(modo), primeraVez: hostComunidad.primeraVez,
         marcarBaneada: hostComunidad.marcarBaneada, baneadas: hostComunidad.baneadas, webhookGp: hostComunidad.webhookGp,
         subirGodPacks: hostComunidad.subirGodPacks, godPacksComunidad: hostComunidad.godPacksComunidad,
+        versionesGodPacks: hostComunidad.versionesGodPacks, guardarWebhookGp: hostComunidad.guardarWebhookGp,
         nombreMain: (codigo) => comunidad.nombreDeFriendId(codigo),
         ultimaRelease: hostComunidad.ultimaRelease, estaAlDia: hostComunidad.estaAlDia,
         avisar: async (texto) => {

@@ -191,7 +191,24 @@ async function baneadasDe(discordId) {
     return salida.slice(0, 500);
 }
 
+// Cuota de Upstash (2026-11-09): las lecturas se guardan 5 min en memoria (los pings de todos los miembros
+// leian release, baneadas y la lista de hosts cada 1 min en cada host). Escribir una clave borra lo guardado.
+const LECTURAS_LIB = new Set(['GET', 'HGET', 'HGETALL', 'MGET']);
+const leidasLib = new Map();
 async function redisLibreta(...comando) {
+    const op = String(comando[0]).toUpperCase();
+    if (LECTURAS_LIB.has(op)) {
+        const k = JSON.stringify(comando), g = leidasLib.get(k);
+        if (g && Date.now() - g.t < 5 * 60 * 1000) return g.v;
+        const v = await redisLibretaDirecto(...comando);
+        if (v != null) leidasLib.set(k, { t: Date.now(), v });   // "no existe" no se guarda (vinculacion recien hecha)
+        return v;
+    }
+    const clave = String(comando[1]);
+    for (const k of leidasLib.keys()) if (JSON.parse(k)[1] === clave) leidasLib.delete(k);
+    return redisLibretaDirecto(...comando);
+}
+async function redisLibretaDirecto(...comando) {
     const url = process.env.LINK_REDIS_URL, token = process.env.LINK_REDIS_TOKEN;
     if (!url || !token) return null;
     const r = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(comando), signal: AbortSignal.timeout(10000) });
@@ -220,9 +237,17 @@ async function sincronizarAgentes() {
         const locales = await db.all(`SELECT token_hash, discord_id, guild_id, creado, version FROM link_agentes`) || [];
         if (!remotos.size) {
             for (const f of locales) await guardarAgenteCompartido(f.token_hash, f);
+            // Base nueva (2026-11-09): durante 1 dia los demas hosts SUMAN sus vinculaciones en vez de borrar
+            // las que no estan, asi no se pierde la de ningun miembro que se vinculo en otro host.
+            if (locales.length) await redisLibretaDirecto('SET', 'ml:agentes_fusion', String(Date.now() + 24 * 3600 * 1000)).catch(() => {});
             return;
         }
-        for (const f of locales) if (!remotos.has(f.token_hash)) await db.run(`DELETE FROM link_agentes WHERE token_hash = ?`, [f.token_hash]);
+        const fusion = Number(await redisLibretaDirecto('GET', 'ml:agentes_fusion').catch(() => 0) || 0) > Date.now();
+        for (const f of locales) {
+            if (remotos.has(f.token_hash)) continue;
+            if (fusion) await guardarAgenteCompartido(f.token_hash, f);
+            else await db.run(`DELETE FROM link_agentes WHERE token_hash = ?`, [f.token_hash]);
+        }
         for (const [th, a] of remotos) {
             await db.run(`INSERT INTO link_agentes (token_hash, discord_id, guild_id, creado, ultimo, version) VALUES (?, ?, ?, ?, 0, ?)
                 ON CONFLICT(token_hash) DO NOTHING`, [th, String(a.d), String(a.g || ''), a.c || Date.now(), String(a.v || '')]);
@@ -403,7 +428,11 @@ function registrar(app, dependencias) {
                 pedido.carpeta_pedida = null;
             }
             res.json({ ok: true, user: (await nombreUsuario(agente.discord_id)) || agente.discord_id, folder: pedido?.carpeta_pedida || null, ahk: await ultimoAhk(),
-                mirrors: await espejos(), banned: await baneadasDe(agente.discord_id) });
+                mirrors: await espejos(), banned: await baneadasDe(agente.discord_id),
+                // Libreta de direcciones actual (solo lectura): si la base de Upstash cambia (2026-11-09), cada
+                // Monitor Link vinculado se pasa solo a la nueva sin volver a vincular.
+                lib: process.env.LINK_REDIS_URL && process.env.LINK_REDIS_READONLY_TOKEN
+                    ? { u: process.env.LINK_REDIS_URL, t: process.env.LINK_REDIS_READONLY_TOKEN } : null });
         } catch (e) {
             res.status(500).json({ error: 'server_error' });
         }
