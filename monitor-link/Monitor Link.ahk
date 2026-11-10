@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.25"
+global VERSION := "ahk-1.9.26"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -39,6 +39,7 @@ global CuentasReroll := {}, UltimoReroll := ""
 global Baneadas := {}   ; lent accounts the GP farm marked as likely banned (from the ping)
 global UltimaVersionAhk := ""   ; newest Monitor Link published (from the ping)
 global BanLocales := "", BtnBanAbrir, BtnBanBorrar   ; banned accounts still on this PC ("" = count again)
+global DragoniteRes := ""
 global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global MiMain := ""   ; this member's own Main friend ID (16 digits): Share/Trade destination in the bot
@@ -154,8 +155,9 @@ CrearVentana() {
     Gui, Font, s9 Bold cBlack, Segoe UI
     Gui, Add, Button, x556 y198 w180 h32 gSyncRerollZenith, Sync reroll for Zenith Rise
     Gui, Font, s10 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y235 w180 h28 gSincronizar, Sync now
-    Gui, Add, Button, x556 y266 w180 h28 gOcultar, Hide
+    Gui, Add, Button, x556 y235 w88 h28 gSincronizar, Sync now
+    Gui, Add, Button, x648 y235 w88 h28 gOcultar, Hide
+    Gui, Add, Button, x556 y266 w180 h28 gGoOffline, Go offline
     Gui, Font, s9 Norm cDCDDDE, Segoe UI
     Gui, Add, Checkbox, x586 y300 w130 -Theme vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
@@ -783,21 +785,33 @@ RegistrarMain:
     MiMain := nuevo
     IniWrite, %MiMain%, %CFG%, main, id
     GuiControl,, BtnMain, % TextoMain()
-    if !EnviarMain()
+    if !EnviarMain(true)
         MsgBox, 48, Monitor Link, Saved, but could not reach the bot. It will be sent when it shows Connected.
     else
-        MsgBox, 64, Monitor Link, % MiMain = "" ? "Done: your Main was removed." : "Done: the bot will send your cards to this Main."
+        MsgBox, 64, Monitor Link, % MiMain = "" ? "Done: your Main was removed." : "Done: the bot will send your cards to this Main." . TextoDragonite(DragoniteRes, "register")
 return
 
-EnviarMain() {
+EnviarMain(dragonite := false) {
+    DragoniteRes := ""
     if (Token = "")
         return false
-    body := "{""main"":""" . MiMain . """}"
+    body := "{""main"":""" . MiMain . """"
+    ; (Ale 2026-11-10) Also in Dragonite (wr98's register), with the heartbeat name of this PC's PTCGPB bot.
+    if (dragonite && MiMain != "") {
+        hb := ""
+        ini := BuscarSettingsPtcgpb()
+        if (ini != "")
+            IniRead, hb, %ini%, General, heartBeatName, %A_Space%
+        body .= ",""dragonite"":true,""heartbeatName"":""" . JsonEsc(Trim(hb)) . """"
+    }
+    body .= "}"
     try {
         r := Http("POST", ServerUrl . "/link/main", body, "text/plain; charset=utf-8", Token, 30)
     } catch e {
         return false
     }
+    if RegExMatch(r.text, """dragonite""\s*:\s*""(\w+)""", dr)
+        DragoniteRes := dr1
     if (r.status = 401) {
         NoVinculado()
         return false
@@ -1133,11 +1147,58 @@ SyncRerollZenith:
     IniWrite, 0, %ini%, General, openExtraPack
     IniWrite, 0, %ini%, General, spendHourGlass
     webhook := ""
-    MsgBox, 64, Monitor Link, Done! Your PTCGPB bot is set up for the Zenith Rise group reroll:`n`n- Group Reroll ON (elite + vip-elite online IDs)`n- Auto GP test every 3600 s (Standard, wait 150 s)`n- Group Discord: your Discord ID + the community webhook`n- Wonderpick: min 2 stars, ignore invalid packs`n- Mode: Inject Wonderpick 96P+ (min 70 packs, most packs first), 0 instances + 1 Main`n`nThe PTCGPB bot opens now, launches MuMu and starts by itself. A copy of your old settings is in Settings.ini.before-zenith.bak
+    if (MiMain != "")
+        EnviarMain(true)
+    online := DragoniteOnline(true)
+    MsgBox, 64, Monitor Link, % "Done! Your PTCGPB bot is set up for the Zenith Rise group reroll:`n`n- Group Reroll ON (elite + vip-elite online IDs)`n- Auto GP test every 3600 s (Standard, wait 150 s)`n- Group Discord: your Discord ID + the community webhook`n- Wonderpick: min 2 stars, ignore invalid packs`n- Mode: Inject Wonderpick 96P+ (min 70 packs, most packs first), 0 instances + 1 Main`n`nThe PTCGPB bot opens now, launches MuMu and starts by itself. A copy of your old settings is in Settings.ini.before-zenith.bak" . TextoDragonite(online, "online")
     ; (Ale 2026-11-10) Opens the PTCGPB bot right after.
     SplitPath, ini,, dirBot
     if FileExist(dirBot . "\PTCGPB.ahk")
         AbrirYArrancarPtcgpb(dirBot)
+return
+
+; (Ale 2026-11-10) Online / offline in Dragonite (wr98's list of online Mains), like his Discord buttons.
+; Returns the bot's answer: ok, full, not_registered, no_role, rivals, error ("" = bot not reached).
+DragoniteOnline(online) {
+    if (Token = "")
+        return ""
+    r := ""
+    try r := Http("POST", ServerUrl . "/link/online", online ? "{""online"":true}" : "{""online"":false}", "text/plain; charset=utf-8", Token, 20)
+    if (!IsObject(r))
+        return ""
+    if (r.status = 401) {
+        NoVinculado()
+        return ""
+    }
+    RegExMatch(r.text, """result""\s*:\s*""(\w+)""", x)
+    return x1 != "" ? x1 : "error"
+}
+
+TextoDragonite(res, accion) {
+    if (res = "")
+        return accion = "register" ? "" : "`n`nDragonite: could not reach the bot. Use the Online button in Discord."
+    if (res = "ok")
+        return accion = "register" ? "`n`nAlso saved in Dragonite." : accion = "online" ? "`n`nYou are ONLINE in Dragonite." : "`n`nYou are OFFLINE in Dragonite."
+    if (res = "id_used")
+        return "`n`nDragonite: that ID is already registered by another member."
+    if (res = "no_role")
+        return "`n`nDragonite: you need a group role (Trainer, Gym Leader, Elite Four) in Discord."
+    if (res = "not_registered")
+        return "`n`nDragonite: set My Main ID first (Discord box), then press this again."
+    if (res = "full")
+        return "`n`nDragonite: your group already has 25 online. Try again later."
+    if (res = "rivals")
+        return "`n`nDragonite: Rivals use their own sessions. Use the buttons in Discord."
+    return "`n`nDragonite: something failed. Use the buttons in Discord."
+}
+
+GoOffline:
+    if (Token = "") {
+        MsgBox, 48, Monitor Link, Link this PC first (type /link in Zenith Rise).
+        return
+    }
+    res := DragoniteOnline(false)
+    MsgBox, % res = "ok" ? 64 : 48, Monitor Link, % res = "ok" ? "You are OFFLINE in Dragonite." : SubStr(TextoDragonite(res, "offline"), 3)
 return
 
 ; (Ale 2026-11-10) Opens PTCGPB, presses Launch all Mumu, waits for MuMu and presses Start Bot (and Yes on

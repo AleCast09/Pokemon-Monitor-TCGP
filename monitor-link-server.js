@@ -311,6 +311,7 @@ function registrar(app, dependencias) {
     setInterval(sincronizarAgentes, 10 * 60 * 1000);
     cargarAmigos();
     const nombreUsuario = dependencias.nombreUsuario || (async () => null);
+    const dragoniteDe = dependencias.dragonite || (async () => 'error');
 
     app.post('/link/claim', express.json(), async (req, res) => {
         try {
@@ -580,9 +581,27 @@ function registrar(app, dependencias) {
             if (main) await db.run(`INSERT OR REPLACE INTO link_main (discord_id, main_id, ts) VALUES (?, ?, ?)`, [String(agente.discord_id), main, Date.now()]);
             else await db.run(`DELETE FROM link_main WHERE discord_id = ?`, [String(agente.discord_id)]);
             await cargarAmigos();
-            res.json({ ok: true, main: main || null });
+            // (Ale 2026-11-10) Tambien en Dragonite (registro de wr98), con el heartbeat name de su PTCGPB.
+            const hb = String(datos.heartbeatName || '').trim().slice(0, 60);
+            const dragonite = (main && datos.dragonite) ? await dragoniteDe(agente.discord_id, agente.guild_id, 'register', { main, heartbeatName: hb }).catch(() => 'error') : null;
+            res.json({ ok: true, main: main || null, dragonite });
         } catch (e) {
             res.status(500).json({ error: 'error' });
+        }
+    });
+
+    // (Ale 2026-11-10) Online/offline en Dragonite, como los botones del bot de wr98: { online: true|false }.
+    app.post('/link/online', express.text({ type: 'text/plain', limit: '1kb' }), async (req, res) => {
+        try {
+            await asegurarTablas();
+            const agente = await agenteDe(req);
+            if (!agente) return res.status(401).json({ error: 'not_linked' });
+            let datos;
+            try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
+            const r = await dragoniteDe(agente.discord_id, agente.guild_id, datos.online ? 'online' : 'offline').catch(() => 'error');
+            res.json({ ok: r === 'ok', result: r });
+        } catch (e) {
+            res.status(500).json({ error: 'server_error' });
         }
     });
 

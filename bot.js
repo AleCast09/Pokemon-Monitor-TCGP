@@ -7764,7 +7764,17 @@ if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
     // Amigo anotado en Monitor Link: solo el rol Monitor (Ale 2026-11-06: sin el rol Trainer).
     alAgregarAmigo: (discordId, guildId) => darRolMonitor(guildId, discordId),
     activo: () => hostComunidad.esActivo(),
-    nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null
+    nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null,
+    // Dragonite (registro de wr98): "My Main ID" de Monitor Link y online/offline (Ale 2026-11-10).
+    dragonite: async (discordId, guildId, accion, datos = {}) => {
+        const guild = client.guilds.cache.get(String(guildId));
+        const miembro = guild ? await guild.members.fetch(String(discordId)).catch(() => null) : null;
+        if (!miembro) return 'no_member';
+        if (accion === 'register') return comunidad.registrarMainDragonite(miembro, datos.main, datos.heartbeatName);
+        const r = await comunidad.onlineDragonite(miembro, accion === 'online');
+        if (typeof r === 'object' && r.result === 'ok') avisarDragonite(guild, miembro, accion === 'online', r.grupo).catch(() => {});
+        return typeof r === 'object' ? r.result : r;
+    }
 });
 // GP farm de la comunidad: los hosts Online (boton en el canal de hosts) se reparten la bolsa de proxies y
 // las cuentas que prestan los miembros (reroll-comunidad.js).
@@ -17163,6 +17173,21 @@ async function quitarRolMonitor(guildId, discordId) {
     const rol = await comunidad.rolMonitor(guild);
     const miembro = rol ? await guild.members.fetch(String(discordId)).catch(() => null) : null;
     if (miembro && miembro.roles.cache.has(rol.id)) await miembro.roles.remove(rol, 'Removed from a Monitor Link friends list').catch(() => {});
+}
+
+// (Ale 2026-11-10) Aviso en #logging (canal del panel de Dragonite) cuando alguien queda online/offline
+// desde Monitor Link. Se borra a los 2 min para no tapar el panel de wr98.
+const CANAL_LOGGING_DRAGONITE = '1494760619985862676';
+async function avisarDragonite(guild, miembro, online, grupo) {
+    let canal = await guild.channels.fetch(CANAL_LOGGING_DRAGONITE).catch(() => null);
+    if (!canal) canal = guild.channels.cache.find(c => c.isTextBased?.() && /logging/i.test(c.name)) || null;
+    if (!canal) return;
+    const nombreGrupo = String(grupo || '').replace(/_/g, ' ');
+    const texto = online
+        ? `🟢 <@${miembro.id}> you are now **ONLINE** in **${nombreGrupo}** (Sync reroll for Zenith Rise).`
+        : `🔴 <@${miembro.id}> you are now **OFFLINE** in **${nombreGrupo}**.`;
+    const msg = await canal.send({ content: texto, allowedMentions: { users: [miembro.id] } }).catch(() => null);
+    if (msg) setTimeout(() => msg.delete().catch(() => {}), 2 * 60 * 1000);
 }
 
 async function darRolMonitor(guildId, discordId) {

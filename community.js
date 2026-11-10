@@ -300,6 +300,76 @@ async function nombreDeFriendId(friendId) {
     return null;
 }
 
+// ---- Escribir en Dragonite (Ale 2026-11-10, con OK y clave de escritura de wr98) ----
+// Igual que su bot (index.js): el grupo sale del rol de Discord (active_roles:<id> si lo eligio, si no
+// Rivals > Elite_Four > Gym_Leader > Trainer); el registro es users:<grupo> <discordId> -> JSON
+// {name, heartbeatName, aliases, main_id, sec_id, updatedAt}; online = SADD online:<grupo> main_id
+// (tope 25 por grupo), offline = SREM main y secundaria. Rivals usa sesiones propias: no se toca.
+const GRUPO_DE_ROL = { 'Trainer': 'Trainer', 'Gym Leader': 'Gym_Leader', 'Gym_Leader': 'Gym_Leader', 'Elite Four': 'Elite_Four',
+    'Elite_Four': 'Elite_Four', 'Rivals': 'Rivals', 'Rival Duo': 'Rivals', 'Rival_Duo': 'Rivals' };
+const MAX_ONLINE_GRUPO = 25;
+
+async function grupoDragonite(member) {
+    const grupos = [...new Set((member?.roles?.cache ? [...member.roles.cache.values()] : []).map(r => GRUPO_DE_ROL[r.name]).filter(Boolean))];
+    if (!grupos.length) return null;
+    const elegido = await redis('GET', `active_roles:${member.id}`).catch(() => null);
+    if (elegido && grupos.includes(elegido)) return elegido;
+    return ['Rivals', 'Elite_Four', 'Gym_Leader', 'Trainer'].find(g => grupos.includes(g)) || null;
+}
+
+// Devuelve 'ok' | 'no_role' | 'id_used' | 'error'.
+async function registrarMainDragonite(member, mainId, heartbeatName) {
+    try {
+        const main = String(mainId || '').replace(/\D/g, '');
+        if (!/^\d{16}$/.test(main)) return 'error';
+        const grupo = await grupoDragonite(member);
+        if (!grupo) return 'no_role';
+        const plano = await redis('HGETALL', `users:${grupo}`) || [];
+        let viejo = {};
+        for (let i = 0; i + 1 < plano.length; i += 2) {
+            let d; try { d = typeof plano[i + 1] === 'string' ? JSON.parse(plano[i + 1]) : plano[i + 1]; } catch (e) { continue; }
+            if (String(plano[i]) === String(member.id)) { viejo = d || {}; continue; }
+            if (String(d?.main_id || '') === main || String(d?.sec_id || '') === main) return 'id_used';
+        }
+        const discordName = member.displayName || member.user?.username || 'Unknown';
+        const name = String(viejo.name || discordName).trim();
+        const hb = String(heartbeatName || viejo.heartbeatName || name).trim();
+        const aliases = [...new Set([...(Array.isArray(viejo.aliases) ? viejo.aliases : []), viejo.name, viejo.heartbeatName, discordName, name, hb]
+            .map(x => String(x || '').trim()).filter(Boolean))];
+        const datos = { ...viejo, name, heartbeatName: hb, aliases, main_id: main, sec_id: viejo.sec_id || null, updatedAt: Date.now() };
+        await redis('HSET', `users:${grupo}`, String(member.id), JSON.stringify(datos));
+        cacheMiembros.delete(grupo);
+        return 'ok';
+    } catch (e) {
+        console.error('DEBUG: Dragonite register:', e?.message || e);
+        return 'error';
+    }
+}
+
+// online true/false. Devuelve 'ok' | 'no_role' | 'not_registered' | 'full' | 'rivals' | 'error'.
+async function onlineDragonite(member, online) {
+    try {
+        const grupo = await grupoDragonite(member);
+        if (!grupo) return 'no_role';
+        if (grupo === 'Rivals') return 'rivals';
+        const crudo = await redis('HGET', `users:${grupo}`, String(member.id));
+        let d = null; try { d = typeof crudo === 'string' ? JSON.parse(crudo) : crudo; } catch (e) { /* ilegible */ }
+        const main = String(d?.main_id || '').replace(/\D/g, ''), sec = String(d?.sec_id || '').replace(/\D/g, '');
+        if (!/^\d{16}$/.test(main)) return 'not_registered';
+        if (online) {
+            if (Number(await redis('SISMEMBER', `online:${grupo}`, main)) === 1) return { result: 'ok', grupo };
+            if (Number(await redis('SCARD', `online:${grupo}`)) >= MAX_ONLINE_GRUPO) return 'full';
+            await redis('SADD', `online:${grupo}`, main);
+        } else {
+            await redis('SREM', `online:${grupo}`, main, ...(/^\d{16}$/.test(sec) ? [sec] : []));
+        }
+        return { result: 'ok', grupo };
+    } catch (e) {
+        console.error('DEBUG: Dragonite online:', e?.message || e);
+        return 'error';
+    }
+}
+
 // Saca de un payload los botones/menus cuyo customId empieza con alguno de los prefijos (los de
 // MuMu/needles, que en comunidad no tienen sentido). Filas que quedan vacias se eliminan.
 function quitarComponentes(guildId, payload, prefijos) {
@@ -313,4 +383,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { rolMonitor, permisosCategoria, CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual };
+module.exports = { rolMonitor, permisosCategoria, CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual, registrarMainDragonite, onlineDragonite };
