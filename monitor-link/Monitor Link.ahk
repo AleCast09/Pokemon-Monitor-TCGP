@@ -114,56 +114,56 @@ CrearVentana() {
     Gui, Add, Text, x24 y154 w226 h30 vTxtResumen,
     Gui, Font, s9 Norm cBlack, Segoe UI
     Gui, Add, Button, x24 y190 w226 h26 gCambiarCarpeta, Change folder
-    Caja(12, 234, 250, 122, "Banned accounts", "ED4245")
+    Caja(12, 234, 250, 82, "Banned accounts", "ED4245")
     Gui, Font, s8 Norm cDCDDDE, Segoe UI
-    Gui, Add, Text, x24 y270 w226 h16 vTxtBan, None on this PC
+    Gui, Add, Text, x24 y254 w226 h16 vTxtBan, None on this PC
     Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Add, Button, x24 y294 w110 h30 gAbrirBaneadas vBtnBanAbrir Disabled, Open folder
-    Gui, Add, Button, x140 y294 w110 h30 gBorrarBaneadas vBtnBanBorrar Disabled, Delete XML && JSON
+    Gui, Add, Button, x24 y276 w110 h28 gAbrirBaneadas vBtnBanAbrir Disabled, Open folder
+    Gui, Add, Button, x140 y276 w110 h28 gBorrarBaneadas vBtnBanBorrar Disabled, Delete XML && JSON
     ; ---- column 2: GP farm, proxies, Discord
-    Caja(274, 8, 250, 124, "GP farm (reroll)", "FAA61A")
+    Caja(274, 8, 250, 92, "GP farm (reroll)", "FAA61A")
     Gui, Font, s8 Norm cDCDDDE, Segoe UI
-    Gui, Add, Text, x286 y28 w226 h62 vTxtGP,
+    Gui, Add, Text, x286 y28 w226 h30 vTxtGP,
     Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Add, Button, x286 y96 w226 h26 gCompartirCuentas, Share accounts for reroll
-    Caja(274, 140, 250, 82, "Proxies", "B47CF5")
+    Gui, Add, Button, x286 y64 w226 h26 gCompartirCuentas, Share accounts for reroll
+    Caja(274, 108, 250, 82, "Proxies", "B47CF5")
     Gui, Font, s8 Norm cDCDDDE, Segoe UI
-    Gui, Add, Text, x286 y160 w226 h16 vTxtProx, Not sharing proxies
+    Gui, Add, Text, x286 y128 w226 h16 vTxtProx, Not sharing proxies
     Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Add, Button, x286 y182 w110 h28 gCompartirProxies, Share proxies
-    Gui, Add, Button, x402 y182 w110 h28 gDejarProxies, Stop sharing
-    Caja(274, 230, 250, 126, "Discord", "00B0F4")
+    Gui, Add, Button, x286 y150 w110 h28 gCompartirProxies, Share proxies
+    Gui, Add, Button, x402 y150 w110 h28 gDejarProxies, Stop sharing
+    Caja(274, 198, 250, 118, "Discord", "00B0F4")
     Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Add, Button, x286 y258 w226 h34 gRegistrarMain vBtnMain, % TextoMain()
-    Gui, Add, Button, x286 y300 w226 h34 gElegirAmigos, Friends who can use my accounts
+    Gui, Add, Button, x286 y220 w226 h36 gRegistrarMain vBtnMain, % TextoMain()
+    Gui, Add, Button, x286 y264 w226 h36 gElegirAmigos, Friends who can use my accounts
     ; ---- column 3: who, status and the main buttons
-    Caja(536, 8, 220, 348, "", "FFFFFF")
+    Caja(536, 8, 220, 308, "", "FFFFFF")
     logo := LogoMonitorLink()
     if (logo != "")
-        Gui, Add, Picture, x610 y44 w72 h72, %logo%
+        Gui, Add, Picture, x614 y28 w64 h64, %logo%
     Gui, Font, s14 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y118 w200 Center, MONITOR LINK
+    Gui, Add, Text, x546 y96 w200 Center, MONITOR LINK
     Gui, Font, s8 Norm cB9BBBE, Segoe UI
-    Gui, Add, Text, x546 y142 w200 Center vTxtVer,
-    Gui, Add, Text, x546 y158 w200 Center vTxtUser,
+    Gui, Add, Text, x546 y120 w200 Center vTxtVer,
+    Gui, Add, Text, x546 y135 w200 Center vTxtUser,
     Gui, Font, s9 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y175 w200 h30 Center vStatus, ...
+    Gui, Add, Text, x546 y152 w200 h28 Center vStatus, ...
     ; Progress while reading/sending the accounts (600+ accounts take a while; without it the window
     ; looked frozen and Windows said "Not responding").
-    Gui, Add, Progress, x556 y207 w180 h8 c3BA55C Background2B2D31 vBarra Hidden, 0
+    Gui, Add, Progress, x556 y182 w180 h8 c3BA55C Background2B2D31 vBarra Hidden, 0
     Gui, Font, s9 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y220 w180 h34 gSyncRerollZenith, Sync reroll for Zenith Rise
+    Gui, Add, Button, x556 y194 w180 h32 gSyncRerollZenith, Sync reroll for Zenith Rise
     Gui, Font, s10 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y259 w180 h30 gSincronizar, Sync now
-    Gui, Add, Button, x556 y294 w180 h30 gOcultar, Hide
+    Gui, Add, Button, x556 y232 w180 h28 gSincronizar, Sync now
+    Gui, Add, Button, x556 y264 w180 h28 gOcultar, Hide
     Gui, Font, s9 Norm cDCDDDE, Segoe UI
-    Gui, Add, Checkbox, x560 y332 w180 -Theme vInicio gCambiarInicio, Start with Windows
+    Gui, Add, Checkbox, x560 y295 w180 -Theme vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
     ; ---- last error (only shows when there is one)
     Gui, Font, s8 Norm cED4245, Segoe UI
-    Gui, Add, Text, x12 y362 w744 h30 vTxtError,
+    Gui, Add, Text, x12 y322 w744 h26 vTxtError,
     Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Show, w768 h392, Monitor Link
+    Gui, Show, w768 h350, Monitor Link
 }
 
 ; (Ale 2026-11-10) Logo of the window (Zekrom), inside this file so it shows with only the .ahk downloaded.
