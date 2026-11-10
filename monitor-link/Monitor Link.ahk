@@ -1022,7 +1022,11 @@ SyncRerollZenith:
     IniWrite, 70, %ini%, General, injectWonderpickMinPacks
     IniWrite, PacksDesc, %ini%, UserSettings, injectSortMethod
     webhook := ""
-    MsgBox, 64, Monitor Link, Done! Your PTCGPB bot is set up for the Zenith Rise group reroll:`n`n- Group Reroll ON (elite + vip-elite online IDs)`n- Auto GP test every 3600 s (Standard, wait 150 s)`n- Group Discord: your Discord ID + the community webhook`n- Wonderpick: min 2 stars, ignore invalid packs`n- Mode: Inject Wonderpick 96P+ (min 70 packs, most packs first)`n`nOpen the PTCGPB bot now. A copy of your old settings is in Settings.ini.before-zenith.bak
+    MsgBox, 64, Monitor Link, Done! Your PTCGPB bot is set up for the Zenith Rise group reroll:`n`n- Group Reroll ON (elite + vip-elite online IDs)`n- Auto GP test every 3600 s (Standard, wait 150 s)`n- Group Discord: your Discord ID + the community webhook`n- Wonderpick: min 2 stars, ignore invalid packs`n- Mode: Inject Wonderpick 96P+ (min 70 packs, most packs first)`n`nThe PTCGPB bot opens now. A copy of your old settings is in Settings.ini.before-zenith.bak
+    ; (Ale 2026-11-10) Opens the PTCGPB bot right after.
+    SplitPath, ini,, dirBot
+    if FileExist(dirBot . "\PTCGPB.ahk")
+        Run, "%A_AhkPath%" "%dirBot%\PTCGPB.ahk", %dirBot%
 return
 
 ; Settings.ini of the PTCGPB bot: next to Monitor Link, or above the chosen accounts folder.
