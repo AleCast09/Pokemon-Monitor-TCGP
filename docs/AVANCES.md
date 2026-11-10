@@ -24,11 +24,18 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-09 (20:30) — cuenta extra — Aviso Only Pack, versión del panel, proxies
+- Publicado `host-2026.11.09-1439` + bot de Ale reiniciado (4 procesos; Arcade tiene el turno).
+- **Aviso de Open Packs Only** (`aviso-only-pack.js`): al dar Start en Only Pack, tarjeta (imagen hecha con sharp) en **🔒-hosts** (no en #chat, pedido de Ale): sobre + imagen (`assets/expansions`), PPM de Only Pack (no va a LatiasBot), sobres, tiempo, cuentas que le faltan a cada miembro. Se edita cada 5 min; STOPPED en gris al parar. **Falta verlo con un Start real.** Mejora pendiente: sumar las cuentas propias del host a la lista. Prueba: `node scripts/prueba-aviso-only-pack.js`. Quedan 4 mensajes 🧪 TEST en 🔒-hosts (borrar con OK de Ale).
+- God Pack UI en la PC de Ale: la versión se lee al arrancar el bot y sale ✅ si ya incluye lo publicado (antes decía "updating…" siempre).
+- Lista de God Packs: se vuelve a bajar también si cambia la cantidad (hosts con código viejo no suben el contador). 17 desde el 8/11.
+- **Proxies DataImpulse regalados sin tráfico** (TRAFFIC_EXHAUSTED desde 14:51): borrados de la bolsa en la PC de Ale (eran de Ale Cast y Olivel GD). Falta: Ale y Olivel → "Stop sharing proxies" en Monitor Link; revisar que Arcade/wr98 no los sigan usando.
+
 ### 2026-11-09 (13:22) — cuenta extra — Monitor Link 1.9.21 publicado
 - El cuadro de la clave ya no se bloquea: un Monitor Link vinculado puede pegar una clave nueva (`/link` → Get a new key). Publicado `host-2026.11.09-1322`.
 - Los que siguen en 1.9.19 (base vieja) deben borrar la línea `token=` de `%APPDATA%\MonitorLink\monitor-link-ahk.ini`, abrir Monitor Link y pegar la clave nueva (texto dado a Ale).
 - Arcade ya está en la base nueva; wr98 recibió `Actualizar-Upstash-Host.bat` (escritorio de Ale; borrarlo cuando lo use).
-- Pendiente (idea de Ale, a medias): aviso en el chat de Zenith al arrancar Open Packs Only (total de cuentas, cada miembro con sus no elegibles, nombre e imagen del sobre). Falta la fuente de la imagen del sobre.
+- (Aviso de Only Pack: hecho, ver arriba.)
 
 ### 2026-11-09 (12:35) — cuenta extra — Upstash: base nueva en uso (PC de Ale)
 - Base nueva gratis **zenitth** (`present-joey-109243.upstash.io`, cuenta Upstash "Ale Cast"). `.env` de Ale actualizado (respaldo `.env.antes-zenitth`), publicado `host-2026.11.09-1233` (ML 1.9.20) y bot de Ale reiniciado (4 procesos, tomó el turno).
