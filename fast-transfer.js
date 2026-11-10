@@ -198,6 +198,25 @@ async function editar(interaction, payload, final = false) {
     }
 }
 
+// Log de Fast Share/Trade en la carpeta del motor (se corta a 5 MB: el viejo queda en .old).
+// No guarda la XML ni claves: solo lo que imprime el motor (pasos, respuestas del juego).
+function abrirLogMotor(runId, args) {
+    let fd = null;
+    try {
+        const dir = path.join(rutaMotor(), 'logs');
+        fs.mkdirSync(dir, { recursive: true });
+        const ruta = path.join(dir, 'fast_transfer.log');
+        try { if (fs.statSync(ruta).size > 5 * 1024 * 1024) fs.renameSync(ruta, `${ruta}.old`); } catch (e) { /* no existe aun */ }
+        fd = fs.openSync(ruta, 'a');
+        const ocultos = ['--xml', '--proxy-file', '--backup-proxy-file', '--stop-file', '--engine-dir'];
+        const visibles = args.filter((x, i) => !ocultos.includes(x) && !ocultos.includes(args[i - 1]));
+        fs.writeSync(fd, `\n===== ${new Date().toISOString()} run ${runId} ${visibles.join(' ')}\n`);
+    } catch (e) { fd = null; }
+    const escribir = (linea) => { if (fd !== null) try { fs.writeSync(fd, `${String(linea).replace(/(token\w*\s*(?:OK\s*)?[:(=]\s*)[^\s)]+/gi, '$1***')}\n`); } catch (e) { /* disco lleno, sigue */ } };
+    escribir.cerrar = () => { if (fd !== null) try { fs.closeSync(fd); } catch (e) { /* nada */ } fd = null; };
+    return escribir;
+}
+
 function correrMotor(runId, args, alEvento) {
     return new Promise(resolve => {
         const python = pythonMotor();
@@ -210,11 +229,22 @@ function correrMotor(runId, args, alEvento) {
         let resultado = null;
         let resto = '';
         const ultimas = [];
+        // (Ale 2026-11-10) Log completo de cada corrida en <motor>\logs\fast_transfer.log, para ver
+        // el error exacto del juego cuando algo falla en otro host.
+        const log = abrirLogMotor(runId, args);
+        let detalleJuego = '';   // lo que respondio el juego al rechazar la oferta (gRPC details)
         const procesar = linea => {
+            log(linea);
+            const det = linea.match(/SubmitProposalV2 (?:gRPC code|details): (.+)/);
+            if (det) detalleJuego = (detalleJuego ? `${detalleJuego} · ` : '') + det[1].replace(/^StatusCode\./, '').replace(/^['"]|['"]$/g, '').slice(0, 150);
             if (linea.startsWith('@@FT_RESULT ')) {
                 try { resultado = JSON.parse(linea.slice(12)); } catch (e) { /* ignorar */ }
             } else if (linea.startsWith('@@FT ')) {
-                try { alEvento(JSON.parse(linea.slice(5))); } catch (e) { /* ignorar */ }
+                try {
+                    const ev = JSON.parse(linea.slice(5));
+                    if (ev.state === 'error' && detalleJuego && /Submit failed/i.test(ev.msg || '')) ev.msg += ` — game said: ${detalleJuego}`;
+                    alEvento(ev);
+                } catch (e) { /* ignorar */ }
             } else if (linea.trim()) {
                 ultimas.push(linea);
                 if (ultimas.length > 30) ultimas.shift();
@@ -231,6 +261,8 @@ function correrMotor(runId, args, alEvento) {
         hijo.on('error', e => { ultimas.push(String(e?.message || e)); });
         hijo.on('close', code => {
             if (resto) procesar(resto);
+            log(`===== exit ${code}`);
+            log.cerrar();
             resolve({ code, resultado, ultimas });
         });
     });
