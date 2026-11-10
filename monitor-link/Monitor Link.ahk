@@ -142,22 +142,22 @@ CrearVentana() {
     if (logo != "")
         Gui, Add, Picture, x614 y28 w64 h64, %logo%
     Gui, Font, s14 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y96 w200 Center, MONITOR LINK
+    Gui, Add, Text, x546 y102 w200 Center, MONITOR LINK
     Gui, Font, s8 Norm cB9BBBE, Segoe UI
-    Gui, Add, Text, x546 y120 w200 Center vTxtVer,
-    Gui, Add, Text, x546 y135 w200 Center vTxtUser,
+    Gui, Add, Text, x546 y127 w200 Center vTxtVer,
+    Gui, Add, Text, x546 y142 w200 Center vTxtUser,
     Gui, Font, s9 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y152 w200 h28 Center vStatus, ...
+    Gui, Add, Text, x546 y158 w200 h28 Center vStatus, ...
     ; Progress while reading/sending the accounts (600+ accounts take a while; without it the window
     ; looked frozen and Windows said "Not responding").
-    Gui, Add, Progress, x556 y182 w180 h8 c3BA55C Background2B2D31 vBarra Hidden, 0
+    Gui, Add, Progress, x556 y187 w180 h8 c3BA55C Background2B2D31 vBarra Hidden, 0
     Gui, Font, s9 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y194 w180 h32 gSyncRerollZenith, Sync reroll for Zenith Rise
+    Gui, Add, Button, x556 y198 w180 h32 gSyncRerollZenith, Sync reroll for Zenith Rise
     Gui, Font, s10 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y232 w180 h28 gSincronizar, Sync now
-    Gui, Add, Button, x556 y264 w180 h28 gOcultar, Hide
+    Gui, Add, Button, x556 y235 w180 h28 gSincronizar, Sync now
+    Gui, Add, Button, x556 y266 w180 h28 gOcultar, Hide
     Gui, Font, s9 Norm cDCDDDE, Segoe UI
-    Gui, Add, Checkbox, x560 y295 w180 -Theme vInicio gCambiarInicio, Start with Windows
+    Gui, Add, Checkbox, x560 y296 w180 -Theme vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
     ; ---- last error (only shows when there is one)
     Gui, Font, s8 Norm cED4245, Segoe UI
