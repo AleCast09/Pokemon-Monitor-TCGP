@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.21"
+global VERSION := "ahk-1.9.22"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -43,6 +43,7 @@ global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global MiMain := ""   ; this member's own Main friend ID (16 digits): Share/Trade destination in the bot
 global Status, Info, Clave, BtnLink, Inicio, LinkBox, LinkTxt, LVCuentas, Barra, BtnMain
+global Cambiando := false   ; linked PC: the key box shows ***** until Change is pressed
 
 CargarConfig()
 CrearVentana()
@@ -133,9 +134,21 @@ CrearVentana() {
 ; (2026-11-09, Ale) The key box is never locked: when the bot moved to a new database the old
 ; Monitor Links could not find it, and members could not paste a new key without editing the .ini.
 ; Already linked -> the same box links again with a new key (/link -> Get a new key).
+; (Ale 2026-11-10) Linked: the box shows ******** and the button says Change; Change empties it for a new key.
 MostrarVinculo(mostrar) {
-    GuiControl,, LinkBox, % mostrar ? "Link this PC" : "Link again (only if it can't connect)"
-    GuiControl,, LinkTxt, % mostrar ? "In Discord, type /link in Zenith Rise and paste the key here:" : "In Discord: /link -> Get a new key, and paste it here:"
+    if (mostrar || Cambiando) {
+        GuiControl,, LinkBox, % mostrar ? "Link this PC" : "Change the link key"
+        GuiControl,, LinkTxt, % mostrar ? "In Discord, type /link in Zenith Rise and paste the key here:" : "In Discord: /link -> Get a new key, and paste it here:"
+        GuiControl,, Clave,
+        GuiControl, Enable, Clave
+        GuiControl,, BtnLink, Link
+    } else {
+        GuiControl,, LinkBox, Linked
+        GuiControl,, LinkTxt, This PC is linked. To use a new key, press Change.
+        GuiControl,, Clave, ****************************
+        GuiControl, Disable, Clave
+        GuiControl,, BtnLink, Change
+    }
     PintarEstado()
 }
 
@@ -903,6 +916,12 @@ FinDeArreglo(t, abre) {
 
 ; ---------------------------------------------------------------- linking (/link)
 Vincular:
+    if (Token != "" && !Cambiando) {
+        Cambiando := true
+        MostrarVinculo(false)
+        GuiControl, Focus, Clave
+        return
+    }
     Gui, Submit, NoHide
     clave := Trim(Clave)
     if !RegExMatch(clave, "^ML([12])-([A-Za-z0-9_-]+)$", m) {
@@ -947,7 +966,7 @@ Vincular:
     ServerUrl := url, Token := t1, UserName := JsonUnesc(u1)
     LibUrl := partes.Length() >= 4 ? partes[3] : "", LibToken := partes.Length() >= 4 ? partes[4] : ""
     GuardarConfig()
-    GuiControl,, Clave,
+    Cambiando := false
     MostrarVinculo(false)
     ; Starts with Windows by default once linked (the member can untick it), so a PC restart
     ; never leaves it closed without them noticing.
@@ -979,7 +998,7 @@ NoVinculado() {
     SetTimer, Ping, Off
     SetTimer, ResumenPeriodico, Off
     SetTimer, RevisarTrabajos, Off
-    Token := "", JobsReq := "", EnLinea := false
+    Token := "", JobsReq := "", EnLinea := false, Cambiando := false
     GuardarConfig()
     MostrarVinculo(true)
     Gui, Show
