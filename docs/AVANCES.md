@@ -24,6 +24,11 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-10 (00:10) — cuenta extra — Log de Fast Trade, proxies
+- Publicado `host-2026.11.10-0010`: cada ⚡ Fast Share/Trade guarda su log en `<motor>\logsast_transfer.log` (tokens tapados) y, si el juego rechaza la oferta, Discord muestra "game said: …". Bot de Ale sin reiniciar (no tiene el turno).
+- Fast Trade de Cyrus ☆☆ (creeeder91, en host de Arcade) falló con ABORTED; la cuenta tiene 42,600 shinedust y a mano el juego sí deja. Antes salieron 2 ☆☆ de creeeder91 al mismo Main desde la PC de Ale. Falta: repetir y leer el log.
+- **Corrección:** DataImpulse es de Ale (comprado, se acabaron los GB porque lo compartía con todos los hosts), no regalado. Los regalados eran los 10 gratis de Webshare (ya caducados). El bloqueo `dd985ff0b1b1192f` en `monitor-link-server.js` es la cuenta de DataImpulse de Ale: quitarlo si recarga. Proxies que funcionan en la PC de Ale: `proxies2.txt` 18/19, `proxies.txt` 8/27.
+
 ### 2026-11-09 (20:30) — cuenta extra — Aviso Only Pack, versión del panel, proxies
 - Publicado `host-2026.11.09-1439` + bot de Ale reiniciado (4 procesos; Arcade tiene el turno).
 - **Aviso de Open Packs Only** (`aviso-only-pack.js`): al dar Start en Only Pack, tarjeta (imagen hecha con sharp) en **🔒-hosts** (no en #chat, pedido de Ale): sobre + imagen (`assets/expansions`), PPM de Only Pack (no va a LatiasBot), sobres, tiempo, cuentas que le faltan a cada miembro. Se edita cada 5 min; STOPPED en gris al parar. **Falta verlo con un Start real.** Mejora pendiente: sumar las cuentas propias del host a la lista. Prueba: `node scripts/prueba-aviso-only-pack.js`. Quedan 4 mensajes 🧪 TEST en 🔒-hosts (borrar con OK de Ale).
