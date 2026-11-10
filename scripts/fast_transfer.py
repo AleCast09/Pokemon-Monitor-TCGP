@@ -154,26 +154,65 @@ def limpiar_amigos_si_hace_falta(sess, pid_main):
         pass  # si no se puede limpiar, se intenta igual
 
 
-def usar_idioma_de_la_cuenta(at, sess):
-    """Idioma de la carta (2026-10-24): el motor ofrece/comparte siempre en ingles (lang=2) y el
-    juego rechaza el trade (ABORTED 4008) si la cuenta tiene el juego en otro idioma -- las cuentas
-    de creeeder91 fallaban con cualquier carta y las de Ale (EN) no. Se usa el idioma real de la
-    cuenta, sin tocar el motor."""
+def idiomas_de_cartas(sess):
+    """{card_id: [lang, ...]} con los idiomas de las copias que la cuenta tiene de verdad
+    (PlayerResources/SyncV1 paginado -> card_stocks[].language_tags; amount 0 = 1 copia, como
+    card_amount). Ordenado: mas copias primero."""
+    mapa = {}
     try:
-        lang = int(sess.get_player_settings().get("language_type") or 0)
+        from engine.takasho.schema.lettuce_server.player_api import player_resources_sync_v1_pb2 as ps
+        cursor = ""
+        for _ in range(50):
+            resp = sess._call(
+                "/takasho.schema.lettuce_server.player_api.PlayerResources/SyncV1",
+                ps.PlayerResourcesSyncV1.Types.Request(cursor=cursor),
+                ps.PlayerResourcesSyncV1.Types.Response,
+            )
+            for st in resp.player_resources.card_stocks:
+                tags = sorted(((int(t.lang), max(1, int(t.amount))) for t in st.language_tags), key=lambda x: -x[1])
+                if tags:
+                    mapa[st.card_id] = [l for l, _ in tags]
+            if not resp.has_next:
+                break
+            cursor = resp.next_cursor
+    except Exception as e:
+        print(f"  [Lang] could not read card languages: {e}", flush=True)
+    return mapa
+
+
+def usar_idioma_de_la_cuenta(at, sess):
+    """Idioma de la carta. El motor ofrece/comparte siempre en ingles (lang=2) y el juego rechaza
+    el trade (ABORTED 4008) si la copia es de otro idioma.
+    - 2026-10-24: se usaba el idioma del juego de la cuenta.
+    - 2026-11-10: no alcanza -- la cuenta bd1118 de creeeder91 tiene el juego en ingles pero sus
+      cartas en espanol (Cyrus/Mimikyu fallaban con 4008, a mano funcionaba). Ahora se usa el idioma
+      de la copia que la cuenta tiene de esa carta; si no se sabe, el del juego."""
+    try:
+        lang_juego = int(sess.get_player_settings().get("language_type") or 0)
     except Exception:
-        return
-    if lang <= 0 or lang == 2:
-        return
+        lang_juego = 0
+    por_carta = idiomas_de_cartas(sess)
+
+    def idioma(card_id):
+        langs = por_carta.get(card_id) or []
+        if lang_juego > 0 and lang_juego in langs:
+            return lang_juego
+        if langs:
+            return langs[0]
+        return lang_juego if lang_juego > 0 else 2
+
     original = sess.submit_trade_proposal
 
     def submit_con_idioma(*args, **kw):
-        kw["lang"] = lang
+        card_id = kw.get("card_id") or (args[1] if len(args) > 1 else "")
+        kw["lang"] = idioma(card_id)
+        print(f"  [Lang] offering {card_id} in language {kw['lang']}", flush=True)
         return original(*args, **kw)
 
     sess.submit_trade_proposal = submit_con_idioma
-    at.LANG_ENUM = dict(at.LANG_ENUM, EN=lang)  # run_share_flow pide "EN" fijo
-    print(f"  [Lang] account language {lang} (not EN) — offering cards in that language", flush=True)
+    if lang_juego > 0 and lang_juego != 2:
+        at.LANG_ENUM = dict(at.LANG_ENUM, EN=lang_juego)  # run_share_flow pide "EN" fijo
+        print(f"  [Lang] account language {lang_juego} (not EN)", flush=True)
 
 
 def main():
