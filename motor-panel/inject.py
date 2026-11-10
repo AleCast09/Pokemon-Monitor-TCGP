@@ -1710,6 +1710,15 @@ def _discover_send_requests_field(Request) -> tuple[Optional[str], Optional[bool
     return None, None
 
 
+PROXY_WEB_PAGE_V1 = True
+
+
+def _proxy_web_page(text: str) -> bool:
+    """The proxy/firewall answered with a web page instead of the game (HTML, '403 Forbidden' page)."""
+    t = (text or "").lower()
+    return "<!doctype" in t or "<html" in t or "403 forbidden" in t
+
+
 _fr_state = threading.local()   # proxy_blocked: the last send failed because the proxy returned a web page
 
 
@@ -2908,6 +2917,11 @@ def inject_one(
             # were sent to QUARANTINE/unknown_failure.
             if "BaaS login failed" in err_str or err_str.startswith("account_in_use"):
                 classification = "transient"   # account open elsewhere: never quarantine it
+            # 2026-11-10 (Arcade: 13 lent accounts of one member "Likely banned" at once): the proxy answered
+            # with a web page (HTML / 403 Forbidden page) instead of the game. That is the proxy blocking us,
+            # not the game refusing the account: retry next run, never mark it banned.
+            if _proxy_web_page(err_str) or _proxy_web_page(str(err_obj or "")):
+                classification = "transient"
             if err_str.startswith("account_in_use"):
                 # Not a failure of this run (no auto-stop count, no red): the account is just busy elsewhere.
                 result["error"] = "account_in_use"
@@ -3201,6 +3215,26 @@ def inject_one(
                 _sospechosos = [p for p in target_pids if pid_to_friend_code.get(p, "") in _sus]
                 target_pids = [p for p in target_pids if p not in _sospechosos]
                 fr_ok = send_friend_requests(sess, target_pids, tag) if target_pids else False
+                # 2026-11-10 (Arcade: many accounts with "SendRequestsV1 blocked by the proxy (web page)"):
+                # that proxy blocks friend requests. If nothing landed yet, put the proxy aside, log in again
+                # on another proxy and resend (max 2 other proxies).
+                for _otro in range(2):
+                    if fr_ok or not getattr(_fr_state, "proxy_blocked", False) or getattr(_fr_state, "sent_ok", None):
+                        break
+                    _bloqueado = getattr(sess, "_proxy_url", "") or ""
+                    _mark_proxy_unhealthy(_bloqueado)
+                    log(f"[proxy] this proxy blocks friend requests - trying again on another proxy "
+                        f"({_otro + 1}/2)", tag=tag)
+                    _nueva = login_account(account, max_retries=2)
+                    if _nueva is None:
+                        account.pop("_login_failure", None)   # a failed re-login says nothing about a ban
+                        break
+                    try:
+                        sess.close()
+                    except Exception:
+                        pass
+                    sess = _nueva
+                    fr_ok = send_friend_requests(sess, target_pids, tag)
                 # One by one only when a Main refused (full list); not when the proxy itself is blocked.
                 if not fr_ok and len(target_pids) > 1 and not getattr(_fr_state, "proxy_blocked", False):
                     # (2026-11-01) El paquete falla entero (ABORTED) si UNO de los collectors tiene la

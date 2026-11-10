@@ -2391,6 +2391,7 @@ class GodPackGui(QMainWindow):
             lista = QVBoxLayout(inner)
             lista.setSpacing(12)
             estado_pag["hits"], estado_pag["shown"], estado_pag["lista"] = hits, 0, lista
+            estado_pag["gen"] = estado_pag.get("gen", 0) + 1
             if not hits:
                 vacio = QLabel("No God Packs here yet. They show up as soon as one is found (on any host).")
                 vacio.setStyleSheet(f"color: {D['TEXT2']}; font-size: 13px;")
@@ -2402,7 +2403,7 @@ class GodPackGui(QMainWindow):
             scroll.setWidget(inner)
             agregar()
 
-        def tarjeta(h: dict, foto: str) -> QFrame:
+        def tarjeta(h: dict, foto: str = None) -> QFrame:
             malo = h.get("mode") == "packs-only"
             card = QFrame(objectName="statCard")
             card.setStyleSheet(f"QFrame#statCard {{ border: 1px solid {D['RED'] if malo else D['GREEN']}; }}")
@@ -2433,14 +2434,23 @@ class GodPackGui(QMainWindow):
             txt.setOpenExternalLinks(True)
             cv.addWidget(txt)
             img = QLabel()
+            card.img = img
+            if foto is None:   # still loading in the background (Ale 2026-11-10: the window froze)
+                img.setText("⏳ Loading cards...")
+                img.setStyleSheet(f"color: {D['TEXT2']}; font-size: 13px; padding: 30px;")
+            else:
+                poner_foto(img, foto)
+            cv.addWidget(img)
+            return card
+
+        def poner_foto(img: QLabel, foto: str):
             pm = QPixmap(foto) if foto else QPixmap()
             if pm.isNull():
                 img.setText("(cards image not available yet)")
                 img.setStyleSheet(f"color: {D['TEXT3']};")
             else:
+                img.setStyleSheet("")
                 img.setPixmap(pm.scaledToWidth(940, Qt.SmoothTransformation))
-            cv.addWidget(img)
-            return card
 
         def agregar():
             hits, desde, lista = estado_pag["hits"], estado_pag["shown"], estado_pag["lista"]
@@ -2450,22 +2460,51 @@ class GodPackGui(QMainWindow):
                     urls = json.loads(self.GP_IMG_URLS_FILE.read_text("utf-8"))
                 except Exception:
                     urls = {}
-                QApplication.setOverrideCursor(Qt.WaitCursor)
-                try:
-                    from concurrent.futures import ThreadPoolExecutor
-                    with ThreadPoolExecutor(max_workers=8) as pool:   # photos download in parallel
-                        fotos = list(pool.map(lambda h: self._gp_collage_path(h, urls), lote))
-                finally:
-                    QApplication.restoreOverrideCursor()
+                # Cards show at once with "Loading cards..."; the photos are built/downloaded in the background
+                # and each one appears when ready (the window no longer freezes).
                 pos = lista.indexOf(estado_pag["mas"])
-                for i, (h, foto) in enumerate(zip(lote, fotos)):
-                    lista.insertWidget(pos + i, tarjeta(h, foto))
+                gen = estado_pag["gen"]
+                for i, h in enumerate(lote):
+                    c = tarjeta(h)
+                    lista.insertWidget(pos + i, c)
+                    carga["pend"] += 1
+                    carga["pool"].submit(lambda h=h, c=c: carga["cola"].put((gen, c, self._gp_collage_path(h, urls))))
+                actualizar_carga()
             estado_pag["shown"] = desde + len(lote)
             faltan = len(hits) - estado_pag["shown"]
             estado_pag["mas"].setVisible(faltan > 0)
             estado_pag["mas"].setText(f"Load {min(30, faltan)} more ({faltan} left)")
 
-        estado_pag = {}
+        estado_pag = {"gen": 0}
+        import queue
+        from concurrent.futures import ThreadPoolExecutor
+        carga = {"cola": queue.Queue(), "pool": ThreadPoolExecutor(max_workers=8), "pend": 0}
+
+        def actualizar_carga():
+            dlg.setWindowTitle(f"God Packs  —  ⏳ loading {carga['pend']} photo(s)..." if carga["pend"] > 0 else "God Packs")
+
+        def recibir_fotos():
+            hubo = False
+            while True:
+                try:
+                    gen, c, foto = carga["cola"].get_nowait()
+                except queue.Empty:
+                    break
+                hubo = True
+                carga["pend"] = max(0, carga["pend"] - 1)
+                if gen != estado_pag["gen"]:
+                    continue   # the filter changed: that card is gone
+                try:
+                    poner_foto(c.img, foto)
+                except RuntimeError:
+                    pass       # card already deleted
+            if hubo:
+                actualizar_carga()
+
+        reloj = QTimer(dlg)
+        reloj.timeout.connect(recibir_fotos)
+        reloj.start(150)
+        dlg.finished.connect(lambda _r: (reloj.stop(), carga["pool"].shutdown(wait=False)))
 
         for w in (w_when, w_hosts, w_kind):
             w.currentIndexChanged.connect(lambda _i: pintar())
