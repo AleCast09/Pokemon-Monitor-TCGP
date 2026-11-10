@@ -750,13 +750,20 @@ async function pedirXmlReroll(discordId, nombres) {
 
 // Formatos aceptados: user:pass@host:port, http://user:pass@host:port y host:port:user:pass (el de
 // la mayoria de los planes). Todo sale como user:pass@host:port, el que lee el motor.
+// Cuentas de proxies que ya no sirven (2026-11-09, Ale: las de DataImpulse regaladas se quedaron sin
+// trafico -> "407 TRAFFIC_EXHAUSTED" y todos los logins fallaban). Se ignoran aunque alguien las siga
+// compartiendo. Va la huella (sha256 del usuario sin lo que sigue a "__", primeros 16), no el usuario.
+const CUENTAS_PROXY_BLOQUEADAS = new Set(['dd985ff0b1b1192f']);
+const proxyBloqueado = (usuario) => CUENTAS_PROXY_BLOQUEADAS.has(
+    crypto.createHash('sha256').update(String(usuario).split('__')[0]).digest('hex').slice(0, 16));
+
 function normalizarProxy(linea) {
     const l = String(linea).trim().replace(/^(https?|socks5h?):\/\//i, '');
     if (!l || l.startsWith('#') || /\s/.test(l)) return null;
     let m = /^([^:@]+):([^@]+)@([A-Za-z0-9.-]+):(\d{2,5})$/.exec(l);
-    if (m) return `${m[1]}:${m[2]}@${m[3]}:${m[4]}`;
+    if (m) return proxyBloqueado(m[1]) ? null : `${m[1]}:${m[2]}@${m[3]}:${m[4]}`;
     m = /^([A-Za-z0-9.-]+):(\d{2,5}):([^:@]+):([^@]+)$/.exec(l);
-    if (m) return `${m[3]}:${m[4]}@${m[1]}:${m[2]}`;
+    if (m) return proxyBloqueado(m[3]) ? null : `${m[3]}:${m[4]}@${m[1]}:${m[2]}`;
     return null;
 }
 
@@ -777,7 +784,8 @@ async function escribirProxiesMotor() {
     if (!motor || !fs.existsSync(motor)) return 0;
     await asegurarTablas();
     const filas = await db.all(`SELECT lista FROM link_proxies ORDER BY discord_id`) || [];
-    const todas = [...new Set(filas.flatMap(f => String(f.lista || '').split('\n')).filter(Boolean))];
+    // normalizarProxy otra vez: saca las cuentas bloqueadas que ya estaban guardadas de antes.
+    const todas = [...new Set(filas.flatMap(f => String(f.lista || '').split('\n')).map(normalizarProxy).filter(Boolean))];
     const parte = await parteReroll().catch(() => null);
     const mias = parte ? todas.slice(Math.floor(todas.length * parte.i / parte.n), Math.floor(todas.length * (parte.i + 1) / parte.n)) : [];
     const escribir = (nombre, lineas) => {
