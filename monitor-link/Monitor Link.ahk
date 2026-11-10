@@ -42,7 +42,7 @@ global BanLocales := "", BtnBanAbrir, BtnBanBorrar   ; banned accounts still on 
 global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global MiMain := ""   ; this member's own Main friend ID (16 digits): Share/Trade destination in the bot
-global Status, Info, Clave, BtnLink, Inicio, LinkBox, LinkTxt, LVCuentas, Barra, BtnMain
+global Status, Info, Clave, TxtCarpeta, TxtResumen, TxtBan, TxtGP, TxtProx, TxtVer, TxtUser, TxtError, BtnLink, Inicio, LinkBox, LinkTxt, LVCuentas, Barra, BtnMain
 global Cambiando := false   ; linked PC: the key box shows ***** until Change is pressed
 
 CargarConfig()
@@ -97,38 +97,80 @@ CrearVentana() {
     Menu, Tray, Default, Open Monitor Link
     Menu, Tray, Tip, Monitor Link
 
-    Gui, Margin, 20, 14
+    ; (Ale 2026-11-10) Ordered like the PTCGPB window: dark, three columns, one box per topic.
+    Gui, Color, 202225, 2B2D31
+    Gui, Margin, 12, 10
+    ; ---- column 1: link, accounts, banned
+    Caja(12, 8, 250, 86, "Link this PC", "7983F5", "LinkBox")
+    Gui, Font, s8 Norm cDCDDDE, Segoe UI
+    Gui, Add, Text, x24 y28 w226 h28 vLinkTxt, In Discord, type /link in Zenith Rise and paste the key here:
+    Gui, Font, s9 Norm cFFFFFF, Segoe UI
+    Gui, Add, Edit, x24 y60 w158 h23 vClave
+    Gui, Font, s9 Norm cBlack, Segoe UI
+    Gui, Add, Button, x188 y59 w62 h25 gVincular vBtnLink, Link
+    Caja(12, 102, 250, 124, "Accounts", "3BA55C")
+    Gui, Font, s8 Norm cDCDDDE, Segoe UI
+    Gui, Add, Text, x24 y122 w226 h30 vTxtCarpeta,
+    Gui, Add, Text, x24 y154 w226 h30 vTxtResumen,
+    Gui, Font, s9 Norm cBlack, Segoe UI
+    Gui, Add, Button, x24 y190 w226 h26 gCambiarCarpeta, Change folder
+    Caja(12, 234, 250, 82, "Banned accounts", "ED4245")
+    Gui, Font, s8 Norm cDCDDDE, Segoe UI
+    Gui, Add, Text, x24 y254 w226 h16 vTxtBan, None on this PC
+    Gui, Font, s9 Norm cBlack, Segoe UI
+    Gui, Add, Button, x24 y276 w110 h28 gAbrirBaneadas vBtnBanAbrir Disabled, Open folder
+    Gui, Add, Button, x140 y276 w110 h28 gBorrarBaneadas vBtnBanBorrar Disabled, Delete XML && JSON
+    ; ---- column 2: GP farm, proxies, Discord
+    Caja(274, 8, 250, 124, "GP farm (reroll)", "FAA61A")
+    Gui, Font, s8 Norm cDCDDDE, Segoe UI
+    Gui, Add, Text, x286 y28 w226 h62 vTxtGP,
+    Gui, Font, s9 Norm cBlack, Segoe UI
+    Gui, Add, Button, x286 y96 w226 h26 gCompartirCuentas, Share accounts for reroll
+    Caja(274, 140, 250, 82, "Proxies", "B47CF5")
+    Gui, Font, s8 Norm cDCDDDE, Segoe UI
+    Gui, Add, Text, x286 y160 w226 h16 vTxtProx, Not sharing proxies
+    Gui, Font, s9 Norm cBlack, Segoe UI
+    Gui, Add, Button, x286 y182 w110 h28 gCompartirProxies, Share proxies
+    Gui, Add, Button, x402 y182 w110 h28 gDejarProxies, Stop sharing
+    Caja(274, 230, 250, 86, "Discord", "00B0F4")
+    Gui, Font, s9 Norm cBlack, Segoe UI
+    Gui, Add, Button, x286 y250 w226 h26 gRegistrarMain vBtnMain, % TextoMain()
+    Gui, Add, Button, x286 y280 w226 h26 gElegirAmigos, Friends who can use my accounts
+    ; ---- column 3: who, status and the main buttons
+    Caja(536, 8, 220, 308, "", "FFFFFF")
     logo := A_ScriptDir . "\GUI\Images\zenith-rise-logo.png"
     if FileExist(logo)
-        Gui, Add, Picture, x150 y14 w100 h100, %logo%
-    Gui, Font, s16 Bold, Segoe UI
-    Gui, Add, Text, xm y+8 w360 Center, MONITOR LINK
-    Gui, Font, s9 Norm cGray, Segoe UI
-    Gui, Add, Text, xm y+0 w360 Center, Zenith Rise - connects your PC with the Discord bot
-    Gui, Font, s11 Bold, Segoe UI
-    Gui, Add, Text, xm y+14 w360 Center vStatus, ...
+        Gui, Add, Picture, x614 y20 w64 h64, %logo%
+    Gui, Font, s14 Bold cFFFFFF, Segoe UI
+    Gui, Add, Text, x546 y88 w200 Center, MONITOR LINK
+    Gui, Font, s8 Norm cB9BBBE, Segoe UI
+    Gui, Add, Text, x546 y114 w200 Center vTxtVer,
+    Gui, Add, Text, x546 y130 w200 Center vTxtUser,
+    Gui, Font, s10 Bold cFFFFFF, Segoe UI
+    Gui, Add, Text, x546 y150 w200 h36 Center vStatus, ...
     ; Progress while reading/sending the accounts (600+ accounts take a while; without it the window
     ; looked frozen and Windows said "Not responding").
-    Gui, Add, Progress, xm y+4 w360 h10 c1E8E3E vBarra Hidden, 0
-    Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Add, Text, xm y+6 w360 r9 vInfo,
-    Gui, Add, GroupBox, xm y+6 w360 h92 vLinkBox, Link this PC
-    Gui, Add, Text, xp+12 yp+22 w336 vLinkTxt, In Discord, type /link in Zenith Rise and paste the key here:
-    Gui, Add, Edit, xp y+6 w250 vClave
-    Gui, Add, Button, x+8 yp-1 w78 h24 gVincular vBtnLink, Link
-    Gui, Add, Button, xm y+28 w116 h30 gCambiarCarpeta, Change folder
-    Gui, Add, Button, x+6 yp w116 h30 gSincronizar, Sync now
-    Gui, Add, Button, x+6 yp w116 h30 gOcultar, Hide
-    Gui, Add, Button, xm y+6 w177 h30 gCompartirProxies, Share proxies
-    Gui, Add, Button, x+6 yp w177 h30 gDejarProxies, Stop sharing proxies
-    Gui, Add, Button, xm y+6 w360 h30 gCompartirCuentas, Share accounts for reroll (96+ packs)
-    Gui, Add, Button, xm y+6 w360 h30 gRegistrarMain vBtnMain, % TextoMain()
-    Gui, Add, Button, xm y+6 w360 h30 gElegirAmigos, Friends who can use my accounts in Discord
-    Gui, Add, Button, xm y+6 w177 h30 gAbrirBaneadas vBtnBanAbrir Disabled, Banned: open folder
-    Gui, Add, Button, x+6 yp w177 h30 gBorrarBaneadas vBtnBanBorrar Disabled, Delete banned XML && JSON
-    Gui, Add, Checkbox, xm y+12 vInicio gCambiarInicio, Start with Windows
+    Gui, Add, Progress, x556 y188 w180 h8 c3BA55C Background2B2D31 vBarra Hidden, 0
+    Gui, Font, s10 Bold cBlack, Segoe UI
+    Gui, Add, Button, x556 y204 w180 h32 gSincronizar, Sync now
+    Gui, Add, Button, x556 y242 w180 h32 gOcultar, Hide
+    Gui, Font, s9 Norm cDCDDDE, Segoe UI
+    Gui, Add, Checkbox, x560 y284 w180 -Theme vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
-    Gui, Show, AutoSize, Monitor Link
+    ; ---- last error (only shows when there is one)
+    Gui, Font, s8 Norm cED4245, Segoe UI
+    Gui, Add, Text, x12 y322 w744 h30 vTxtError,
+    Gui, Font, s9 Norm cBlack, Segoe UI
+    Gui, Show, w768 h352, Monitor Link
+}
+
+; Titled box with a colored title (-Theme so Windows keeps the color).
+Caja(x, y, w, h, titulo, color, var := "") {
+    Gui, Font, s9 Bold c%color%, Segoe UI
+    if (var != "")
+        Gui, Add, GroupBox, x%x% y%y% w%w% h%h% -Theme v%var%, %titulo%
+    else
+        Gui, Add, GroupBox, x%x% y%y% w%w% h%h% -Theme, %titulo%
 }
 
 ; (2026-11-09, Ale) The key box is never locked: when the bot moved to a new database the old
@@ -159,30 +201,30 @@ PintarEstado() {
     GuiControl, % BanLocales ? "Enable" : "Disable", BtnBanAbrir
     GuiControl, % BanLocales ? "Enable" : "Disable", BtnBanBorrar
     if (Token = "") {
-        Gui, Font, s11 Bold cDA7B00, Segoe UI
+        Gui, Font, s10 Bold cFAA61A, Segoe UI
         GuiControl, Font, Status
         GuiControl,, Status, Not linked yet
     } else if (EnLinea) {
-        Gui, Font, s11 Bold c1E8E3E, Segoe UI
+        Gui, Font, s10 Bold c3BA55C, Segoe UI
         GuiControl, Font, Status
         GuiControl,, Status, Connected
     } else {
-        Gui, Font, s11 Bold cC62828, Segoe UI
+        Gui, Font, s10 Bold cED4245, Segoe UI
         GuiControl, Font, Status
         GuiControl,, Status, Can't reach the bot - retrying
     }
     ; Version line (Ale 2026-11-06): up to date, or updating to the newest one (it installs by itself).
-    estadoVer := UltimaVersionAhk = "" ? "" : VersionMasNueva(UltimaVersionAhk, VERSION) ? "  -  updating to " . UltimaVersionAhk . "..." : "  -  up to date"
-    texto := "Version: " . VERSION . estadoVer . "`n"
-        . (UserName != "" ? "Discord user: " . UserName . "`n" : "")
-        . "Folder: " . (Ruta != "" ? Ruta : "(not chosen yet - press Change folder)") . "`n"
-        . (UltimoEnvio != "" ? "Cards summary: " . CuentasEnviadas . " accounts, sent at " . UltimoEnvio : "Cards summary: not sent yet")
-        . (ProxyFile != "" ? "`nProxies shared: " . (ProxiesEnviadas != "" ? ProxiesEnviadas : "sending...") : "")
-        . (CuentasReroll.Count() ? "`nAccounts shared for reroll: " . CuentasReroll.Count() . (UltimoReroll != "" ? " - last opened " . UltimoReroll : "") : "")
-        . (CompGP != "" ? "`nGP farm accounts: " . CompGP . "  -  96P pack farm accounts: " . Comp96 : "")
-        . (BanLocales ? "`nBanned accounts: " . BanLocales . " (buttons below)" : "")
-        . (UltimoError != "" ? "`n" . UltimoError : "")
-    GuiControl,, Info, %texto%
+    GuiControl,, TxtVer, % VERSION . (UltimaVersionAhk = "" ? "" : VersionMasNueva(UltimaVersionAhk, VERSION) ? "  -  updating to " . UltimaVersionAhk . "..." : "  -  up to date")
+    GuiControl,, TxtUser, % UserName != "" ? "Discord: " . UserName : ""
+    GuiControl,, TxtCarpeta, % "Folder: " . (Ruta != "" ? Ruta : "not chosen yet - press Change folder")
+    GuiControl,, TxtResumen, % UltimoEnvio != "" ? "Cards summary: " . CuentasEnviadas . " accounts, sent at " . UltimoEnvio : "Cards summary: not sent yet"
+    GuiControl,, TxtBan, % BanLocales ? "On this PC: " . BanLocales . " (open or delete them)" : "None on this PC"
+    gp := CuentasReroll.Count() ? "Shared: " . CuentasReroll.Count() . " accounts" . (UltimoReroll != "" ? "`nLast opened: " . UltimoReroll : "") : "Not sharing accounts yet"
+    if (CompGP != "")
+        gp .= "`nGod Pack farm: " . CompGP . "  -  96P pack farm: " . Comp96
+    GuiControl,, TxtGP, %gp%
+    GuiControl,, TxtProx, % ProxyFile != "" ? "Shared: " . (ProxiesEnviadas != "" ? ProxiesEnviadas : "sending...") : "Not sharing proxies"
+    GuiControl,, TxtError, %UltimoError%
     Menu, Tray, Tip, % "Monitor Link - " . (Token = "" ? "not linked" : EnLinea ? "connected" : "offline")
 }
 
