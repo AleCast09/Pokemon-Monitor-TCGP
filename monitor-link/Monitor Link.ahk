@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.28"
+global VERSION := "ahk-1.9.29"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -1313,28 +1313,38 @@ AbrirYArrancarPtcgpb(dirBot) {
     AvisoArranque(ventana, "Zenith Rise reroll started!")
 }
 
-; Countdown over the PTCGPB window: "Launch all Mumu in 10..." (also in the Monitor Link status).
+; Countdown in the PTCGPB window, under "CC BY-NC 4.0 international license" (also in the Monitor Link
+; status). (Ale 2026-11-10) It writes into that text of the PTCGPB panel, so the user sees it right there.
 CuentaRegresiva(ventana, segundos, boton) {
     Loop, %segundos% {
-        AvisoArranque(ventana, "Zenith Rise: " . boton . " in " . (segundos - A_Index + 1) . "...", 0)
+        AvisoArranque(ventana, boton . " in " . (segundos - A_Index + 1) . "s...", 0)
         Sleep, 1000
     }
-    ToolTip,,,, 19
 }
 
 AvisoArranque(ventana, texto, quitar := 6000) {
-    CoordMode, ToolTip, Screen
-    WinGetPos, wx, wy, ww,, %ventana%
-    if (wx = "")
-        wx := A_ScreenWidth // 2 - 150, wy := 40, ww := 300
-    ToolTip, %texto%, % wx + ww // 2 - 110, % wy + 40, 19
-    GuiControl,, Status, %texto%
-    if (quitar)
-        SetTimer, QuitarAvisoArranque, -%quitar%
+    global LicenciaPtcgpb
+    GuiControl,, Status, % "Zenith Rise: " . texto
+    if !LicenciaPtcgpb || !WinExist("ahk_id " . LicenciaPtcgpb)
+        ControlGet, LicenciaPtcgpb, Hwnd,, CC BY-NC 4.0 international license, %ventana%
+    if LicenciaPtcgpb {
+        ControlMove,,,,, 48, ahk_id %LicenciaPtcgpb%
+        ControlSetText,, % "CC BY-NC 4.0 international license`n`nZenith Rise: " . texto, ahk_id %LicenciaPtcgpb%
+    } else {
+        ; panel text not found: tooltip over the PTCGPB window, as before
+        CoordMode, ToolTip, Screen
+        WinGetPos, wx, wy, ww,, %ventana%
+        if (wx = "")
+            wx := A_ScreenWidth // 2 - 150, wy := 40, ww := 300
+        ToolTip, % "Zenith Rise: " . texto, % wx + ww // 2 - 110, % wy + 40, 19
+    }
+    SetTimer, QuitarAvisoArranque, % quitar ? -quitar : "Off"
 }
 
 QuitarAvisoArranque:
     ToolTip,,,, 19
+    if LicenciaPtcgpb && WinExist("ahk_id " . LicenciaPtcgpb)
+        ControlSetText,, CC BY-NC 4.0 international license, ahk_id %LicenciaPtcgpb%
 return
 
 ; Presses a PTCGPB button by its text and waits for PTCGPB to write it in its log; up to 3 tries.

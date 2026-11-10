@@ -24,6 +24,9 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-10 — diegoikrew123 — Bot: Monitor Link 1.9.29 (sin publicar)
+- La cuenta regresiva del Sync (Launch all Mumu / Start Bot) ahora se escribe dentro del panel de PTCGPB, debajo de "CC BY-NC 4.0 international license" (cambia ese texto y lo agranda); si no lo encuentra, usa el globito de antes. Probado en la PC de Ale (encontró el texto). Falta publicar con OK de Ale.
+
 ### 2026-11-10 09:55 — diegoikrew123 — Bot: Monitor Link 1.9.28 (publicado host-2026.11.10-0952)
 - Botón de Dragonite con **circulito** dentro (verde = online, "Go offline"; rojo = offline, "Go online"; gris = no se sabe). Consulta el estado solo al abrir la ventana y al arrancar (GET `/link/online`), para no gastar el Upstash de wr98.
 - Sync: cuenta regresiva de 10 s antes de Launch all Mumu y de 45 s antes de Start Bot; cada clic se comprueba en `Logs\Log_PTCGPB.txt` (hasta 3 intentos). Probado en la PC de Ale: arrancó.
