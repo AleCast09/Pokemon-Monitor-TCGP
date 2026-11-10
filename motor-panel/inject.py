@@ -1711,6 +1711,7 @@ def _discover_send_requests_field(Request) -> tuple[Optional[str], Optional[bool
 
 
 PROXY_WEB_PAGE_V1 = True
+PROXY_WEB_PAGE_V2 = True
 
 
 def _proxy_web_page(text: str) -> bool:
@@ -1755,8 +1756,11 @@ def send_friend_requests(sess, target_pids: list[str], tag: str = "") -> bool:
                     # not one per batch) and the caller doesn't retry one by one from this proxy.
                     if "<!doctype" in err_str.lower() or "<html" in err_str.lower():
                         _fr_state.proxy_blocked = True
-                        log(f"[!] SendRequestsV1 blocked by the proxy (web page) - stopping friend requests "
-                            f"for this account", tag=tag)
+                        _t = re.search(r"<title[^>]*>(.*?)</title>", err_str, re.I | re.S)
+                        _pagina = re.sub(r"\s+", " ", (_t.group(1) if _t else re.sub(r"<[^>]+>", " ", err_str)))[:90].strip()
+                        log(f"[!] SendRequestsV1 blocked by the proxy (web page: {_pagina!r}) - stopping friend "
+                            f"requests from this proxy ({len(_fr_state.sent_ok)} of {len(target_pids)} Mains reached)",
+                            tag=tag)
                         return False
                     log(f"[!] SendRequestsV1 helper error: {err_str[:200]}", tag=tag)
             except Exception as exc:
@@ -3218,8 +3222,14 @@ def inject_one(
                 # 2026-11-10 (Arcade: many accounts with "SendRequestsV1 blocked by the proxy (web page)"):
                 # that proxy blocks friend requests. If nothing landed yet, put the proxy aside, log in again
                 # on another proxy and resend (max 2 other proxies).
+                # 2026-11-10 (2nd fix): also when some Mains were reached before the block - only the rest is resent.
                 for _otro in range(2):
-                    if fr_ok or not getattr(_fr_state, "proxy_blocked", False) or getattr(_fr_state, "sent_ok", None):
+                    if fr_ok or not getattr(_fr_state, "proxy_blocked", False):
+                        break
+                    _ya = list(getattr(_fr_state, "sent_ok", []) or [])
+                    _resto = [p for p in target_pids if p not in _ya]
+                    if not _resto:
+                        fr_ok = True
                         break
                     _bloqueado = getattr(sess, "_proxy_url", "") or ""
                     _mark_proxy_unhealthy(_bloqueado)
@@ -3234,7 +3244,10 @@ def inject_one(
                     except Exception:
                         pass
                     sess = _nueva
-                    fr_ok = send_friend_requests(sess, target_pids, tag)
+                    fr_ok = send_friend_requests(sess, _resto, tag)
+                    _fr_state.sent_ok = _ya + (list(_resto) if fr_ok else list(getattr(_fr_state, "sent_ok", []) or []))
+                    if fr_ok:
+                        log(f"[proxy] friend requests sent from the new proxy ({len(_resto)} Mains)", tag=tag)
                 # One by one only when a Main refused (full list); not when the proxy itself is blocked.
                 if not fr_ok and len(target_pids) > 1 and not getattr(_fr_state, "proxy_blocked", False):
                     # (2026-11-01) El paquete falla entero (ABORTED) si UNO de los collectors tiene la

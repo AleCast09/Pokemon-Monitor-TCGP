@@ -53,7 +53,7 @@ function iniciar(d) {
         // (2026-11-09) God Packs de Open Packs Only tambien se anotan (con ❌) en la lista del panel.
         // (2026-11-10, Arcade) Una pagina web del proxy ya no cuenta como ban, y si bloquea las solicitudes se
         // reintenta con otro proxy.
-        'PROXY_WEB_PAGE_V1');
+        'PROXY_WEB_PAGE_V2');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',
