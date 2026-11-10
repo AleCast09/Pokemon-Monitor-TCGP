@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-10 15:12 — diegoikrew123 — Bot: proxy web page ≠ ban + lista de God Packs sin congelarse (publicado host-2026.11.10-1512)
+- Arcade: 13 cuentas de jasonshied salieron "Likely banned" y muchas "SendRequestsV1 blocked by the proxy (web page)" (DataImpulse en su host). Se borraron las 13 de `zenith:baneadas` (quedan 3 de otro miembro).
+- `motor-panel/inject.py` (marca `PROXY_WEB_PAGE_V1`): una página web del proxy (HTML/403 Forbidden) nunca cuenta como ban; si el proxy bloquea las solicitudes antes de que llegue alguna, se aparta ese proxy, se vuelve a entrar con otro y se reenvía (hasta 2 proxies).
+- `motor-panel/god_pack_gui.py`: la ventana GOD PACK HITS (Last 7 days) se congelaba; ahora muestra las tarjetas al instante con "Loading cards..." y las fotos llegan en segundo plano.
+- Falta: Arcade cierra/abre el God Pack UI; pasarle el mensaje para revisar su DataImpulse. Pendiente de Ale: ¿Offline de Dragonite también cierra la Main de MuMu? (no hecho).
+
 ### 2026-11-10 — diegoikrew123 — Bot: Monitor Link 1.9.29 (publicado host-2026.11.10-1103)
 - La cuenta regresiva del Sync (Launch all Mumu / Start Bot) ahora se escribe dentro del panel de PTCGPB, debajo de "CC BY-NC 4.0 international license" (cambia ese texto y lo agranda); si no lo encuentra, usa el globito de antes. Probado en la PC de Ale (encontró el texto).
 
