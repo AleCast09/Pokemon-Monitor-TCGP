@@ -24,6 +24,10 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-10 15:24 — diegoikrew123 — Bot: 2º arreglo proxy web page (publicado host-2026.11.10-1524)
+- En Arcade seguía "blocked by the proxy (web page)" sin reintento: el bloqueo llegaba después de que algunos Mains ya habían recibido. Ahora se reenvía solo el resto desde otro proxy (marca `PROXY_WEB_PAGE_V2`) y el log muestra el título de la página del proxy.
+- Falta: que Arcade cierre/abra el God Pack UI y mande captura (buscar "[proxy] this proxy blocks friend requests" y el título de la página).
+
 ### 2026-11-10 15:12 — diegoikrew123 — Bot: proxy web page ≠ ban + lista de God Packs sin congelarse (publicado host-2026.11.10-1512)
 - Arcade: 13 cuentas de jasonshied salieron "Likely banned" y muchas "SendRequestsV1 blocked by the proxy (web page)" (DataImpulse en su host). Se borraron las 13 de `zenith:baneadas` (quedan 3 de otro miembro).
 - `motor-panel/inject.py` (marca `PROXY_WEB_PAGE_V1`): una página web del proxy (HTML/403 Forbidden) nunca cuenta como ban; si el proxy bloquea las solicitudes antes de que llegue alguna, se aparta ese proxy, se vuelve a entrar con otro y se reenvía (hasta 2 proxies).
