@@ -546,6 +546,28 @@ function registrar(app, dependencias) {
     });
 
     // Main propia: { main: "16 digitos" } (vacio = la quita).
+    // (Ale 2026-11-10) Boton "Sync reroll for Zenith Rise" de Monitor Link: la configuracion de Group Reroll
+    // del bot de Lean (PTCGPB). El webhook NO va en Monitor Link (se descarga publico de GitHub): vive en
+    // Upstash zenith:group_webhook y solo se entrega a un Monitor Link vinculado, con el Discord ID de su dueno.
+    app.get('/link/reroll-config', async (req, res) => {
+        try {
+            await asegurarTablas();
+            const agente = await agenteDe(req);
+            if (!agente) return res.status(401).json({ error: 'not_linked' });
+            const webhook = String(await redisLibreta('GET', 'zenith:group_webhook').catch(() => '') || '').trim();
+            if (!webhook) return res.status(503).json({ error: 'no_webhook' });
+            res.json({
+                ok: true,
+                discordId: String(agente.discord_id),
+                webhook,
+                mainIdsURL: 'https://onlineids.zenithrise.workers.dev/elite',
+                vipIdsURL: 'https://onlineids.zenithrise.workers.dev/vip-elite',
+            });
+        } catch (e) {
+            res.status(500).json({ error: 'server_error' });
+        }
+    });
+
     app.post('/link/main', express.text({ type: 'text/plain', limit: '4kb' }), async (req, res) => {
         try {
             await asegurarTablas();

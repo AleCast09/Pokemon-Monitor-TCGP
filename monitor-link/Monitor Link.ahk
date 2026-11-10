@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.22"
+global VERSION := "ahk-1.9.23"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -114,7 +114,7 @@ CrearVentana() {
     Gui, Add, Text, x24 y154 w226 h30 vTxtResumen,
     Gui, Font, s9 Norm cBlack, Segoe UI
     Gui, Add, Button, x24 y190 w226 h26 gCambiarCarpeta, Change folder
-    Caja(12, 234, 250, 82, "Banned accounts", "ED4245")
+    Caja(12, 234, 250, 122, "Banned accounts", "ED4245")
     Gui, Font, s8 Norm cDCDDDE, Segoe UI
     Gui, Add, Text, x24 y254 w226 h16 vTxtBan, None on this PC
     Gui, Font, s9 Norm cBlack, Segoe UI
@@ -132,12 +132,12 @@ CrearVentana() {
     Gui, Font, s9 Norm cBlack, Segoe UI
     Gui, Add, Button, x286 y182 w110 h28 gCompartirProxies, Share proxies
     Gui, Add, Button, x402 y182 w110 h28 gDejarProxies, Stop sharing
-    Caja(274, 230, 250, 86, "Discord", "00B0F4")
+    Caja(274, 230, 250, 126, "Discord", "00B0F4")
     Gui, Font, s9 Norm cBlack, Segoe UI
     Gui, Add, Button, x286 y250 w226 h26 gRegistrarMain vBtnMain, % TextoMain()
     Gui, Add, Button, x286 y280 w226 h26 gElegirAmigos, Friends who can use my accounts
     ; ---- column 3: who, status and the main buttons
-    Caja(536, 8, 220, 308, "", "FFFFFF")
+    Caja(536, 8, 220, 348, "", "FFFFFF")
     logo := A_ScriptDir . "\GUI\Images\zenith-rise-logo.png"
     if FileExist(logo)
         Gui, Add, Picture, x614 y20 w64 h64, %logo%
@@ -151,17 +151,19 @@ CrearVentana() {
     ; Progress while reading/sending the accounts (600+ accounts take a while; without it the window
     ; looked frozen and Windows said "Not responding").
     Gui, Add, Progress, x556 y188 w180 h8 c3BA55C Background2B2D31 vBarra Hidden, 0
+    Gui, Font, s9 Bold cBlack, Segoe UI
+    Gui, Add, Button, x556 y204 w180 h36 gSyncRerollZenith, Sync reroll for Zenith Rise
     Gui, Font, s10 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y204 w180 h32 gSincronizar, Sync now
-    Gui, Add, Button, x556 y242 w180 h32 gOcultar, Hide
+    Gui, Add, Button, x556 y246 w180 h32 gSincronizar, Sync now
+    Gui, Add, Button, x556 y284 w180 h32 gOcultar, Hide
     Gui, Font, s9 Norm cDCDDDE, Segoe UI
-    Gui, Add, Checkbox, x560 y284 w180 -Theme vInicio gCambiarInicio, Start with Windows
+    Gui, Add, Checkbox, x560 y326 w180 -Theme vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
     ; ---- last error (only shows when there is one)
     Gui, Font, s8 Norm cED4245, Segoe UI
-    Gui, Add, Text, x12 y322 w744 h30 vTxtError,
+    Gui, Add, Text, x12 y362 w744 h30 vTxtError,
     Gui, Font, s9 Norm cBlack, Segoe UI
-    Gui, Show, w768 h352, Monitor Link
+    Gui, Show, w768 h392, Monitor Link
 }
 
 ; Titled box with a colored title (-Theme so Windows keeps the color).
@@ -954,6 +956,98 @@ FinDeArreglo(t, abre) {
         }
     }
     return 0
+}
+
+; ---------------------------------------------------------------- Sync reroll for Zenith Rise (Ale 2026-11-10)
+; Writes the community Group Reroll setup into the PTCGPB bot (Settings.ini): online IDs lists, auto GP test,
+; this member's Discord ID + the community webhook (asked to the bot: it is never inside this file),
+; Wonderpick detection and the Inject Wonderpick 96P+ mode.
+SyncRerollZenith:
+    if (Token = "") {
+        MsgBox, 48, Monitor Link, Link this PC first (type /link in Zenith Rise).
+        return
+    }
+    ini := BuscarSettingsPtcgpb()
+    if (ini = "") {
+        FileSelectFile, ini, 3, %A_ScriptDir%, Choose the Settings.ini of your PTCGPB bot, Settings (Settings.ini)
+        if (ini = "")
+            return
+    }
+    if PtcgpbAbierto() {
+        MsgBox, 48, Monitor Link, Close the PTCGPB bot first (it saves its own settings when it closes), then press this button again.
+        return
+    }
+    r := ""
+    try r := Http("GET", ServerUrl . "/link/reroll-config", "", "", Token, 20)
+    if (!IsObject(r) || r.status != 200) {
+        if (IsObject(r) && r.status = 401) {
+            NoVinculado()
+            return
+        }
+        MsgBox, 48, Monitor Link, % "Could not get the Zenith Rise setup from the bot" . (IsObject(r) ? " (" . r.status . ")" : "") . ". Try again in a minute."
+        return
+    }
+    RegExMatch(r.text, """discordId""\s*:\s*""(\d+)""", d)
+    RegExMatch(r.text, """webhook""\s*:\s*""((?:[^""\]|\.)*)""", w)
+    RegExMatch(r.text, """mainIdsURL""\s*:\s*""((?:[^""\]|\.)*)""", m)
+    RegExMatch(r.text, """vipIdsURL""\s*:\s*""((?:[^""\]|\.)*)""", v)
+    webhook := JsonUnesc(w1), mainUrl := JsonUnesc(m1), vipUrl := JsonUnesc(v1)
+    if (d1 = "" || webhook = "" || mainUrl = "") {
+        MsgBox, 48, Monitor Link, The bot sent an incomplete setup. Try again in a minute.
+        return
+    }
+    FileCopy, %ini%, %ini%.before-zenith.bak, 1
+    ; Group Reroll
+    IniWrite, 1, %ini%, GroupReroll, groupRerollEnabled
+    IniWrite, %mainUrl%, %ini%, GroupReroll, mainIdsURL
+    IniWrite, %vipUrl%, %ini%, GroupReroll, vipIdsURL
+    IniWrite, 1, %ini%, GroupReroll, autoUseGPTest
+    IniWrite, 3600, %ini%, GroupReroll, TestTime
+    IniWrite, 0, %ini%, GroupReroll, hasUnopenedPack
+    IniWrite, 150, %ini%, GroupReroll, gpTestWaitTime
+    ; Group Reroll Discord (only this part of Discord Settings)
+    IniWrite, %d1%, %ini%, GroupReroll, groupRerollDiscordUserId
+    IniWrite, %webhook%, %ini%, GroupReroll, groupRerollDiscordWebhookURL
+    IniWrite, 0, %ini%, GroupReroll, groupRerollSendAccountXml
+    ; Wonderpick card detection: Min GP 2 stars, ignore invalid packs, the rest off
+    IniWrite, 2, %ini%, Wonderpick, minStars
+    IniWrite, 1, %ini%, Wonderpick, InvalidCheck
+    IniWrite, 0, %ini%, Wonderpick, FullArtCheck
+    IniWrite, 0, %ini%, Wonderpick, TrainerCheck
+    IniWrite, 0, %ini%, Wonderpick, RainbowCheck
+    IniWrite, 0, %ini%, Wonderpick, WishlistCheck
+    IniWrite, 0, %ini%, Wonderpick, PseudoGodPack
+    ; Bot mode
+    IniWrite, Inject Wonderpick 96P+, %ini%, General, deleteMethod
+    IniWrite, 70, %ini%, General, injectWonderpickMinPacks
+    IniWrite, PacksDesc, %ini%, UserSettings, injectSortMethod
+    webhook := ""
+    MsgBox, 64, Monitor Link, Done! Your PTCGPB bot is set up for the Zenith Rise group reroll:`n`n- Group Reroll ON (elite + vip-elite online IDs)`n- Auto GP test every 3600 s (Standard, wait 150 s)`n- Group Discord: your Discord ID + the community webhook`n- Wonderpick: min 2 stars, ignore invalid packs`n- Mode: Inject Wonderpick 96P+ (min 70 packs, most packs first)`n`nOpen the PTCGPB bot now. A copy of your old settings is in Settings.ini.before-zenith.bak
+return
+
+; Settings.ini of the PTCGPB bot: next to Monitor Link, or above the chosen accounts folder.
+BuscarSettingsPtcgpb() {
+    if FileExist(A_ScriptDir . "\Settings.ini") && FileExist(A_ScriptDir . "\PTCGPB.ahk")
+        return A_ScriptDir . "\Settings.ini"
+    dir := Ruta
+    Loop, 5 {
+        if (dir = "")
+            break
+        if FileExist(dir . "\Settings.ini") && FileExist(dir . "\PTCGPB.ahk")
+            return dir . "\Settings.ini"
+        SplitPath, dir,, padre
+        if (padre = dir)
+            break
+        dir := padre
+    }
+    return ""
+}
+
+PtcgpbAbierto() {
+    for p in ComObjGet("winmgmts:").ExecQuery("SELECT CommandLine FROM Win32_Process WHERE Name LIKE 'AutoHotkey%'")
+        if InStr(p.CommandLine, "PTCGPB.ahk")
+            return true
+    return false
 }
 
 ; ---------------------------------------------------------------- linking (/link)
