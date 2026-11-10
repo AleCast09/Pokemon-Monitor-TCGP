@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.24"
+global VERSION := "ahk-1.9.25"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -1123,13 +1123,86 @@ SyncRerollZenith:
     IniWrite, Inject Wonderpick 96P+, %ini%, General, deleteMethod
     IniWrite, 70, %ini%, General, injectWonderpickMinPacks
     IniWrite, PacksDesc, %ini%, UserSettings, injectSortMethod
+    ; Instance settings (Ale 2026-11-10): no reroll instances, only the Main injecting.
+    IniWrite, 0, %ini%, General, Instances
+    IniWrite, 0, %ini%, General, Columns
+    IniWrite, 10, %ini%, General, instanceStartDelay
+    IniWrite, 1, %ini%, General, runMain
+    IniWrite, 1, %ini%, General, Mains
+    IniWrite, 0, %ini%, General, packMethod
+    IniWrite, 0, %ini%, General, openExtraPack
+    IniWrite, 0, %ini%, General, spendHourGlass
     webhook := ""
-    MsgBox, 64, Monitor Link, Done! Your PTCGPB bot is set up for the Zenith Rise group reroll:`n`n- Group Reroll ON (elite + vip-elite online IDs)`n- Auto GP test every 3600 s (Standard, wait 150 s)`n- Group Discord: your Discord ID + the community webhook`n- Wonderpick: min 2 stars, ignore invalid packs`n- Mode: Inject Wonderpick 96P+ (min 70 packs, most packs first)`n`nThe PTCGPB bot opens now. A copy of your old settings is in Settings.ini.before-zenith.bak
+    MsgBox, 64, Monitor Link, Done! Your PTCGPB bot is set up for the Zenith Rise group reroll:`n`n- Group Reroll ON (elite + vip-elite online IDs)`n- Auto GP test every 3600 s (Standard, wait 150 s)`n- Group Discord: your Discord ID + the community webhook`n- Wonderpick: min 2 stars, ignore invalid packs`n- Mode: Inject Wonderpick 96P+ (min 70 packs, most packs first), 0 instances + 1 Main`n`nThe PTCGPB bot opens now, launches MuMu and starts by itself. A copy of your old settings is in Settings.ini.before-zenith.bak
     ; (Ale 2026-11-10) Opens the PTCGPB bot right after.
     SplitPath, ini,, dirBot
     if FileExist(dirBot . "\PTCGPB.ahk")
-        Run, "%A_AhkPath%" "%dirBot%\PTCGPB.ahk", %dirBot%
+        AbrirYArrancarPtcgpb(dirBot)
 return
+
+; (Ale 2026-11-10) Opens PTCGPB, presses Launch all Mumu, waits for MuMu and presses Start Bot (and Yes on
+; its "Confirm Bot Settings" box). The buttons are pressed by their text in the PTCGPB window.
+AbrirYArrancarPtcgpb(dirBot) {
+    Run, "%A_AhkPath%" "%dirBot%\PTCGPB.ahk", %dirBot%
+    ventana := "Arturo's PTCGP BOT ahk_class AutoHotkeyGUI"
+    WinWait, %ventana%,, 60
+    if ErrorLevel {
+        TrayTip, Monitor Link, The PTCGPB window did not open. Press Launch all Mumu and Start Bot yourself., 8, 2
+        return
+    }
+    Sleep, 3000
+    ControlClick, Launch all Mumu, %ventana%
+    if ErrorLevel
+        ControlClick, Launch all MuMu, %ventana%
+    ; PTCGPB waits for MuMu inside that button; then it needs a moment more to be ready.
+    TrayTip, Monitor Link, Launching MuMu... the bot starts in about 45 seconds., 5, 1
+    Sleep, 45000
+    WinWait, %ventana%,, 60
+    ControlClick, Start Bot, %ventana%
+    WinWait, Confirm Bot Settings ahk_class #32770,, 15
+    if !ErrorLevel
+        ControlClick, Button1, Confirm Bot Settings ahk_class #32770
+}
+
+; (Ale 2026-11-10) All the XMLs in Accounts\Saved\1 (the other numbered folders are the instances of the
+; PTCGPB bot and stay, empty). Banned accounts go to Accounts\Banned instead. A name that is already in
+; 1 is left where it is. Nothing is moved while PTCGPB is open (it is using the files).
+OrdenarXmlCarpeta1() {
+    if (CarpetaJson = "" || PtcgpbAbierto())
+        return
+    saved := CarpetaPadre(CarpetaPadre(CarpetaJson)) . "\Saved"
+    destino := saved . "\1"
+    if !FileExist(saved)
+        return
+    FileCreateDir, %destino%
+    ; banned first (same as Banned: open folder, without opening Explorer)
+    ban := CarpetaBaneadas()
+    for f, a in ArchivosBaneados() {
+        FileCreateDir, %ban%
+        base := RegExReplace(f, "i)\.xml$", "")
+        if (a.xml != "" && !InStr(a.xml, ban . "\"))
+            FileMove, % a.xml, % ban . "\" . base . ".xml", 1
+        if (a.json != "" && !InStr(a.json, ban . "\"))
+            FileMove, % a.json, % ban . "\" . base . ".json", 1
+    }
+    movidas := 0
+    Loop, Files, %saved%\*.xml, R
+    {
+        if (A_LoopFileDir = destino)
+            continue
+        rel := SubStr(A_LoopFileDir, StrLen(saved) + 2)   ; "" (loose), "2", "10", "tmp", ...
+        if (rel != "" && !RegExMatch(rel, "^\d+$"))
+            continue   ; only the numbered instance folders and loose files; never tmp or others
+        if FileExist(destino . "\" . A_LoopFileName)
+            continue
+        FileMove, %A_LoopFileFullPath%, %destino%\%A_LoopFileName%
+        movidas += !ErrorLevel
+    }
+    if (movidas) {
+        IndiceXml := "", BanLocales := ""
+        TrayTip, Monitor Link, % movidas . " account(s) moved to Saved\1", 5, 1
+    }
+}
 
 ; Settings.ini of the PTCGPB bot: next to Monitor Link, or above the chosen accounts folder.
 BuscarSettingsPtcgpb() {
@@ -1269,6 +1342,7 @@ SubirResumen(forzar, folderError := "") {
 }
 
 SubirResumenAhora(forzar, folderError) {
+    OrdenarXmlCarpeta1()
     huella := Huella()
     if (!forzar && folderError = "" && huella = UltimaHuella)
         return
