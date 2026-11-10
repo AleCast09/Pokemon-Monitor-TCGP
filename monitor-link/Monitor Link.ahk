@@ -142,15 +142,15 @@ CrearVentana() {
     if (logo != "")
         Gui, Add, Picture, x614 y28 w64 h64, %logo%
     Gui, Font, s14 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y100 w200 Center, MONITOR LINK
+    Gui, Add, Text, x546 y106 w200 Center, MONITOR LINK
     Gui, Font, s8 Norm cB9BBBE, Segoe UI
-    Gui, Add, Text, x546 y126 w200 Center vTxtVer,
-    Gui, Add, Text, x546 y141 w200 Center vTxtUser,
+    Gui, Add, Text, x546 y132 w200 Center vTxtVer,
+    Gui, Add, Text, x546 y147 w200 Center vTxtUser,
     Gui, Font, s9 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y157 w200 h31 Center vStatus, ...
+    Gui, Add, Text, x540 y165 w212 h18 Center vStatus, ...
     ; Progress while reading/sending the accounts (600+ accounts take a while; without it the window
     ; looked frozen and Windows said "Not responding").
-    Gui, Add, Progress, x556 y190 w180 h5 c3BA55C Background2B2D31 vBarra Hidden, 0
+    Gui, Add, Progress, x556 y186 w180 h5 c3BA55C Background2B2D31 vBarra Hidden, 0
     Gui, Font, s9 Bold cBlack, Segoe UI
     Gui, Add, Button, x556 y198 w180 h32 gSyncRerollZenith, Sync reroll for Zenith Rise
     Gui, Font, s10 Bold cBlack, Segoe UI
@@ -315,7 +315,7 @@ PintarEstado() {
     } else {
         Gui, Font, s9 Bold cED4245, Segoe UI
         GuiControl, Font, Status
-        GuiControl,, Status, Can't reach the bot - retrying
+        GuiControl,, Status, Can't reach the bot, retrying
     }
     ; Version line (Ale 2026-11-06): up to date, or updating to the newest one (it installs by itself).
     GuiControl,, TxtVer, % VERSION . (UltimaVersionAhk = "" ? "" : VersionMasNueva(UltimaVersionAhk, VERSION) ? "  -  updating to " . UltimaVersionAhk . "..." : "  -  up to date")
@@ -1275,7 +1275,7 @@ SubirResumenAhora(forzar, folderError) {
     total := 0
     Loop, Files, %CarpetaJson%\*.json
         total++
-    GuiControl,, Status, Reading your accounts... 0`%
+    GuiControl,, Status, Reading accounts 0`%
     GuiControl,, Barra, 0
     GuiControl, Show, Barra
     cuentas := 0
@@ -1286,7 +1286,7 @@ SubirResumenAhora(forzar, folderError) {
         if (Mod(A_Index, 5) = 0 && total) {
             pct := Floor(A_Index * 100 / total)
             GuiControl,, Barra, %pct%
-            GuiControl,, Status, % "Reading your accounts... " . pct . "% (" . A_Index . "/" . total . ")"
+            GuiControl,, Status, % "Reading accounts " . pct . "% (" . A_Index . "/" . total . ")"
             Sleep, -1
         }
         FileRead, t, %A_LoopFileFullPath%
@@ -1327,7 +1327,7 @@ SubirResumenAhora(forzar, folderError) {
         body .= ",""folderError"":""" . JsonEsc(folderError) . """"
     body .= "}"
     GuiControl,, Barra, 100
-    GuiControl,, Status, % "Sending your cards summary (" . cuentas . " accounts)..."
+    GuiControl,, Status, % "Sending summary (" . cuentas . ")..."
     try {
         r := HttpSinTrabar("POST", ServerUrl . "/link/summary", body, "text/plain; charset=utf-8", Token, 120)
     } catch e {
@@ -1347,7 +1347,7 @@ SubirResumenAhora(forzar, folderError) {
     }
     ; The other hosts at most every 30 min (or right away when a host appears).
     if (Espejos.Length() && (forzar || A_TickCount - UltimoEspejo > 1800000 || !UltimoEspejo)) {
-        GuiControl,, Status, Sending to the other hosts...
+        GuiControl,, Status, Sending to other hosts...
         for _, espejo in Espejos
             try HttpSinTrabar("POST", espejo . "/link/summary", body, "text/plain; charset=utf-8", Token, 120)
         UltimoEspejo := A_TickCount
