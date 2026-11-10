@@ -140,22 +140,22 @@ CrearVentana() {
     Caja(536, 8, 220, 348, "", "FFFFFF")
     logo := LogoMonitorLink()
     if (logo != "")
-        Gui, Add, Picture, x606 y22 w80 h80, %logo%
+        Gui, Add, Picture, x610 y18 w72 h72, %logo%
     Gui, Font, s14 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y106 w200 Center, MONITOR LINK
+    Gui, Add, Text, x546 y92 w200 Center, MONITOR LINK
     Gui, Font, s8 Norm cB9BBBE, Segoe UI
-    Gui, Add, Text, x546 y132 w200 Center vTxtVer,
-    Gui, Add, Text, x546 y148 w200 Center vTxtUser,
-    Gui, Font, s10 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y166 w200 h24 Center vStatus, ...
+    Gui, Add, Text, x546 y118 w200 Center vTxtVer,
+    Gui, Add, Text, x546 y134 w200 Center vTxtUser,
+    Gui, Font, s9 Bold cFFFFFF, Segoe UI
+    Gui, Add, Text, x546 y152 w200 h34 Center vStatus, ...
     ; Progress while reading/sending the accounts (600+ accounts take a while; without it the window
     ; looked frozen and Windows said "Not responding").
-    Gui, Add, Progress, x556 y192 w180 h8 c3BA55C Background2B2D31 vBarra Hidden, 0
+    Gui, Add, Progress, x556 y190 w180 h8 c3BA55C Background2B2D31 vBarra Hidden, 0
     Gui, Font, s9 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y204 w180 h36 gSyncRerollZenith, Sync reroll for Zenith Rise
+    Gui, Add, Button, x556 y206 w180 h36 gSyncRerollZenith, Sync reroll for Zenith Rise
     Gui, Font, s10 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y246 w180 h32 gSincronizar, Sync now
-    Gui, Add, Button, x556 y284 w180 h32 gOcultar, Hide
+    Gui, Add, Button, x556 y248 w180 h32 gSincronizar, Sync now
+    Gui, Add, Button, x556 y286 w180 h32 gOcultar, Hide
     Gui, Font, s9 Norm cDCDDDE, Segoe UI
     Gui, Add, Checkbox, x560 y326 w180 -Theme vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
@@ -305,15 +305,15 @@ PintarEstado() {
     GuiControl, % BanLocales ? "Enable" : "Disable", BtnBanAbrir
     GuiControl, % BanLocales ? "Enable" : "Disable", BtnBanBorrar
     if (Token = "") {
-        Gui, Font, s10 Bold cFAA61A, Segoe UI
+        Gui, Font, s9 Bold cFAA61A, Segoe UI
         GuiControl, Font, Status
         GuiControl,, Status, Not linked yet
     } else if (EnLinea) {
-        Gui, Font, s10 Bold c3BA55C, Segoe UI
+        Gui, Font, s9 Bold c3BA55C, Segoe UI
         GuiControl, Font, Status
         GuiControl,, Status, Connected
     } else {
-        Gui, Font, s10 Bold cED4245, Segoe UI
+        Gui, Font, s9 Bold cED4245, Segoe UI
         GuiControl, Font, Status
         GuiControl,, Status, Can't reach the bot - retrying
     }
