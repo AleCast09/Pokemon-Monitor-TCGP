@@ -988,9 +988,9 @@ SyncRerollZenith:
         return
     }
     RegExMatch(r.text, """discordId""\s*:\s*""(\d+)""", d)
-    RegExMatch(r.text, """webhook""\s*:\s*""((?:[^""\]|\.)*)""", w)
-    RegExMatch(r.text, """mainIdsURL""\s*:\s*""((?:[^""\]|\.)*)""", m)
-    RegExMatch(r.text, """vipIdsURL""\s*:\s*""((?:[^""\]|\.)*)""", v)
+    RegExMatch(r.text, """webhook""\s*:\s*""([^""]*)""", w)
+    RegExMatch(r.text, """mainIdsURL""\s*:\s*""([^""]*)""", m)
+    RegExMatch(r.text, """vipIdsURL""\s*:\s*""([^""]*)""", v)
     webhook := JsonUnesc(w1), mainUrl := JsonUnesc(m1), vipUrl := JsonUnesc(v1)
     if (d1 = "" || webhook = "" || mainUrl = "") {
         MsgBox, 48, Monitor Link, The bot sent an incomplete setup. Try again in a minute.
