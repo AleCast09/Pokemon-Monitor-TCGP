@@ -398,6 +398,13 @@ def load_proxies(path: Optional[str], scheme: str = "http") -> None:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
+            # 2026-11-10: Webshare's list format "IP:port:user:pass" (with or without http://) was used as is and
+            # every login was refused ("no usable value"). Turn it into user:pass@IP:port.
+            _sin = re.sub(r"^[a-z0-9]+://", "", line, flags=re.I)
+            _ws = re.match(r"^([A-Za-z0-9.-]+):(\d{2,5}):([^:@]+):([^@]+)$", _sin)
+            if _ws:
+                proxies.append(f"{scheme}://{_ws.group(3)}:{_ws.group(4)}@{_ws.group(1)}:{_ws.group(2)}")
+                continue
             if "://" in line:
                 proxies.append(line)
             elif "@" in line:
@@ -1712,6 +1719,7 @@ def _discover_send_requests_field(Request) -> tuple[Optional[str], Optional[bool
 
 PROXY_WEB_PAGE_V1 = True
 PROXY_WEB_PAGE_V2 = True
+PROXY_IP_PORT_USER_PASS_V1 = True
 
 
 def _proxy_web_page(text: str) -> bool:
