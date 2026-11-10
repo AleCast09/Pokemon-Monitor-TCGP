@@ -140,24 +140,24 @@ CrearVentana() {
     Caja(536, 8, 220, 348, "", "FFFFFF")
     logo := LogoMonitorLink()
     if (logo != "")
-        Gui, Add, Picture, x610 y30 w72 h72, %logo%
+        Gui, Add, Picture, x610 y44 w72 h72, %logo%
     Gui, Font, s14 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y104 w200 Center, MONITOR LINK
+    Gui, Add, Text, x546 y118 w200 Center, MONITOR LINK
     Gui, Font, s8 Norm cB9BBBE, Segoe UI
-    Gui, Add, Text, x546 y128 w200 Center vTxtVer,
-    Gui, Add, Text, x546 y144 w200 Center vTxtUser,
+    Gui, Add, Text, x546 y142 w200 Center vTxtVer,
+    Gui, Add, Text, x546 y158 w200 Center vTxtUser,
     Gui, Font, s9 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y161 w200 h34 Center vStatus, ...
+    Gui, Add, Text, x546 y175 w200 h30 Center vStatus, ...
     ; Progress while reading/sending the accounts (600+ accounts take a while; without it the window
     ; looked frozen and Windows said "Not responding").
-    Gui, Add, Progress, x556 y197 w180 h8 c3BA55C Background2B2D31 vBarra Hidden, 0
+    Gui, Add, Progress, x556 y207 w180 h8 c3BA55C Background2B2D31 vBarra Hidden, 0
     Gui, Font, s9 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y211 w180 h36 gSyncRerollZenith, Sync reroll for Zenith Rise
+    Gui, Add, Button, x556 y220 w180 h34 gSyncRerollZenith, Sync reroll for Zenith Rise
     Gui, Font, s10 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y252 w180 h32 gSincronizar, Sync now
-    Gui, Add, Button, x556 y289 w180 h32 gOcultar, Hide
+    Gui, Add, Button, x556 y259 w180 h30 gSincronizar, Sync now
+    Gui, Add, Button, x556 y294 w180 h30 gOcultar, Hide
     Gui, Font, s9 Norm cDCDDDE, Segoe UI
-    Gui, Add, Checkbox, x560 y330 w180 -Theme vInicio gCambiarInicio, Start with Windows
+    Gui, Add, Checkbox, x560 y332 w180 -Theme vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
     ; ---- last error (only shows when there is one)
     Gui, Font, s8 Norm cED4245, Segoe UI
