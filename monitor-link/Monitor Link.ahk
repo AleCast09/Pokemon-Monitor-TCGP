@@ -142,15 +142,15 @@ CrearVentana() {
     if (logo != "")
         Gui, Add, Picture, x614 y28 w64 h64, %logo%
     Gui, Font, s14 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y104 w200 Center, MONITOR LINK
+    Gui, Add, Text, x546 y100 w200 Center, MONITOR LINK
     Gui, Font, s8 Norm cB9BBBE, Segoe UI
-    Gui, Add, Text, x546 y130 w200 Center vTxtVer,
-    Gui, Add, Text, x546 y145 w200 Center vTxtUser,
+    Gui, Add, Text, x546 y126 w200 Center vTxtVer,
+    Gui, Add, Text, x546 y141 w200 Center vTxtUser,
     Gui, Font, s9 Bold cFFFFFF, Segoe UI
-    Gui, Add, Text, x546 y162 w200 h26 Center vStatus, ...
+    Gui, Add, Text, x546 y157 w200 h31 Center vStatus, ...
     ; Progress while reading/sending the accounts (600+ accounts take a while; without it the window
     ; looked frozen and Windows said "Not responding").
-    Gui, Add, Progress, x556 y190 w180 h6 c3BA55C Background2B2D31 vBarra Hidden, 0
+    Gui, Add, Progress, x556 y190 w180 h5 c3BA55C Background2B2D31 vBarra Hidden, 0
     Gui, Font, s9 Bold cBlack, Segoe UI
     Gui, Add, Button, x556 y198 w180 h32 gSyncRerollZenith, Sync reroll for Zenith Rise
     Gui, Font, s10 Bold cBlack, Segoe UI
