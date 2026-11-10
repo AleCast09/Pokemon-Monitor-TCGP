@@ -205,8 +205,23 @@ const TTL_MIEMBROS_MS = 30 * 60 * 1000;
 const TTL_GRUPOS_MS = 6 * 60 * 60 * 1000;
 let gruposCache = { ts: 0, lista: [] };
 
+// (Ale 2026-11-10) La clave de wr98 vive tambien en NUESTRO Upstash (zenith:wr98_redis = {"url","token"}),
+// asi cada host usa la vigente sin tocar su .env (wr98 la rota cada ~15 dias; la de los .env quedo vieja).
+let credsWr98 = { ts: 0, url: '', token: '' };
+async function clavesWr98() {
+    if (Date.now() - credsWr98.ts < 10 * 60 * 1000 && credsWr98.token) return credsWr98;
+    try {
+        const r = await fetch(process.env.LINK_REDIS_URL.replace(/\/+$/, ''), { method: 'POST',
+            headers: { Authorization: `Bearer ${process.env.LINK_REDIS_TOKEN}` }, body: JSON.stringify(['GET', 'zenith:wr98_redis']) });
+        const d = JSON.parse((await r.json()).result || 'null');
+        if (d?.url && d?.token) credsWr98 = { ts: Date.now(), url: d.url, token: d.token };
+    } catch (e) { /* sin libreta: el .env */ }
+    if (!credsWr98.token) credsWr98 = { ts: Date.now(), url: process.env.WR98_REDIS_URL || '', token: process.env.WR98_REDIS_TOKEN || '' };
+    return credsWr98;
+}
+
 async function redis(...args) {
-    const url = process.env.WR98_REDIS_URL, token = process.env.WR98_REDIS_TOKEN;
+    const { url, token } = await clavesWr98();
     if (!url || !token) throw new Error('wr98 registry is not configured');
     const r = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(args) });
     if (r.status === 401 || r.status === 403) throw new Error('wr98 registry key expired or invalid');
@@ -346,6 +361,22 @@ async function registrarMainDragonite(member, mainId, heartbeatName) {
     }
 }
 
+// Si esta online ahora: { result: 'ok', online, grupo } | 'no_role' | 'not_registered' | 'rivals' | 'error'.
+async function estadoDragonite(member) {
+    try {
+        const grupo = await grupoDragonite(member);
+        if (!grupo) return 'no_role';
+        if (grupo === 'Rivals') return 'rivals';
+        const crudo = await redis('HGET', `users:${grupo}`, String(member.id));
+        let d = null; try { d = typeof crudo === 'string' ? JSON.parse(crudo) : crudo; } catch (e) { /* ilegible */ }
+        const main = String(d?.main_id || '').replace(/\D/g, '');
+        if (!/^\d{16}$/.test(main)) return 'not_registered';
+        return { result: 'ok', online: Number(await redis('SISMEMBER', `online:${grupo}`, main)) === 1, grupo };
+    } catch (e) {
+        return 'error';
+    }
+}
+
 // online true/false. Devuelve 'ok' | 'no_role' | 'not_registered' | 'full' | 'rivals' | 'error'.
 async function onlineDragonite(member, online) {
     try {
@@ -383,4 +414,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { rolMonitor, permisosCategoria, CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual, registrarMainDragonite, onlineDragonite };
+module.exports = { rolMonitor, permisosCategoria, CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual, registrarMainDragonite, onlineDragonite, estadoDragonite };

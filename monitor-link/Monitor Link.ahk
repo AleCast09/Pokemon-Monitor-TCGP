@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.26"
+global VERSION := "ahk-1.9.28"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -39,7 +39,7 @@ global CuentasReroll := {}, UltimoReroll := ""
 global Baneadas := {}   ; lent accounts the GP farm marked as likely banned (from the ping)
 global UltimaVersionAhk := ""   ; newest Monitor Link published (from the ping)
 global BanLocales := "", BtnBanAbrir, BtnBanBorrar   ; banned accounts still on this PC ("" = count again)
-global DragoniteRes := ""
+global DragoniteRes := "", EstadoOnline := "", HBtnOnline := 0, BtnOnline := ""
 global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global MiMain := ""   ; this member's own Main friend ID (16 digits): Share/Trade destination in the bot
@@ -48,6 +48,8 @@ global Cambiando := false   ; linked PC: the key box shows ***** until Change is
 
 CargarConfig()
 CrearVentana()
+PintarOnline("")
+SetTimer, ConsultarOnlineAhora, -8000
 if (Token = "") {
     MostrarVinculo(true)
 } else {
@@ -157,7 +159,8 @@ CrearVentana() {
     Gui, Font, s10 Bold cBlack, Segoe UI
     Gui, Add, Button, x556 y235 w88 h28 gSincronizar, Sync now
     Gui, Add, Button, x648 y235 w88 h28 gOcultar, Hide
-    Gui, Add, Button, x556 y266 w180 h28 gGoOffline, Go offline
+    ; (Ale 2026-11-10) Dragonite online/offline: a small light in the button (green online, red offline).
+    Gui, Add, Button, x556 y266 w180 h28 vBtnOnline hwndHBtnOnline gCambiarOnline, Go online
     Gui, Font, s9 Norm cDCDDDE, Segoe UI
     Gui, Add, Checkbox, x586 y300 w130 -Theme vInicio gCambiarInicio, Start with Windows
     GuiControl,, Inicio, % FileExist(A_Startup . "\Monitor Link.lnk") ? 1 : 0
@@ -336,6 +339,7 @@ PintarEstado() {
 
 AbrirVentana:
     Gui, Show
+    SetTimer, ConsultarOnlineAhora, -500
 return
 
 Ocultar:
@@ -1150,6 +1154,8 @@ SyncRerollZenith:
     if (MiMain != "")
         EnviarMain(true)
     online := DragoniteOnline(true)
+    if (online = "ok")
+        PintarOnline("on")
     MsgBox, 64, Monitor Link, % "Done! Your PTCGPB bot is set up for the Zenith Rise group reroll:`n`n- Group Reroll ON (elite + vip-elite online IDs)`n- Auto GP test every 3600 s (Standard, wait 150 s)`n- Group Discord: your Discord ID + the community webhook`n- Wonderpick: min 2 stars, ignore invalid packs`n- Mode: Inject Wonderpick 96P+ (min 70 packs, most packs first), 0 instances + 1 Main`n`nThe PTCGPB bot opens now, launches MuMu and starts by itself. A copy of your old settings is in Settings.ini.before-zenith.bak" . TextoDragonite(online, "online")
     ; (Ale 2026-11-10) Opens the PTCGPB bot right after.
     SplitPath, ini,, dirBot
@@ -1192,18 +1198,100 @@ TextoDragonite(res, accion) {
     return "`n`nDragonite: something failed. Use the buttons in Discord."
 }
 
-GoOffline:
+CambiarOnline:
     if (Token = "") {
         MsgBox, 48, Monitor Link, Link this PC first (type /link in Zenith Rise).
         return
     }
-    res := DragoniteOnline(false)
-    MsgBox, % res = "ok" ? 64 : 48, Monitor Link, % res = "ok" ? "You are OFFLINE in Dragonite." : SubStr(TextoDragonite(res, "offline"), 3)
+    quiere := EstadoOnline != "on"
+    PintarOnline("wait")
+    res := DragoniteOnline(quiere)
+    if (res = "ok")
+        PintarOnline(quiere ? "on" : "off")
+    else {
+        ConsultarOnline()
+        MsgBox, 48, Monitor Link, % SubStr(TextoDragonite(res, quiere ? "online" : "offline"), 3)
+    }
 return
+
+; Asks the bot once (when the window opens / at start), not on a timer: wr98's Upstash has a monthly limit.
+ConsultarOnline() {
+    if (Token = "")
+        return PintarOnline("")
+    r := ""
+    try r := Http("GET", ServerUrl . "/link/online", "", "", Token, 15)
+    if (IsObject(r) && r.status = 200 && RegExMatch(r.text, """online""\s*:\s*(true|false)", x))
+        return PintarOnline(x1 = "true" ? "on" : "off")
+    PintarOnline("")
+}
+
+ConsultarOnlineAhora:
+    ConsultarOnline()
+return
+
+; estado: "on" (green light, "Go offline"), "off" (red, "Go online"), "wait" or "" (grey).
+PintarOnline(estado) {
+    EstadoOnline := estado
+    color := estado = "on" ? "3BA55C" : estado = "off" ? "ED4245" : "747F8D"
+    texto := estado = "on" ? "Go offline" : estado = "wait" ? "..." : "Go online"
+    GuiControl,, BtnOnline, %texto%
+    LuzEnBoton(HBtnOnline, texto, color)
+}
+
+; Text + a small light right after it, the text centered in the button. The light is drawn at run time at
+; the end of a transparent strip (text width + gap on both sides) centered over the text (image list, align
+; center), so it lands just after the text on any screen scale.
+LuzEnBoton(hB, texto, color) {
+    static tok := 0, ilViejo := 0
+    if (!tok) {
+        VarSetCapacity(si, 24, 0), NumPut(1, si, 0, "UInt")
+        DllCall("LoadLibrary", "Str", "gdiplus")
+        DllCall("gdiplus\GdiplusStartup", "Ptr*", tok, "Ptr", &si, "Ptr", 0)
+    }
+    hf := DllCall("SendMessage", "Ptr", hB, "UInt", 0x31, "Ptr", 0, "Ptr", 0, "Ptr")
+    hdc := DllCall("GetDC", "Ptr", hB, "Ptr")
+    old := DllCall("SelectObject", "Ptr", hdc, "Ptr", hf, "Ptr")
+    VarSetCapacity(sz, 8, 0)
+    DllCall("GetTextExtentPoint32", "Ptr", hdc, "Str", texto, "Int", StrLen(texto), "Ptr", &sz)
+    tw := NumGet(sz, 0, "Int"), th := NumGet(sz, 4, "Int")
+    DllCall("SelectObject", "Ptr", hdc, "Ptr", old)
+    DllCall("ReleaseDC", "Ptr", hB, "Ptr", hdc)
+    d := Round(th * 0.62), gap := Round(d * 1.1)
+    w := tw + 2 * (gap + d), h := d
+    bmp := 0, g := 0
+    DllCall("gdiplus\GdipCreateBitmapFromScan0", "Int", w, "Int", h, "Int", 0, "Int", 0x26200A, "Ptr", 0, "Ptr*", bmp)
+    DllCall("gdiplus\GdipGetImageGraphicsContext", "Ptr", bmp, "Ptr*", g)
+    DllCall("gdiplus\GdipSetSmoothingMode", "Ptr", g, "Int", 4)
+    rgb := "0x" . color
+    for _, capa in [[0x5A000000 | rgb, 0, d], [0xFF000000 | rgb, d * 0.18, d * 0.64], [0x96FFFFFF, d * 0.32, d * 0.2]] {
+        br := 0
+        DllCall("gdiplus\GdipCreateSolidFill", "UInt", capa[1], "Ptr*", br)
+        DllCall("gdiplus\GdipFillEllipse", "Ptr", g, "Ptr", br, "Float", w - d + capa[2], "Float", capa[2], "Float", capa[3], "Float", capa[3])
+        DllCall("gdiplus\GdipDeleteBrush", "Ptr", br)
+    }
+    DllCall("gdiplus\GdipDeleteGraphics", "Ptr", g)
+    hIcon := 0
+    DllCall("gdiplus\GdipCreateHICONFromBitmap", "Ptr", bmp, "Ptr*", hIcon)
+    DllCall("gdiplus\GdipDisposeImage", "Ptr", bmp)
+    il := DllCall("comctl32\ImageList_Create", "Int", w, "Int", h, "UInt", 0x21, "Int", 1, "Int", 0, "Ptr")
+    DllCall("comctl32\ImageList_ReplaceIcon", "Ptr", il, "Int", -1, "Ptr", hIcon)
+    DllCall("DestroyIcon", "Ptr", hIcon)
+    VarSetCapacity(bil, A_PtrSize + 20, 0)
+    NumPut(il, bil, 0, "Ptr")
+    NumPut(4, bil, A_PtrSize + 16, "UInt")   ; BUTTON_IMAGELIST_ALIGN_CENTER
+    SendMessage, 0x1602, 0, &bil,, ahk_id %hB%   ; BCM_SETIMAGELIST
+    if (ilViejo)
+        DllCall("comctl32\ImageList_Destroy", "Ptr", ilViejo)
+    ilViejo := il
+}
 
 ; (Ale 2026-11-10) Opens PTCGPB, presses Launch all Mumu, waits for MuMu and presses Start Bot (and Yes on
 ; its "Confirm Bot Settings" box). The buttons are pressed by their text in the PTCGPB window.
 AbrirYArrancarPtcgpb(dirBot) {
+    ; (Ale 2026-11-10) A 10 s countdown (shown over the PTCGPB window) before each button, and every click is
+    ; checked in the PTCGPB log ("User action | ...") and retried: the first version clicked once while
+    ; PTCGPB was still loading and nothing happened.
+    log := dirBot . "\Logs\Log_PTCGPB.txt"
     Run, "%A_AhkPath%" "%dirBot%\PTCGPB.ahk", %dirBot%
     ventana := "Arturo's PTCGP BOT ahk_class AutoHotkeyGUI"
     WinWait, %ventana%,, 60
@@ -1211,18 +1299,71 @@ AbrirYArrancarPtcgpb(dirBot) {
         TrayTip, Monitor Link, The PTCGPB window did not open. Press Launch all Mumu and Start Bot yourself., 8, 2
         return
     }
-    Sleep, 3000
-    ControlClick, Launch all Mumu, %ventana%
-    if ErrorLevel
-        ControlClick, Launch all MuMu, %ventana%
+    CuentaRegresiva(ventana, 10, "Launch all Mumu")
+    if !ApretarBotonPtcgpb(ventana, "Launch all Mumu", log, "User action | Launch all MuMu") {
+        AvisoArranque(ventana, "Could not press Launch all Mumu. Press it and Start Bot yourself.")
+        return
+    }
     ; PTCGPB waits for MuMu inside that button; then it needs a moment more to be ready.
-    TrayTip, Monitor Link, Launching MuMu... the bot starts in about 45 seconds., 5, 1
-    Sleep, 45000
-    WinWait, %ventana%,, 60
-    ControlClick, Start Bot, %ventana%
-    WinWait, Confirm Bot Settings ahk_class #32770,, 15
-    if !ErrorLevel
-        ControlClick, Button1, Confirm Bot Settings ahk_class #32770
+    CuentaRegresiva(ventana, 45, "Start Bot")
+    if !ApretarBotonPtcgpb(ventana, "Start Bot", log, "User action | Start Bot", true) {
+        AvisoArranque(ventana, "Could not press Start Bot. Press it yourself.")
+        return
+    }
+    AvisoArranque(ventana, "Zenith Rise reroll started!")
+}
+
+; Countdown over the PTCGPB window: "Launch all Mumu in 10..." (also in the Monitor Link status).
+CuentaRegresiva(ventana, segundos, boton) {
+    Loop, %segundos% {
+        AvisoArranque(ventana, "Zenith Rise: " . boton . " in " . (segundos - A_Index + 1) . "...", 0)
+        Sleep, 1000
+    }
+    ToolTip,,,, 19
+}
+
+AvisoArranque(ventana, texto, quitar := 6000) {
+    CoordMode, ToolTip, Screen
+    WinGetPos, wx, wy, ww,, %ventana%
+    if (wx = "")
+        wx := A_ScreenWidth // 2 - 150, wy := 40, ww := 300
+    ToolTip, %texto%, % wx + ww // 2 - 110, % wy + 40, 19
+    GuiControl,, Status, %texto%
+    if (quitar)
+        SetTimer, QuitarAvisoArranque, -%quitar%
+}
+
+QuitarAvisoArranque:
+    ToolTip,,,, 19
+return
+
+; Presses a PTCGPB button by its text and waits for PTCGPB to write it in its log; up to 3 tries.
+; Start Bot also asks "Confirm Bot Settings" (Yes) before it is logged.
+ApretarBotonPtcgpb(ventana, texto, log, marca, confirmar := false) {
+    FileGetSize, desde, %log%
+    Loop, 3 {
+        WinWait, %ventana%,, 10
+        ControlClick, %texto%, %ventana%,,,, NA
+        if ErrorLevel {
+            ControlGet, h, Hwnd,, %texto%, %ventana%
+            if h
+                PostMessage, 0xF5, 0, 0,, ahk_id %h%   ; BM_CLICK
+        }
+        Loop, 20 {
+            Sleep, 500
+            if (confirmar && WinExist("Confirm Bot Settings ahk_class #32770"))
+                ControlClick, Button1, Confirm Bot Settings ahk_class #32770
+            f := FileOpen(log, "r")
+            if IsObject(f) {
+                f.Seek(desde + 0)
+                nuevo := f.Read()
+                f.Close()
+                if InStr(nuevo, marca)
+                    return true
+            }
+        }
+    }
+    return false
 }
 
 ; (Ale 2026-11-10) All the XMLs in Accounts\Saved\1 (the other numbered folders are the instances of the

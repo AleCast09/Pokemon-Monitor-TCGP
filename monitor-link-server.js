@@ -590,6 +590,20 @@ function registrar(app, dependencias) {
         }
     });
 
+    // Estado actual en Dragonite (boton verde/rojo de Monitor Link): { ok, online, result }.
+    app.get('/link/online', async (req, res) => {
+        try {
+            await asegurarTablas();
+            const agente = await agenteDe(req);
+            if (!agente) return res.status(401).json({ error: 'not_linked' });
+            const r = await dragoniteDe(agente.discord_id, agente.guild_id, 'status').catch(() => 'error');
+            if (typeof r === 'object' && r?.result === 'ok') return res.json({ ok: true, online: !!r.online, result: 'ok' });
+            res.json({ ok: false, result: typeof r === 'string' ? r : 'error' });
+        } catch (e) {
+            res.status(500).json({ error: 'server_error' });
+        }
+    });
+
     // (Ale 2026-11-10) Online/offline en Dragonite, como los botones del bot de wr98: { online: true|false }.
     app.post('/link/online', express.text({ type: 'text/plain', limit: '1kb' }), async (req, res) => {
         try {

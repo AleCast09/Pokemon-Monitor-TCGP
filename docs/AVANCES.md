@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-10 09:00 — diegoikrew123 — Bot: Monitor Link 1.9.25/1.9.26 + Dragonite (publicado host-2026.11.10-0859)
+- **1.9.25**: Sync reroll for Zenith Rise además pone 0 instancias + 1 Main, abre PTCGPB, aprieta Launch all Mumu y ~45 s después Start Bot (+ Yes). Al cargar, mueve todas las XML a `Accounts\Saved\1` (baneadas a la carpeta de baneadas). Probado el orden de XML; el arranque automático de PTCGPB no se probó en vivo.
+- **1.9.26 / Dragonite** (Upstash de wr98, `.env` WR98_REDIS_URL/TOKEN, ahora con permiso de escritura): **My Main ID** de Monitor Link también se guarda en `users:<grupo>` (misma forma que el bot de wr98, con heartbeatName del Settings.ini de PTCGPB). **Sync** pone online (`SADD online:<grupo>`, tope 25, Rivals no). Botón nuevo **Go offline**. Nuestro bot avisa en #logging ("you are now ONLINE/OFFLINE", se borra a los 2 min). Rutas: `/link/main` (con `dragonite:true`) y `/link/online`. Código: `community.js` (registrarMainDragonite, onlineDragonite), `bot.js` (avisarDragonite).
+- Probado en vivo con Ale Cast (Elite Four): online/offline + avisos OK.
+- Falta: confirmar con un miembro real (registro + Sync) en el host del turno.
+
 ### 2026-11-10 (01:42) — cuenta extra — Monitor Link 1.9.23 publicado
 - Publicado `host-2026.11.10-0142`. Monitor Link: ventana nueva (oscura, 3 columnas, una caja por tema, logo Zekrom embebido -> `%APPDATA%\MonitorLink\logo-v2.png`), clave vinculada como ***** con botón **Change**, estado en 2 líneas.
 - Botón **Sync reroll for Zenith Rise**: escribe en `Settings.ini` del bot de Lean (PTCGPB) Group Reroll (elite/vip-elite, auto GP test 3600 Standard 150), Group Discord (ID del miembro + webhook), Wonderpick (min 2★, ignore invalid) y modo Inject Wonderpick 96P+ (70, PacksDesc); deja `.before-zenith.bak` y abre PTCGPB. Pide cerrarlo antes. El webhook vive en Upstash `zenith:group_webhook` y lo entrega `/link/reroll-config` (nunca va en el .ahk público).
