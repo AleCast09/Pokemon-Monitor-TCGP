@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-10 (01:42) — cuenta extra — Monitor Link 1.9.23 publicado
+- Publicado `host-2026.11.10-0142`. Monitor Link: ventana nueva (oscura, 3 columnas, una caja por tema, logo Zekrom embebido -> `%APPDATA%\MonitorLink\logo-v2.png`), clave vinculada como ***** con botón **Change**, estado en 2 líneas.
+- Botón **Sync reroll for Zenith Rise**: escribe en `Settings.ini` del bot de Lean (PTCGPB) Group Reroll (elite/vip-elite, auto GP test 3600 Standard 150), Group Discord (ID del miembro + webhook), Wonderpick (min 2★, ignore invalid) y modo Inject Wonderpick 96P+ (70, PacksDesc); deja `.before-zenith.bak` y abre PTCGPB. Pide cerrarlo antes. El webhook vive en Upstash `zenith:group_webhook` y lo entrega `/link/reroll-config` (nunca va en el .ahk público).
+- Ojo AHK: `ruta` dentro de una función es la super-global `Ruta`; y el regex con `\` no matcheaba (usar `[^""]*`).
+- Siguiente: Dragonite (My Main ID -> `users:<grupo>`), esperando OK/formato de wr98.
+
 ### 2026-11-10 (00:10) — cuenta extra — Log de Fast Trade, proxies
 - Publicado `host-2026.11.10-0010`: cada ⚡ Fast Share/Trade guarda su log en `<motor>\logsast_transfer.log` (tokens tapados) y, si el juego rechaza la oferta, Discord muestra "game said: …". Bot de Ale sin reiniciar (no tiene el turno).
 - Fast Trade de Cyrus ☆☆ (creeeder91) fallaba con ABORTED **4008**: la cuenta tiene el juego en inglés pero sus cartas en español, y el bot ofrecía la carta en inglés. Arreglado en `scripts/fast_transfer.py` (usa el idioma de la copia que tiene la cuenta, de `card_stocks[].language_tags`); confirmado por creeeder91 y publicado en `host-2026.11.10-0100`. Códigos del juego: `engine/takasho/schema/lettuce_server/resource/player_api_error/code_pb2.py`.
