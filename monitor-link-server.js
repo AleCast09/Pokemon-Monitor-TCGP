@@ -312,6 +312,7 @@ function registrar(app, dependencias) {
     cargarAmigos();
     const nombreUsuario = dependencias.nombreUsuario || (async () => null);
     const dragoniteDe = dependencias.dragonite || (async () => 'error');
+    const avisoGpStop = dependencias.avisoGpStop || (async () => {});
 
     app.post('/link/claim', express.json(), async (req, res) => {
         try {
@@ -614,6 +615,25 @@ function registrar(app, dependencias) {
             try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
             const r = await dragoniteDe(agente.discord_id, agente.guild_id, datos.online ? 'online' : 'offline').catch(() => 'error');
             res.json({ ok: r === 'ok', result: r });
+        } catch (e) {
+            res.status(500).json({ error: 'server_error' });
+        }
+    });
+
+    // (Ale 2026-11-11) Offline -> GP test -> PTCGPB y MuMu Main cerrados: Monitor Link avisa cada fase
+    // ({ phase: start|done|timeout, seconds, mumu }) y el bot lo pone en #logging.
+    app.post('/link/gp-stop', express.text({ type: 'text/plain', limit: '1kb' }), async (req, res) => {
+        try {
+            await asegurarTablas();
+            const agente = await agenteDe(req);
+            if (!agente) return res.status(401).json({ error: 'not_linked' });
+            let datos;
+            try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
+            const fase = ['start', 'done', 'timeout'].includes(datos.phase) ? datos.phase : null;
+            if (!fase) return res.status(400).json({ error: 'bad_phase' });
+            await avisoGpStop(agente.discord_id, agente.guild_id, fase,
+                { seconds: Number.isFinite(datos.seconds) ? datos.seconds : 0, mumu: datos.mumu !== false }).catch(() => {});
+            res.json({ ok: true });
         } catch (e) {
             res.status(500).json({ error: 'server_error' });
         }

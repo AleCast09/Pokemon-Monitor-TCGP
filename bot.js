@@ -7775,7 +7775,8 @@ if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
         const r = await comunidad.onlineDragonite(miembro, accion === 'online');
         if (typeof r === 'object' && r.result === 'ok') avisarDragonite(guild, miembro, accion === 'online', r.grupo).catch(() => {});
         return typeof r === 'object' ? r.result : r;
-    }
+    },
+    avisoGpStop: (discordId, guildId, fase, datos) => avisarGpStop(guildId, discordId, fase, datos)
 });
 // GP farm de la comunidad: los hosts Online (boton en el canal de hosts) se reparten la bolsa de proxies y
 // las cuentas que prestan los miembros (reroll-comunidad.js).
@@ -17189,6 +17190,36 @@ async function avisarDragonite(guild, miembro, online, grupo) {
         : `🔴 <@${miembro.id}> you are now **OFFLINE** in **${nombreGrupo}**.`;
     const msg = await canal.send({ content: texto, allowedMentions: { users: [miembro.id] } }).catch(() => null);
     if (msg) setTimeout(() => msg.delete().catch(() => {}), 2 * 60 * 1000);
+}
+
+// (Ale 2026-11-11) Offline -> GP test -> cerrar: Monitor Link avisa al empezar y al terminar. El mensaje
+// de inicio cuenta solo el tiempo (<t:..:R>); el final es uno nuevo (para que mencione) y el de inicio se borra.
+const avisosGpStop = new Map();   // discordId -> mensaje de inicio
+async function avisarGpStop(guildId, discordId, fase, datos = {}) {
+    const guild = client.guilds.cache.get(String(guildId));
+    if (!guild) return;
+    let canal = await guild.channels.fetch(CANAL_LOGGING_DRAGONITE).catch(() => null);
+    if (!canal) canal = guild.channels.cache.find(c => c.isTextBased?.() && /logging/i.test(c.name)) || null;
+    if (!canal) return;
+    const id = String(discordId);
+    const menciona = { allowedMentions: { users: [id] } };
+    if (fase === 'start') {
+        const msg = await canal.send({ content: `🔴 <@${id}> you are **OFFLINE** — 🧪 **GP Test running** (Standard), started <t:${Math.floor(Date.now() / 1000)}:R>.\nMuMu Player and the AHK close by themselves when it ends.`, ...menciona }).catch(() => null);
+        if (msg) {
+            avisosGpStop.get(id)?.delete().catch(() => {});
+            avisosGpStop.set(id, msg);
+            setTimeout(() => { if (avisosGpStop.get(id) === msg) { avisosGpStop.delete(id); msg.delete().catch(() => {}); } }, 30 * 60 * 1000);
+        }
+        return;
+    }
+    avisosGpStop.get(id)?.delete().catch(() => {});
+    avisosGpStop.delete(id);
+    const min = Math.max(1, Math.round((datos.seconds || 0) / 60));
+    const texto = fase === 'done'
+        ? `✅ <@${id}> **GP Test finished** (${min} min) — ${datos.mumu ? 'MuMu Player and AHK closed correctly.' : 'AHK closed correctly (MuMu Main was not found).'}`
+        : `⚠️ <@${id}> the GP Test did not finish in 20 min — MuMu Player and AHK were closed anyway.`;
+    const msg = await canal.send({ content: texto, ...menciona }).catch(() => null);
+    if (msg) setTimeout(() => msg.delete().catch(() => {}), 10 * 60 * 1000);
 }
 
 async function darRolMonitor(guildId, discordId) {

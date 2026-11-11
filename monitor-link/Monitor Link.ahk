@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.30"
+global VERSION := "ahk-1.9.31"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -43,6 +43,7 @@ global DragoniteRes := "", EstadoOnline := "", HBtnOnline := 0, BtnOnline := ""
 global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global MiMain := ""   ; this member's own Main friend ID (16 digits): Share/Trade destination in the bot
+global MainVistoOnline := false, MainAusente := 0, ApagandoGp := false   ; Offline -> GP test -> close (Ale 2026-11-11)
 global Status, Info, Clave, TxtCarpeta, TxtResumen, TxtBan, TxtGP, TxtProx, TxtVer, TxtUser, TxtError, BtnLink, Inicio, LinkBox, LinkTxt, LVCuentas, Barra, BtnMain
 global Cambiando := false   ; linked PC: the key box shows ***** until Change is pressed
 
@@ -1206,13 +1207,134 @@ CambiarOnline:
     quiere := EstadoOnline != "on"
     PintarOnline("wait")
     res := DragoniteOnline(quiere)
-    if (res = "ok")
+    if (res = "ok") {
         PintarOnline(quiere ? "on" : "off")
+        ; Offline with the Main running: GP test, then PTCGPB and MuMu Main close (Ale 2026-11-11).
+        if (!quiere && MainCorriendo() != "")
+            SetTimer, ApagarConGpTestYa, -100
+    }
     else {
         ConsultarOnline()
         MsgBox, 48, Monitor Link, % SubStr(TextoDragonite(res, quiere ? "online" : "offline"), 3)
     }
 return
+
+; ---------------------------------------------------------------- Offline -> GP test -> close (Ale 2026-11-11)
+; Going Offline (this window's button, or Dragonite's button in Discord) while the PTCGPB Main runs:
+; the Main does a Standard GP test (removes the friends, keeps the God Pack ones) and stops by itself
+; ("Run GP Test then Stop"), then PTCGPB and the MuMu "Main" instance close and Discord gets a message.
+; Dragonite's button is wr98's bot: it is noticed because this Main leaves the public online list.
+
+; PID of the PTCGPB Main.ahk running on this PC ("" = not running). dir = the PTCGPB folder.
+MainCorriendo(ByRef dir := "") {
+    for p in ComObjGet("winmgmts:").ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'AutoHotkey%'")
+        if RegExMatch(p.CommandLine, "i)([A-Z]:\\(?:(?![A-Z]:\\)[^""])*?)\\Scripts\\Main\.ahk", m) {
+            dir := m1
+            return p.ProcessId
+        }
+    return ""
+}
+
+VigilarOfflineMain:
+    if (ApagandoGp || Token = "")
+        return
+    if (MiMain = "" || MainCorriendo() = "") {
+        MainVistoOnline := false, MainAusente := 0
+        return
+    }
+    listas := "", leidas := 0
+    for _, u in ["https://onlineids.zenithrise.workers.dev/elite", "https://onlineids.zenithrise.workers.dev/vip-elite"] {
+        r := ""
+        try r := Http("GET", u, "", "", "", 15)
+        if (IsObject(r) && r.status = 200 && RegExMatch(r.text, "\d{16}"))
+            listas .= r.text . "`n", leidas++
+    }
+    if (!leidas)
+        return   ; list not reachable / empty: never stop on that
+    if InStr(listas, MiMain) {
+        MainVistoOnline := true, MainAusente := 0
+        return
+    }
+    ; Two checks in a row without this Main (1 min apart) = it went Offline.
+    if (MainVistoOnline && ++MainAusente >= 2)
+        SetTimer, ApagarConGpTestYa, -100
+return
+
+ApagarConGpTestYa:
+    ApagarConGpTest()
+return
+
+ApagarConGpTest() {
+    global ApagandoGp, MainVistoOnline, MainAusente
+    if ApagandoGp
+        return
+    pid := MainCorriendo(dirBot)
+    if (pid = "" || dirBot = "")
+        return
+    ApagandoGp := true, MainVistoOnline := false, MainAusente := 0
+    inicio := A_TickCount
+    AvisarGpStop("start")
+    TrayTip, Monitor Link, % "You are Offline: running a GP test. PTCGPB and MuMu Main close after it.", 6, 1
+    ini := dirBot . "\Settings.ini", logMain := dirBot . "\Logs\Log_Main.txt"
+    FileGetSize, desde, %logMain%
+    IniRead, antes, %ini%, Extra, stopPreferenceMain, %A_Space%
+    IniWrite, gp_test, %ini%, Extra, stopPreferenceMain
+    ; Stop button of the Main toolbar (with stopPreferenceMain=gp_test it runs the GP test, then stops).
+    pulsado := false
+    WinGet, lista, List, ahk_class AutoHotkeyGUI ahk_pid %pid%
+    Loop, %lista% {
+        h := lista%A_Index%
+        ControlGet, b, Hwnd,, Stop (Shift+F10), ahk_id %h%
+        if b {
+            PostMessage, 0xF5, 0, 0,, ahk_id %b%   ; BM_CLICK
+            pulsado := true
+            break
+        }
+    }
+    if !pulsado
+        Send, +{F10}
+    ; Wait until Main.ahk ends by itself (up to 20 min).
+    while (MainCorriendo() = pid && A_TickCount - inicio < 20 * 60000)
+        Sleep, 3000
+    hecho := false
+    f := FileOpen(logMain, "r")
+    if IsObject(f) {
+        f.Seek(desde + 0)
+        hecho := InStr(f.Read(), "GP Test: done") > 0
+        f.Close()
+    }
+    if (MainCorriendo() = pid)
+        Process, Close, %pid%
+    ; PTCGPB window (its close also stops any script it started), then the MuMu "Main" instance.
+    ventana := "Arturo's PTCGP BOT ahk_class AutoHotkeyGUI"
+    if WinExist(ventana) {
+        WinClose, %ventana%
+        WinWaitClose, %ventana%,, 30
+    }
+    if (antes = "" || antes = "ERROR")
+        IniDelete, %ini%, Extra, stopPreferenceMain
+    else
+        IniWrite, %antes%, %ini%, Extra, stopPreferenceMain
+    mumu := false
+    manager := RutaMuMuManager()
+    if (manager != "")
+        for _, i in InstanciasMuMu(InfoMuMu(manager))
+            if (i.name = "Main") {
+                RunWait, % """" . manager . """ control -v " . i.index . " shutdown",, Hide
+                mumu := true
+            }
+    AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu)
+    TrayTip, Monitor Link, % hecho ? "GP test finished. PTCGPB and MuMu Main closed." : "The GP test did not finish in 20 min. PTCGPB and MuMu Main closed anyway.", 6, 1
+    ApagandoGp := false
+}
+
+; Tells the bot (message in #logging). fase: start | done | timeout.
+AvisarGpStop(fase, segundos := 0, mumu := true) {
+    if (Token = "")
+        return
+    body := "{""phase"":""" . fase . """,""seconds"":" . (segundos + 0) . ",""mumu"":" . (mumu ? "true" : "false") . "}"
+    try Http("POST", ServerUrl . "/link/gp-stop", body, "text/plain; charset=utf-8", Token, 20)
+}
 
 ; Asks the bot once (when the window opens / at start), not on a timer: wr98's Upstash has a monthly limit.
 ConsultarOnline() {
@@ -1539,6 +1661,7 @@ Arrancar() {
     SetTimer, ResumenPeriodico, 600000
     SetTimer, RevisarTrabajos, 300
     SetTimer, RevisarTrabajosEspejos, 500
+    SetTimer, VigilarOfflineMain, 60000
 }
 
 NoVinculado() {
