@@ -1295,9 +1295,38 @@ ApagarConGpTest() {
     }
     if !pulsado
         Send, +{F10}
-    ; Wait until Main.ahk ends by itself (up to 20 min).
-    while (MainCorriendo() = pid && A_TickCount - inicio < 20 * 60000)
-        Sleep, 3000
+    ; Wait until Main.ahk ends by itself (up to 20 min), showing the step and the countdown (Ale 2026-11-11).
+    VentanaGpTest("Step 1/3: Favouriting VIP friends...", inicio)
+    Loop {
+        Process, Exist, %pid%
+        if (!ErrorLevel || A_TickCount - inicio >= 20 * 60000)
+            break
+        paso := "Step 1/3: Favouriting VIP friends..."
+        f := FileOpen(logMain, "r")
+        if IsObject(f) {
+            f.Seek(desde + 0)
+            nuevo := f.Read()
+            f.Close()
+            if InStr(nuevo, "GP Test: done")
+                paso := "GP Test done!"
+            else if InStr(nuevo, "GP Test: removing non-VIP friends")
+                paso := "Step 3/3: Removing non-VIP friends..."
+        }
+        if InStr(paso, "Step 1/3") {
+            ; The Main shows its countdown only on screen: read it from its status window.
+            DetectHiddenText, On
+            WinGet, ventanas, List, ahk_pid %pid%
+            Loop, %ventanas% {
+                WinGetText, t, % "ahk_id " . ventanas%A_Index%
+                if RegExMatch(t, "Waiting for instances to remove friends \((\d+)s\)", ms) {
+                    paso := "Step 2/3: Waiting for friends to be removed - " . ms1 . "s"
+                    break
+                }
+            }
+        }
+        VentanaGpTest(paso, inicio)
+        Sleep, 1000
+    }
     hecho := false
     f := FileOpen(logMain, "r")
     if IsObject(f) {
@@ -1307,6 +1336,7 @@ ApagarConGpTest() {
     }
     if (MainCorriendo() = pid)
         Process, Close, %pid%
+    VentanaGpTest(hecho ? "GP Test done! Closing PTCGPB and MuMu..." : "The GP test did not finish. Closing PTCGPB and MuMu...", inicio)
     ; PTCGPB window (its close also stops any script it started), then the MuMu "Main" instance.
     ventana := "Arturo's PTCGP BOT ahk_class AutoHotkeyGUI"
     if WinExist(ventana) {
@@ -1325,10 +1355,42 @@ ApagarConGpTest() {
                 RunWait, % """" . manager . """ control -v " . i.index . " shutdown",, Hide
                 mumu := true
             }
+    VentanaGpTest(hecho ? "Done! GP Test finished, PTCGPB and MuMu closed." : "The GP test did not finish (cancelled or 20 min). PTCGPB and MuMu closed.", inicio, true)
     AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu)
     TrayTip, Monitor Link, % hecho ? "GP test finished. PTCGPB and MuMu Main closed." : "The GP test did not finish in 20 min. PTCGPB and MuMu Main closed anyway.", 6, 1
     ApagandoGp := false
 }
+
+; Small always-on-top window while the Offline GP test runs: the step, the Main's countdown and the time.
+VentanaGpTest(paso, inicio, final := false) {
+    static creada := false, hTitulo := 0, hPaso := 0, hTiempo := 0
+    if !creada {
+        Gui, GpTest:New, +AlwaysOnTop +ToolWindow -MinimizeBox, Monitor Link - GP Test
+        Gui, GpTest:Color, 1E1E1E
+        Gui, GpTest:Font, s12 Bold cFFD54F, Segoe UI
+        Gui, GpTest:Add, Text, x16 y12 w440 h26 hwndhTitulo, GP Test running - please don't touch the bot
+        Gui, GpTest:Font, s11 Norm cFFFFFF, Segoe UI
+        Gui, GpTest:Add, Text, x16 y46 w440 h24 hwndhPaso
+        Gui, GpTest:Font, s9 cAAAAAA, Segoe UI
+        Gui, GpTest:Add, Text, x16 y78 w440 h20 hwndhTiempo
+        Gui, GpTest:Show, w472 h108 NoActivate
+        creada := true
+    }
+    if final
+        GuiControl, GpTest:, %hTitulo%, GP Test finished
+    GuiControl, GpTest:, %hPaso%, %paso%
+    s := (A_TickCount - inicio) // 1000
+    GuiControl, GpTest:, %hTiempo%, % "Time: " . (s // 60) . ":" . Format("{:02}", Mod(s, 60))
+        . (final ? "" : "    -    PTCGPB and MuMu close by themselves at the end")
+    if final {
+        creada := false
+        SetTimer, CerrarVentanaGpTest, -15000
+    }
+}
+
+CerrarVentanaGpTest:
+    Gui, GpTest:Destroy
+return
 
 ; Tells the bot (message in #logging). fase: start | done | timeout.
 AvisarGpStop(fase, segundos := 0, mumu := true) {
