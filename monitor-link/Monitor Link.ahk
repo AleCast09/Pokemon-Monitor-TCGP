@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.31"
+global VERSION := "ahk-1.9.32"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -43,7 +43,7 @@ global DragoniteRes := "", EstadoOnline := "", HBtnOnline := 0, BtnOnline := ""
 global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible) / the 96P pack farm (locked)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global MiMain := ""   ; this member's own Main friend ID (16 digits): Share/Trade destination in the bot
-global MainVistoOnline := false, MainAusente := 0, ApagandoGp := false   ; Offline -> GP test -> close (Ale 2026-11-11)
+global MainVistoOnline := false, MainAusente := 0, ApagandoGp := false, MainDragonite := ""   ; Offline -> GP test -> close (Ale 2026-11-11)
 global Status, Info, Clave, TxtCarpeta, TxtResumen, TxtBan, TxtGP, TxtProx, TxtVer, TxtUser, TxtError, BtnLink, Inicio, LinkBox, LinkTxt, LVCuentas, Barra, BtnMain
 global Cambiando := false   ; linked PC: the key box shows ***** until Change is pressed
 
@@ -1227,7 +1227,8 @@ return
 
 ; PID of the PTCGPB Main.ahk running on this PC ("" = not running). dir = the PTCGPB folder.
 MainCorriendo(ByRef dir := "") {
-    for p in ComObjGet("winmgmts:").ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'AutoHotkey%'")
+    ; AutoHotkeyUX.exe = the AutoHotkey launcher: its command line also names Main.ahk, but it is not the Main.
+    for p in ComObjGet("winmgmts:").ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'AutoHotkey%' AND NOT Name LIKE 'AutoHotkeyUX%'")
         if RegExMatch(p.CommandLine, "i)([A-Z]:\\(?:(?![A-Z]:\\)[^""])*?)\\Scripts\\Main\.ahk", m) {
             dir := m1
             return p.ProcessId
@@ -1238,7 +1239,8 @@ MainCorriendo(ByRef dir := "") {
 VigilarOfflineMain:
     if (ApagandoGp || Token = "")
         return
-    if (MiMain = "" || MainCorriendo() = "") {
+    miId := MiMain != "" ? MiMain : MainDragonite
+    if (miId = "" || MainCorriendo() = "") {
         MainVistoOnline := false, MainAusente := 0
         return
     }
@@ -1251,7 +1253,7 @@ VigilarOfflineMain:
     }
     if (!leidas)
         return   ; list not reachable / empty: never stop on that
-    if InStr(listas, MiMain) {
+    if InStr(listas, miId) {
         MainVistoOnline := true, MainAusente := 0
         return
     }
@@ -1472,6 +1474,7 @@ AvisoArranque(ventana, texto, quitar := 6000) {
     if LicenciaPtcgpb {
         ControlMove,,,,, 48, ahk_id %LicenciaPtcgpb%
         ControlSetText,, % "CC BY-NC 4.0 international license`n`nZenith Rise: " . texto, ahk_id %LicenciaPtcgpb%
+        RedibujarLicencia()
     } else {
         ; panel text not found: tooltip over the PTCGPB window, as before
         CoordMode, ToolTip, Screen
@@ -1487,7 +1490,22 @@ QuitarAvisoArranque:
     ToolTip,,,, 19
     if LicenciaPtcgpb && WinExist("ahk_id " . LicenciaPtcgpb)
         ControlSetText,, CC BY-NC 4.0 international license, ahk_id %LicenciaPtcgpb%
+    RedibujarLicencia()
 return
+
+; The PTCGPB text has a transparent background: without repainting what is behind it, every new text was
+; drawn over the old one and the countdown looked blurry (Ale 2026-11-11).
+RedibujarLicencia() {
+    global LicenciaPtcgpb
+    if !LicenciaPtcgpb
+        return
+    padre := DllCall("GetParent", "Ptr", LicenciaPtcgpb, "Ptr")
+    VarSetCapacity(r, 16, 0)
+    DllCall("GetWindowRect", "Ptr", LicenciaPtcgpb, "Ptr", &r)
+    DllCall("MapWindowPoints", "Ptr", 0, "Ptr", padre, "Ptr", &r, "UInt", 2)
+    ; RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW, only the text's area
+    DllCall("RedrawWindow", "Ptr", padre, "Ptr", &r, "Ptr", 0, "UInt", 0x185)
+}
 
 ; Presses a PTCGPB button by its text and waits for PTCGPB to write it in its log; up to 3 tries.
 ; Start Bot also asks "Confirm Bot Settings" (Yes) before it is logged.
@@ -1839,6 +1857,8 @@ Ping:
     }
     ActualizarSiHayVersion(r.text)
     LeerBaneadas(r.text)
+    ; Main registered in Dragonite (or My Main ID): to notice Offline from Dragonite's button.
+    MainDragonite := RegExMatch(r.text, """main""\s*:\s*""(\d{16})""", mmd) ? mmd1 : ""
     ; The address book (Upstash) can move to a new database: the bot sends the current one and it's kept.
     if (RegExMatch(r.text, """lib""\s*:\s*\{\s*""u""\s*:\s*""(https://[^""]+)""\s*,\s*""t""\s*:\s*""([^""]+)""", mlib)
         && (mlib1 != LibUrl || mlib2 != LibToken)) {

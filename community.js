@@ -377,6 +377,21 @@ async function estadoDragonite(member) {
     }
 }
 
+// Main ID registrado en Dragonite (16 digitos) o null. Monitor Link lo usa para notar el Offline del boton
+// de Dragonite (Ale 2026-11-11).
+async function mainDragonite(member) {
+    try {
+        const grupo = await grupoDragonite(member);
+        if (!grupo || grupo === 'Rivals') return null;
+        const crudo = await redis('HGET', `users:${grupo}`, String(member.id));
+        let d = null; try { d = typeof crudo === 'string' ? JSON.parse(crudo) : crudo; } catch (e) { /* ilegible */ }
+        const main = String(d?.main_id || '').replace(/\D/g, '');
+        return /^\d{16}$/.test(main) ? main : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 // online true/false. Devuelve 'ok' | 'no_role' | 'not_registered' | 'full' | 'rivals' | 'error'.
 async function onlineDragonite(member, online) {
     try {
@@ -414,4 +429,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { rolMonitor, permisosCategoria, CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual, registrarMainDragonite, onlineDragonite, estadoDragonite };
+module.exports = { rolMonitor, permisosCategoria, CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual, registrarMainDragonite, onlineDragonite, estadoDragonite, mainDragonite };

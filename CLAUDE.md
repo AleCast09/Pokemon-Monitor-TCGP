@@ -63,7 +63,7 @@ Un host tiene el **turno** (atiende los comandos y los Monitor Link); los demás
 - **Limpieza**: cada cuenta queda anotada en `reports/fr_pending/` antes de mandar solicitudes; si el motor se corta, la siguiente corrida borra esas amistades (las prestadas pidiendo la XML otra vez). Así las listas de los Mains no llegan a 99.
 - Avisos de God Pack: el motor los manda al webhook de la comunidad (KyuremBot crea el post). Necesita Pillow (el motor lo instala solo si falta).
 
-**Monitor Link** (versión actual ahk-1.9.31; Offline -> GP test Standard -> cierra PTCGPB y MuMu Main, aviso en #logging): cartas, proxies, cuentas para reroll, amigos (ID de Discord + ID del juego), **"My Main ID"** (destino de Share/Trade; todavía no se escribe en Dragonite: esperando formato/permiso de wr98), baneadas.
+**Monitor Link** (versión actual ahk-1.9.32; Offline -> GP test Standard -> cierra PTCGPB y MuMu Main, aviso en #logging): cartas, proxies, cuentas para reroll, amigos (ID de Discord + ID del juego), **"My Main ID"** (destino de Share/Trade; todavía no se escribe en Dragonite: esperando formato/permiso de wr98), baneadas.
 
 **Fast Farm / Shinedust / Fast Share-Trade**: corren en el host del turno; si el juego bloquea su IP, reintentan por 1-2 proxies del host (`scripts/respaldo_proxy.py`; Share/Trade solo reintenta el login).
 

@@ -313,6 +313,19 @@ function registrar(app, dependencias) {
     const nombreUsuario = dependencias.nombreUsuario || (async () => null);
     const dragoniteDe = dependencias.dragonite || (async () => 'error');
     const avisoGpStop = dependencias.avisoGpStop || (async () => {});
+    // Main del miembro para el ping (Offline de Dragonite -> GP test): "My Main ID" de Monitor Link o, si no
+    // lo puso, el de Dragonite. Guardado 30 min en memoria (el Upstash de wr98 tiene limite mensual).
+    const mainsCache = new Map();
+    const mainDelMiembro = async (discordId, guildId) => {
+        const propia = await db.get(`SELECT main_id FROM link_main WHERE discord_id = ?`, [String(discordId)]).catch(() => null);
+        if (propia?.main_id) return String(propia.main_id);
+        const g = mainsCache.get(String(discordId));
+        if (g && Date.now() - g.t < 30 * 60 * 1000) return g.v;
+        const v = await dragoniteDe(discordId, guildId, 'main').catch(() => null);
+        const main = typeof v === 'string' && /^\d{16}$/.test(v) ? v : null;
+        mainsCache.set(String(discordId), { t: Date.now(), v: main });
+        return main;
+    };
 
     app.post('/link/claim', express.json(), async (req, res) => {
         try {
@@ -430,6 +443,7 @@ function registrar(app, dependencias) {
                 pedido.carpeta_pedida = null;
             }
             res.json({ ok: true, user: (await nombreUsuario(agente.discord_id)) || agente.discord_id, folder: pedido?.carpeta_pedida || null, ahk: await ultimoAhk(),
+                main: await mainDelMiembro(agente.discord_id, agente.guild_id),
                 mirrors: await espejos(), banned: await baneadasDe(agente.discord_id),
                 // Libreta de direcciones actual (solo lectura): si la base de Upstash cambia (2026-11-09), cada
                 // Monitor Link vinculado se pasa solo a la nueva sin volver a vincular.

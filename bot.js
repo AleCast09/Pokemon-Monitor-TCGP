@@ -7772,6 +7772,7 @@ if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
         if (!miembro) return 'no_member';
         if (accion === 'register') return comunidad.registrarMainDragonite(miembro, datos.main, datos.heartbeatName);
         if (accion === 'status') return comunidad.estadoDragonite(miembro);
+        if (accion === 'main') return comunidad.mainDragonite(miembro);
         const r = await comunidad.onlineDragonite(miembro, accion === 'online');
         if (typeof r === 'object' && r.result === 'ok') avisarDragonite(guild, miembro, accion === 'online', r.grupo).catch(() => {});
         return typeof r === 'object' ? r.result : r;
