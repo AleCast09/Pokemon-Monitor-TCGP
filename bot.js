@@ -17252,13 +17252,18 @@ async function avisarGpStop(guildId, discordId, fase, datos = {}) {
     avisosGpStop.get(id)?.delete().catch(() => {});
     avisosGpStop.delete(id);
     const ok = fase === 'done';
-    const vip = Array.isArray(datos.vip) ? datos.vip : [];
+    let vip = Array.isArray(datos.vip) ? datos.vip : [];
+    // (Ale 2026-11-11) Solo los God Packs que salieron mientras estuvo conectado: desde que arranco su Main
+    // (since, Monitor Link 1.9.33+) hasta ahora. La lista VIP es la acumulada del grupo. Sin since (Monitor
+    // Link viejo) se muestran todos, como antes.
+    const desde = Number(datos.since) || 0, hasta = Math.floor(Date.now() / 1000);
     let lineas = [];
     if (vip.length) {
         const conocidos = new Map();
         for (const viejos of [true, false]) {
             for (const h of await hostComunidad.godPacksComunidad(viejos).catch(() => null) || []) if (h?.id) conocidos.set(String(h.id), h);
         }
+        if (desde) vip = vip.filter(v => { const t = Number(conocidos.get(v)?.ts) || 0; return t >= desde * 1000 && t <= hasta * 1000; });
         const estrella = em('rareza_estrella', '⭐');
         lineas = vip.map(v => {
             const h = conocidos.get(v);
@@ -17267,7 +17272,8 @@ async function avisarGpStop(guildId, discordId, fase, datos = {}) {
             return `${em('Card_Back_TCGP', '🃏')} **${h.name || v}**${estrellas ? ` · ${estrella} ${estrellas}` : ''}${sobre ? ` · ${sobre}` : ''}`;
         });
     }
-    const lista = lineas.slice(0, 15).join('\n') + (lineas.length > 15 ? `\n…and ${lineas.length - 15} more` : '');
+    const rango = desde ? `Online <t:${desde}:t> → <t:${hasta}:t>\n` : '';
+    const lista = rango + (lineas.slice(0, 15).join('\n') + (lineas.length > 15 ? `\n…and ${lineas.length - 15} more` : '') || 'None in this time');
     const embed = new EmbedBuilder()
         .setColor(ok ? 0x2ECC71 : 0xE74C3C)
         .setTitle(ok ? `${em('nice', '✅')} GP Test finished — ${nombre}` : `${em('bad', '⚠️')} GP Test did not finish — ${nombre}`)
@@ -17278,7 +17284,7 @@ async function avisarGpStop(guildId, discordId, fase, datos = {}) {
             { name: 'Time', value: `⏱ ${tiempoGp(datos.seconds)}`, inline: true },
             // Donde se quedo (Ale 2026-11-11: el de alerieva se corto y no se sabia en que paso).
             ...(!ok && datos.step ? [{ name: 'Stuck at', value: datos.step, inline: true }] : []),
-            { name: `${em('rareza_estrella', '💎')} God Packs kept as friends (${vip.length})`, value: lista || 'None' })
+            { name: `${em('rareza_estrella', '💎')} ${desde ? 'God Packs while you were online' : 'God Packs kept as friends'} (${vip.length})`, value: lista || 'None' })
         .setFooter({ text: 'Monitor Link' })
         .setTimestamp();
     const msg = await canal.send({ content: `<@${id}>`, embeds: [embed], allowedMentions: { users: [id] } }).catch(() => null);

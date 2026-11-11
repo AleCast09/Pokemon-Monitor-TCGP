@@ -1281,6 +1281,7 @@ ApagarConGpTest() {
     if (pid = "" || dirBot = "")
         return
     ApagandoGp := true, MainVistoOnline := false, MainAusente := 0
+    desde := InicioProceso(pid)   ; when this Main started = start of the online session (Ale 2026-11-11)
     inicio := A_TickCount
     AvisarGpStop("start")
     TrayTip, Monitor Link, % "You are Offline: running a GP test. PTCGPB and MuMu Main close after it.", 6, 1
@@ -1379,7 +1380,7 @@ ApagarConGpTest() {
                 vip .= (vip = "" ? "" : ",") . """" . mv1 . """", nVip++
         }
     }
-    AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu, hecho ? "" : paso, vip)
+    AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu, hecho ? "" : paso, vip, desde)
     TrayTip, Monitor Link, % hecho ? "GP test finished. PTCGPB and MuMu Main closed." : "The GP test did not finish in 30 min. PTCGPB and MuMu Main closed anyway.", 6, 1
     ApagandoGp := false
 }
@@ -1409,6 +1410,17 @@ CerrarPtcgpb() {
             && InStr("|" . dirs, "|" . ms1 . "|")
             Process, Close, % p.ProcessId
     DetectHiddenWindows, Off
+}
+
+; Unix time (seconds) when a process started, from WMI ("20261111123500.123456-300": local time + offset in min).
+InicioProceso(pid) {
+    for p in ComObjGet("winmgmts:").ExecQuery("SELECT CreationDate FROM Win32_Process WHERE ProcessId = " . pid) {
+        cd := p.CreationDate
+        t := SubStr(cd, 1, 14)
+        EnvSub, t, 19700101000000, Seconds
+        return t - SubStr(cd, 22) * 60
+    }
+    return 0
 }
 
 ; Small always-on-top window while the Offline GP test runs: the step, the Main's countdown and the time.
@@ -1443,12 +1455,12 @@ CerrarVentanaGpTest:
 return
 
 ; Tells the bot (message in #logging). fase: start | done | timeout.
-AvisarGpStop(fase, segundos := 0, mumu := true, paso := "", vip := "") {
+AvisarGpStop(fase, segundos := 0, mumu := true, paso := "", vip := "", desde := 0) {
     if (Token = "")
         return
     body := "{""phase"":""" . fase . """,""seconds"":" . (segundos + 0) . ",""mumu"":" . (mumu ? "true" : "false")
         . (paso != "" ? ",""step"":""" . JsonEsc(paso) . """" : "")
-        . (fase != "start" && fase != "step" ? ",""vip"":[" . vip . "]" : "") . "}"
+        . (fase != "start" && fase != "step" ? ",""vip"":[" . vip . "],""since"":" . (desde + 0) : "") . "}"
     try Http("POST", ServerUrl . "/link/gp-stop", body, "text/plain; charset=utf-8", Token, 10)
 }
 
