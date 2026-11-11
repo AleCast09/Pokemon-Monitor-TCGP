@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.29"
+global VERSION := "ahk-1.9.30"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -1304,13 +1304,33 @@ AbrirYArrancarPtcgpb(dirBot) {
         AvisoArranque(ventana, "Could not press Launch all Mumu. Press it and Start Bot yourself.")
         return
     }
-    ; PTCGPB waits for MuMu inside that button; then it needs a moment more to be ready.
-    CuentaRegresiva(ventana, 45, "Start Bot")
+    ; (Ale 2026-11-11) Start Bot only once Android of the "Main" instance is up: with a fixed 45 s, a slow
+    ; MuMu boot left Main.ahk without ADB ("cannot connect 127.0.0.1:...") and the Main never started.
+    EsperarMainMuMu(ventana)
+    CuentaRegresiva(ventana, 20, "Start Bot")
     if !ApretarBotonPtcgpb(ventana, "Start Bot", log, "User action | Start Bot", true) {
         AvisoArranque(ventana, "Could not press Start Bot. Press it yourself.")
         return
     }
     AvisoArranque(ventana, "Zenith Rise reroll started!")
+}
+
+; Waits (up to 3 min) until MuMuManager says Android of the instance named "Main" started. Without
+; MuMuManager it just waits 45 s, like before.
+EsperarMainMuMu(ventana) {
+    manager := RutaMuMuManager()
+    if (manager = "") {
+        CuentaRegresiva(ventana, 25, "Start Bot")
+        return
+    }
+    inicio := A_TickCount
+    while (A_TickCount - inicio < 180000) {
+        for _, i in InstanciasMuMu(InfoMuMu(manager))
+            if (i.name = "Main" && i.on)
+                return
+        AvisoArranque(ventana, "waiting for MuMu Main to start (" . Round((A_TickCount - inicio) / 1000) . "s)...", 0)
+        Sleep, 3000
+    }
 }
 
 ; Countdown in the PTCGPB window, under "CC BY-NC 4.0 international license" (also in the Monitor Link
