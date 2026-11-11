@@ -17243,7 +17243,7 @@ async function avisarGpStop(guildId, discordId, fase, datos = {}) {
         if (msg) {
             viejo?.delete().catch(() => {});
             avisosGpStop.set(id, msg);
-            setTimeout(() => { if (avisosGpStop.get(id) === msg) { avisosGpStop.delete(id); msg.delete().catch(() => {}); } }, 40 * 60 * 1000);
+            setTimeout(() => { if (avisosGpStop.get(id) === msg) { avisosGpStop.delete(id); msg.delete().catch(() => {}); } }, 20 * 60 * 1000);
         }
         return;
     }
@@ -17279,7 +17279,7 @@ async function avisarGpStop(guildId, discordId, fase, datos = {}) {
         .setTitle(ok ? `${em('nice', '✅')} GP Test finished — ${nombre}` : `${em('bad', '⚠️')} GP Test did not finish — ${nombre}`)
         .setDescription(ok
             ? (datos.mumu ? 'MuMu Player and AHK closed correctly.' : 'AHK closed correctly (MuMu Main was not found).')
-            : 'It was cancelled or got stuck (more than 30 min). MuMu Player and AHK were closed anyway.')
+            : 'It was cancelled or got stuck (more than 10 min). MuMu Player and AHK were closed anyway.')
         .addFields(
             { name: 'Time', value: `⏱ ${tiempoGp(datos.seconds)}`, inline: true },
             // Donde se quedo (Ale 2026-11-11: el de alerieva se corto y no se sabia en que paso).

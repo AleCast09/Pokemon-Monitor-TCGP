@@ -1303,12 +1303,12 @@ ApagarConGpTest() {
     }
     if !pulsado
         Send, +{F10}
-    ; Wait until Main.ahk ends by itself (up to 30 min; normally ~4 min), showing the step and the countdown (Ale 2026-11-11).
+    ; Wait until Main.ahk ends by itself (up to 10 min; normally 4-6 min), showing the step and the countdown (Ale 2026-11-11).
     VentanaGpTest("Step 1/3: Favouriting VIP friends...", inicio)
     pasoEnviado := "", envioPaso := 0
     Loop {
         Process, Exist, %pid%
-        if (!ErrorLevel || A_TickCount - inicio >= 30 * 60000)
+        if (!ErrorLevel || A_TickCount - inicio >= 10 * 60000)
             break
         paso := "Step 1/3: Favouriting VIP friends..."
         f := FileOpen(logMain, "r")
@@ -1368,7 +1368,7 @@ ApagarConGpTest() {
                 RunWait, % """" . manager . """ control -v " . i.index . " shutdown",, Hide
                 mumu := true
             }
-    VentanaGpTest(hecho ? "Done! GP Test finished, PTCGPB and MuMu closed." : "The GP test did not finish (stuck, cancelled or 30 min). PTCGPB and MuMu closed.", inicio, true)
+    VentanaGpTest(hecho ? "Done! GP Test finished, PTCGPB and MuMu closed." : "The GP test did not finish (stuck, cancelled or 10 min). PTCGPB and MuMu closed.", inicio, true)
     ; God Packs kept as friends = the VIP list the Main used (vip_ids.txt + manual_vip_ids.txt), IDs only.
     vip := "", nVip := 0
     for _, archivoVip in [dirBot . "\vip_ids.txt", dirBot . "\manual_vip_ids.txt"] {
@@ -1381,7 +1381,7 @@ ApagarConGpTest() {
         }
     }
     AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu, hecho ? "" : paso, vip, desde)
-    TrayTip, Monitor Link, % hecho ? "GP test finished. PTCGPB and MuMu Main closed." : "The GP test did not finish in 30 min. PTCGPB and MuMu Main closed anyway.", 6, 1
+    TrayTip, Monitor Link, % hecho ? "GP test finished. PTCGPB and MuMu Main closed." : "The GP test did not finish in 10 min. PTCGPB and MuMu Main closed anyway.", 6, 1
     ApagandoGp := false
 }
 
