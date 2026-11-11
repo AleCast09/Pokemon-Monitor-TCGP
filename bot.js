@@ -17204,8 +17204,16 @@ async function avisarGpStop(guildId, discordId, fase, datos = {}) {
     if (!canal) return;
     const id = String(discordId);
     const menciona = { allowedMentions: { users: [id] } };
+    // Mensaje en vivo: el mismo paso y contador que la ventana del Monitor Link (se edita, no vuelve a mencionar).
+    const enVivo = (paso, seg) => `🔴 <@${id}> you are **OFFLINE** — 🧪 **GP Test running** (Standard)\n**${paso}**\n`
+        + `⏱ ${Math.floor(seg / 60)}:${String(seg % 60).padStart(2, '0')} · MuMu Player and the AHK close by themselves when it ends.`;
+    if (fase === 'step') {
+        const msg = avisosGpStop.get(id);
+        if (msg && datos.step) await msg.edit({ content: enVivo(datos.step, Math.max(0, Math.round(datos.seconds || 0))), allowedMentions: { parse: [] } }).catch(() => {});
+        return;
+    }
     if (fase === 'start') {
-        const msg = await canal.send({ content: `🔴 <@${id}> you are **OFFLINE** — 🧪 **GP Test running** (Standard), started <t:${Math.floor(Date.now() / 1000)}:R>.\nMuMu Player and the AHK close by themselves when it ends.`, ...menciona }).catch(() => null);
+        const msg = await canal.send({ content: enVivo('Step 1/3: Favouriting VIP friends...', 0), ...menciona }).catch(() => null);
         if (msg) {
             avisosGpStop.get(id)?.delete().catch(() => {});
             avisosGpStop.set(id, msg);

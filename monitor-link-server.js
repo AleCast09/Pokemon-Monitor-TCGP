@@ -643,10 +643,11 @@ function registrar(app, dependencias) {
             if (!agente) return res.status(401).json({ error: 'not_linked' });
             let datos;
             try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
-            const fase = ['start', 'done', 'timeout'].includes(datos.phase) ? datos.phase : null;
+            const fase = ['start', 'step', 'done', 'timeout'].includes(datos.phase) ? datos.phase : null;
             if (!fase) return res.status(400).json({ error: 'bad_phase' });
             await avisoGpStop(agente.discord_id, agente.guild_id, fase,
-                { seconds: Number.isFinite(datos.seconds) ? datos.seconds : 0, mumu: datos.mumu !== false }).catch(() => {});
+                { seconds: Number.isFinite(datos.seconds) ? datos.seconds : 0, mumu: datos.mumu !== false,
+                    step: String(datos.step || '').replace(/[`*_~|<>@]/g, '').slice(0, 120) }).catch(() => {});
             res.json({ ok: true });
         } catch (e) {
             res.status(500).json({ error: 'server_error' });

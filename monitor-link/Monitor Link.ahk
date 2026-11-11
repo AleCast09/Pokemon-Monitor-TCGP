@@ -1297,6 +1297,7 @@ ApagarConGpTest() {
         Send, +{F10}
     ; Wait until Main.ahk ends by itself (up to 20 min), showing the step and the countdown (Ale 2026-11-11).
     VentanaGpTest("Step 1/3: Favouriting VIP friends...", inicio)
+    pasoEnviado := "", envioPaso := 0
     Loop {
         Process, Exist, %pid%
         if (!ErrorLevel || A_TickCount - inicio >= 20 * 60000)
@@ -1325,6 +1326,12 @@ ApagarConGpTest() {
             }
         }
         VentanaGpTest(paso, inicio)
+        ; Same step to Discord (the message is edited live): when the step changes, or every 15 s.
+        clavePaso := SubStr(paso, 1, 9)
+        if (clavePaso != pasoEnviado || A_TickCount - envioPaso >= 15000) {
+            pasoEnviado := clavePaso, envioPaso := A_TickCount
+            AvisarGpStop("step", Round((A_TickCount - inicio) / 1000), true, paso)
+        }
         Sleep, 1000
     }
     hecho := false
@@ -1393,11 +1400,12 @@ CerrarVentanaGpTest:
 return
 
 ; Tells the bot (message in #logging). fase: start | done | timeout.
-AvisarGpStop(fase, segundos := 0, mumu := true) {
+AvisarGpStop(fase, segundos := 0, mumu := true, paso := "") {
     if (Token = "")
         return
-    body := "{""phase"":""" . fase . """,""seconds"":" . (segundos + 0) . ",""mumu"":" . (mumu ? "true" : "false") . "}"
-    try Http("POST", ServerUrl . "/link/gp-stop", body, "text/plain; charset=utf-8", Token, 20)
+    body := "{""phase"":""" . fase . """,""seconds"":" . (segundos + 0) . ",""mumu"":" . (mumu ? "true" : "false")
+        . (paso != "" ? ",""step"":""" . JsonEsc(paso) . """" : "") . "}"
+    try Http("POST", ServerUrl . "/link/gp-stop", body, "text/plain; charset=utf-8", Token, 10)
 }
 
 ; Asks the bot once (when the window opens / at start), not on a timer: wr98's Upstash has a monthly limit.
