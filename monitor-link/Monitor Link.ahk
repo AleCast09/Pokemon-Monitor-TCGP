@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.32"
+global VERSION := "ahk-1.9.33"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -1302,12 +1302,12 @@ ApagarConGpTest() {
     }
     if !pulsado
         Send, +{F10}
-    ; Wait until Main.ahk ends by itself (up to 20 min), showing the step and the countdown (Ale 2026-11-11).
+    ; Wait until Main.ahk ends by itself (up to 60 min: with 99 friends removing alone takes ~15 min; 20 min cut alerieva mid-test), showing the step and the countdown (Ale 2026-11-11).
     VentanaGpTest("Step 1/3: Favouriting VIP friends...", inicio)
     pasoEnviado := "", envioPaso := 0
     Loop {
         Process, Exist, %pid%
-        if (!ErrorLevel || A_TickCount - inicio >= 20 * 60000)
+        if (!ErrorLevel || A_TickCount - inicio >= 60 * 60000)
             break
         paso := "Step 1/3: Favouriting VIP friends..."
         f := FileOpen(logMain, "r")
@@ -1367,7 +1367,7 @@ ApagarConGpTest() {
                 RunWait, % """" . manager . """ control -v " . i.index . " shutdown",, Hide
                 mumu := true
             }
-    VentanaGpTest(hecho ? "Done! GP Test finished, PTCGPB and MuMu closed." : "The GP test did not finish (cancelled or 20 min). PTCGPB and MuMu closed.", inicio, true)
+    VentanaGpTest(hecho ? "Done! GP Test finished, PTCGPB and MuMu closed." : "The GP test did not finish (cancelled or 60 min). PTCGPB and MuMu closed.", inicio, true)
     ; God Packs kept as friends = the VIP list the Main used (vip_ids.txt + manual_vip_ids.txt), IDs only.
     vip := "", nVip := 0
     for _, archivoVip in [dirBot . "\vip_ids.txt", dirBot . "\manual_vip_ids.txt"] {
@@ -1380,7 +1380,7 @@ ApagarConGpTest() {
         }
     }
     AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu, "", vip)
-    TrayTip, Monitor Link, % hecho ? "GP test finished. PTCGPB and MuMu Main closed." : "The GP test did not finish in 20 min. PTCGPB and MuMu Main closed anyway.", 6, 1
+    TrayTip, Monitor Link, % hecho ? "GP test finished. PTCGPB and MuMu Main closed." : "The GP test did not finish in 60 min. PTCGPB and MuMu Main closed anyway.", 6, 1
     ApagandoGp := false
 }
 

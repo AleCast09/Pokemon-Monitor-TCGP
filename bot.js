@@ -17243,7 +17243,7 @@ async function avisarGpStop(guildId, discordId, fase, datos = {}) {
         if (msg) {
             viejo?.delete().catch(() => {});
             avisosGpStop.set(id, msg);
-            setTimeout(() => { if (avisosGpStop.get(id) === msg) { avisosGpStop.delete(id); msg.delete().catch(() => {}); } }, 30 * 60 * 1000);
+            setTimeout(() => { if (avisosGpStop.get(id) === msg) { avisosGpStop.delete(id); msg.delete().catch(() => {}); } }, 70 * 60 * 1000);
         }
         return;
     }
@@ -17273,7 +17273,7 @@ async function avisarGpStop(guildId, discordId, fase, datos = {}) {
         .setTitle(ok ? `${em('nice', '✅')} GP Test finished — ${nombre}` : `${em('bad', '⚠️')} GP Test did not finish — ${nombre}`)
         .setDescription(ok
             ? (datos.mumu ? 'MuMu Player and AHK closed correctly.' : 'AHK closed correctly (MuMu Main was not found).')
-            : 'It was cancelled or took more than 20 min. MuMu Player and AHK were closed anyway.')
+            : 'It was cancelled or took more than 60 min. MuMu Player and AHK were closed anyway.')
         .addFields(
             { name: 'Time', value: `⏱ ${tiempoGp(datos.seconds)}`, inline: true },
             { name: `${em('rareza_estrella', '💎')} God Packs kept as friends (${vip.length})`, value: lista || 'None' })
