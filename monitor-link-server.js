@@ -647,7 +647,8 @@ function registrar(app, dependencias) {
             if (!fase) return res.status(400).json({ error: 'bad_phase' });
             await avisoGpStop(agente.discord_id, agente.guild_id, fase,
                 { seconds: Number.isFinite(datos.seconds) ? datos.seconds : 0, mumu: datos.mumu !== false,
-                    step: String(datos.step || '').replace(/[`*_~|<>@]/g, '').slice(0, 120) }).catch(() => {});
+                    step: String(datos.step || '').replace(/[`*_~|<>@]/g, '').slice(0, 120),
+                    vip: Array.isArray(datos.vip) ? [...new Set(datos.vip.map(String).filter(x => /^\d{16}$/.test(x)))].slice(0, 100) : null }).catch(() => {});
             res.json({ ok: true });
         } catch (e) {
             res.status(500).json({ error: 'server_error' });

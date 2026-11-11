@@ -1368,7 +1368,18 @@ ApagarConGpTest() {
                 mumu := true
             }
     VentanaGpTest(hecho ? "Done! GP Test finished, PTCGPB and MuMu closed." : "The GP test did not finish (cancelled or 20 min). PTCGPB and MuMu closed.", inicio, true)
-    AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu)
+    ; God Packs kept as friends = the VIP list the Main used (vip_ids.txt + manual_vip_ids.txt), IDs only.
+    vip := "", nVip := 0
+    for _, archivoVip in [dirBot . "\vip_ids.txt", dirBot . "\manual_vip_ids.txt"] {
+        FileRead, tv, %archivoVip%
+        pv := 1
+        while (nVip < 100 && (pv := RegExMatch(tv, "\b(\d{16})\b", mv, pv))) {
+            pv += StrLen(mv)
+            if !InStr(vip, """" . mv1 . """")
+                vip .= (vip = "" ? "" : ",") . """" . mv1 . """", nVip++
+        }
+    }
+    AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu, "", vip)
     TrayTip, Monitor Link, % hecho ? "GP test finished. PTCGPB and MuMu Main closed." : "The GP test did not finish in 20 min. PTCGPB and MuMu Main closed anyway.", 6, 1
     ApagandoGp := false
 }
@@ -1432,11 +1443,12 @@ CerrarVentanaGpTest:
 return
 
 ; Tells the bot (message in #logging). fase: start | done | timeout.
-AvisarGpStop(fase, segundos := 0, mumu := true, paso := "") {
+AvisarGpStop(fase, segundos := 0, mumu := true, paso := "", vip := "") {
     if (Token = "")
         return
     body := "{""phase"":""" . fase . """,""seconds"":" . (segundos + 0) . ",""mumu"":" . (mumu ? "true" : "false")
-        . (paso != "" ? ",""step"":""" . JsonEsc(paso) . """" : "") . "}"
+        . (paso != "" ? ",""step"":""" . JsonEsc(paso) . """" : "")
+        . (fase != "start" && fase != "step" ? ",""vip"":[" . vip . "]" : "") . "}"
     try Http("POST", ServerUrl . "/link/gp-stop", body, "text/plain; charset=utf-8", Token, 10)
 }
 

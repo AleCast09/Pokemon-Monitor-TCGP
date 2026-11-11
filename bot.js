@@ -17193,9 +17193,21 @@ async function avisarDragonite(guild, miembro, online, grupo) {
     if (msg) setTimeout(() => msg.delete().catch(() => {}), 2 * 60 * 1000);
 }
 
-// (Ale 2026-11-11) Offline -> GP test -> cerrar: Monitor Link avisa al empezar y al terminar. El mensaje
-// de inicio cuenta solo el tiempo (<t:..:R>); el final es uno nuevo (para que mencione) y el de inicio se borra.
-const avisosGpStop = new Map();   // discordId -> mensaje de inicio
+// (Ale 2026-11-11) Offline -> GP test -> cerrar. Monitor Link avisa start / step (cada paso o cada 15 s) /
+// done|timeout. Un embed en #logging que se edita en vivo con el paso y el contador (igual que la ventana del
+// Monitor Link); al final uno nuevo que menciona, con los God Packs que quedaron de amigos (la lista VIP).
+const avisosGpStop = new Map();   // discordId -> mensaje en vivo
+function tiempoGp(seg) {
+    seg = Math.max(0, Math.round(seg || 0));
+    return `${Math.floor(seg / 60)}:${String(seg % 60).padStart(2, '0')}`;
+}
+// "Dual Pikachu" de un tag como "[DualPikachu]"; estrellas de "[3/5]".
+function sobreDeTags(tags) {
+    const partes = (String(tags || '').match(/\[([^\]]+)\]/g) || []).map(t => t.slice(1, -1));
+    const estrellas = partes.find(p => /^\d\/5$/.test(p)) || '';
+    const sobre = partes.filter(p => !/^\d\/5$/.test(p) && !/^\d+P$/.test(p)).pop() || '';
+    return { estrellas, sobre: sobre.replace(/([a-z])([A-Z])/g, '$1 $2') };
+}
 async function avisarGpStop(guildId, discordId, fase, datos = {}) {
     const guild = client.guilds.cache.get(String(guildId));
     if (!guild) return;
@@ -17203,32 +17215,72 @@ async function avisarGpStop(guildId, discordId, fase, datos = {}) {
     if (!canal) canal = guild.channels.cache.find(c => c.isTextBased?.() && /logging/i.test(c.name)) || null;
     if (!canal) return;
     const id = String(discordId);
-    const menciona = { allowedMentions: { users: [id] } };
-    // Mensaje en vivo: el mismo paso y contador que la ventana del Monitor Link (se edita, no vuelve a mencionar).
-    const enVivo = (paso, seg) => `🔴 <@${id}> you are **OFFLINE** — 🧪 **GP Test running** (Standard)\n**${paso}**\n`
-        + `⏱ ${Math.floor(seg / 60)}:${String(seg % 60).padStart(2, '0')} · MuMu Player and the AHK close by themselves when it ends.`;
-    if (fase === 'step') {
-        const msg = avisosGpStop.get(id);
-        if (msg && datos.step) await msg.edit({ content: enVivo(datos.step, Math.max(0, Math.round(datos.seconds || 0))), allowedMentions: { parse: [] } }).catch(() => {});
-        return;
-    }
-    if (fase === 'start') {
-        const msg = await canal.send({ content: enVivo('Step 1/3: Favouriting VIP friends...', 0), ...menciona }).catch(() => null);
+    const emojis = await obtenerMapaEmojisGuild(guild).catch(() => ({}));
+    const em = (clave, otro) => tagTipoBot(clave, emojis) || otro;
+    const miembro = await guild.members.fetch(id).catch(() => null);
+    const nombre = miembro?.displayName || miembro?.user?.username || 'Member';
+
+    if (fase === 'start' || fase === 'step') {
+        const paso = fase === 'start' ? 'Step 1/3: Favouriting VIP friends...' : String(datos.step || '');
+        const n = Number((/Step (\d)\/3/.exec(paso) || [])[1] || (/done/i.test(paso) ? 4 : 1));
+        const marca = (i) => (i < n ? em('nice', '✅') : i === n ? em('Reloj_de_arena_de_sobres_TCGP', '⏳') : '▫️');
+        const embed = new EmbedBuilder()
+            .setColor(0xF39C12)
+            .setTitle(`🧪 GP Test running — ${nombre}`)
+            .setDescription(`🔴 <@${id}> is **OFFLINE** — Standard GP test.\nDon't touch the bot: MuMu Player and the AHK close by themselves at the end.`)
+            .addFields(
+                { name: 'Progress', value: `${marca(1)} Favourite VIPs   ${marca(2)} Wait   ${marca(3)} Remove non-VIPs` },
+                { name: 'Now', value: `**${paso.replace(/^Step \d\/3:\s*/, '') || 'Starting...'}**`, inline: true },
+                { name: 'Time', value: `⏱ ${tiempoGp(datos.seconds)}`, inline: true })
+            .setFooter({ text: 'Monitor Link · updates live' })
+            .setTimestamp();
+        const viejo = avisosGpStop.get(id);
+        if (fase === 'step') {
+            if (viejo) await viejo.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
+            return;
+        }
+        const msg = await canal.send({ content: `<@${id}>`, embeds: [embed], allowedMentions: { users: [id] } }).catch(() => null);
         if (msg) {
-            avisosGpStop.get(id)?.delete().catch(() => {});
+            viejo?.delete().catch(() => {});
             avisosGpStop.set(id, msg);
             setTimeout(() => { if (avisosGpStop.get(id) === msg) { avisosGpStop.delete(id); msg.delete().catch(() => {}); } }, 30 * 60 * 1000);
         }
         return;
     }
+
+    // done / timeout: el en vivo se borra y sale uno nuevo (asi menciona al dueño).
     avisosGpStop.get(id)?.delete().catch(() => {});
     avisosGpStop.delete(id);
-    const min = Math.max(1, Math.round((datos.seconds || 0) / 60));
-    const texto = fase === 'done'
-        ? `✅ <@${id}> **GP Test finished** (${min} min) — ${datos.mumu ? 'MuMu Player and AHK closed correctly.' : 'AHK closed correctly (MuMu Main was not found).'}`
-        : `⚠️ <@${id}> the GP Test did not finish in 20 min — MuMu Player and AHK were closed anyway.`;
-    const msg = await canal.send({ content: texto, ...menciona }).catch(() => null);
-    if (msg) setTimeout(() => msg.delete().catch(() => {}), 10 * 60 * 1000);
+    const ok = fase === 'done';
+    const vip = Array.isArray(datos.vip) ? datos.vip : [];
+    let lineas = [];
+    if (vip.length) {
+        const conocidos = new Map();
+        for (const viejos of [true, false]) {
+            for (const h of await hostComunidad.godPacksComunidad(viejos).catch(() => null) || []) if (h?.id) conocidos.set(String(h.id), h);
+        }
+        const estrella = em('rareza_estrella', '⭐');
+        lineas = vip.map(v => {
+            const h = conocidos.get(v);
+            if (!h) return `${em('Card_Back_TCGP', '🃏')} \`${v}\``;
+            const { estrellas, sobre } = sobreDeTags(h.tags);
+            return `${em('Card_Back_TCGP', '🃏')} **${h.name || v}**${estrellas ? ` · ${estrella} ${estrellas}` : ''}${sobre ? ` · ${sobre}` : ''}`;
+        });
+    }
+    const lista = lineas.slice(0, 15).join('\n') + (lineas.length > 15 ? `\n…and ${lineas.length - 15} more` : '');
+    const embed = new EmbedBuilder()
+        .setColor(ok ? 0x2ECC71 : 0xE74C3C)
+        .setTitle(ok ? `${em('nice', '✅')} GP Test finished — ${nombre}` : `${em('bad', '⚠️')} GP Test did not finish — ${nombre}`)
+        .setDescription(ok
+            ? (datos.mumu ? 'MuMu Player and AHK closed correctly.' : 'AHK closed correctly (MuMu Main was not found).')
+            : 'It was cancelled or took more than 20 min. MuMu Player and AHK were closed anyway.')
+        .addFields(
+            { name: 'Time', value: `⏱ ${tiempoGp(datos.seconds)}`, inline: true },
+            { name: `${em('rareza_estrella', '💎')} God Packs kept as friends (${vip.length})`, value: lista || 'None' })
+        .setFooter({ text: 'Monitor Link' })
+        .setTimestamp();
+    const msg = await canal.send({ content: `<@${id}>`, embeds: [embed], allowedMentions: { users: [id] } }).catch(() => null);
+    if (msg) setTimeout(() => msg.delete().catch(() => {}), 30 * 60 * 1000);
 }
 
 async function darRolMonitor(guildId, discordId) {
