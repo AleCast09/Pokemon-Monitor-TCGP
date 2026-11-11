@@ -17,8 +17,10 @@ const pedir = (url, token, comando) => fetch(url.replace(/\/+$/, ''), {
 
 (async () => {
     console.log('Update wr98 Upstash (Dragonite)\n');
-    const url = (await preguntar('Upstash URL (https://....upstash.io): ')).replace(/\/+$/, '');
-    const token = await preguntar('Token: ');
+    let url = '', token = '';
+    while (!url) url = (await preguntar('1) Paste the Upstash URL (....upstash.io) and press Enter: ')).replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+    while (!token) token = await preguntar('2) Paste the token and press Enter: ');
     if (!/^https:\/\/[a-z0-9-]+\.upstash\.io$/i.test(url) || token.length < 20) {
         console.log('\n❌ That URL or token does not look right. Nothing changed.');
         return;
