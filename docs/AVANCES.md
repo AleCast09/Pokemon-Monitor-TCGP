@@ -24,6 +24,10 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-11 02:40 — diegoikrew123 — Bot: PUBLICADO host-2026.11.11-0237 (Monitor Link ahk-1.9.32)
+- Sale: Offline (Monitor o Dragonite) → GP test con ventanita + embed en vivo en #logging → cierra PTCGPB y MuMu Main; Sync reroll cierra el PTCGPB abierto y espera a MuMu Main; proxies Webshare en el motor. Arcade y wr98 confirmados en 0237; bot de Ale reiniciado (4 procesos). Probado en la PC de Ale: GP test completo y elimina amigos; el embed no salía antes porque el turno (GengarBot) tenía código viejo.
+- Paquete para host nuevo: `C:\Users\Ale TCG\Desktop\Host Zenith Rise.rar` (bot + motor limpio + README). La clave de host y la contraseña las pasa Ale por privado. Pendiente: ver lo del "amigo" (nuevo host).
+
 ### 2026-11-11 — diegoikrew123 — Bot: Offline con GP test (Monitor Link 1.9.31) + Sync reroll (1.9.30), sin publicar
 - 1.9.30: Sync reroll aprieta Start Bot recién cuando MuMuManager dice que Android de "Main" arrancó (antes 45 s fijos: el Main.ahk quedaba sin ADB).
 - 1.9.31: al quedar Offline (botón de Monitor Link, o el de Dragonite de wr98: se detecta porque su Main sale de la lista pública `onlineids…/elite` 2 veces seguidas) con el Main de PTCGPB corriendo → `stopPreferenceMain=gp_test` + botón Stop del Main ("Run GP Test then Stop", Standard) → espera que Main.ahk termine (máx 20 min) → cierra PTCGPB y la instancia MuMu "Main" → restaura la preferencia. Avisa por POST `/link/gp-stop` (start/done/timeout) y el bot pone el mensaje en #logging (`avisarGpStop` en bot.js).
