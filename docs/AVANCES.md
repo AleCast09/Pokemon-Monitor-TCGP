@@ -24,6 +24,9 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-11 — diegoikrew123 — Bot: clave nueva del Upstash de wr98
+- wr98 rotó su Upstash (Dragonite). Nuevo `ACTUALIZAR UPSTASH WR98.bat` (+ `scripts/actualizar-wr98.js`): Ale pega URL y token, se prueba y se guarda en `zenith:wr98_redis` (todos los hosts en ~10 min) y en el `.env`. Ya corrido OK (4 grupos). Claude no puede escribir claves (lo bloquea el clasificador): siempre que wr98 la rote, que Ale corra ese .bat.
+
 ### 2026-11-11 02:40 — diegoikrew123 — Bot: PUBLICADO host-2026.11.11-0237 (Monitor Link ahk-1.9.32)
 - Sale: Offline (Monitor o Dragonite) → GP test con ventanita + embed en vivo en #logging → cierra PTCGPB y MuMu Main; Sync reroll cierra el PTCGPB abierto y espera a MuMu Main; proxies Webshare en el motor. Arcade y wr98 confirmados en 0237; bot de Ale reiniciado (4 procesos). Probado en la PC de Ale: GP test completo y elimina amigos; el embed no salía antes porque el turno (GengarBot) tenía código viejo.
 - Paquete para host nuevo: `C:\Users\Ale TCG\Desktop\Host Zenith Rise.rar` (bot + motor limpio + README). La clave de host y la contraseña las pasa Ale por privado. Pendiente: ver lo del "amigo" (nuevo host).
