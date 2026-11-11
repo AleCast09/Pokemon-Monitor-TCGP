@@ -1094,9 +1094,16 @@ SyncRerollZenith:
         if (ini = "")
             return
     }
+    ; (Ale 2026-11-11) PTCGPB open: close it here (it saves its own settings when it closes, so before
+    ; writing them) and a new one opens at the end, instead of asking the member to close it.
     if PtcgpbAbierto() {
-        MsgBox, 48, Monitor Link, Close the PTCGPB bot first (it saves its own settings when it closes), then press this button again.
-        return
+        GuiControl,, Status, Zenith Rise: closing the open PTCGPB bot...
+        CerrarPtcgpb()
+        Sleep, 1500
+        if PtcgpbAbierto() {
+            MsgBox, 48, Monitor Link, Could not close the PTCGPB bot. Close it yourself and press this button again.
+            return
+        }
     }
     r := ""
     try r := Http("GET", ServerUrl . "/link/reroll-config", "", "", Token, 20)
@@ -1347,22 +1354,7 @@ ApagarConGpTest() {
     ; PTCGPB window (its close also stops any script it started), then the MuMu "Main" instance.
     ; After Start Bot the PTCGPB window is hidden (tray): look for hidden windows too, and if it is still
     ; open after 30 s close the process (Ale 2026-11-11: it stayed open and Sync reroll refused to start).
-    ; By process, not by title (the window is not always called "Arturo's PTCGP BOT"): close its window,
-    ; then Exit like the tray menu, and as a last resort end the process.
-    DetectHiddenWindows, On
-    for p in ComObjGet("winmgmts:").ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'AutoHotkey%' AND NOT Name LIKE 'AutoHotkeyUX%'")
-        if InStr(p.CommandLine, "PTCGPB.ahk") {
-            ppid := p.ProcessId
-            WinClose, ahk_class AutoHotkeyGUI ahk_pid %ppid%
-            Process, WaitClose, %ppid%, 20
-            if ErrorLevel {
-                PostMessage, 0x111, 65307,,, ahk_class AutoHotkey ahk_pid %ppid%   ; tray menu Exit
-                Process, WaitClose, %ppid%, 10
-            }
-            if ErrorLevel
-                Process, Close, %ppid%
-        }
-    DetectHiddenWindows, Off
+    CerrarPtcgpb()
     if (antes = "" || antes = "ERROR")
         IniDelete, %ini%, Extra, stopPreferenceMain
     else
@@ -1379,6 +1371,33 @@ ApagarConGpTest() {
     AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu)
     TrayTip, Monitor Link, % hecho ? "GP test finished. PTCGPB and MuMu Main closed." : "The GP test did not finish in 20 min. PTCGPB and MuMu Main closed anyway.", 6, 1
     ApagandoGp := false
+}
+
+; Closes PTCGPB (and the scripts it started). By process, not by title (the window is not always called
+; "Arturo's PTCGP BOT", and after Start Bot it can be hidden): close its window, then Exit like the tray
+; menu, and as a last resort end the process.
+CerrarPtcgpb() {
+    dirs := ""
+    DetectHiddenWindows, On
+    for p in ComObjGet("winmgmts:").ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'AutoHotkey%' AND NOT Name LIKE 'AutoHotkeyUX%'")
+        if RegExMatch(p.CommandLine, "i)([A-Z]:\\(?:(?![A-Z]:\\)[^""])*?)\\PTCGPB\.ahk", md) {
+            dirs .= md1 . "\Scripts\|"
+            ppid := p.ProcessId
+            WinClose, ahk_class AutoHotkeyGUI ahk_pid %ppid%
+            Process, WaitClose, %ppid%, 20
+            if ErrorLevel {
+                PostMessage, 0x111, 65307,,, ahk_class AutoHotkey ahk_pid %ppid%   ; tray menu Exit
+                Process, WaitClose, %ppid%, 10
+            }
+            if ErrorLevel
+                Process, Close, %ppid%
+        }
+    ; The Main (and instances) of THAT PTCGPB folder, if any is left (never another PTCGPB folder).
+    for p in ComObjGet("winmgmts:").ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'AutoHotkey%'")
+        if RegExMatch(p.CommandLine, "i)([A-Z]:\\(?:(?![A-Z]:\\)[^""])*?\\Scripts\\)(?:Main\d*|\d+)\.ahk", ms)
+            && InStr("|" . dirs, "|" . ms1 . "|")
+            Process, Close, % p.ProcessId
+    DetectHiddenWindows, Off
 }
 
 ; Small always-on-top window while the Offline GP test runs: the step, the Main's countdown and the time.
