@@ -24,6 +24,11 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-11 00:10 — diegoikrew123 — Bot: Monitor Link Lite (Mac) + formato Webshare
+- Nuevo `monitor-link-lite/` (`monitor_link_lite.py` + `Monitor Link Lite.command` + `README.txt`): Monitor Link en Python sin dependencias para Mac/Linux, para MysticWind (Mac, bot headless propio que guarda cuentas en **SQLite**). Vincula con la clave ML2, ping, presta cuentas (lee XML, JSON o .db SQLite y arma el XML en memoria), anota sobres de los hosts (`add_pulls`) en `~/.monitor_link_lite/state.json` para la regla de 96, proxies y Main ID. Lo demás (MuMu, wishlist, cartas) responde "not supported". Probado contra un servidor falso, falta probarlo con el bot real (vincularlo desde otra cuenta de Discord, no la de Ale: un vínculo nuevo reemplaza el anterior).
+- Falta: que MysticWind diga tabla/columnas de su SQLite si no las detecta solo; que no preste cuentas que su bot esté usando a la vez.
+- Commit 54c81dc (proxies Webshare `IP:puerto:user:pass` en el motor, marca `PROXY_IP_PORT_USER_PASS_V1`) **sin publicar**. La bolsa de proxies de la comunidad estaba en 0 (no abría nada en la PC de Ale): hay que compartir proxies por Monitor Link.
+
 ### 2026-11-10 15:24 — diegoikrew123 — Bot: 2º arreglo proxy web page (publicado host-2026.11.10-1524)
 - En Arcade seguía "blocked by the proxy (web page)" sin reintento: el bloqueo llegaba después de que algunos Mains ya habían recibido. Ahora se reenvía solo el resto desde otro proxy (marca `PROXY_WEB_PAGE_V2`) y el log muestra el título de la página del proxy.
 - Falta: que Arcade cierre/abra el God Pack UI y mande captura (buscar "[proxy] this proxy blocks friend requests" y el título de la página).
