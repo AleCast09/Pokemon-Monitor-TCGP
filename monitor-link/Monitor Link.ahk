@@ -1345,11 +1345,24 @@ ApagarConGpTest() {
         Process, Close, %pid%
     VentanaGpTest(hecho ? "GP Test done! Closing PTCGPB and MuMu..." : "The GP test did not finish. Closing PTCGPB and MuMu...", inicio)
     ; PTCGPB window (its close also stops any script it started), then the MuMu "Main" instance.
-    ventana := "Arturo's PTCGP BOT ahk_class AutoHotkeyGUI"
-    if WinExist(ventana) {
-        WinClose, %ventana%
-        WinWaitClose, %ventana%,, 30
-    }
+    ; After Start Bot the PTCGPB window is hidden (tray): look for hidden windows too, and if it is still
+    ; open after 30 s close the process (Ale 2026-11-11: it stayed open and Sync reroll refused to start).
+    ; By process, not by title (the window is not always called "Arturo's PTCGP BOT"): close its window,
+    ; then Exit like the tray menu, and as a last resort end the process.
+    DetectHiddenWindows, On
+    for p in ComObjGet("winmgmts:").ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'AutoHotkey%' AND NOT Name LIKE 'AutoHotkeyUX%'")
+        if InStr(p.CommandLine, "PTCGPB.ahk") {
+            ppid := p.ProcessId
+            WinClose, ahk_class AutoHotkeyGUI ahk_pid %ppid%
+            Process, WaitClose, %ppid%, 20
+            if ErrorLevel {
+                PostMessage, 0x111, 65307,,, ahk_class AutoHotkey ahk_pid %ppid%   ; tray menu Exit
+                Process, WaitClose, %ppid%, 10
+            }
+            if ErrorLevel
+                Process, Close, %ppid%
+        }
+    DetectHiddenWindows, Off
     if (antes = "" || antes = "ERROR")
         IniDelete, %ini%, Extra, stopPreferenceMain
     else
