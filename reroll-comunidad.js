@@ -103,7 +103,7 @@ async function escribirSetsSobres() {
 async function escribirTopePpm() {
     const motor = deps?.fastTransfer.rutaMotor();
     if (!motor) return;
-    const total = num(process.env.PPM_COMUNIDAD, 45);   // 2026-11-07: 36 -> 20 (soft bans) -> 40 (Ale/Arcade, ya sin rafagas ni amistades sin borrar); 2026-11-12: 45 (Naja fue a 50 sin soft-ban; si nadie reporta, 50)
+    const total = num(process.env.PPM_COMUNIDAD, 40);   // 2026-11-07: 36 -> 20 (soft bans) -> 40 (Ale/Arcade, ya sin rafagas ni amistades sin borrar); 2026-11-12: 45 (Naja fue a 50 sin soft-ban) -> 40 otra vez (Arcade con ban de IP)
     const hosts = await deps.hostsFarm?.('godpack').catch(() => null);
     if (!Array.isArray(hosts)) return;
     const parte = await deps.parte('godpack').catch(() => null);

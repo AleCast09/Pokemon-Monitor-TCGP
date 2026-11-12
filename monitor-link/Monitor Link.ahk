@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.33"
+global VERSION := "ahk-1.9.34"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -44,6 +44,8 @@ global CompGP := "", Comp96 := ""   ; shared accounts for the GP farm (eligible)
 global Amigos := ""   ; Discord IDs (comma separated) of friends who can use this member's accounts in the bot
 global MiMain := ""   ; this member's own Main friend ID (16 digits): Share/Trade destination in the bot
 global MainVistoOnline := false, MainAusente := 0, ApagandoGp := false, MainDragonite := ""   ; Offline -> GP test -> close (Ale 2026-11-11)
+; (Ale 2026-11-12, Arcade and cy asked) The automatic GP test on Offline is OFF. Only on with gpTest=1 under [offline] in the config.
+global GpTestOffline := 0
 global Status, Info, Clave, TxtCarpeta, TxtResumen, TxtBan, TxtGP, TxtProx, TxtVer, TxtUser, TxtError, BtnLink, Inicio, LinkBox, LinkTxt, LVCuentas, Barra, BtnMain
 global Cambiando := false   ; linked PC: the key box shows ***** until Change is pressed
 
@@ -70,6 +72,8 @@ CargarConfig() {
     IniRead, ProxyFile, %CFG%, proxies, file, %A_Space%
     IniRead, Amigos, %CFG%, friends, ids, %A_Space%
     IniRead, MiMain, %CFG%, main, id, %A_Space%
+    IniRead, GpTestOffline, %CFG%, offline, gpTest, 0
+    GpTestOffline := (GpTestOffline = "1")
     CuentasReroll := {}
     Loop, Read, %CFG_REROLL%
         if (Trim(A_LoopReadLine) != "")
@@ -1217,7 +1221,7 @@ CambiarOnline:
     if (res = "ok") {
         PintarOnline(quiere ? "on" : "off")
         ; Offline with the Main running: GP test, then PTCGPB and MuMu Main close (Ale 2026-11-11).
-        if (!quiere && MainCorriendo() != "")
+        if (!quiere && GpTestOffline && MainCorriendo() != "")
             SetTimer, ApagarConGpTestYa, -100
     }
     else {
@@ -1265,8 +1269,15 @@ VigilarOfflineMain:
         return
     }
     ; Two checks in a row without this Main (1 min apart) = it went Offline.
-    if (MainVistoOnline && ++MainAusente >= 2)
-        SetTimer, ApagarConGpTestYa, -100
+    if (MainVistoOnline && ++MainAusente >= 2) {
+        if GpTestOffline
+            SetTimer, ApagarConGpTestYa, -100
+        else {
+            ; No GP test: only the button shows Offline (Dragonite's button in Discord).
+            MainVistoOnline := false, MainAusente := 0
+            PintarOnline("off")
+        }
+    }
 return
 
 ApagarConGpTestYa:
