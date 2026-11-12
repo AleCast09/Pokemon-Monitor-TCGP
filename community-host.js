@@ -325,4 +325,4 @@ const anotarMiembros = (registro) => configurado()
 
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
     tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, guardarWebhookGp, webhookGp, ultimaRelease, estaAlDia,
-    subirGodPacks, godPacksComunidad, versionesGodPacks };
+    subirGodPacks, godPacksComunidad, versionesGodPacks, hostsConocidos };

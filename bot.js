@@ -11618,6 +11618,9 @@ client.on('interactionCreate', (interaction) => comunidad.contexto.run(
 async function manejarInteraccionPrincipal(interaction) {
     if (comunidad.soloComunidad() && !comunidad.esComunidad(interaction.guildId)) return;
     // 🌟 GP webhook (staff, cualquier host): ventana privada para guardar el webhook de God Packs de la comunidad.
+    if (interaction.isStringSelectMenu?.() && comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_menu' || interaction.customId.startsWith('host_pick::'))) {
+        return await manejarMenuHosts(interaction);
+    }
     if (comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_gpwebhook' || interaction.customId === 'host_gpwebhook_modal')) {
         return await manejarWebhookGp(interaction);
     }
@@ -16897,7 +16900,21 @@ async function estadoDeEsteHost() {
     const prestadas = reroll === null ? null : await require('./reroll-comunidad.js').resumenPrestadas().catch(() => null);
     // Nombre del panel GP ("Ale Cast") y cuantas cuentas propias corre ahi, para su recuadro.
     const farm = reroll === null ? null : require('./reroll-comunidad.js').infoFarm();
-    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), versionMotor, links, reroll, prestadas, farm };
+    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), versionMotor, links, reroll, prestadas, farm,
+        duenos: await duenosDelBot() };
+}
+
+// Dueño(s) en Discord de la app de ESTE bot (Ale 2026-11-12): "Take the turn" le muestra a cada uno solo su host.
+let _duenosBot = null;
+async function duenosDelBot() {
+    if (_duenosBot) return _duenosBot;
+    try {
+        const app = await client.application?.fetch();
+        const o = app?.owner;
+        const ids = o?.members ? [...o.members.keys()] : o?.id ? [o.id] : [];
+        if (ids.length) _duenosBot = ids.map(String);
+    } catch (e) { /* sin red */ }
+    return _duenosBot || [];
 }
 
 // Seccion "Lent accounts" del panel de hosts (2026-11-01, pedido de Ale): por miembro, cuantas cuentas
@@ -17028,22 +17045,23 @@ async function actualizarPanelHosts(hosts) {
             .setDescription((lineas.join('\n\n') || 'No hosts yet.').slice(0, 4000))
             .setFooter({ text: '👑 has the turn · ⏸️ standby · 🟢 PC on · 🔴 PC off · updates every 2 min' }).setTimestamp();
         const embeds = [embed, ...(recuadroCuentas ? [recuadroCuentas] : []), ...recuadrosPrestadas];
+        const components = menuHosts();
         const guardado = await hostComunidad.panelGuardado();
         if (guardado?.canal === canal.id && guardado.bot === client.user.id) {
             const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
-            if (msg) { await msg.edit({ embeds }).catch(() => {}); continue; }
+            if (msg) { await msg.edit({ embeds, components }).catch(() => {}); continue; }
             // Guardado pero no se pudo leer: puede ser un fallo de un momento. Se busca el propio antes de publicar.
             const { msg: propio, fallo } = await mensajePropioEnCanal(canal, t => t === '🖥️ Community hosts');
             if (fallo) continue;
             if (propio) {
-                await propio.edit({ embeds }).catch(() => {});
+                await propio.edit({ embeds, components }).catch(() => {});
                 await hostComunidad.guardarPanel({ canal: canal.id, msg: propio.id, bot: client.user.id });
                 continue;
             }
         }
         // Era de otro bot (otro host) o no existe: se borra el viejo y se publica uno propio.
         if (guardado?.canal === canal.id && guardado.msg) await canal.messages.delete(guardado.msg).catch(() => {});
-        const nuevo = await canal.send({ embeds }).catch(() => null);
+        const nuevo = await canal.send({ embeds, components }).catch(() => null);
         if (nuevo) await hostComunidad.guardarPanel({ canal: canal.id, msg: nuevo.id, bot: client.user.id });
     }
 }
@@ -17064,6 +17082,22 @@ async function mensajePropioEnCanal(canal, titulo) {
 // espera): en espera "👑 Take the turn"; con el turno, "🔁 Hand over to X" por cada otro host prendido.
 async function actualizarControlHost(hosts, conTurno) {
     const yo = hostComunidad.nombre();
+    // (Ale 2026-11-12) Take the turn / Hand over / GP webhook estan ahora en la lista del panel "Community hosts":
+    // el mensaje propio de cada host ya no se publica y el que haya quedado se borra.
+    if (MENU_HOSTS) {
+        const guardado = await hostComunidad.controlGuardado();
+        for (const guild of client.guilds.cache.values()) {
+            if (!comunidad.esComunidad(guild.id)) continue;
+            const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
+            const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+            if (!canal) continue;
+            if (guardado?.canal === canal.id && guardado.msg) await canal.messages.delete(guardado.msg).catch(() => {});
+            const { msg: propio } = await mensajePropioEnCanal(canal, t => t.startsWith(`🖥️ ${yo} — `));
+            if (propio) await propio.delete().catch(() => {});
+        }
+        if (guardado) await hostComunidad.guardarControl(null);
+        return;
+    }
     for (const guild of client.guilds.cache.values()) {
         if (!comunidad.esComunidad(guild.id)) continue;
         const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
@@ -17130,7 +17164,7 @@ async function manejarWebhookGp(interaction) {
     if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
         return await interaction.reply({ content: '🔒 Only staff can set the God Pack webhook.', ephemeral: true }).catch(() => {});
     }
-    if (interaction.isButton()) {
+    if (interaction.isButton() || interaction.isStringSelectMenu?.()) {
         const modal = new ModalBuilder().setCustomId('host_gpwebhook_modal').setTitle('🌟 Community God Pack webhook')
             .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
                 .setCustomId('url').setLabel('Webhook of the GP channel KyuremBot reads').setStyle(TextInputStyle.Short)
@@ -17145,6 +17179,57 @@ async function manejarWebhookGp(interaction) {
     await interaction.reply({ ephemeral: true, content: url
         ? '🌟 Saved. Every host uses it for God Pack alerts when the "God Pack Hit Webhook URL" of its God Pack UI is empty (it reaches each host within a minute).'
         : '🗑️ Community God Pack webhook removed.' }).catch(() => {});
+}
+
+// Lista del panel "Community hosts" (Ale 2026-11-12): Take the turn (solo tus hosts) / Hand over (todos los
+// prendidos) / GP webhook. Al elegir, el mensaje se vuelve a dibujar para que la lista quede en "Select an option".
+const MENU_HOSTS = true;
+function menuHosts() {
+    return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('host_menu')
+        .setPlaceholder('⚙️ Select an option')
+        .addOptions(
+            { label: 'Take the turn', value: 'take', emoji: '👑', description: 'Make your own host the main one' },
+            { label: 'Hand over the turn', value: 'give', emoji: '🔁', description: 'Pass the turn to another host that is on' },
+            { label: 'GP webhook', value: 'gpwebhook', emoji: '🌟', description: 'Webhook of the God Pack channel (staff)' }))];
+}
+
+async function manejarMenuHosts(interaction) {
+    if (interaction.customId === 'host_menu') {
+        const opcion = interaction.values[0];
+        if (opcion === 'gpwebhook') return await manejarWebhookGp(interaction);
+        // Se vuelve a dibujar la lista (queda sin nada elegido) y se contesta en privado.
+        await interaction.update({ components: menuHosts() }).catch(() => {});
+        const hosts = (await hostComunidad.hostsConocidos().catch(() => [])).filter(h => h.enLinea);
+        const conTurno = hosts.find(h => h.turno)?.nombre || hostComunidad.nombre();
+        const mios = hosts.filter(h => (h.duenos || []).includes(interaction.user.id));
+        let lista, texto;
+        if (opcion === 'take') {
+            lista = mios.filter(h => h.nombre !== conTurno);
+            texto = lista.length ? '👑 Choose your host to make it the main one:'
+                : mios.length ? `👑 Your host already has the turn (**${conTurno}**).` : "🔒 You don't have a host that is on right now.";
+        } else {
+            if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
+                return await interaction.followUp({ ephemeral: true, content: '🔒 Only staff can hand over the turn.' }).catch(() => {});
+            }
+            lista = hosts.filter(h => h.nombre !== conTurno);
+            texto = lista.length ? `🔁 **${conTurno}** has the turn. Hand it over to:` : '🔁 No other host is on right now.';
+        }
+        const comps = lista.length ? [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`host_pick::${opcion}`)
+            .setPlaceholder('Select a host').addOptions(lista.slice(0, 25).map(h => ({ label: h.nombre.slice(0, 100), value: h.nombre.slice(0, 100),
+                emoji: '🖥️', ...(h.bot ? { description: `bot ${h.bot}`.slice(0, 100) } : {}) }))))] : [];
+        return await interaction.followUp({ ephemeral: true, content: texto, components: comps }).catch(() => {});
+    }
+    // host_pick::take | host_pick::give
+    const opcion = interaction.customId.split('::')[1];
+    const destino = interaction.values[0];
+    const hosts = (await hostComunidad.hostsConocidos().catch(() => [])).filter(h => h.enLinea);
+    const h = hosts.find(x => x.nombre === destino);
+    const permitido = opcion === 'take' ? (h?.duenos || []).includes(interaction.user.id) : comunidad.esStaff(interaction.user.id, interaction.member);
+    if (!h || !permitido) return await interaction.update({ content: '⚠️ That host is not available anymore.', components: [] }).catch(() => {});
+    const ok = await hostComunidad.cederTurnoA(destino);
+    return await interaction.update({ components: [], content: ok
+        ? `${opcion === 'take' ? '👑' : '🔁'} **${destino}** takes the turn within 30 s.`
+        : "⚠️ This bot doesn't have the turn anymore — try again from the newest panel." }).catch(() => {});
 }
 
 async function manejarBotonHost(interaction) {
