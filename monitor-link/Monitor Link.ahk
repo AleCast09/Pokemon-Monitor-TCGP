@@ -1281,7 +1281,8 @@ ApagarConGpTest() {
     if (pid = "" || dirBot = "")
         return
     ApagandoGp := true, MainVistoOnline := false, MainAusente := 0
-    desde := InicioProceso(pid)   ; when this Main started = start of the online session (Ale 2026-11-11)
+    PintarOnline("off")   ; Offline from Dragonite too: the button shows it (Ale 2026-11-11)
+    online := InicioProceso(pid)   ; when this Main started = start of the online session (Ale 2026-11-11)
     inicio := A_TickCount
     AvisarGpStop("start")
     TrayTip, Monitor Link, % "You are Offline: running a GP test. PTCGPB and MuMu Main close after it.", 6, 1
@@ -1380,7 +1381,7 @@ ApagarConGpTest() {
                 vip .= (vip = "" ? "" : ",") . """" . mv1 . """", nVip++
         }
     }
-    AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu, hecho ? "" : paso, vip, desde)
+    AvisarGpStop(hecho ? "done" : "timeout", Round((A_TickCount - inicio) / 1000), mumu, hecho ? "" : paso, vip, online)
     TrayTip, Monitor Link, % hecho ? "GP test finished. PTCGPB and MuMu Main closed." : "The GP test did not finish in 10 min. PTCGPB and MuMu Main closed anyway.", 6, 1
     ApagandoGp := false
 }
