@@ -7,10 +7,10 @@ const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 // Sin emojis (la fuente no los tiene); se dejan letras con acento y CJK.
 const nombreTarjeta = (s) => String(s || '').replace(/[^\p{L}\p{N} ._\-'!?#&()]/gu, '').trim().slice(0, 20) || '?';
 
-async function armarTarjetaGp({ motor, packId, host, modo = 'godpack', propias = 0, miembros }) {
+async function armarTarjetaGp({ motor, packId, sobre: sobreDado, host, modo = 'godpack', propias = 0, miembros }) {
     const sharp = require('sharp');
     const { nombreSobre, imagenSobre } = require('./aviso-only-pack.js');
-    const sobre = nombreSobre(motor, packId);
+    const sobre = sobreDado || nombreSobre(motor, packId);
     const imagen = imagenSobre(sobre);
     const soloSobres = modo === 'packs-only';
     const color = soloSobres ? '#f5c518' : '#3ddc84';

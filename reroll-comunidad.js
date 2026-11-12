@@ -646,7 +646,9 @@ function infoFarm() {
     if (!motor || !panelEncendido(motor)) return null;
     let propias = 0;
     try { propias = Number(JSON.parse(fs.readFileSync(path.join(motor, 'reports', 'community_farm.json'), 'utf8')).own) || 0; } catch (e) { /* sin dato */ }
-    return { nombre: String(ajustesPanel(motor).host_name || '').trim() || null, propias, modo: modoPanel(motor) };
+    const s = ajustesPanel(motor);
+    return { nombre: String(s.host_name || '').trim() || null, propias, modo: modoPanel(motor),
+        sobre: nombreDeSobre(motor, s.pack_id || 'CN001_0010_00_000') };
 }
 
 // Nombre del sobre para el mensaje de PPM, igual que el panel ("Dual Fusion: Pikachu").

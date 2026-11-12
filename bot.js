@@ -17017,6 +17017,58 @@ async function seccionCuentasComunidad() {
 }
 
 // Panel de hosts en el canal 🔒-hosts (lo arma y lo mantiene el host que tiene el turno).
+// Tarjetas del canal 🔒-hosts (Ale 2026-11-12: "que sea similar a los embed" de Only Pack): hosts, cuentas de la
+// comunidad, amigos de Monitor Link y una por host que farmea. Devuelve { embeds, files } o null si algo falla.
+async function tarjetasPanelHosts(guild, hosts) {
+    const { tarjetaHosts, tarjetaCuentas, tarjetaAmigos } = require('./tarjetas-comunidad.js');
+    const { armarTarjetaGp } = require('./tarjeta-gp-farm.js');
+    const release = await hostComunidad.ultimaRelease().catch(() => null);
+    const hace = (ts) => { const m = Math.max(0, Math.round((Date.now() - (ts || 0)) / 60000)); return m < 60 ? `${m} MIN AGO` : m < 2880 ? `${Math.round(m / 60)} H AGO` : `${Math.round(m / 1440)} D AGO`; };
+    const listaHosts = hosts.map(h => ({ nombre: h.nombre, estado: !h.enLinea ? 'off' : h.turno ? 'turn' : 'standby', desde: h.enLinea ? null : hace(h.ts),
+        bot: h.bot, version: h.version ? `v${h.version}` : '', alDia: hostComunidad.estaAlDia(h.version, release) !== false,
+        motor: h.motor ? (h.versionMotor ? `v${h.versionMotor}` : 'on') : null, links: h.turno && typeof h.links === 'number' ? h.links : null,
+        proxies: typeof h.reroll === 'number' ? h.reroll : null }));
+    // Nombres de Discord (apodo en el servidor) de quien haga falta, con cache del propio discord.js.
+    const nombre = async (id) => { const m = await guild.members.fetch(String(id)).catch(() => null); return m ? { nombre: m.displayName, user: m.user.username } : null; };
+    let enLinea = new Map();
+    try { enLinea = new Map((await monitorLink.vinculados()).map(v => [String(v.discordId), v.enLinea])); } catch (e) { /* sin tablas */ }
+    const piezas = [];
+    piezas.push({ archivo: 'hosts.png', color: 0x5865F2, buffer: await tarjetaHosts(listaHosts) });
+    const e = await monitorLink.estadoCuentasComunidad().catch(() => null);
+    if (e?.miembros) piezas.push({ archivo: 'accounts.png', color: 0xF5C518, buffer: await tarjetaCuentas({ miembros: e.miembros, linkOn: e.enLinea,
+        cuentas: e.cuentas, con96: e.n96, elegibles: e.elegibles, bloqueadas: e.bloqueadas, compartidas: e.prestadas, deMiembros: e.conGp }) });
+    const pares = await db.all(`SELECT amigo_id, dueno_id FROM link_amigos`).catch(() => []) || [];
+    if (pares.length) {
+        const grupos = {};
+        for (const p of pares) (grupos[p.dueno_id] ||= []).push(String(p.amigo_id));
+        const lista = [];
+        for (const [dueno, amigos] of Object.entries(grupos)) {
+            const d = await nombre(dueno);
+            lista.push({ dueno: d?.nombre || dueno, duenoUser: d?.user, online: enLinea.get(String(dueno)) === true,
+                amigos: await Promise.all(amigos.map(async a => { const x = await nombre(a); return { nombre: x?.nombre || null, user: x?.user, id: a }; })) });
+        }
+        piezas.push({ archivo: 'friends.png', color: 0xA970FF, buffer: await tarjetaAmigos(lista) });
+    }
+    // Una por host que farmea (God Pack = verde, Only Pack = amarillo), solo los miembros con Monitor Link prendido.
+    const farm = hosts.filter(h => h.enLinea && h.prestadas && typeof h.prestadas === 'object').slice(0, 10 - piezas.length);
+    for (const h of farm) {
+        const sobres = h.farm?.modo === 'packs-only';
+        const delModo = (v) => sobres ? (Number(v[3]) || 0) : (v[5] ?? Math.max(0, (Number(v[1]) || 0) - (Number(v[3]) || 0)));
+        const miembros = [];
+        for (const [id, v] of Object.entries(h.prestadas)) {
+            if (!(delModo(v) > 0) || enLinea.get(String(id)) !== true) continue;
+            miembros.push({ nombre: (await nombre(id))?.nombre || id, online: true, total: delModo(v), abiertas: Number(v[4]) || 0, quedan: Number(v[2]) || 0 });
+        }
+        const { buffer } = await armarTarjetaGp({ sobre: h.farm?.sobre, motor: fastTransfer.rutaMotor(), packId: 'CN001_0010_00_000',
+            host: h.farm?.nombre || h.nombre, modo: sobres ? 'packs-only' : 'godpack', propias: h.farm?.propias || 0, miembros });
+        piezas.push({ archivo: `farm-${piezas.length}.png`, color: sobres ? 0xF5C518 : 0x3DDC84, buffer });
+    }
+    return {
+        embeds: piezas.map(p => new EmbedBuilder().setColor(p.color).setImage(`attachment://${p.archivo}`)),
+        files: piezas.map(p => ({ attachment: p.buffer, name: p.archivo })),
+    };
+}
+
 async function actualizarPanelHosts(hosts) {
     const recuadrosPrestadas = await seccionPrestadas(hosts).catch(() => null) || [];
     const recuadroCuentas = await seccionCuentasComunidad().catch(() => null);
@@ -17046,24 +17098,28 @@ async function actualizarPanelHosts(hosts) {
         const embed = new EmbedBuilder().setTitle('🖥️ Community hosts').setColor(0x5865F2)
             .setDescription((lineas.join('\n\n') || 'No hosts yet.').slice(0, 4000))
             .setFooter({ text: '👑 has the turn · ⏸️ standby · 🟢 PC on · 🔴 PC off · updates every 2 min' }).setTimestamp();
-        const embeds = [embed, ...(recuadroCuentas ? [recuadroCuentas] : []), ...recuadrosPrestadas];
+        let embeds = [embed, ...(recuadroCuentas ? [recuadroCuentas] : []), ...recuadrosPrestadas];
         const components = menuHosts();
+        // Tarjetas (imagenes); si fallan, va el texto de siempre. attachments: [] = reemplaza las imagenes viejas.
+        let files = [];
+        const tarjetas = await tarjetasPanelHosts(guild, hosts).catch(e => { console.error('DEBUG: hosts cards:', e?.message || e); return null; });
+        if (tarjetas) ({ embeds, files } = tarjetas);
         const guardado = await hostComunidad.panelGuardado();
         if (guardado?.canal === canal.id && guardado.bot === client.user.id) {
             const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
-            if (msg) { await msg.edit({ embeds, components }).catch(() => {}); continue; }
+            if (msg) { await msg.edit({ embeds, components, files, attachments: [] }).catch(() => {}); continue; }
             // Guardado pero no se pudo leer: puede ser un fallo de un momento. Se busca el propio antes de publicar.
             const { msg: propio, fallo } = await mensajePropioEnCanal(canal, t => t === '🖥️ Community hosts');
             if (fallo) continue;
             if (propio) {
-                await propio.edit({ embeds, components }).catch(() => {});
+                await propio.edit({ embeds, components, files, attachments: [] }).catch(() => {});
                 await hostComunidad.guardarPanel({ canal: canal.id, msg: propio.id, bot: client.user.id });
                 continue;
             }
         }
         // Era de otro bot (otro host) o no existe: se borra el viejo y se publica uno propio.
         if (guardado?.canal === canal.id && guardado.msg) await canal.messages.delete(guardado.msg).catch(() => {});
-        const nuevo = await canal.send({ embeds, components, flags: SIN_AVISO }).catch(() => null);
+        const nuevo = await canal.send({ embeds, components, files, flags: SIN_AVISO }).catch(() => null);
         if (nuevo) await hostComunidad.guardarPanel({ canal: canal.id, msg: nuevo.id, bot: client.user.id });
     }
 }
