@@ -17015,12 +17015,32 @@ async function actualizarPanelHosts(hosts) {
         if (guardado?.canal === canal.id && guardado.bot === client.user.id) {
             const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
             if (msg) { await msg.edit({ embeds }).catch(() => {}); continue; }
+            // Guardado pero no se pudo leer: puede ser un fallo de un momento. Se busca el propio antes de publicar.
+            const { msg: propio, fallo } = await mensajePropioEnCanal(canal, t => t === '🖥️ Community hosts');
+            if (fallo) continue;
+            if (propio) {
+                await propio.edit({ embeds }).catch(() => {});
+                await hostComunidad.guardarPanel({ canal: canal.id, msg: propio.id, bot: client.user.id });
+                continue;
+            }
         }
         // Era de otro bot (otro host) o no existe: se borra el viejo y se publica uno propio.
         if (guardado?.canal === canal.id && guardado.msg) await canal.messages.delete(guardado.msg).catch(() => {});
         const nuevo = await canal.send({ embeds }).catch(() => null);
         if (nuevo) await hostComunidad.guardarPanel({ canal: canal.id, msg: nuevo.id, bot: client.user.id });
     }
+}
+
+// (Ale 2026-11-12: "me salen muchos pop up, deben usar los mismos") Si no se encuentra el mensaje guardado
+// (Upstash o Discord fallaron un momento), antes de publicar otro se busca el propio en los ultimos 50 del canal
+// y se edita ese; los repetidos se borran. Asi nunca se acumulan mensajes ni avisos nuevos.
+async function mensajePropioEnCanal(canal, titulo) {
+    const ultimos = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+    if (!ultimos) return { msg: null, fallo: true };
+    const propios = [...ultimos.values()].filter(m => m.author.id === client.user.id && titulo(m.embeds?.[0]?.title || ''))
+        .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+    for (const extra of propios.slice(1)) await extra.delete().catch(() => {});
+    return { msg: propios[0] || null, fallo: false };
 }
 
 // Mensaje de control de ESTE host en el canal de hosts (lo publica y lo atiende su propio bot, activo o en
@@ -17053,6 +17073,13 @@ async function actualizarControlHost(hosts, conTurno) {
         if (guardado?.canal === canal.id) {
             const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
             if (msg && msg.author.id === client.user.id) { await msg.edit(payload).catch(() => {}); continue; }
+        }
+        const { msg: propio, fallo } = await mensajePropioEnCanal(canal, t => t.startsWith(`🖥️ ${yo} — `));
+        if (fallo) continue;   // Discord no respondio: se reintenta en la proxima vuelta, sin publicar otro
+        if (propio) {
+            await propio.edit(payload).catch(() => {});
+            await hostComunidad.guardarControl({ canal: canal.id, msg: propio.id });
+            continue;
         }
         const nuevo = await canal.send(payload).catch(() => null);
         if (nuevo) await hostComunidad.guardarControl({ canal: canal.id, msg: nuevo.id });
