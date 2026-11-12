@@ -24,6 +24,13 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-12 (tarde) — diegoikrew123 — Bot: GP test apagado, PPM 40, sin aviso aparte de Only Pack
+- Monitor Link 1.9.34: el GP test automático al pasar a Offline queda **apagado** (lo pidieron Arcade y cy); solo se prende con `gpTest=1` en `[offline]` de la config.
+- PPM de la comunidad de vuelta a **40** (Arcade tuvo ban de IP con 45).
+- Only Pack ya no publica aviso aparte en 🔒-hosts (está la tarjeta del host en el panel); los viejos se borran.
+- Publicado host-2026.11.12-1322; bot de Ale reiniciado (4 procesos).
+- Pendiente: el aviso "God Packs while you were online" sale en 0 con los GP del PTCGPB propio (solo conoce `zenith:gp_hits` del motor). Arreglo propuesto: que Monitor Link mande los IDs VIP nuevos de la sesión.
+
 ### 2026-11-12 — diegoikrew123 — Bot: canal 🔒-hosts + Only Pack
 - Panel "Community hosts": lista "Select an option" con Take the turn (solo el host del que eres dueño: `duenos` = dueño de la app del bot) y Hand over (hosts en línea, staff). Ya no hay mensaje de control por host (se borra solo). GP webhook quitado de la lista (ya está puesto).
 - Canal de hosts: el bot reusa su mensaje (no publica otro) y borra duplicados; avisos de texto (Likely banned, Turn moved) se borran a los 10 min.
