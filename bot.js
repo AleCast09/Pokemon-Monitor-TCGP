@@ -7805,7 +7805,7 @@ if (comunidad.hayComunidad()) {
                 const previo = id ? await canal.messages.fetch(id).catch(() => null) : null;
                 if (previo) { await previo.edit(datos); return previo.id; }
                 const { attachments, ...nuevo } = datos;
-                return (await canal.send(nuevo)).id;
+                return (await canal.send({ ...nuevo, flags: SIN_AVISO })).id;
             }
             return null;
         },
@@ -7822,7 +7822,7 @@ if (comunidad.hayComunidad()) {
                 if (!comunidad.esComunidad(guild.id)) continue;
                 const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
                 const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
-                if (canal) await canal.send({ content: texto.slice(0, 1900), allowedMentions: { parse: [] } }).catch(() => {});
+                if (canal) await canal.send({ content: texto.slice(0, 1900), allowedMentions: { parse: [] }, flags: SIN_AVISO }).catch(() => {});
             }
         } });
 }
@@ -9769,6 +9769,8 @@ async function reiniciarTunelLink(motivo) {
         reiniciandoTunel = false;
     }
 }
+// Mensajes del canal 🔒-hosts sin notificación (@silent, Ale 2026-11-12: "me salen muchos pop up").
+const SIN_AVISO = 4096;   // MessageFlags.SuppressNotifications
 // Avisos de texto en 🔒-hosts (Likely banned, Turn moved...) se borran a los 10 min (Ale 2026-11-12).
 // Se revisa cada 2 min (asi tambien se borran los de antes de un reinicio). Solo los mensajes de ESTE bot
 // que son texto solo: los paneles (embeds/botones) no se tocan.
@@ -9791,7 +9793,7 @@ async function avisarCanalHostsBot(texto) {
         if (!comunidad.esComunidad(guild.id)) continue;
         const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]).catch(() => null);
         const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
-        if (canal) await canal.send({ content: texto.slice(0, 1900), allowedMentions: { parse: [] } }).catch(() => {});
+        if (canal) await canal.send({ content: texto.slice(0, 1900), allowedMentions: { parse: [] }, flags: SIN_AVISO }).catch(() => {});
     }
 }
 setInterval(async () => {
@@ -17061,7 +17063,7 @@ async function actualizarPanelHosts(hosts) {
         }
         // Era de otro bot (otro host) o no existe: se borra el viejo y se publica uno propio.
         if (guardado?.canal === canal.id && guardado.msg) await canal.messages.delete(guardado.msg).catch(() => {});
-        const nuevo = await canal.send({ embeds, components }).catch(() => null);
+        const nuevo = await canal.send({ embeds, components, flags: SIN_AVISO }).catch(() => null);
         if (nuevo) await hostComunidad.guardarPanel({ canal: canal.id, msg: nuevo.id, bot: client.user.id });
     }
 }
