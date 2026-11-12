@@ -343,7 +343,8 @@ async function sincronizarPanel() {
             ppm.pausado = (ppm.pausado || 0) + (Date.now() - ppm.pausa.at);
             delete ppm.pausa;
         } else ppm = null;
-        if (!ppm) { ppm = { desde: Date.now(), sobres: 0 }; sumarPropios(motor); }
+        // Only Pack no cuenta PPM (Ale 2026-11-12: Arcade en Only Pack salio en LatiasBot con 92 PPM).
+        if (!ppm && modo !== 'packs-only') { ppm = { desde: Date.now(), sobres: 0 }; sumarPropios(motor); }
         setTimeout(ciclo, 15 * 1000);
         await cambiarAvisoOnly(modo === 'packs-only');
     } else {
@@ -1071,7 +1072,7 @@ async function ciclo() {
                 guardarEstado(motor, estado);
                 anotarAbiertas(motor, abiertasTanda);
                 escribirEstadoPanel().catch(() => {});
-                if (ppm) ppm.sobres += sobres;
+                if (ppm && !soloSobres(s)) ppm.sobres += sobres;   // los de Only Pack no van al PPM
                 if (only) only.sobres += sobres;
                 log(`${sobres} pack(s) opened for ${m.discord_id}`);
             } finally {

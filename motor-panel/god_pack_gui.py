@@ -1611,7 +1611,9 @@ class GodPackGui(QMainWindow):
         self._ppm_stop = Event()
         if comunidad and not self._community:
             self._start_community(limpiar=False)
-        webhook_target = "" if comunidad else self.w_ppm_webhook.text().strip()
+        # Ale 2026-11-12: Open Packs Only is not God Pack PPM (Arcade showed 92 PPM in LatiasBot): not reported.
+        solo_sobres = (self.w_run_mode.currentData() or "godpack") == "packs-only"
+        webhook_target = "" if (comunidad or solo_sobres) else self.w_ppm_webhook.text().strip()
         if webhook_target:
             Thread(target=start_ppm_loop, args=(webhook_target, current_pack_name, interval_mins,
                                                 self.w_host_name.text().strip() or "Host", self._ppm_stop),
