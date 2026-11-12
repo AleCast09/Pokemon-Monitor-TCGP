@@ -423,6 +423,7 @@ class GodPackGui(QMainWindow):
         # Tracking structures for live event feed & card correlation
         self._last_pack_line: dict[str, str] = {}
         self._pending_hit_header: dict[str, str] = {}
+        self._gp_counted: set[str] = set()   # accounts whose God Pack is already in GOD PACK HITS
         self._events_count = {"hits": 0, "errors": 0}
 
         self._build_ui()
@@ -1567,6 +1568,7 @@ class GodPackGui(QMainWindow):
             self._live_tail = ""
             self._last_pack_line.clear()
             self._pending_hit_header.clear()
+            self._gp_counted.clear()
             self._live = {"accounts": 0, "packs": 0, "matches": 0, "errors": 0, "t0": time.time()}
             self._log_pending = []
         self._own_total = 0; self._own_done = 0; self._own_opened = 0
@@ -2139,6 +2141,10 @@ class GodPackGui(QMainWindow):
 
             elif "cards: " in ln and tag in self._pending_hit_header:
                 header_ln = self._pending_hit_header.pop(tag)
+                # Ale 2026-11-12: count every God Pack found (Open Packs Only never "keeps" one, so it stayed at 0).
+                if tag not in self._gp_counted:
+                    self._gp_counted.add(tag)
+                    self._live["matches"] += 1
                 self._events_count["hits"] += 1
                 self._events_pending.append(
                     f'<div style="background:#261f06; border:1px solid {D["GOLD"]}; '
@@ -2155,7 +2161,8 @@ class GodPackGui(QMainWindow):
                 # Solo sumar al contador y fijar en el panel inferior si el match es un God Pack (X/5)
                 # Ignora matches de sobres normales como 1xSR o 2xSR
                 if "MATCH:" in ln and "/5" in ln:
-                    self._live["matches"] += 1
+                    if tag not in self._gp_counted:
+                        self._live["matches"] += 1
                     self._events_pending.append(
                         f'<div style="background:#142e1f; border-left:4px solid {D["GREEN"]}; '
                         f'color:{D["GREEN"]}; font-weight:800; padding:4px 8px;">'
