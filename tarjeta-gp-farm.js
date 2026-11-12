@@ -42,7 +42,7 @@ async function armarTarjetaGp({ motor, packId, sobre: sobreDado, host, modo = 'g
     const BX = 330, BW = 260, C_ABI = 730, C_QUE = 850, C_TOT = W - PAD;
     const svgFilas = filas.map((m, i) => {
         const y = TOP_LISTA + 44 + i * FILA;
-        const w = m.total && m.abiertas ? Math.max(8, Math.round(m.abiertas / m.total * BW)) : 0;
+        const w = m.total && m.abiertas ? Math.max(8, Math.round(Math.min(1, m.abiertas / m.total) * BW)) : 0;
         return `${i % 2 ? '' : `<rect x="${PAD - 12}" y="${y - 31}" width="${W - 2 * PAD + 24}" height="${FILA}" rx="10" fill="#24262c"/>`}
             <text x="${PAD + 18}" y="${y}" ${F} font-size="20" font-weight="700" fill="${i < 3 ? color : '#6f747c'}" text-anchor="middle">${i + 1}</text>
             <text x="${PAD + 50}" y="${y}" ${F} font-size="22" font-weight="600" fill="#e8eaed">${xml(nombreTarjeta(m.nombre))}</text>

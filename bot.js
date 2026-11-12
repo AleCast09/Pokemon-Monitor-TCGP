@@ -17101,26 +17101,42 @@ async function actualizarPanelHosts(hosts) {
         let embeds = [embed, ...(recuadroCuentas ? [recuadroCuentas] : []), ...recuadrosPrestadas];
         const components = menuHosts();
         // Tarjetas (imagenes); si fallan, va el texto de siempre. attachments: [] = reemplaza las imagenes viejas.
-        let files = [];
+        // (Ale 2026-11-12) 2 mensajes: 1) Community hosts + la lista (Discord pone la lista al final del mensaje,
+        // asi queda pegada a esa tarjeta); 2) las demas tarjetas (cuentas, amigos, farms).
         const tarjetas = await tarjetasPanelHosts(guild, hosts).catch(e => { console.error('DEBUG: hosts cards:', e?.message || e); return null; });
-        if (tarjetas) ({ embeds, files } = tarjetas);
+        const uno = tarjetas ? { embeds: tarjetas.embeds.slice(0, 1), files: tarjetas.files.slice(0, 1), components } : { embeds, files: [], components };
+        const dos = tarjetas && tarjetas.embeds.length > 1 ? { embeds: tarjetas.embeds.slice(1), files: tarjetas.files.slice(1), components: [] } : null;
         const guardado = await hostComunidad.panelGuardado();
+        const leer = (id) => id ? canal.messages.fetch(id).catch(() => null) : Promise.resolve(null);
         if (guardado?.canal === canal.id && guardado.bot === client.user.id) {
-            const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
-            if (msg) { await msg.edit({ embeds, components, files, attachments: [] }).catch(() => {}); continue; }
-            // Guardado pero no se pudo leer: puede ser un fallo de un momento. Se busca el propio antes de publicar.
-            const { msg: propio, fallo } = await mensajePropioEnCanal(canal, t => t === '🖥️ Community hosts');
-            if (fallo) continue;
-            if (propio) {
-                await propio.edit({ embeds, components, files, attachments: [] }).catch(() => {});
-                await hostComunidad.guardarPanel({ canal: canal.id, msg: propio.id, bot: client.user.id });
+            const msg = await leer(guardado.msg);
+            if (msg) {
+                await msg.edit({ ...uno, attachments: [] }).catch(() => {});
+                let msg2 = await leer(guardado.msg2);
+                if (dos) {
+                    if (msg2) await msg2.edit({ ...dos, attachments: [] }).catch(() => {});
+                    else msg2 = await canal.send({ ...dos, flags: SIN_AVISO }).catch(() => null);
+                } else if (msg2) { await msg2.delete().catch(() => {}); msg2 = null; }
+                if ((msg2?.id || null) !== (guardado.msg2 || null)) await hostComunidad.guardarPanel({ ...guardado, msg2: msg2?.id || null });
                 continue;
             }
+            // Guardado pero no se pudo leer: si Discord no responde, se reintenta en la proxima vuelta sin publicar otro.
+            const prueba = await canal.messages.fetch({ limit: 1 }).catch(() => null);
+            if (!prueba) continue;
         }
-        // Era de otro bot (otro host) o no existe: se borra el viejo y se publica uno propio.
-        if (guardado?.canal === canal.id && guardado.msg) await canal.messages.delete(guardado.msg).catch(() => {});
-        const nuevo = await canal.send({ embeds, components, files, flags: SIN_AVISO }).catch(() => null);
-        if (nuevo) await hostComunidad.guardarPanel({ canal: canal.id, msg: nuevo.id, bot: client.user.id });
+        // Era de otro bot (otro host) o no existe: se borran los viejos y los propios que hayan quedado, y se publica.
+        if (guardado?.canal === canal.id) {
+            for (const id of [guardado.msg, guardado.msg2]) if (id) await canal.messages.delete(id).catch(() => {});
+        }
+        const ultimos = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+        for (const m of ultimos?.values() || []) {
+            const esPanel = m.author.id === client.user.id && (m.embeds?.[0]?.title === '🖥️ Community hosts'
+                || [...m.attachments.values()].some(a => /^(hosts|accounts|friends|farm-\d+)\.png$/.test(a.name)));
+            if (esPanel) await m.delete().catch(() => {});
+        }
+        const nuevo = await canal.send({ ...uno, flags: SIN_AVISO }).catch(() => null);
+        const nuevo2 = nuevo && dos ? await canal.send({ ...dos, flags: SIN_AVISO }).catch(() => null) : null;
+        if (nuevo) await hostComunidad.guardarPanel({ canal: canal.id, msg: nuevo.id, msg2: nuevo2?.id || null, bot: client.user.id });
     }
 }
 
