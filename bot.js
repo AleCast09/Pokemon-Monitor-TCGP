@@ -7800,6 +7800,16 @@ if (comunidad.hayComunidad()) {
                 const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
                 const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
                 if (!canal) continue;
+                // (Ale 2026-11-12: "solo deberia haber un embed de cada host") El panel de hosts ya trae la tarjeta de
+                // cada host que farmea (Only Pack incluido): este aviso aparte ya no se publica y los que quedaron se borran.
+                if (MENU_HOSTS) {
+                    const ultimos = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+                    for (const m of ultimos?.values() || []) {
+                        if (m.author.id === client.user.id && [...m.attachments.values()].some(x => x.name === 'only-pack.png')) await m.delete().catch(() => {});
+                    }
+                    if (id) await canal.messages.delete(id).catch(() => {});
+                    return null;
+                }
                 const datos = { embeds: [embed], files: archivo ? [{ attachment: archivo.buffer, name: archivo.nombre }] : [],
                     attachments: [], allowedMentions: { parse: [] } };
                 const previo = id ? await canal.messages.fetch(id).catch(() => null) : null;
