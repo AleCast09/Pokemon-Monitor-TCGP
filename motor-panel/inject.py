@@ -3036,6 +3036,9 @@ def inject_one(
                 live_codes = fetch_live_worker_codes(friend_codes, ttl_sec=0)
             log(f"[worker-elite] {len(live_codes)} ID(s) online detectados: {', '.join(live_codes)}", tag=tag)
             live_codes = _limit_collectors(live_codes, friend_codes)
+            # 2026-11-12 (Arcade: 403 on the last Main of every account): the worker list had the same Main
+            # twice (2695515994221625); the 2nd request to it got 403. Each Main only once.
+            live_codes = list(dict.fromkeys(live_codes))
             for code in live_codes:
                 pid = resolve_friend_code(sess, code)
                 if pid:
