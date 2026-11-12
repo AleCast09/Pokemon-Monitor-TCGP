@@ -9769,6 +9769,23 @@ async function reiniciarTunelLink(motivo) {
         reiniciandoTunel = false;
     }
 }
+// Avisos de texto en 🔒-hosts (Likely banned, Turn moved...) se borran a los 10 min (Ale 2026-11-12).
+// Se revisa cada 2 min (asi tambien se borran los de antes de un reinicio). Solo los mensajes de ESTE bot
+// que son texto solo: los paneles (embeds/botones) no se tocan.
+const AVISO_HOSTS_MS = 10 * 60 * 1000;
+setInterval(async () => {
+    if (!client.isReady?.() || !comunidad.hayComunidad()) return;
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]).catch(() => null);
+        const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+        const ultimos = canal ? await canal.messages.fetch({ limit: 100 }).catch(() => null) : null;
+        for (const m of ultimos?.values() || []) {
+            if (m.author.id !== client.user.id || m.embeds.length || m.components.length || m.attachments.size) continue;
+            if (Date.now() - m.createdTimestamp >= AVISO_HOSTS_MS) await m.delete().catch(() => {});
+        }
+    }
+}, 2 * 60 * 1000);
 async function avisarCanalHostsBot(texto) {
     for (const guild of client.guilds.cache.values()) {
         if (!comunidad.esComunidad(guild.id)) continue;
