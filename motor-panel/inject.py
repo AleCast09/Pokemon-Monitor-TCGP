@@ -1720,6 +1720,7 @@ def _discover_send_requests_field(Request) -> tuple[Optional[str], Optional[bool
 PROXY_WEB_PAGE_V1 = True
 PROXY_WEB_PAGE_V2 = True
 PROXY_IP_PORT_USER_PASS_V1 = True
+FR_403_ONE_MAIN_V1 = True   # 2026-11-12: one Main answering 403 no longer withdraws the other requests
 
 
 def _proxy_web_page(text: str) -> bool:
@@ -3256,6 +3257,19 @@ def inject_one(
                     _fr_state.sent_ok = _ya + (list(_resto) if fr_ok else list(getattr(_fr_state, "sent_ok", []) or []))
                     if fr_ok:
                         log(f"[proxy] friend requests sent from the new proxy ({len(_resto)} Mains)", tag=tag)
+                # 2026-11-12 (Arcade: every account "20 of 21 Mains reached", then 403 on the same last Main from
+                # every proxy, and all 20 were withdrawn = 0 packs opened). Most Mains got it, so it is not an IP
+                # block: that Main is the problem. Keep going with the Mains reached; the rest become suspects
+                # (next accounts send to them last, one by one).
+                if not fr_ok and getattr(_fr_state, "proxy_blocked", False):
+                    _ya = [p for p in (getattr(_fr_state, "sent_ok", []) or []) if p in target_pids]
+                    _resto = [p for p in target_pids if p not in _ya]
+                    if _ya and len(_resto) <= max(1, len(target_pids) // 4):
+                        _mark_suspects([pid_to_friend_code.get(p, "") for p in _resto])
+                        log(f"[fr] {len(_resto)} Main(s) always answer 403 (from every proxy) - continuing with the "
+                            f"{len(_ya)} Mains reached", tag=tag)
+                        target_pids = _ya
+                        fr_ok = True
                 # One by one only when a Main refused (full list); not when the proxy itself is blocked.
                 if not fr_ok and len(target_pids) > 1 and not getattr(_fr_state, "proxy_blocked", False):
                     # (2026-11-01) El paquete falla entero (ABORTED) si UNO de los collectors tiene la
