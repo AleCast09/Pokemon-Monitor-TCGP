@@ -24,6 +24,13 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-12 — diegoikrew123 — Bot: canal 🔒-hosts + Only Pack
+- Panel "Community hosts": lista "Select an option" con Take the turn (solo el host del que eres dueño: `duenos` = dueño de la app del bot) y Hand over (hosts en línea, staff). Ya no hay mensaje de control por host (se borra solo). GP webhook quitado de la lista (ya está puesto).
+- Canal de hosts: el bot reusa su mensaje (no publica otro) y borra duplicados; avisos de texto (Likely banned, Turn moved) se borran a los 10 min.
+- Only Pack ya no manda PPM a LatiasBot (Arcade salió con 92 PPM en Only Pack con sus cuentas). GOD PACK HITS del panel cuenta los God Packs también en Only Pack.
+- Tarjetas (imagen) hechas pero SIN conectar todavía: `tarjetas-comunidad.js` (hosts, cuentas, amigos de Monitor Link) y `tarjeta-gp-farm.js`; logo de Pokémon en la de Only Pack.
+- Kathleen (Lv 6) mandando solicitudes: no está en nuestros datos; posible hueco = prestada sin datos de sobres cuenta como elegible. Propuesto (sin hacer): 96+ confirmados y nivel 9+ para mandar solicitudes.
+
 ### 2026-11-11 — diegoikrew123 — Bot: reporte del GP test (Offline)
 - Reporte final: solo los God Packs que salieron mientras el miembro estaba en línea (desde que abrió el Main hasta Offline), campo "Stuck at" si no termina, tope 10 min (normal 3-4 min).
 - Monitor Link 1.9.33: arreglado que la hora de inicio se pisaba con el tamaño del log (nunca filtraba); Offline desde Dragonite pone el botón en rojo.
