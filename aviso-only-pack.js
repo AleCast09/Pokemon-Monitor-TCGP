@@ -142,6 +142,7 @@ async function armarTarjeta({ sobre, imagen, host, lista, total, progreso, termi
         <rect width="${W}" height="${H}" rx="28" fill="#1c1d22"/>
         <rect x="0" y="0" width="${W}" height="8" rx="4" fill="${amarillo}"/>
         ${packImg}
+        ${require('./tarjetas-comunidad.js').logo()}
         <rect x="${X}" y="${PAD + 4}" width="${terminado ? 250 : 236}" height="38" rx="19" fill="${amarillo}"/>
         <text x="${X + 18}" y="${PAD + 30}" ${F} font-size="18" font-weight="800" fill="#1c1d22" letter-spacing="1.5">OPEN PACKS ONLY</text>
         <circle cx="${X + (terminado ? 278 : 264)}" cy="${PAD + 23}" r="7" fill="${terminado ? '#9aa0a6' : '#3ddc84'}"/>

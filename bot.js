@@ -17182,15 +17182,14 @@ async function manejarWebhookGp(interaction) {
 }
 
 // Lista del panel "Community hosts" (Ale 2026-11-12): Take the turn (solo tus hosts) / Hand over (todos los
-// prendidos) / GP webhook. Al elegir, el mensaje se vuelve a dibujar para que la lista quede en "Select an option".
+// prendidos). (El GP webhook ya esta puesto: Ale lo saco de la lista; su ventana sigue para botones viejos.) Al elegir, el mensaje se vuelve a dibujar para que la lista quede en "Select an option".
 const MENU_HOSTS = true;
 function menuHosts() {
     return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('host_menu')
         .setPlaceholder('⚙️ Select an option')
         .addOptions(
             { label: 'Take the turn', value: 'take', emoji: '👑', description: 'Make your own host the main one' },
-            { label: 'Hand over the turn', value: 'give', emoji: '🔁', description: 'Pass the turn to another host that is on' },
-            { label: 'GP webhook', value: 'gpwebhook', emoji: '🌟', description: 'Webhook of the God Pack channel (staff)' }))];
+            { label: 'Hand over the turn', value: 'give', emoji: '🔁', description: 'Pass the turn to another host that is on' }))];
 }
 
 async function manejarMenuHosts(interaction) {
