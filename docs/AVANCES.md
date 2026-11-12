@@ -24,6 +24,11 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-11 — diegoikrew123 — Bot: reporte del GP test (Offline)
+- Reporte final: solo los God Packs que salieron mientras el miembro estaba en línea (desde que abrió el Main hasta Offline), campo "Stuck at" si no termina, tope 10 min (normal 3-4 min).
+- Monitor Link 1.9.33: arreglado que la hora de inicio se pisaba con el tamaño del log (nunca filtraba); Offline desde Dragonite pone el botón en rojo.
+- Publicado a los hosts (este día). Falta confirmar con un reporte real que salga solo el God Pack de la sesión.
+
 ### 2026-11-11 — diegoikrew123 — Bot: clave nueva del Upstash de wr98
 - wr98 rotó su Upstash (Dragonite). Nuevo `ACTUALIZAR UPSTASH WR98.bat` (+ `scripts/actualizar-wr98.js`): Ale pega URL y token, se prueba y se guarda en `zenith:wr98_redis` (todos los hosts en ~10 min) y en el `.env`. Ya corrido OK (4 grupos). Claude no puede escribir claves (lo bloquea el clasificador): siempre que wr98 la rote, que Ale corra ese .bat.
 
