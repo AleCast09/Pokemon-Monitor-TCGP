@@ -9801,6 +9801,44 @@ setInterval(async () => {
         }
     }
 }, 2 * 60 * 1000);
+// (Ale 2026-11-13) Cuentas prestadas "probablemente baneadas": en vez de un aviso por cuenta, UN resumen al final del
+// dia (23:55 hora de Peru = 04:55 UTC) con todas las del dia por dueño y su total. Solo el host con el turno lo manda,
+// una vez por dia (candado en Upstash). Va como embed, asi el borrado de 10 min no lo toca. Solo el nombre del archivo
+// XML, nunca su contenido.
+const RESUMEN_BANEADAS_UTC = { h: 4, m: 55 };
+setInterval(async () => {
+    try {
+        if (!client.isReady?.() || !comunidad.hayComunidad() || !hostComunidad.esActivo()) return;
+        const ahora = new Date();
+        const min = ahora.getUTCHours() * 60 + ahora.getUTCMinutes(), desde = RESUMEN_BANEADAS_UTC.h * 60 + RESUMEN_BANEADAS_UTC.m;
+        if (min < desde || min > desde + 45) return;
+        const dia = new Date(ahora.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 10);
+        const todas = await hostComunidad.baneadasConFecha();
+        const hoy = todas.filter(b => Date.now() - b.ts < 24 * 3600 * 1000);
+        if (!hoy.length) return;
+        if (!(await hostComunidad.primeraVez(`zenith:ban_resumen:${dia}`, 3 * 24 * 3600))) return;
+        const porDueno = new Map();
+        for (const b of hoy) (porDueno.get(b.dueno) || porDueno.set(b.dueno, []).get(b.dueno)).push(b.archivo);
+        const totalDe = (d) => todas.filter(b => b.dueno === d).length;
+        let texto = '';
+        for (const [dueno, archivos] of [...porDueno.entries()].sort((a, b) => b[1].length - a[1].length)) {
+            const bloque = `<@${dueno}> — **${archivos.length}** today · ${totalDe(dueno)} in total\n\`\`\`\n${archivos.sort().join('\n')}\n\`\`\`\n`;
+            if (texto.length + bloque.length > 3800) { texto += `…and more (${hoy.length} accounts today in total).`; break; }
+            texto += bloque;
+        }
+        const embed = new EmbedBuilder().setColor(0xE74C3C)
+            .setTitle(`⛔ Likely banned accounts — ${dia}`)
+            .setDescription(texto)
+            .setFooter({ text: `${hoy.length} account(s) today · the game refused them on 2+ different proxies. The GP farm won't open them again; they show as "Banned?" in each owner's Monitor Link.` })
+            .setTimestamp();
+        for (const guild of client.guilds.cache.values()) {
+            if (!comunidad.esComunidad(guild.id)) continue;
+            const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]).catch(() => null);
+            const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+            if (canal) await canal.send({ embeds: [embed], allowedMentions: { parse: [] }, flags: SIN_AVISO }).catch(() => {});
+        }
+    } catch (e) { console.error('DEBUG: banned summary:', e?.message || e); }
+}, 5 * 60 * 1000);
 async function avisarCanalHostsBot(texto) {
     for (const guild of client.guilds.cache.values()) {
         if (!comunidad.esComunidad(guild.id)) continue;

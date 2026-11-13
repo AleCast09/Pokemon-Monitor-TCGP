@@ -854,8 +854,7 @@ async function revisarBaneadas(motor, desde, duenoId, nombres) {
         vistas.add(nombre);
         await deps.marcarBaneada?.(duenoId, nombre).catch(() => {});
         log(`likely banned: ${nombre} (lent by ${duenoId})`);
-        await deps.avisar?.(`⛔ **Likely banned** — <@${duenoId}>'s account \`${nombre}\`: the game refused it on ${ev.proxies || 2}+ different proxies. `
-            + `The GP farm won't open it again, and it shows as **Banned?** in their Monitor Link.`).catch(() => {});
+        // (Ale 2026-11-13) Ya no un aviso por cuenta: van todas juntas en el resumen del dia (bot.js, zenith:baneadas).
     }
 }
 

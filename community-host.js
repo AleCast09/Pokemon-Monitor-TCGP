@@ -255,6 +255,17 @@ async function marcarBaneada(discordId, archivo) {
     if (!configurado()) return;
     await redis('HSET', 'zenith:baneadas', `${discordId}|${archivo}`, String(Date.now()));
 }
+// Con fecha: [{ dueno, archivo, ts }] (resumen diario de cuentas baneadas, Ale 2026-11-13).
+async function baneadasConFecha() {
+    if (!configurado()) return [];
+    const plano = await redis('HGETALL', 'zenith:baneadas').catch(() => []) || [];
+    const out = [];
+    for (let i = 0; i < plano.length; i += 2) {
+        const [dueno, ...resto] = String(plano[i]).split('|');
+        out.push({ dueno, archivo: resto.join('|'), ts: Number(plano[i + 1]) || 0 });
+    }
+    return out;
+}
 async function baneadas() {
     if (!configurado()) return new Set();
     const plano = await redis('HGETALL', 'zenith:baneadas').catch(() => []) || [];
@@ -324,5 +335,5 @@ const anotarMiembros = (registro) => configurado()
     ? redis('SET', 'zenith:miembros', JSON.stringify(registro)).catch(() => {}) : Promise.resolve();
 
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
-    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, guardarWebhookGp, webhookGp, ultimaRelease, estaAlDia,
+    tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, baneadasConFecha, guardarWebhookGp, webhookGp, ultimaRelease, estaAlDia,
     subirGodPacks, godPacksComunidad, versionesGodPacks, hostsConocidos };
