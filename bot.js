@@ -9793,7 +9793,10 @@ setInterval(async () => {
         const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
         const ultimos = canal ? await canal.messages.fetch({ limit: 100 }).catch(() => null) : null;
         for (const m of ultimos?.values() || []) {
-            if (m.author.id !== client.user.id || m.embeds.length || m.components.length || m.attachments.size) continue;
+            // (Ale 2026-11-13: avisos de GengarBot seguian ahi desde el dia anterior) Tambien los de los bots de los
+            // otros hosts: si ese host esta apagado, su bot no los borra nunca. Solo bots (no webhooks ni personas).
+            const deUnBot = m.author.id === client.user.id || (m.author.bot && !m.webhookId);
+            if (!deUnBot || m.embeds.length || m.components.length || m.attachments.size) continue;
             if (Date.now() - m.createdTimestamp >= AVISO_HOSTS_MS) await m.delete().catch(() => {});
         }
     }
