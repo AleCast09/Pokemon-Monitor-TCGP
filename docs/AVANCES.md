@@ -24,6 +24,11 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-12 (noche) — diegoikrew123 — Bot: GP farm de Arcade en 0 sobres (403)
+- Causa: el Main 2695515994221625 venía **dos veces** en la lista online del worker; la 2.ª solicitud daba 403 y el motor retiraba las otras 20 → ninguna cuenta abría.
+- `motor-panel/inject.py`: cada Main una sola vez; si uno da 403 desde todos los proxies pero llegaron la mayoría, la cuenta sigue (marca `FR_403_ONE_MAIN_V1`, obligatoria en `reroll-comunidad.js`).
+- Publicado host-2026.11.12-1747; bot de Ale reiniciado. Arcade quedó contento. Pedirle a wr98 que revise el registro doble en Dragonite.
+
 ### 2026-11-12 (tarde) — diegoikrew123 — Bot: GP test apagado, PPM 40, sin aviso aparte de Only Pack
 - Monitor Link 1.9.34: el GP test automático al pasar a Offline queda **apagado** (lo pidieron Arcade y cy); solo se prende con `gpTest=1` en `[offline]` de la config.
 - PPM de la comunidad de vuelta a **40** (Arcade tuvo ban de IP con 45).
