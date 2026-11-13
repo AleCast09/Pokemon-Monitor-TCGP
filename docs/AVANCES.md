@@ -24,6 +24,13 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-13 — diegoikrew123 — Motor: varios sobres, relojes, regalos; /shinedust con relojes
+- God Pack UI (Open Packs Only): lista con casillas de sobres, las cuentas se turnan (`--pack-rotation`, también en el GP farm).
+- Casillas: **Spend all hourglasses** (solo Open Packs Only, cuentas propias), **Claim gifts & finished missions** (cuentas propias); botón **⏳ Hourglasses list** (`reports/hourglasses.json` + `hourglasses_history.jsonl`). Las prestadas nunca gastan ni se tocan.
+- Community Farm con texto: desmarcada = solo tus cuentas.
+- `/shinedust`: ⏳ relojes por cuenta y total al pie (los lee ⚡ Refresh).
+- Publicado host-2026.11.13-0654; bot de Ale reiniciado. Sin probar con cuentas reales. Falta (opcional): botón "Claim rewards" sin abrir sobres.
+
 ### 2026-11-12 (noche) — diegoikrew123 — Bot: GP farm de Arcade en 0 sobres (403)
 - Causa: el Main 2695515994221625 venía **dos veces** en la lista online del worker; la 2.ª solicitud daba 403 y el motor retiraba las otras 20 → ninguna cuenta abría.
 - `motor-panel/inject.py`: cada Main una sola vez; si uno da 403 desde todos los proxies pero llegaron la mayoría, la cuenta sigue (marca `FR_403_ONE_MAIN_V1`, obligatoria en `reroll-comunidad.js`).
