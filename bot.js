@@ -10101,6 +10101,9 @@ function construirEmbedShinedust(resultados, pagina = 0) {
     }
 
     const totalGeneral = resultados.reduce((suma, r) => suma + r.valor, 0);
+    // (Ale 2026-11-12) Relojes de sobres (los lee ⚡ Refresh): por cuenta y total, para verlos antes de gastar.
+    const conRelojes = resultados.filter(r => typeof r.relojes === 'number');
+    const totalRelojes = conRelojes.reduce((suma, r) => suma + r.relojes, 0);
     const totalPaginas = Math.max(1, Math.ceil(resultados.length / SHINEDUST_POR_PAGINA));
     const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
     const inicio = paginaSegura * SHINEDUST_POR_PAGINA;
@@ -10111,11 +10114,13 @@ function construirEmbedShinedust(resultados, pagina = 0) {
     // escritorio -- nada que el bot tenga que armar, solo envolver el texto en ```.
     const anchoNombre = Math.max(...items.map(r => r.nombreCuenta.length), 10);
     // 🎁N = regalos pendientes en el buzon · ⛔ = la cuenta no pudo entrar al juego (baneada/borrada?).
-    const lineas = items.map(r => `${r.nombreCuenta.padEnd(anchoNombre)}  ${r.valor.toLocaleString('en-US')}` +
-        (r.regalos ? `  🎁${r.regalos}` : '') + (r.estado === 'login_failed' ? '  ⛔' : ''));
+    const anchoValor = Math.max(...items.map(r => r.valor.toLocaleString('en-US').length), 1);
+    const lineas = items.map(r => `${r.nombreCuenta.padEnd(anchoNombre)}  ${r.valor.toLocaleString('en-US').padStart(anchoValor)}` +
+        (r.relojes ? `  ⏳${r.relojes}` : '') + (r.regalos ? `  🎁${r.regalos}` : '') + (r.estado === 'login_failed' ? '  ⛔' : ''));
     embed.setDescription('```\n' + lineas.join('\n') + '\n```')
         .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas} • ${resultados.length} account(s) • Total: ${totalGeneral.toLocaleString('en-US')}` +
-            (items.some(r => r.regalos || r.estado === 'login_failed') ? '\n🎁 = gifts to claim · ⛔ = could not log in (banned or deleted?)' : '') });
+            (conRelojes.length ? `\n⏳ Pack hourglasses: ${totalRelojes.toLocaleString('en-US')} on ${conRelojes.length} account(s) = ${Math.floor(totalRelojes / 12).toLocaleString('en-US')} paid packs` : '') +
+            (items.some(r => r.relojes || r.regalos || r.estado === 'login_failed') ? '\n⏳ = pack hourglasses · 🎁 = gifts to claim · ⛔ = could not log in (banned or deleted?)' : '') });
 
     // Boton "Track Shinedust" (2026-09-16, a pedido explicito del usuario): deja elegir
     // una cuenta de ESTA pagina para leerla EN VIVO por OCR (mismo motor de

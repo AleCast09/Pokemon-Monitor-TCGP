@@ -654,7 +654,7 @@ async function asegurarTablaDust() {
 
 async function filasDust() {
     await asegurarTablaDust();
-    const filas = await deps.db.all(`SELECT archivo_json, valor, tickets, ts, valor_json, regalos, estado, error FROM shinedust_fast`);
+    const filas = await deps.db.all(`SELECT archivo_json, valor, tickets, ts, valor_json, inventario, regalos, estado, error FROM shinedust_fast`);
     const mapa = new Map();
     for (const f of filas || []) mapa.set(f.archivo_json, f);
     return mapa;
@@ -764,6 +764,8 @@ async function mezclarShinedust(resultados, rutaJson) {
         }
         if (!r) continue;
         r.regalos = f.regalos || 0;
+        // (Ale 2026-11-12) Relojes de sobres leidos por ⚡ (ya venian en el inventario): total como el Shinedust.
+        try { const inv = JSON.parse(f.inventario || '{}'); if (inv.packhourglass != null) r.relojes = Number(inv.packhourglass) || 0; } catch (e) { /* sin dato */ }
         r.estado = f.estado || null;
         r.error = f.error || null;
         const kevinCambio = c.valorJson !== null && f.valor_json !== null && c.valorJson !== f.valor_json;
