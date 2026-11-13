@@ -1721,6 +1721,7 @@ PROXY_WEB_PAGE_V1 = True
 PROXY_WEB_PAGE_V2 = True
 PROXY_IP_PORT_USER_PASS_V1 = True
 FR_403_ONE_MAIN_V1 = True   # 2026-11-12: one Main answering 403 no longer withdraws the other requests
+PACK_ROTATION_V1 = True     # 2026-11-12: --pack-rotation (several packs, the accounts take turns)
 
 
 def _proxy_web_page(text: str) -> bool:
@@ -4124,6 +4125,40 @@ def run_injection(args) -> int:
         except Exception:
             _resolved_power_id = "PACK_POWER_SPECIAL" if str(args.pack_id).upper().startswith("SP") else "PACK_POWER_NORMAL"
     log(f"hg_cost per pack: {_resolved_hg_cost} LARGE (source: {_hg_source}) | power_id: {_resolved_power_id}")
+
+    # 2026-11-12 (Ale/Arcade): several packs in one run (Open Packs Only), the accounts take turns.
+    _rotacion = [{"pack_id": args.pack_id, "product_id": args.product_id, "packs": args.packs,
+                  "hg_cost": _resolved_hg_cost, "power_id": _resolved_power_id}]
+    if str(getattr(args, "pack_rotation", "") or "").strip():
+        _lista = []
+        for _parte in str(args.pack_rotation).split(","):
+            _bits = [b.strip() for b in _parte.split(":")]
+            if len(_bits) < 2 or not _bits[0] or not _bits[1]:
+                continue
+            _pid = _bits[0]
+            try:
+                _np = int(_bits[2]) if len(_bits) > 2 and _bits[2] else args.packs
+            except ValueError:
+                _np = args.packs
+            _hg = _resolved_hg_cost if hg_override >= 0 else 0
+            if hg_override < 0:
+                try:
+                    from scripts.flow.pack_catalog import hg_cost_for_pack
+                    _hg = int(hg_cost_for_pack(_pid) or 0)
+                except Exception:
+                    _hg = 0
+            try:
+                from scripts.flow.pack_catalog import power_id_for_pack
+                _pw = str(getattr(args, "power_id", "") or "").strip() or power_id_for_pack(_pid)
+            except Exception:
+                _pw = "PACK_POWER_SPECIAL" if _pid.upper().startswith("SP") else "PACK_POWER_NORMAL"
+            _lista.append({"pack_id": _pid, "product_id": _bits[1], "packs": _np, "hg_cost": _hg, "power_id": _pw})
+        if _lista:
+            _rotacion = _lista
+            log(f"[packs] {len(_rotacion)} packs, one per account in turn: "
+                f"{', '.join(r['pack_id'] for r in _rotacion)}")
+    _rot_turno = itertools.count()
+    _rot_lock = threading.Lock()
     if _resolved_hg_cost > 0 and args.packs > 2:
         # Sanity nudge — 10 paid packs = 120 LARGE. Without --min-hourglass
         # gate, a low-balance account will burn a login before getting
@@ -4304,12 +4339,14 @@ def run_injection(args) -> int:
     def _worker(acct):
         if _stop_event.is_set():
             return None
+        with _rot_lock:
+            _sobre = _rotacion[next(_rot_turno) % len(_rotacion)]
         r = inject_one(
             acct,
             friend_codes=friend_codes_list,
-            packs=args.packs,
-            pack_id=args.pack_id,
-            product_id=args.product_id,
+            packs=_sobre["packs"],
+            pack_id=_sobre["pack_id"],
+            product_id=_sobre["product_id"],
             wait_accept=args.wait_accept,
             dry_run=args.dry_run,
             verify_power=getattr(args, "verify_power", False),
@@ -4325,8 +4362,8 @@ def run_injection(args) -> int:
             allow_likes=acct["account_key"] in like_account_keys,
             dismiss_popups=getattr(args, "dismiss_popups", True),
             min_hourglass=int(getattr(args, "min_hourglass", 0) or 0),
-            hg_cost=_resolved_hg_cost,
-            power_id=_resolved_power_id,
+            hg_cost=_sobre["hg_cost"],
+            power_id=_sobre["power_id"],
         )
         # Record state (touch mtime only on successful attempt)
         _record_kwargs = dict(
@@ -4336,7 +4373,7 @@ def run_injection(args) -> int:
             packs_opened=r["packs_opened"],
             god_pack_found=r["god_pack"],
             god_pack_cards=r["cards"] if r["god_pack"] else None,
-            pack_id=args.pack_id,
+            pack_id=_sobre["pack_id"],
             pack_table_id=r["pack_table_id"] if r["god_pack"] else None,
             friend_status=r["friend_status"],
             error=r["error"],
@@ -4614,6 +4651,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Pack ID to open (default: B4a Team Rocket).")
     p.add_argument("--product-id", default="PC_PS_2608000_01_01_01",
                    help="Product ID matching pack-id.")
+    p.add_argument("--pack-rotation", default="",
+                   help="Several packs, one per account in turn: 'pack_id:product_id:packs,pack_id:product_id:packs'. "
+                        "Account 1 opens the 1st, account 2 the 2nd, ... (overrides --pack-id/--product-id/--packs).")
     p.add_argument("--gp-eligibility", default="", choices=["", "eligible", "locked"],
                    help="Only open GP-eligible accounts (God Pack mode) or only the locked ones (Open Packs Only). "
                         "Empty = all accounts.")

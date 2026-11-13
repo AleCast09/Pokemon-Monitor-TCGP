@@ -54,7 +54,8 @@ function iniciar(d) {
         // (2026-11-10, Arcade) Una pagina web del proxy ya no cuenta como ban, y si bloquea las solicitudes se
         // reintenta con otro proxy.
         // (2026-11-12, Arcade) Un Main que siempre da 403 ya no hace retirar las demas solicitudes: la cuenta sigue.
-        'FR_403_ONE_MAIN_V1');
+        // (2026-11-12) --pack-rotation: varios sobres en Open Packs Only (el panel nuevo lo usa).
+        'PACK_ROTATION_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',
@@ -649,7 +650,14 @@ function infoFarm() {
     try { propias = Number(JSON.parse(fs.readFileSync(path.join(motor, 'reports', 'community_farm.json'), 'utf8')).own) || 0; } catch (e) { /* sin dato */ }
     const s = ajustesPanel(motor);
     return { nombre: String(s.host_name || '').trim() || null, propias, modo: modoPanel(motor),
-        sobre: nombreDeSobre(motor, s.pack_id || 'CN001_0010_00_000') };
+        sobre: sobresDelPanel(s).map(p => nombreDeSobre(motor, p)).join(' + ') };
+}
+
+// Sobres que abre el panel: en Open Packs Only los marcados (pack_ids, varios = las cuentas se turnan); si no, pack_id.
+function sobresDelPanel(s) {
+    const uno = s.pack_id || 'CN001_0010_00_000';
+    if ((s.run_mode || 'godpack') !== 'packs-only' || !Array.isArray(s.pack_ids) || !s.pack_ids.length) return [uno];
+    return s.pack_ids.map(String);
 }
 
 // Nombre del sobre para el mensaje de PPM, igual que el panel ("Dual Fusion: Pikachu").
@@ -740,8 +748,8 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = fal
             '--collector-codes', (s.collectors || []).join(',') || 'dummy',
             '--worker-url', s.worker_url || 'https://onlineids.zenithrise.workers.dev/elite',
             // Sobre especial (SP1): 1 por cuenta, usa su propia energia (2026-11-07).
-            '--packs', String(/^SP/i.test(s.pack_id || '') ? 1 : (s.packs || 2)),
-            '--pack-id', s.pack_id || 'CN001_0010_00_000',
+            '--packs', String(/^SP/i.test(sobresDelPanel(s)[0]) ? 1 : (s.packs || 2)),
+            '--pack-id', sobresDelPanel(s)[0],
             '--accounts-dir', dirCuentas, '--xml-dir', dirCuentas, '--json-dir', dirCuentas,
             '--proxy-file', archivoProxies(motor, s),
             '--proxy-scheme', s.proxy_scheme || 'http',
@@ -762,8 +770,14 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = fal
             '--stop-file', path.join(motor, 'reports', 'community_farm.stop')];
         if (soloLimpiar) args.push('--cleanup-only');   // solo borra amistades que quedaron (no abre sobres)
         if (s.packs_per_min > 0) args.push('--packs-per-min', String(s.packs_per_min));
-        const producto = productoDeSobre(motor, s.pack_id || 'CN001_0010_00_000');
+        const producto = productoDeSobre(motor, sobresDelPanel(s)[0]);
         if (producto) args.push('--product-id', producto);
+        // (2026-11-12, Ale/Arcade) Open Packs Only con varios sobres marcados: las cuentas se turnan.
+        const rotacion = sobresDelPanel(s);
+        if (rotacion.length > 1 && motorConoce(motor, '--pack-rotation')) {
+            const partes = rotacion.map(p => { const prod = productoDeSobre(motor, p); return prod ? `${p}:${prod}:${/^SP/i.test(p) ? 1 : (s.packs || 2)}` : ''; }).filter(Boolean);
+            if (partes.length > 1) args.push('--pack-rotation', partes.join(','));
+        }
         // Lo que dice el motor queda en reports/reroll_comunidad.log (2026-11-01: todas las cuentas daban
         // 0 sobres y no se veia por que). Pasado de 20 MB se rota a .log.1.
         const rutaLog = path.join(motor, 'reports', 'reroll_comunidad.log');

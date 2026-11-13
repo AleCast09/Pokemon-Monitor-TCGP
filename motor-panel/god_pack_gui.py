@@ -721,7 +721,31 @@ class GodPackGui(QMainWindow):
             self.w_pack.addItem(label, pack["pack_id"])
         default_idx = max(0, self.w_pack.findData(DEFAULT_PAID_PACK_ID))
         self.w_pack.setCurrentIndex(default_idx)
-        self._add_field(l_pack, "Pack to Open", self.w_pack)
+        self._pack_one_field = self._wrap_field("Pack to Open", self.w_pack)
+        l_pack.addWidget(self._pack_one_field)
+
+        # 2026-11-12 (Ale/Arcade): Open Packs Only can open several packs; the accounts take turns
+        # (account 1 the 1st pack, account 2 the 2nd, ...).
+        self.w_pack_multi = QListWidget()
+        self.w_pack_multi.setFixedHeight(150)
+        self.w_pack_multi.setStyleSheet(
+            f"QListWidget {{ background: {D['INPUT']}; border: 1px solid {D['BORDER']}; "
+            f"border-radius: 6px; padding: 4px; color: {D['TEXT']}; }}"
+            f"QListWidget::item {{ padding: 3px 6px; }}")
+        for pack in paid_pack_options():
+            it = QListWidgetItem(f"[{pack.get('sku_id', '?')}] {pack.get('name', '?')}")
+            it.setData(Qt.UserRole, pack["pack_id"])
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if pack["pack_id"] == DEFAULT_PAID_PACK_ID else Qt.Unchecked)
+            self.w_pack_multi.addItem(it)
+        self.w_pack_multi.itemChanged.connect(lambda _it: self._update_pack_multi_hint())
+        self._pack_multi_field = self._wrap_field("Packs to Open (tick one or more - the accounts take turns)",
+                                                  self.w_pack_multi)
+        l_pack.addWidget(self._pack_multi_field)
+        self.w_pack_multi_hint = QLabel("")
+        self.w_pack_multi_hint.setStyleSheet(f"color: {D['TEXT2']}; font-size: 11px;")
+        self.w_pack_multi_hint.setWordWrap(True)
+        l_pack.addWidget(self.w_pack_multi_hint)
 
         grid_p = QGridLayout()
         grid_p.setSpacing(8)
@@ -768,7 +792,14 @@ class GodPackGui(QMainWindow):
 
         self.w_community = QCheckBox("Community Farm — also open lent accounts (Monitor Link)")
         self.w_community.setChecked(True)
+        self.w_community.setToolTip("Ticked: your accounts + the community's lent accounts (counters show all).\n"
+                                    "Unticked: only your own accounts (counters show only yours).")
+        self.w_community.toggled.connect(self._update_community_hint)
         l_flags.addWidget(self.w_community)
+        self.w_community_hint = QLabel("")
+        self.w_community_hint.setStyleSheet(f"color: {D['TEXT2']}; font-size: 11px; margin-left: 22px;")
+        l_flags.addWidget(self.w_community_hint)
+        self._update_community_hint()
 
         self.w_dry_run = QCheckBox("Dry run (test flow without opening packs)")
         l_flags.addWidget(self.w_dry_run)
@@ -1311,6 +1342,11 @@ class GodPackGui(QMainWindow):
                 if pi >= 0:
                     self.w_pack_power_min.setCurrentIndex(pi)
                 self.w_verbose.setChecked(bool(data.get("verbose", False)))
+                marcados = data.get("pack_ids")
+                if isinstance(marcados, list) and marcados:
+                    for i in range(self.w_pack_multi.count()):
+                        it = self.w_pack_multi.item(i)
+                        it.setCheckState(Qt.Checked if str(it.data(Qt.UserRole)) in marcados else Qt.Unchecked)
                 self._update_mode_enabled()
         except Exception:
             pass
@@ -1321,6 +1357,7 @@ class GodPackGui(QMainWindow):
         data = {
             "collectors": self._collectors_list(),
             "pack_id": self.w_pack.currentData(),
+            "pack_ids": self._packs_ticked(),   # Open Packs Only: several packs, the accounts take turns
             "packs": self.w_packs.value(),
             "wait_accept": self.w_wait.value(),
             "cooldown_hours": self.w_cooldown.value(),
@@ -1384,7 +1421,11 @@ class GodPackGui(QMainWindow):
                 "or switch Run mode to 'Open Packs Only'.",
             )
             return []
-        pack_id = self.w_pack.currentData() or DEFAULT_PAID_PACK_ID
+        if run_mode == "packs-only" and not self._packs_ticked():
+            QMessageBox.warning(self, "No pack", "Tick at least one pack in 'Packs to Open'.")
+            return []
+        sobres = self._packs_for_run()
+        pack_id = sobres[0]
         product_id = product_id_for_pack(pack_id)
         cmd = [
             sys.executable, str(INJECT_SCRIPT),
@@ -1417,6 +1458,9 @@ class GodPackGui(QMainWindow):
             inject_ok = False
         if inject_ok and self.w_community.isChecked():
             cmd += ["--gp-eligibility", "locked" if run_mode == "packs-only" else "eligible"]
+        if len(sobres) > 1:
+            cmd += ["--pack-rotation", ",".join(
+                f"{p}:{product_id_for_pack(p)}:{packs_for(p, self.w_packs.value())}" for p in sobres)]
         if self.w_dry_run.isChecked():
             cmd.append("--dry-run")
         if self.w_verify_power.isChecked():
@@ -1513,6 +1557,52 @@ class GodPackGui(QMainWindow):
                 w.setEnabled(is_gp)
             except Exception:
                 pass
+        # God Pack: one pack (combo). Open Packs Only: tick several (list).
+        try:
+            self._pack_one_field.setVisible(is_gp)
+            self._pack_multi_field.setVisible(not is_gp)
+            self.w_pack_multi_hint.setVisible(not is_gp)
+            self._update_pack_multi_hint()
+        except Exception:
+            pass
+
+    def _packs_ticked(self) -> list[str]:
+        """Pack ids ticked in the Open Packs Only list (in list order)."""
+        out = []
+        try:
+            for i in range(self.w_pack_multi.count()):
+                it = self.w_pack_multi.item(i)
+                if it.checkState() == Qt.Checked:
+                    out.append(str(it.data(Qt.UserRole)))
+        except Exception:
+            pass
+        return out
+
+    def _packs_for_run(self) -> list[str]:
+        """Packs this run opens: the ticked ones in Open Packs Only, else the combo's one."""
+        if (self.w_run_mode.currentData() or "godpack") == "packs-only":
+            ticked = self._packs_ticked()
+            if ticked:
+                return ticked
+        return [self.w_pack.currentData() or DEFAULT_PAID_PACK_ID]
+
+    def _update_pack_multi_hint(self):
+        try:
+            n = len(self._packs_ticked())
+            self.w_pack_multi_hint.setText(
+                "Tick at least one pack." if n == 0 else
+                "1 pack: every account opens it." if n == 1 else
+                f"{n} packs: account 1 opens the 1st, account 2 the 2nd, ... and it starts over.")
+        except Exception:
+            pass
+
+    def _update_community_hint(self, *_):
+        try:
+            self.w_community_hint.setText(
+                "Your accounts + the community's lent accounts (counters show all)." if self.w_community.isChecked()
+                else "Only your own accounts (counters show only yours).")
+        except Exception:
+            pass
 
     def _start_cleanup_only(self):
         cmd = [
