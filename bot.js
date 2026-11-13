@@ -10127,7 +10127,7 @@ function buscarShinedustTodasCuentas(rutaJsonCuentas) {
 
 const SHINEDUST_POR_PAGINA = 25;
 
-function construirEmbedShinedust(resultados, pagina = 0) {
+function construirEmbedShinedust(resultados, pagina = 0, mapaEmojis = {}) {
     const embed = new EmbedBuilder()
         .setTitle('🍬 Shinedust per account')
         .setColor(0xE91E63);
@@ -10153,15 +10153,28 @@ function construirEmbedShinedust(resultados, pagina = 0) {
     // Bloque de codigo (2026-09-16, a pedido explicito del usuario): Discord dibuja
     // automatico un boton de copiar en la esquina de un bloque ``` en la version de
     // escritorio -- nada que el bot tenga que armar, solo envolver el texto en ```.
-    const anchoNombre = Math.max(...items.map(r => r.nombreCuenta.length), 10);
-    // 🎁N = regalos pendientes en el buzon · ⛔ = la cuenta no pudo entrar al juego (baneada/borrada?).
-    const anchoValor = Math.max(...items.map(r => r.valor.toLocaleString('en-US').length), 1);
-    const lineas = items.map(r => `${r.nombreCuenta.padEnd(anchoNombre)}  ${r.valor.toLocaleString('en-US').padStart(anchoValor)}` +
-        (r.relojes ? `  ⏳${r.relojes}` : '') + (r.regalos ? `  🎁${r.regalos}` : '') + (r.estado === 'login_failed' ? '  ⛔' : ''));
-    embed.setDescription('```\n' + lineas.join('\n') + '\n```')
-        .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas} • ${resultados.length} account(s) • Total: ${totalGeneral.toLocaleString('en-US')}` +
-            (conRelojes.length ? `\n⏳ Pack hourglasses: ${totalRelojes.toLocaleString('en-US')} on ${conRelojes.length} account(s) = ${Math.floor(totalRelojes / 12).toLocaleString('en-US')} paid packs` : '') +
-            (items.some(r => r.relojes || r.regalos || r.estado === 'login_failed') ? '\n⏳ = pack hourglasses · 🎁 = gifts to claim · ⛔ = could not log in (banned or deleted?)' : '') });
+    // (Ale 2026-11-13: "que sea mas ordenado") Columnas fijas que entran en el celular: nombre sin ".xml",
+    // Shinedust y relojes alineados a la derecha, con encabezado. Los emojis del juego van arriba (dentro de un
+    // bloque de codigo Discord no los dibuja). G = regalos pendientes, X = no pudo entrar (baneada/borrada?).
+    const nombreCorto = (n) => String(n).replace(/\.xml$/i, '');
+    const fmt = (n) => Number(n || 0).toLocaleString('en-US');
+    const anchoNombre = Math.min(20, Math.max(...items.map(r => nombreCorto(r.nombreCuenta).length), 7));
+    const anchoValor = Math.max(...items.map(r => fmt(r.valor).length), 4);
+    const hayRelojes = items.some(r => typeof r.relojes === 'number');
+    const anchoReloj = Math.max(...items.map(r => typeof r.relojes === 'number' ? fmt(r.relojes).length : 1), 2);
+    const recortar = (n) => { const c = nombreCorto(n); return c.length > anchoNombre ? c.slice(0, anchoNombre - 1) + '~' : c.padEnd(anchoNombre); };
+    const cab = `${'Account'.padEnd(anchoNombre)}  ${'Dust'.padStart(anchoValor)}` + (hayRelojes ? `  ${'HG'.padStart(anchoReloj)}` : '');
+    const lineas = items.map(r => `${recortar(r.nombreCuenta)}  ${fmt(r.valor).padStart(anchoValor)}` +
+        (hayRelojes ? `  ${(typeof r.relojes === 'number' ? fmt(r.relojes) : '-').padStart(anchoReloj)}` : '') +
+        (r.regalos ? ` G${r.regalos}` : '') + (r.estado === 'login_failed' ? ' X' : ''));
+    const emDust = emojiTag(mapaEmojis, 'Polvo_iris_TCGP') || '🍬';
+    const emReloj = emojiTag(mapaEmojis, 'Reloj_de_arena_de_sobres_TCGP') || '⏳';
+    const arriba = `${emDust} **Shinedust:** ${fmt(totalGeneral)}` +
+        (conRelojes.length ? `\n${emReloj} **Pack hourglasses:** ${fmt(totalRelojes)} · ${fmt(Math.floor(totalRelojes / 12))} paid packs` : '');
+    embed.setDescription(arriba + '\n```\n' + cab + '\n' + lineas.join('\n') + '\n```')
+        .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas} • ${resultados.length} account(s)` +
+            (hayRelojes ? ' • HG = pack hourglasses' : '') +
+            (items.some(r => r.regalos || r.estado === 'login_failed') ? '\nG = gifts to claim · X = could not log in (banned or deleted?)' : '') });
 
     // Boton "Track Shinedust" (2026-09-16, a pedido explicito del usuario): deja elegir
     // una cuenta de ESTA pagina para leerla EN VIVO por OCR (mismo motor de
@@ -13013,7 +13026,7 @@ async function manejarInteraccionPrincipal(interaction) {
         const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
         // ⚡ Fast Shinedust (fast-transfer.js): valores leidos del servidor + botones de refresco.
         const resultados = await fastTransfer.mezclarShinedust(buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url), rutaJsonCfg?.webhook_url);
-        const payloadSd = comunidad.quitarComponentes(interaction.guildId, construirEmbedShinedust(resultados, 0), ['shinedust_track_select::']);
+        const payloadSd = comunidad.quitarComponentes(interaction.guildId, construirEmbedShinedust(resultados, 0, await obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))), ['shinedust_track_select::']);
         const filaSd = fastTransfer.filaBotonesDust(interaction.guildId, 0);
         if (filaSd && payloadSd.components) payloadSd.components.push(filaSd);
         payloadSd.content = `<@${interaction.user.id}>, here's your Shinedust list! 🍬`;
@@ -13025,7 +13038,7 @@ async function manejarInteraccionPrincipal(interaction) {
         await interaction.deferUpdate();
         const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
         const resultados = await fastTransfer.mezclarShinedust(buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url), rutaJsonCfg?.webhook_url);
-        const payloadSd = comunidad.quitarComponentes(interaction.guildId, construirEmbedShinedust(resultados, pagina), ['shinedust_track_select::']);
+        const payloadSd = comunidad.quitarComponentes(interaction.guildId, construirEmbedShinedust(resultados, pagina, await obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))), ['shinedust_track_select::']);
         const filaSd = fastTransfer.filaBotonesDust(interaction.guildId, Math.max(0, pagina));
         if (filaSd && payloadSd.components) payloadSd.components.push(filaSd);
         payloadSd.content = `<@${interaction.user.id}>, here's your Shinedust list! 🍬`;
