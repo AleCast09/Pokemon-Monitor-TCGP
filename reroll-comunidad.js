@@ -55,7 +55,8 @@ function iniciar(d) {
         // reintenta con otro proxy.
         // (2026-11-12, Arcade) Un Main que siempre da 403 ya no hace retirar las demas solicitudes: la cuenta sigue.
         // (2026-11-12) --pack-rotation: varios sobres en Open Packs Only (el panel nuevo lo usa).
-        'PACK_ROTATION_V1');
+        // (2026-11-12) Relojes de arena (gastar todos, lista) y recompensas: solo cuentas propias, desde el panel.
+        'HOURGLASS_LIST_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',

@@ -1730,6 +1730,66 @@ def _proxy_web_page(text: str) -> bool:
     return "<!doctype" in t or "<html" in t or "403 forbidden" in t
 
 
+HOURGLASS_LIST_V1 = True   # 2026-11-12 (Ale): --spend-all-hourglasses, --track-hourglasses, --claim-rewards
+_HG_FILE = PROJECT_ROOT / "reports" / "hourglasses.json"          # account -> hourglasses left (last seen)
+_HG_HISTORY = PROJECT_ROOT / "reports" / "hourglasses_history.jsonl"   # one line per account opened
+_hg_lock = threading.Lock()
+
+
+def _claim_rewards(sess, tag: str = "", gifts: bool = True) -> None:
+    """Gifts (present box) + finished missions, like the game's 'Receive all'. Best effort: never fails the run."""
+    if gifts:
+        try:
+            from engine.takasho.schema.lettuce_server.player_api import (
+                present_box_list_v1_pb2, present_box_receive_v1_pb2)
+            lst = sess._call("/takasho.schema.lettuce_server.player_api.PresentBox/ListV1",
+                             present_box_list_v1_pb2.PresentBoxListV1.Types.Request(),
+                             present_box_list_v1_pb2.PresentBoxListV1.Types.Response)
+            ids = [p.present_id for p in getattr(lst, "presents", [])]
+            got = 0
+            for i in range(0, len(ids), 50):
+                req = present_box_receive_v1_pb2.PresentBoxReceiveV1.Types.Request()
+                req.present_ids.extend(ids[i:i + 50])
+                r = sess._call("/takasho.schema.lettuce_server.player_api.PresentBox/ReceiveV1", req,
+                               present_box_receive_v1_pb2.PresentBoxReceiveV1.Types.Response)
+                got += sum(1 for x in getattr(r, "results", []) if getattr(x, "is_successe", False)) or len(ids[i:i + 50])
+            if ids:
+                log(f"[rewards] gifts received: {got} of {len(ids)}", tag=tag)
+        except Exception as exc:
+            log(f"[rewards] gifts: skipped ({str(exc)[:120]})", tag=tag)
+    try:
+        from engine.takasho.schema.lettuce_server.player_api import mission_complete_v2_pb2
+        sess._call("/takasho.schema.lettuce_server.player_api.Mission/CompleteV2",
+                   mission_complete_v2_pb2.MissionCompleteV2.Types.Request(),
+                   mission_complete_v2_pb2.MissionCompleteV2.Types.Response)
+        log("[rewards] finished missions claimed", tag=tag)
+    except Exception as exc:
+        log(f"[rewards] missions: nothing to claim ({str(exc)[:80]})", tag=tag)
+
+
+def _note_hourglasses(account: dict, tag: str, before: int, after: int, packs: int) -> None:
+    """reports/hourglasses.json (last seen per account) + one history line. Own accounts only (GUI flag)."""
+    ahora = int(time.time())
+    with _hg_lock:
+        try:
+            data = json.loads(_HG_FILE.read_text("utf-8")) if _HG_FILE.exists() else {}
+        except Exception:
+            data = {}
+        data[str(account.get("account_key", tag))] = {"name": tag, "hg": int(after), "before": int(before),
+                                                     "packs": int(packs), "ts": ahora}
+        try:
+            _HG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _HG_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
+            tmp.replace(_HG_FILE)
+            with open(_HG_HISTORY, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"ts": ahora, "name": tag, "before": int(before), "after": int(after),
+                                    "packs": int(packs), "total": sum(int(v.get("hg", 0)) for v in data.values())}) + "\n")
+        except Exception as exc:
+            log(f"[hourglass] could not write {_HG_FILE.name}: {exc}", tag=tag)
+    log(f"[hourglass] {before} -> {after} LARGE left", tag=tag)
+
+
 _fr_state = threading.local()   # proxy_blocked: the last send failed because the proxy returned a web page
 
 
@@ -2879,6 +2939,9 @@ def inject_one(
     min_hourglass: int = 0,              # skip account if fewer LARGE hourglasses than this
     hg_cost: int = 0,                    # LARGE hourglasses to spend PER pack in PurchaseV2
     power_id: str = "PACK_POWER_NORMAL", # (wr98) PACK_POWER_NORMAL or PACK_POWER_SPECIAL (SP1)
+    spend_all_hg: bool = False,          # (Ale 2026-11-12) open as many paid packs as the hourglasses allow
+    track_hg: bool = False,              # (Ale 2026-11-12) write the hourglasses left to reports/hourglasses.json
+    claim_rewards: bool = False,         # (Ale 2026-11-12) claim gifts (present box) and finished missions
 ) -> dict:
     """
     Run the full injection flow for one account.
@@ -3004,6 +3067,13 @@ def inject_one(
             except Exception as exc:
                 log(f"[popup] unexpected error (continuing): {str(exc)[:200]}",
                     tag=tag)
+
+        # 1b2. (Ale 2026-11-12) Gifts and finished missions first: gifts often bring hourglasses.
+        if claim_rewards and not dry_run:
+            _claim_rewards(sess, tag)
+        hg_before = -1
+        if (track_hg or spend_all_hg) and not dry_run:
+            hg_before, _ = gp_resources.pack_power_charger_count(sess, "LARGE")
 
         # 1c. Optional: hourglass minimum. When min_hourglass > 0, skip
         # the account if it has fewer LARGE pack-power chargers than
@@ -3209,6 +3279,20 @@ def inject_one(
                     log(f"paid pack mix: {free_used} free "
                         f"+ {paid_used} paid × {hg_cost} LARGE "
                         f"= {total_hg} LARGE for {packs} packs", tag=tag)
+
+        # (Ale 2026-11-12) Spend all hourglasses (Open Packs Only, own accounts): free power + every pack
+        # the LARGE hourglasses can pay. Unknown count = keep the normal number of packs.
+        if spend_all_hg and run_mode == "packs-only" and hg_cost > 0 and hg_before >= 0 and not dry_run:
+            if not verify_power:
+                _pw = get_pack_power(sess, tag=tag, target_power_id=power_id)
+                free_power_at_start = max(0, int(_pw))
+            _todos = free_power_at_start + hg_before // int(hg_cost)
+            log(f"[hourglass] spend all: {hg_before} LARGE = {hg_before // int(hg_cost)} paid + "
+                f"{free_power_at_start} free -> {_todos} packs", tag=tag)
+            packs = _todos
+            if packs <= 0:
+                result["error"] = "no_power_no_hourglasses"
+                return result
 
         # 4. Send friend request to all collectors (godpack mode only).
         if run_mode == "godpack":
@@ -3587,6 +3671,13 @@ def inject_one(
             outcome_str = (f"opened {result['packs_opened']}/{packs} packs, "
                            f"no match ({','.join(pack_labels) or '-'})")
         log(f"-- ACCOUNT SUMMARY: {outcome_str}", tag=tag)
+        # (Ale 2026-11-12) Missions finished by opening packs, then the hourglasses left -> list.
+        if claim_rewards and not dry_run and result["packs_opened"]:
+            _claim_rewards(sess, tag, gifts=False)
+        if track_hg and not dry_run:
+            _hg_after, _ = gp_resources.pack_power_charger_count(sess, "LARGE")
+            if _hg_after >= 0:
+                _note_hourglasses(account, tag, hg_before, _hg_after, result["packs_opened"])
 
         result["god_pack"] = any_match           # "match" in the new lingo
         result["god_pack_raw"] = any_god_raw
@@ -4364,6 +4455,9 @@ def run_injection(args) -> int:
             min_hourglass=int(getattr(args, "min_hourglass", 0) or 0),
             hg_cost=_sobre["hg_cost"],
             power_id=_sobre["power_id"],
+            spend_all_hg=bool(getattr(args, "spend_all_hourglasses", False)),
+            track_hg=bool(getattr(args, "track_hourglasses", False)),
+            claim_rewards=bool(getattr(args, "claim_rewards", False)),
         )
         # Record state (touch mtime only on successful attempt)
         _record_kwargs = dict(
@@ -4651,6 +4745,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Pack ID to open (default: B4a Team Rocket).")
     p.add_argument("--product-id", default="PC_PS_2608000_01_01_01",
                    help="Product ID matching pack-id.")
+    p.add_argument("--spend-all-hourglasses", action="store_true",
+                   help="Open Packs Only: open the free packs + every paid pack the LARGE hourglasses can pay.")
+    p.add_argument("--track-hourglasses", action="store_true",
+                   help="Write each account's hourglasses left to reports/hourglasses.json (+ history).")
+    p.add_argument("--claim-rewards", action="store_true",
+                   help="Claim gifts (present box) and finished missions on each account.")
     p.add_argument("--pack-rotation", default="",
                    help="Several packs, one per account in turn: 'pack_id:product_id:packs,pack_id:product_id:packs'. "
                         "Account 1 opens the 1st, account 2 the 2nd, ... (overrides --pack-id/--product-id/--packs).")

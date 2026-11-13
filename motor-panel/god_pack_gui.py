@@ -801,6 +801,22 @@ class GodPackGui(QMainWindow):
         l_flags.addWidget(self.w_community_hint)
         self._update_community_hint()
 
+        # (Ale 2026-11-12) Hourglasses + rewards: own accounts only (lent accounts never spend anything).
+        self.w_spend_all = QCheckBox("Spend all hourglasses — Open Packs Only, your accounts")
+        self.w_spend_all.setToolTip("Each account opens its free packs + every paid pack its LARGE hourglasses can pay\n"
+                                    "(12 per pack). Ignores 'Packs per Account'. Lent accounts never spend hourglasses.")
+        self.w_spend_all.toggled.connect(lambda on: on and self.w_free_only.setChecked(False))
+        self.w_free_only.toggled.connect(lambda on: on and self.w_spend_all.setChecked(False))
+        l_flags.addWidget(self.w_spend_all)
+        self.w_claim_rewards = QCheckBox("Claim gifts & finished missions — your accounts")
+        self.w_claim_rewards.setToolTip("Before opening: receive everything in the gift box (often hourglasses).\n"
+                                        "After opening: claim the missions that got finished.")
+        l_flags.addWidget(self.w_claim_rewards)
+        self.btn_hourglasses = QPushButton("⏳  Hourglasses list")
+        self.btn_hourglasses.setToolTip("Hourglasses left on each of your accounts (updated while the bot runs).")
+        self.btn_hourglasses.clicked.connect(self._show_hourglasses)
+        l_flags.addWidget(self.btn_hourglasses)
+
         self.w_dry_run = QCheckBox("Dry run (test flow without opening packs)")
         l_flags.addWidget(self.w_dry_run)
         lay.addWidget(c_flags)
@@ -1342,6 +1358,8 @@ class GodPackGui(QMainWindow):
                 if pi >= 0:
                     self.w_pack_power_min.setCurrentIndex(pi)
                 self.w_verbose.setChecked(bool(data.get("verbose", False)))
+                self.w_spend_all.setChecked(bool(data.get("spend_all_hourglasses", False)))
+                self.w_claim_rewards.setChecked(bool(data.get("claim_rewards", False)))
                 marcados = data.get("pack_ids")
                 if isinstance(marcados, list) and marcados:
                     for i in range(self.w_pack_multi.count()):
@@ -1358,6 +1376,8 @@ class GodPackGui(QMainWindow):
             "collectors": self._collectors_list(),
             "pack_id": self.w_pack.currentData(),
             "pack_ids": self._packs_ticked(),   # Open Packs Only: several packs, the accounts take turns
+            "spend_all_hourglasses": self.w_spend_all.isChecked(),
+            "claim_rewards": self.w_claim_rewards.isChecked(),
             "packs": self.w_packs.value(),
             "wait_accept": self.w_wait.value(),
             "cooldown_hours": self.w_cooldown.value(),
@@ -1458,6 +1478,16 @@ class GodPackGui(QMainWindow):
             inject_ok = False
         if inject_ok and self.w_community.isChecked():
             cmd += ["--gp-eligibility", "locked" if run_mode == "packs-only" else "eligible"]
+        try:
+            _inj = Path(INJECT_SCRIPT).read_text("utf-8", errors="ignore")
+        except Exception:
+            _inj = ""
+        if "--track-hourglasses" in _inj:   # own accounts only: this process never opens lent ones
+            cmd.append("--track-hourglasses")
+            if self.w_spend_all.isChecked() and run_mode == "packs-only":
+                cmd.append("--spend-all-hourglasses")
+            if self.w_claim_rewards.isChecked():
+                cmd.append("--claim-rewards")
         if len(sobres) > 1:
             cmd += ["--pack-rotation", ",".join(
                 f"{p}:{product_id_for_pack(p)}:{packs_for(p, self.w_packs.value())}" for p in sobres)]
@@ -1595,6 +1625,52 @@ class GodPackGui(QMainWindow):
                 f"{n} packs: account 1 opens the 1st, account 2 the 2nd, ... and it starts over.")
         except Exception:
             pass
+
+    # ── Hourglasses list (Ale 2026-11-12) ─────────────────────────
+    def _hourglasses_html(self) -> str:
+        try:
+            data = json.loads((ROOT / "reports" / "hourglasses.json").read_text("utf-8"))
+        except Exception:
+            data = {}
+        filas = sorted(data.values(), key=lambda v: -int(v.get("hg", 0)))
+        total = sum(int(v.get("hg", 0)) for v in filas)
+        gastado = sum(max(0, int(v.get("before", 0)) - int(v.get("hg", 0))) for v in filas if int(v.get("before", -1)) >= 0)
+        def hace(ts):
+            m = max(0, int((time.time() - int(ts or 0)) // 60))
+            return f"{m} min ago" if m < 60 else f"{m // 60} h ago" if m < 2880 else f"{m // 1440} d ago"
+        cab = (f"<div style='font-size:15px;margin-bottom:6px'><b>Total: {total:,} LARGE</b> on {len(filas)} account(s)"
+               f" &nbsp;·&nbsp; spent last time: {gastado:,} &nbsp;·&nbsp; packs they can still pay: {total // 12:,}</div>")
+        if not filas:
+            return cab + "<p>No data yet: it fills in while the bot opens your accounts.</p>"
+        tr = "".join(
+            f"<tr><td>{_html.escape(str(v.get('name', '?')))}</td><td align='right'><b>{int(v.get('hg', 0)):,}</b></td>"
+            f"<td align='right'>{int(v.get('before', -1)) if int(v.get('before', -1)) >= 0 else '—'}</td>"
+            f"<td align='right'>{int(v.get('packs', 0))}</td><td>{hace(v.get('ts'))}</td></tr>" for v in filas[:2000])
+        return (cab + "<table cellspacing='0' cellpadding='4' width='100%'>"
+                "<tr><th align='left'>Account</th><th align='right'>Hourglasses</th><th align='right'>Before</th>"
+                "<th align='right'>Packs</th><th align='left'>Seen</th></tr>" + tr + "</table>")
+
+    def _show_hourglasses(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Hourglasses - your accounts")
+        dlg.resize(620, 560)
+        v = QVBoxLayout(dlg)
+        vista = QTextEdit()
+        vista.setReadOnly(True)
+        vista.setStyleSheet(f"background: {D['INPUT']}; color: {D['TEXT']}; border: 1px solid {D['BORDER']};")
+        vista.setHtml(self._hourglasses_html())
+        v.addWidget(vista)
+        nota = QLabel("Updated every 5 s while the bot runs. History: reports/hourglasses_history.jsonl")
+        nota.setStyleSheet(f"color: {D['TEXT2']}; font-size: 11px;")
+        v.addWidget(nota)
+        reloj = QTimer(dlg)
+        def refrescar():
+            pos = vista.verticalScrollBar().value()
+            vista.setHtml(self._hourglasses_html())
+            vista.verticalScrollBar().setValue(pos)
+        reloj.timeout.connect(refrescar)
+        reloj.start(5000)
+        dlg.show()
 
     def _update_community_hint(self, *_):
         try:
