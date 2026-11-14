@@ -1670,6 +1670,7 @@ function construirEmbedCategoriasDeExpansion(categorias, mapaCategorias, totalCa
 }
 
 async function construirEmbedResumenExpansiones(cartas, opciones = {}) {
+    cartas = (cartas || []).filter(c => !c.sobre);   // "Genetic Apex · Pikachu" no es una expansion aparte
     const prefijo = opciones.prefijo || 'allcards';
     const categoriaFiltro = opciones.categoriaFiltro || null;
     const grupoFiltro = opciones.grupoFiltro || null;
@@ -3166,9 +3167,35 @@ function categoriaBaseExpansionId(expansionId) {
 
 // Mapa código de release (ej. "B3") -> Set de nombres de expansión (ej.
 // "Extradimensional Crisis", "Eevee Grove") que caen dentro de ese release.
+// ===== Sobres por expansion (Ale 2026-11-14) =====
+const sobresExpansion = require('./sobres-expansion.js');
+let _cartasConSobres = { base: null, todas: null };
+function cartasConSobres(cartas) {
+    if (!cartas) return cartas;
+    if (_cartasConSobres.base !== cartas) _cartasConSobres = { base: cartas, todas: [...cartas, ...sobresExpansion.entradasPorSobre(cartas, _ultimoCardMapBot)] };
+    return _cartasConSobres.todas;
+}
+async function pantallaElegirSobre(cartas, expansion) {
+    if (String(expansion).includes(sobresExpansion.SEP)) return null;
+    const una = cartas.find(c => c.expansion === expansion && !c.sobre);
+    const sobres = una ? sobresExpansion.sobresDe(una.expansionId) : null;
+    if (!sobres) return null;
+    const imagen = await sobresExpansion.imagenSobres(una.expansionId, expansion).catch(() => null);
+    const cuenta = (s) => cartas.filter(c => c.expansion === `${expansion}${sobresExpansion.SEP}${s}`).length;
+    const embed = new EmbedBuilder().setColor(0x3498DB).setTitle(`📦 ${expansion}`)
+        .setDescription(`This expansion has **${sobres.length} booster packs**. Pick one to see only its cards:\n` +
+            sobres.map(s => `• **${s}** — ${cuenta(s)} cards`).join('\n'));
+    if (imagen) embed.setImage('attachment://packs.png');
+    const fila = new ActionRowBuilder().addComponents(
+        ...sobres.map(s => new ButtonBuilder().setCustomId(`allcards_sobre::${expansion}::${s}`.slice(0, 100)).setLabel(s).setStyle(ButtonStyle.Primary)),
+        new ButtonBuilder().setCustomId(`allcards_sobre::${expansion}::`.slice(0, 100)).setLabel('All packs').setStyle(ButtonStyle.Secondary));
+    return { content: '', embeds: [embed], components: [fila], files: imagen ? [{ attachment: imagen, name: 'packs.png' }] : [], attachments: [] };
+}
+
 function categoriasDeExpansiones(cartas) {
     const mapa = {};
     for (const c of cartas) {
+        if (c.sobre) continue;
         const cat = categoriaBaseExpansionId(c.expansionId) || c.expansion;
         if (!mapa[cat]) mapa[cat] = new Set();
         mapa[cat].add(c.expansion);
@@ -3184,6 +3211,7 @@ function categoriasDeExpansiones(cartas) {
 // tiene el selector con botones, pero adaptado a autocompletado en vez de un
 // paso de menú aparte (acá no hay "botones", solo texto).
 function coincidenciasExpansionAutocomplete(base, focused, releaseFiltro = null) {
+    base = (base || []).filter(c => !c.sobre);
     const baseFiltrada = releaseFiltro
         ? base.filter(c => categoriaBaseExpansionId(c.expansionId) === releaseFiltro)
         : base;
@@ -11702,7 +11730,7 @@ const FUENTES_CARTAS = {
         obtenerCartas: async () => {
             const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
             const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-            return { cartas, rutaMasterPath, mapaCopias: construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url) };
+            return { cartas: cartasConSobres(cartas), rutaMasterPath, mapaCopias: construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url) };
         }
     },
     goldcards: {
@@ -13728,6 +13756,21 @@ async function manejarInteraccionPrincipal(interaction) {
         return await configScript.manejarModal(interaction);
     }
 
+    if (interaction.isButton() && interaction.customId.startsWith('allcards_sobre::')) {
+        await interaction.deferUpdate();
+        await avisarCargandoCartas(interaction);
+        try {
+            const [, expansion, sobre] = interaction.customId.split('::');
+            const fuente = FUENTES_CARTAS.allcards;
+            const { cartas } = await fuente.obtenerCartas(interaction.user.id);
+            const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
+            const elegida = sobre ? `${expansion}${sobresExpansion.SEP}${sobre}` : expansion;
+            return await interaction.editReply({ attachments: [], ...(await construirEmbedCategoriasPorExpansion(cartas || [], elegida, { prefijo: 'allcards', contexto: fuente.contexto, mapaEmojis })) });   // attachments: [] saca la imagen de los sobres
+        } catch (error) {
+            console.error('DEBUG: error mostrando el sobre:', error?.message || error);
+            return await interaction.editReply({ content: '❌ Could not show this pack. Try again.', embeds: [], components: [], files: [], attachments: [] });
+        }
+    }
     if (interaction.isStringSelectMenu() && (interaction.customId === 'wishlist_expansion_seleccion' || interaction.customId === 'allcards_expansion_seleccion' || interaction.customId === 'goldcards_expansion_seleccion')) {
         await interaction.deferUpdate();
         await avisarCargandoCartas(interaction);
@@ -13745,6 +13788,11 @@ async function manejarInteraccionPrincipal(interaction) {
             // (mismo criterio que ya usa el atajo expansion:X de /card, CATEGORIA_SIN_FILTRO).
             // allcards/goldcards siguen pasando por categorias primero, ahi si hace falta
             // filtrar (pueden ser cientos de cartas por expansion).
+            // (Ale 2026-11-14) Expansion con varios sobres (Genetic Apex: Mewtwo/Charizard/Pikachu...): primero el sobre.
+            if (prefijo === 'allcards') {
+                const pantalla = await pantallaElegirSobre(cartas || [], expansionElegida);
+                if (pantalla) return await interaction.editReply(pantalla);
+            }
             const payload = prefijo === 'wishlist'
                 ? await construirEmbedCartasPorExpansion(cartas || [], expansionElegida, CATEGORIA_SIN_FILTRO, ELEMENTO_SIN_FILTRO, 0, { prefijo, contexto: fuente.contexto, mapaEmojis, rutaMasterPath, mapaCopias })
                 : await construirEmbedCategoriasPorExpansion(cartas || [], expansionElegida, { prefijo, contexto: fuente.contexto, mapaEmojis });

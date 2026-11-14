@@ -1,0 +1,28 @@
+{
+ "A1": {
+  "Mewtwo": "A1_mewtwo.png",
+  "Charizard": "A1_charizard.png",
+  "Pikachu": "A1_pikachu.png"
+ },
+ "A2": {
+  "Dialga": "A2_dialga.png",
+  "Palkia": "A2_palkia.png"
+ },
+ "A3": {
+  "Solgaleo": "A3_solgaleo.png",
+  "Lunala": "A3_lunala.png"
+ },
+ "A4": {
+  "Ho-Oh": "A4_hooh.png",
+  "Lugia": "A4_lugia.png"
+ },
+ "B1": {
+  "Mega Blaziken": "B1_mega_blaziken.png",
+  "Mega Gyarados": "B1_mega_gyarados.png",
+  "Mega Altaria": "B1_mega_altaria.png"
+ },
+ "C1": {
+  "Mega Mewtwo X": "C1_mega_mewtwo_x.png",
+  "Pikachu": "C1_pikachu.png"
+ }
+}
