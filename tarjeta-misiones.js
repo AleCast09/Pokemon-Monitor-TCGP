@@ -1,6 +1,6 @@
 // 🏆 All Missions (Ale 2026-11-14): colecciones tematicas de cada expansion (que cartas pide y que premio da),
 // como tarjeta-imagen igual que las demas del bot. Datos: assets/missions/themed_collections.json (sacado de
-// Serebii una vez); logos de premios en assets/missions/ (rewards_icons.json); cartas con las imagenes del bot.
+// Serebii una vez); logos de premios en assets/missions/ (campo 'logo' de cada premio); cartas con las imagenes del bot.
 const path = require('path');
 const fs = require('fs');
 
@@ -10,7 +10,6 @@ let _datos = null;
 function datos() {
     if (!_datos) {
         try { _datos = JSON.parse(fs.readFileSync(path.join(DIR, 'themed_collections.json'), 'utf8')); } catch (e) { _datos = { expansions: [] }; }
-        try { _datos.logos = JSON.parse(fs.readFileSync(path.join(DIR, 'rewards_icons.json'), 'utf8')); } catch (e) { _datos.logos = {}; }
     }
     return _datos;
 }
@@ -24,6 +23,29 @@ const ICONOS_BOT = {
 };
 const PREFIJO = { icon: 'Icon', binders: 'Binder', playmats: 'Playmat', sleeves: 'Sleeve', coin: 'Coin' };
 const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// Texto en hasta 2 lineas (corta por palabras). Devuelve [linea1, linea2?].
+function partir(texto, max) {
+    const t = String(texto);
+    if (t.length <= max) return [t];
+    const corte = t.lastIndexOf(' ', max);
+    const a = t.slice(0, corte > max * 0.5 ? corte : max).trim();
+    let b = t.slice(a.length).trim();
+    if (b.length > max) b = b.slice(0, max - 1).trim() + '…';
+    return [a, b];
+}
+// Nombre del premio: tipo chico arriba (Playmat, Binder...) y el nombre debajo, en 1 o 2 lineas, sin cortarse.
+function etiquetaPremio(x, yCentro, r, max = 22) {
+    const base = r.item.replace(/\s*\(.*\)$/, '');
+    const tipo = PREFIJO[r.type];
+    const lineas = partir(tipo ? r.item : base, max);
+    const fs = lineas.length > 1 || lineas[0].length > 16 ? 17 : 20;
+    const alto = (tipo ? 18 : 0) + lineas.length * (fs + 3);
+    let y = yCentro - alto / 2 + (tipo ? 13 : 0);
+    let out = '';
+    if (tipo) { out += `<text x="${x}" y="${y}" font-family="Segoe UI, Arial" font-weight="700" font-size="13" fill="#9aa3c7" letter-spacing="1.5">${tipo.toUpperCase()}</text>`; y += 5; }
+    for (const l of lineas) { y += fs; out += `<text x="${x}" y="${y - 3}" font-family="Segoe UI, Arial" font-weight="700" font-size="${fs}" fill="#ffffff">${esc(l)}</text>`; y += 3; }
+    return out;
+}
 
 // imagenCarta(id) -> ruta de la imagen (la da bot.js: CardImageCache / repo de cartas).
 async function armarTarjetaMisiones({ expansion, pagina = 0, imagenCarta }) {
@@ -33,7 +55,7 @@ async function armarTarjetaMisiones({ expansion, pagina = 0, imagenCarta }) {
     const total = Math.ceil(exp.collections.length / POR_PAGINA);
     pagina = Math.min(Math.max(0, pagina), total - 1);
     const cols = exp.collections.slice(pagina * POR_PAGINA, (pagina + 1) * POR_PAGINA);
-    const { logos } = datos();
+    // logo de cada premio: r.logo (archivo en assets/missions)
 
     const W = 1100, PAD = 34, CW = 64, CH = 89, GAP = 8, GGAP = 22;
     const ZX0 = PAD + 6, ZX1 = 700;                 // zona de cartas
@@ -57,7 +79,7 @@ async function armarTarjetaMisiones({ expansion, pagina = 0, imagenCarta }) {
     async function logoPremio(r) {
         const base = r.item.replace(/\s*\(.*\)$/, '');
         const archivo = ICONOS_BOT[base] ? path.join(__dirname, 'assets', 'element', ICONOS_BOT[base])
-            : logos[r.item] ? path.join(DIR, logos[r.item]) : null;
+            : r.logo ? path.join(DIR, r.logo) : null;
         if (/card$/i.test(r.item) && !ICONOS_BOT[base]) {
             // premio = una carta: la imagen del bot (mas nitida que el logo)
             const nombre = r.item.replace(/ card$/i, '').toLowerCase();
@@ -118,7 +140,13 @@ async function armarTarjetaMisiones({ expansion, pagina = 0, imagenCarta }) {
     for (const m of medidas) {
         const { c } = m;
         svg += `<rect x="${PAD - 12}" y="${y}" width="${W - 2 * PAD + 24}" height="${m.alto}" rx="18" fill="#1d2340" stroke="#2c3560"/>`;
-        svg += `<text x="${(ZX0 + ZX1) / 2}" y="${y + 38}" text-anchor="middle" font-family="Segoe UI, Arial" font-weight="700" font-size="23" fill="#ffd54f">${esc(c.name.slice(0, 48))}</text>`;
+        {
+            const tl = partir(c.name, 46);
+            svg += tl.map((l, i) => `<text x="${(ZX0 + ZX1) / 2}" y="${y + (tl.length > 1 ? 30 + i * 24 : 38)}" text-anchor="middle" font-family="Segoe UI, Arial" font-weight="700" font-size="${tl.length > 1 ? 20 : 23}" fill="#ffd54f">${esc(l)}</text>`).join('');
+        }
+        if (!m.lineas.length && !m.anyVer) {
+            svg += `<text x="${(ZX0 + ZX1) / 2}" y="${y + m.alto / 2 + 22}" text-anchor="middle" font-family="Segoe UI, Arial" font-weight="800" font-size="19" fill="#7CF29A">NO CARDS NEEDED — just do what the title says</text>`;
+        }
         // 2) Cartas: cada linea centrada en su zona; bloque centrado en alto.
         const altoBloque = (m.anyVer ? 34 : 0) + m.lineas.length * LINEA;
         let ly = Math.round(y + TITULO + Math.max(0, (m.alto - TITULO - 12 - altoBloque) / 2));
@@ -161,8 +189,8 @@ async function armarTarjetaMisiones({ expansion, pagina = 0, imagenCarta }) {
                 const meta = await sharp(img).metadata();
                 capas.push({ input: img, left: RX0 + Math.round((ICO - meta.width) / 2), top: Math.round(ry + (RFILA - 8 - meta.height) / 2) });
             }
-            const largo = etiqueta.length > 20;
-            svg += `<text x="${RX0 + ICO + 14}" y="${ry + RFILA / 2 + 3}" font-family="Segoe UI, Arial" font-weight="700" font-size="${largo ? 17 : 20}" fill="#ffffff">${esc(etiqueta.slice(0, 30))}</text>`;
+            void etiqueta;
+            svg += etiquetaPremio(RX0 + ICO + 14, ry + RFILA / 2 - 4, r, r.qty ? 18 : 22);
             if (r.qty) svg += `<text x="${RX1}" y="${ry + RFILA / 2 + 4}" text-anchor="end" font-family="Segoe UI, Arial" font-weight="800" font-size="24" fill="#7CF29A">x${r.qty}</text>`;
             ry += RFILA;
         }
@@ -181,7 +209,7 @@ async function armarDetalleMision({ expansion, indice, imagenCarta }) {
     const exp = buscar(expansion);
     const c = exp?.collections[indice];
     if (!c) return null;
-    const { logos } = datos();
+    // logo de cada premio: r.logo (archivo en assets/missions)
     const W = 1100, PAD = 34, CW = 86, CH = 120, GAP = 10, POR_FILA = 7;
     const ZX0 = PAD + 6, ZX1 = 740, RX0 = 772, RX1 = W - PAD - 4, ICO = 72, RFILA = 86;
     const capas = [];
@@ -213,9 +241,15 @@ async function armarDetalleMision({ expansion, indice, imagenCarta }) {
 <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#151a2e"/><stop offset="1" stop-color="#0d1020"/></linearGradient></defs>
 <rect width="${W}" height="${H}" rx="26" fill="url(#bg)"/>
 <text x="${PAD}" y="56" font-family="Segoe UI, Arial" font-size="19" fill="#9aa3c7" letter-spacing="1.5">${esc(exp.expansion.toUpperCase())} · MISSION ${indice + 1}/${exp.collections.length}</text>
-<text x="${PAD}" y="100" font-family="Segoe UI, Arial" font-weight="800" font-size="32" fill="#ffd54f">${esc(c.name.slice(0, 50))}</text>
+${partir(c.name, 46).map((l, i, a) => `<text x="${PAD}" y="${a.length > 1 ? 92 + i * 32 : 100}" font-family="Segoe UI, Arial" font-weight="800" font-size="${a.length > 1 ? 27 : 32}" fill="#ffd54f">${esc(l)}</text>`).join('')}
 <line x1="${PAD}" y1="${TOP - 22}" x2="${W - PAD}" y2="${TOP - 22}" stroke="#2c3560" stroke-width="2"/>`;
     let y = TOP;
+    if (!juntos.length) {
+        // Mision de texto (abrir X sobres, registrar X cartas...): el titulo ya dice que hacer.
+        svg += `<rect x="${ZX0}" y="${y + 10}" width="${ZX1 - ZX0 - 20}" height="110" rx="18" fill="#1d2340" stroke="#2c3560"/>
+<text x="${(ZX0 + ZX1 - 20) / 2}" y="${y + 58}" text-anchor="middle" font-family="Segoe UI, Arial" font-weight="800" font-size="22" fill="#7CF29A">NO CARDS NEEDED</text>
+<text x="${(ZX0 + ZX1 - 20) / 2}" y="${y + 92}" text-anchor="middle" font-family="Segoe UI, Arial" font-size="18" fill="#c7d0ff">Just do what the title says to get the rewards.</text>`;
+    }
     for (const b of juntos) {
         if (b.texto) {
             const w = b.texto.length * 10 + 36;
@@ -237,15 +271,14 @@ async function armarDetalleMision({ expansion, indice, imagenCarta }) {
     let ry = TOP + 36;
     for (const r of c.rewards) {
         const base = r.item.replace(/\s*\(.*\)$/, '');
-        const archivo = ICONOS_BOT[base] ? path.join(__dirname, 'assets', 'element', ICONOS_BOT[base]) : logos[r.item] ? path.join(DIR, logos[r.item]) : null;
+        const archivo = ICONOS_BOT[base] ? path.join(__dirname, 'assets', 'element', ICONOS_BOT[base]) : r.logo ? path.join(DIR, r.logo) : null;
         if (archivo && fs.existsSync(archivo)) {
             const redondo = ['icon', 'binders', 'playmats', 'sleeves'].includes(r.type);
             let s = sharp(archivo).resize(ICO, ICO, { fit: redondo ? 'cover' : 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } });
             if (redondo) s = s.composite([{ input: Buffer.from(`<svg width="${ICO}" height="${ICO}"><rect width="${ICO}" height="${ICO}" rx="${r.type === 'icon' ? ICO / 2 : 12}"/></svg>`), blend: 'dest-in' }]);
             capas.push({ input: await s.png().toBuffer(), left: RX0, top: ry });
         }
-        const etiqueta = PREFIJO[r.type] ? `${PREFIJO[r.type]}: ${r.item}` : base;
-        svg += `<text x="${RX0 + ICO + 14}" y="${ry + ICO / 2 + 7}" font-family="Segoe UI, Arial" font-weight="700" font-size="${etiqueta.length > 14 ? 16 : 19}" fill="#ffffff">${esc(etiqueta.slice(0, 26))}</text>`;
+        svg += etiquetaPremio(RX0 + ICO + 14, ry + ICO / 2, r, r.qty ? 14 : 18);
         if (r.qty) svg += `<text x="${RX1}" y="${ry + ICO / 2 + 8}" text-anchor="end" font-family="Segoe UI, Arial" font-weight="800" font-size="24" fill="#7CF29A">x${r.qty}</text>`;
         ry += RFILA;
     }

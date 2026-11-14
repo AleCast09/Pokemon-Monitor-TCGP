@@ -24,6 +24,11 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-14 (3) — diegoikrew123 — All Missions: un logo por premio
+- Premios con el mismo nombre (ej. "Mythical Island Mew" tapete/fundas/carpeta) tenían el mismo logo: ahora cada premio trae su campo `logo` (archivo por ruta de Serebii) en themed_collections.json; se quitó rewards_icons.json.
+- Títulos y nombres de premios en 2 líneas (tipo arriba: PLAYMAT, BINDER...); misiones sin cartas dicen "NO CARDS NEEDED".
+- Publicado; Ale pidió apagar la PC después (su bot queda apagado hasta que la prenda; otro host toma el turno).
+
 ### 2026-11-14 (2) — diegoikrew123 — Bot: 🙋 pedido de ayuda en ⚡ Share/Trade
 - Si la PC del dueño de las cuentas está offline (ej. un amigo usa las de Ale): mensaje privado "🔴 PC offline" + **🙋 Ask for help** (ya no un error).
 - El pedido menciona **solo** a miembros con Monitor Link en línea que tienen esa carta; uno presiona **🤝 Lend my accounts**; quien pidió presiona **⚡ Use their accounts**, elige cuenta y corre el ⚡ como el que presta (su Monitor Link da la XML). Pedido vence a los 30 min. Código: `manejarAyuda` en fast-transfer.js.
