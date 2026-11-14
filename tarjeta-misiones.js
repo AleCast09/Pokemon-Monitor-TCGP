@@ -27,8 +27,11 @@ const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 function partir(texto, max) {
     const t = String(texto);
     if (t.length <= max) return [t];
-    const corte = t.lastIndexOf(' ', max);
-    const a = t.slice(0, corte > max * 0.5 ? corte : max).trim();
+    // Solo se corta en un espacio, nunca en medio de una palabra (Ale 2026-11-14: "Wonder Hourgla ss").
+    let corte = t.lastIndexOf(' ', max);
+    if (corte <= 0) corte = t.indexOf(' ', max);
+    if (corte <= 0) return [t];
+    const a = t.slice(0, corte).trim();
     let b = t.slice(a.length).trim();
     if (b.length > max) b = b.slice(0, max - 1).trim() + '…';
     return [a, b];
