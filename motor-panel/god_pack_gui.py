@@ -404,6 +404,12 @@ class NoScrollDoubleSpinBox(QDoubleSpinBox):
         event.ignore()
 
 
+# (Ale 2026-11-14) The mouse wheel over a list changed the setting by itself: lists only change by clicking.
+class NoScrollComboBox(QComboBox):
+    def wheelEvent(self, event):
+        event.ignore()
+
+
 class GodPackGui(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -708,14 +714,14 @@ class GodPackGui(QMainWindow):
         page, lay = self._make_scrollable_tab()
 
         c_pack, l_pack = self._make_card("📦 Pack & Mode Selection")
-        self.w_run_mode = QComboBox()
+        self.w_run_mode = NoScrollComboBox()
         self.w_run_mode.addItem("God Pack Farming (Send FR + Wishlist Match)", "godpack")
         self.w_run_mode.addItem("Open Packs Only (No FR, No Wishlist)", "packs-only")
         self.w_run_mode.currentIndexChanged.connect(self._update_mode_enabled)
         self.w_run_mode.currentIndexChanged.connect(self._apply_mode_timing)
         self._add_field(l_pack, "Run Mode", self.w_run_mode)
 
-        self.w_pack = QComboBox()
+        self.w_pack = NoScrollComboBox()
         for pack in paid_pack_options():
             label = f"[{pack.get('sku_id', '?')}] {pack.get('name', '?')} — {pack['pack_id']}"
             self.w_pack.addItem(label, pack["pack_id"])
@@ -765,13 +771,13 @@ class GodPackGui(QMainWindow):
         lay.addWidget(c_pack)
 
         c_wish, l_wish = self._make_card("🌟 Wishlist & Threshold (God Pack Mode)")
-        self.w_farming_mode = QComboBox()
+        self.w_farming_mode = NoScrollComboBox()
         self.w_farming_mode.addItem("Only GP (99% of members)", "only_gp")
         self.w_farming_mode.addItem("GP & Double (2xSR normal packs too)", "gp_double")
         self.w_farming_mode.addItem("GP & Single or Double (1xSR or 2xSR normal packs)", "gp_single")
         self._add_field(l_wish, "Farming Mode", self.w_farming_mode)
 
-        self.w_pack_power_min = QComboBox()
+        self.w_pack_power_min = NoScrollComboBox()
         tier_descriptions = [
             ("5/5", "5/5 ☆☆☆☆☆ Perfect (all 2-star)"),
             ("4/5", "4/5 ☆☆☆☆ Excellent (four 2-star)"),
@@ -984,7 +990,7 @@ class GodPackGui(QMainWindow):
 
         l_time.addLayout(grid_t)
 
-        self.w_sort_order = QComboBox()
+        self.w_sort_order = NoScrollComboBox()
         self.w_sort_order.addItem("Filename (alphabetical, default)", "filename")
         self.w_sort_order.addItem("Oldest first (longest since last pack)", "oldest")
         self.w_sort_order.addItem("Newest first (most recently drained)", "newest")
@@ -999,7 +1005,7 @@ class GodPackGui(QMainWindow):
         grid_pr = QGridLayout()
         grid_pr.setSpacing(8)
 
-        self.w_proxy_scheme = QComboBox()
+        self.w_proxy_scheme = NoScrollComboBox()
         self.w_proxy_scheme.addItems(["http", "https", "socks5"])
         grid_pr.addWidget(self._wrap_field("Proxy Scheme", self.w_proxy_scheme), 0, 0)
 
@@ -2507,16 +2513,16 @@ class GodPackGui(QMainWindow):
         head.setStyleSheet(f"color: {D['GOLD']}; font-size: 18px; font-weight: 900;")
         barra.addWidget(head)
         barra.addStretch(1)
-        w_when = QComboBox()
+        w_when = NoScrollComboBox()
         w_when.addItem("This session", "session")
         w_when.addItem("Today", "today")
         w_when.addItem("Last 7 days", "week")
         w_when.addItem("All", "all")
         w_when.setCurrentIndex(0 if self._live.get("t0") else 1)
-        w_hosts = QComboBox()
+        w_hosts = NoScrollComboBox()
         w_hosts.addItem("All hosts", "all")
         w_hosts.addItem("Only this PC", "mine")
-        w_kind = QComboBox()
+        w_kind = NoScrollComboBox()
         w_kind.addItem("✅ + ❌", "all")
         w_kind.addItem("Only ✅ usable", "ok")
         w_kind.addItem("Only ❌ not usable", "bad")
