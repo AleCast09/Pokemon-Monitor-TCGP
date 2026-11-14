@@ -307,6 +307,18 @@ async function ejecutar(interaction, { cartaId, friendId, fileName, modo }) {
         const xmls = await prepararXmls(miembro, [fileName], runId);
         limpiezas.push(xmls.limpiar);
         const rutaXml = rutaXmlDe(xmls.mapa, fileName);
+        // (Ale 2026-11-14) La PC del dueño de las cuentas esta apagada (ej. un amigo usa las de Ale): en vez
+        // de solo "no", un mensaje que solo ve quien pidio y el boton para pedir ayuda a los que estan en linea.
+        if (!rutaXml && xmls.offline && miembro) {
+            ctx.final = 'offline';
+            const quien = miembro === interaction.user.id ? 'Your' : `<@${miembro}>'s`;
+            const ayuda = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`fast_help::${cartaId}::${friendId}::${modo}`.slice(0, 100)).setLabel('🙋 Ask for help').setStyle(ButtonStyle.Primary));
+            return await editar(interaction, { content: '', components: [ayuda], embeds: [new EmbedBuilder().setColor(0xE74C3C)
+                .setTitle('🔴 PC offline')
+                .setDescription(`${quien} PC is **offline** — those accounts can't send cards right now.\n\n` +
+                    `Press **🙋 Ask for help**: the members with Monitor Link **online** that have **${ctx.nombreCarta}** get a mention, and one of them can lend you an account to send it.`)] }, true);
+        }
         if (!rutaXml) {
             ctx.estados.login = 'error';
             ctx.detalles.login = xmls.error || (miembro ? `${fileName} was not found in your Saved folder` : `XML ${fileName} not found in the XML Accounts Path`);
@@ -719,7 +731,7 @@ async function prepararXmls(miembro, nombres, runId) {
     try {
         archivos = await deps.pedirXml(miembro, nombres);
     } catch (e) {
-        return { mapa: new Map(), limpiar, error: e.message === 'offline'
+        return { mapa: new Map(), limpiar, offline: e.message === 'offline', error: e.message === 'offline'
             ? 'Your Monitor Link is not running — open it on your PC and try again'
             : 'Your Monitor Link did not answer in time — check it is running and try again' };
     }
@@ -1440,6 +1452,7 @@ async function manejarInteraccion(interaction) {
         });
         return true;
     }
+    if (/^fast_(help|lend|use|usecta)::/.test(id)) return await manejarAyuda(interaction);
     if (!id.startsWith('fast_go::')) return false;
     if (!habilitado(interaction.guildId)) {
         await interaction.reply({ content: '❌ Fast Share/Trade is not available here.', ephemeral: true });
@@ -1462,6 +1475,102 @@ async function manejarInteraccion(interaction) {
     }
     ejecutar(interaction, { cartaId, friendId, fileName, modo });
     return true;
+}
+
+// ===== 🙋 Pedido de ayuda (Ale 2026-11-14) =====
+// La PC del dueño de las cuentas esta apagada: se pide ayuda mencionando SOLO a los miembros con Monitor Link
+// en linea que tienen esa carta. Uno presta sus cuentas (🤝), y quien pidio manda la carta desde una de ellas
+// a su Main con el ⚡ de siempre (el Monitor Link de quien presta da la XML, como en cualquier ⚡).
+const pedidosAyuda = new Map();   // id -> { pide, cartaId, friendId, modo, guildId, ayuda, ts }
+const PEDIDO_MS = 30 * 60 * 1000;
+
+async function manejarAyuda(interaction) {
+    const id = interaction.customId;
+    const nombre = async (cartaId) => (await Promise.resolve(deps.nombreCarta?.(cartaId)).catch(() => null)) || cartaId;
+
+    if (id.startsWith('fast_help::')) {
+        const [, cartaId, friendId, modo] = id.split('::');
+        await interaction.deferUpdate().catch(() => {});
+        const carta = await nombre(cartaId);
+        const enLinea = (await deps.vinculados().catch(() => [])).filter(v => v.enLinea && String(v.discordId) !== interaction.user.id);
+        const conCarta = [];
+        for (const v of enLinea) {
+            const cuentas = await deps.cuentasConCarta(v.discordId, cartaId).catch(() => []);
+            if (cuentas.length) conCarta.push(String(v.discordId));
+        }
+        if (!conCarta.length) {
+            await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xE67E22).setTitle('🙋 Nobody can help right now')
+                .setDescription(`No member with Monitor Link **online** has **${carta}** at the moment. Try again later.`)], components: [] }).catch(() => {});
+            return true;
+        }
+        const pid = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        pedidosAyuda.set(pid, { pide: interaction.user.id, cartaId, friendId, modo, guildId: interaction.guildId, ayuda: null, ts: Date.now(), candidatos: conCarta });
+        const tipo = MODO_A_FAST[modo] === 'share' ? 'Share' : 'Trade';
+        const msg = await interaction.followUp({
+            content: `🙋 <@${interaction.user.id}> needs **${carta}** (${tipo}) — can someone lend an account that has it? ${conCarta.slice(0, 15).map(d => `<@${d}>`).join(' ')}`,
+            components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`fast_lend::${pid}`).setLabel('🤝 Lend my accounts').setStyle(ButtonStyle.Success))],
+            allowedMentions: { users: conCarta.slice(0, 15) }
+        }).catch(e => { console.error('DEBUG: help request:', e?.message || e); return null; });
+        if (msg) {
+            pedidosAyuda.get(pid).msg = msg;
+            setTimeout(() => { const p = pedidosAyuda.get(pid); if (p && !p.ayuda) { pedidosAyuda.delete(pid); msg.delete().catch(() => {}); } }, PEDIDO_MS);
+        }
+        await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x2ECC71).setTitle('🙋 Help requested')
+            .setDescription(`${conCarta.length} member(s) online with **${carta}** got a mention. You'll see a button when someone lends you an account.`)], components: [] }).catch(() => {});
+        return true;
+    }
+
+    const pid = id.split('::')[1];
+    const p = pedidosAyuda.get(pid);
+    if (!p) {
+        await interaction.reply({ content: '⌛ This help request expired.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+    const carta = await nombre(p.cartaId);
+
+    if (id.startsWith('fast_lend::')) {
+        if (interaction.user.id === p.pide) return !!(await interaction.reply({ content: '🙂 This is your own request.', ephemeral: true }).catch(() => {}));
+        if (p.ayuda) return !!(await interaction.reply({ content: `✅ <@${p.ayuda}> is already helping.`, ephemeral: true }).catch(() => {}));
+        const enLinea = (await deps.vinculados().catch(() => [])).some(v => String(v.discordId) === interaction.user.id && v.enLinea);
+        const cuentas = enLinea ? await deps.cuentasConCarta(interaction.user.id, p.cartaId).catch(() => []) : [];
+        if (!cuentas.length) {
+            return !!(await interaction.reply({ ephemeral: true, content: enLinea
+                ? `❌ None of your accounts has **${carta}**.` : '❌ Your Monitor Link has to be **online** to lend accounts.' }).catch(() => {}));
+        }
+        p.ayuda = interaction.user.id;
+        await interaction.update({
+            content: `🤝 <@${p.ayuda}> lent their accounts to <@${p.pide}> for **${carta}**.`,
+            components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`fast_use::${pid}`).setLabel('⚡ Use their accounts').setStyle(ButtonStyle.Primary))],
+            allowedMentions: { users: [p.pide] }
+        }).catch(() => {});
+        await interaction.followUp({ content: `Thanks! <@${p.pide}> can now send **${carta}** from one of your accounts.`, ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    if (id.startsWith('fast_use::')) {
+        if (interaction.user.id !== p.pide) return !!(await interaction.reply({ content: `🔒 Only <@${p.pide}> can use this.`, ephemeral: true }).catch(() => {}));
+        const cuentas = await deps.cuentasConCarta(p.ayuda, p.cartaId).catch(() => []);
+        if (!cuentas.length) return !!(await interaction.reply({ content: `❌ <@${p.ayuda}>'s accounts don't have **${carta}** anymore.`, ephemeral: true }).catch(() => {}));
+        const menu = new StringSelectMenuBuilder().setCustomId(`fast_usecta::${pid}`).setPlaceholder('Which account?')
+            .addOptions(cuentas.slice(0, 25).map(c => ({ label: String(c.fileName).replace(/\.xml$/i, '').slice(0, 100), description: `x${c.cantidad}`, value: String(c.fileName).slice(0, 100) })));
+        await interaction.reply({ ephemeral: true, content: `🤝 <@${p.ayuda}> lent you their accounts that have **${carta}** — pick one and the ⚡ ${MODO_A_FAST[p.modo] === 'share' ? 'Share' : 'Trade'} starts:`,
+            components: [new ActionRowBuilder().addComponents(menu)] }).catch(() => {});
+        return true;
+    }
+
+    if (id.startsWith('fast_usecta::')) {
+        if (interaction.user.id !== p.pide) return !!(await interaction.reply({ content: `🔒 Only <@${p.pide}> can use this.`, ephemeral: true }).catch(() => {}));
+        const fileName = interaction.values[0];
+        await interaction.update({ content: '⏳ Starting…', components: [] }).catch(() => {});
+        pedidosAyuda.delete(pid);
+        p.msg?.edit({ content: `✅ <@${p.ayuda}> helped <@${p.pide}> with **${carta}**.`, components: [], allowedMentions: { parse: [] } }).catch(() => {});
+        // El ⚡ corre "como" quien presta: su Monitor Link da la XML y el ajuste de copias queda en sus cuentas.
+        deps.comoMiembro(interaction.guildId, p.ayuda, () => ejecutar(interaction, { cartaId: p.cartaId, friendId: p.friendId, fileName, modo: p.modo }));
+        return true;
+    }
+    return false;
 }
 
 // Hay algun ⚡ corriendo o en fila (para no reiniciar el host en medio, ver host-updater.js).

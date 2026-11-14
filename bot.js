@@ -43,6 +43,14 @@ fastTransfer.init({
     db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
     esComunidad: (guildId) => comunidad.esComunidad(guildId),
     usuarioComunidad: () => comunidad.usuarioActual(),
+    // 🙋 Pedido de ayuda (Ale 2026-11-14): miembros con Monitor Link en linea que tienen la carta; correr
+    // un ⚡ "como" otro miembro (el que presta sus cuentas).
+    comoMiembro: (guildId, userId, fn) => comunidad.contexto.run({ guildId, userId }, fn),
+    vinculados: () => monitorLink.vinculados(),
+    cuentasConCarta: async (discordId, cartaId) => {
+        if (!(await monitorLink.precargar(discordId).catch(() => false))) return [];
+        return monitorLink.cuentasPorCartaDe(discordId, cartaId);
+    },
     pedirXml: (discordId, nombres) => monitorLink.pedirXml(discordId, nombres),
     pedirAccion: (discordId, accion, timeoutMs) => monitorLink.pedirAccion(discordId, accion, timeoutMs),
     // Ajustes de copias (sincronizacion con el juego + lo tradeado), sin tocar los JSON de Kevin/Leanny.
@@ -11823,7 +11831,8 @@ async function manejarInteraccionPrincipal(interaction) {
             interaction._duenoLista = dueno;
             comunidad.contexto.enterWith({ guildId: interaction.guildId, userId: dueno });
             await monitorLink.precargar(dueno).catch(() => false);
-        } else if (dueno && dueno !== interaction.user.id) {
+        } else if (dueno && dueno !== interaction.user.id && !/^fast_(lend|use)::/.test(interaction.customId)) {
+            // (fast_lend/fast_use: pedido de ayuda, lo atiende cualquiera en linea; fast-transfer.js valida quien.)
             return await interaction.reply({ ephemeral: true,
                 content: `🔒 This belongs to <@${dueno}> — only they can use these buttons. Open your own with **📋 View my Wishlist** or **/card**.` }).catch(() => {});
         }
@@ -11957,7 +11966,8 @@ async function manejarInteraccionPrincipal(interaction) {
     // (2026-11-07, Ale) Los botones de la lista de Shinedust de OTRO miembro (Refresh, Claim, Bulk, paginas)
     // no se pueden usar: cada uno usa los de la lista que pidio. (Igual usaban las cuentas de quien tocaba.)
     if ((interaction.isButton() || interaction.isStringSelectMenu())
-        && (interaction.customId.startsWith('fast_') || interaction.customId.startsWith('shinedust_reporte::'))) {
+        && (interaction.customId.startsWith('fast_') || interaction.customId.startsWith('shinedust_reporte::'))
+        && !/^fast_(lend|use)::/.test(interaction.customId)) {
         const dueno = interaction.message?.interactionMetadata?.user?.id || interaction.message?.interaction?.user?.id;
         if (dueno && dueno !== interaction.user.id) {
             return interaction.reply({ content: `🔒 This list belongs to <@${dueno}>. Use **/shinedust** to get your own.`, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => {});
