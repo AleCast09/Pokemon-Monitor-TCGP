@@ -3559,8 +3559,19 @@ async function obtenerMapaCarpetasDriveGoldBot() {
     return await refrescarMapaCarpetasDriveGoldBot();
 }
 
+// (Ale 2026-11-14: Slowpoke de Mega Shine salia "sin borde dorado") Una carta reimpresa se busca primero en su
+// expansion ORIGINAL con su numero ahi (la misma tabla que el HD: assets/override_hd_numbers.json): cardmap trae la
+// expansion de la reimpresion (ej. Deluxe Pack Mega #57) y esa carpeta del Drive dorado no existe.
 async function obtenerImagenGoldBot(cardMap, cartaId) {
-    const info = cardMap?.[cartaId];
+    const original = numerosHdOverrideBot()[cartaId];
+    if (original) {
+        const [exp, num] = original.split('-');
+        const enOriginal = await obtenerImagenGoldEn({ ExpansionID: exp, CollectionNumber: Number(num) }, cartaId);
+        if (enOriginal) return enOriginal;
+    }
+    return obtenerImagenGoldEn(cardMap?.[cartaId], cartaId);
+}
+async function obtenerImagenGoldEn(info, cartaId) {
     if (!info?.ExpansionID || !info?.CollectionNumber || !GOOGLE_DRIVE_API_KEY_BOT || !GOOGLE_DRIVE_HD_ENABLED_BOT) return null;
 
     const localId = String(info.CollectionNumber).padStart(3, '0');
