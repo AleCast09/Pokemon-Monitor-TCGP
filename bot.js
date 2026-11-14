@@ -27,7 +27,89 @@ const configScript = require('./config.js');
 const { chequearActualizaciones, avisarActualizacionAplicadaSiHaceFalta, avisarActualizacionFallidaSiHaceFalta, obtenerVersionLocal, obtenerVersionRemota, esVersionMasNueva, descargarActualizacion, describirError, notasParaEmbed, obtenerDestinoNotificacion } = require('./update-checker.js');
 const { obtenerMapaEmojisGuild, FUENTES_EMOJIS, obtenerErroresEmojisGuild } = require('./guild-emojis.js');
 const { iniciarAutoSyncCardTypes } = require('./card-types-sync.js');
+const { sincronizarDatosCartas } = require('./card-data-sync.js');
 iniciarAutoSyncCardTypes();
+// Fast Share/Trade sin MuMu (2026-10-23): todo en fast-transfer.js, apagado salvo que el .env
+// tenga FAST_TRANSFER_ENGINE_DIR y sea el servidor propio.
+const fastTransfer = require('./fast-transfer.js');
+const infoCartaBulkCache = { ruta: null, ts: 0, cm: null, en: null };
+// Modo comunidad (community.js): solo para los servers de COMMUNITY_GUILD_IDS del .env.
+const comunidad = require('./community.js');
+// Monitor Link: el programa de cada miembro sube el resumen de SUS cartas (monitor-link-server.js).
+const monitorLink = require('./monitor-link-server.js');
+// Turno de host en la comunidad: cada host con su propio bot, uno solo atiende a la vez.
+const hostComunidad = require('./community-host.js');
+fastTransfer.init({
+    db, esServidorPropio, buscarArchivoXmlPorNombre, registrarTransferenciaCarta, obtenerMapaEmojisGuild,
+    esComunidad: (guildId) => comunidad.esComunidad(guildId),
+    usuarioComunidad: () => comunidad.usuarioActual(),
+    // 🙋 Pedido de ayuda (Ale 2026-11-14): miembros con Monitor Link en linea que tienen la carta; correr
+    // un ⚡ "como" otro miembro (el que presta sus cuentas).
+    comoMiembro: (guildId, userId, fn) => comunidad.contexto.run({ guildId, userId }, fn),
+    vinculados: () => monitorLink.vinculados(),
+    cuentasConCarta: async (discordId, cartaId) => {
+        if (!(await monitorLink.precargar(discordId).catch(() => false))) return [];
+        return monitorLink.cuentasPorCartaDe(discordId, cartaId);
+    },
+    pedirXml: (discordId, nombres) => monitorLink.pedirXml(discordId, nombres),
+    pedirAccion: (discordId, accion, timeoutMs) => monitorLink.pedirAccion(discordId, accion, timeoutMs),
+    // Ajustes de copias (sincronizacion con el juego + lo tradeado), sin tocar los JSON de Kevin/Leanny.
+    cartasCrudasMiembro: (discordId, fileName) => monitorLink.cartasCrudasMiembro(discordId, fileName),
+    anotarAjusteMiembro: (discordId, fileName, cambio) => monitorLink.anotarAjusteMiembro(discordId, fileName, cambio),
+    guardarAjusteLocal: (fileName, diferencia) => guardarAjusteLocal(fileName, diferencia),
+    // 📦 Bulk trade
+    cartasMiembro: (discordId, fileName) => monitorLink.cartasDeCuentaMiembro(discordId, fileName),
+    // Catalogo leido una vez cada 10 min (se consulta por cada carta de cada cuenta).
+    infoCartaBulk: (cartaId, rutaMasterPath) => {
+        const cache = infoCartaBulkCache;
+        if (!cache.cm || cache.ruta !== rutaMasterPath || Date.now() - cache.ts > 10 * 60 * 1000) {
+            cache.ruta = rutaMasterPath;
+            cache.ts = Date.now();
+            cache.cm = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'cardmaster.json')) || {} : {};
+            cache.en = rutaMasterPath ? leerJsonSeguroConTimeout(path.join(rutaMasterPath, 'en_US.json')) || {} : {};
+        }
+        const info = cache.cm[cartaId];
+        const tipo = tipoRarezaDesdeInfo(info);
+        return { tipo, rara: !!tipo && !tipo.endsWith('-diamond'), tradeable: RAREZAS_TRADEABLES.includes(tipo), nombre: (info?.Name && cache.en[info.Name]) || cartaId };
+    },
+    destinosTrade: async (interaction) => amigosParaInteraccion(interaction, (await obtenerRutasInject(interaction.guildId)).rutaIni),
+    // ⚡ Gold trade: cuentas con muchas copias de una carta (mismo umbral que Gold Cards). Las copias
+    // son las DISPONIBLES: las del JSON menos las que el bot ya transfirio (registro de /transfers), asi
+    // una cuenta que ya mando copias no ofrece de mas aunque su JSON todavia no se haya enterado.
+    cuentasGoldDe: async (userId, cartaId) => {
+        const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(userId);
+        if (!mapaCopias) return [];
+        const transferidas = comunidad.usuarioActual() ? {} : await transferenciasPorCuenta(cartaId);
+        return (mapaCopias[cartaId] || [])
+            .map(r => {
+                const ya = transferidas[normalizarCuentaTransferencia(r.fileName)] || 0;
+                return { fileName: r.fileName, enJson: r.cantidad, transferidas: ya, cantidad: Math.max(0, r.cantidad - ya) };
+            })
+            .filter(r => r.cantidad >= umbral)
+            .sort((a, b) => b.cantidad - a.cantidad);
+    },
+    cuentasMiembro: (discordId) => monitorLink.cuentasDe(discordId),
+    auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
+    // ⚡ Fast Farm: mismas reglas y tablas que el Farm Tickets con MuMu.
+    formatearFriendId, ticketsFarmeadosHoy, cuentasPoolFarmTickets, cuentasYaUsadasParaId,
+    sortearCuentasFarm, registrarLikeDado, guardarTandaFarm,
+    farmMaxDiario: () => FARM_TICKETS_MAX_DIARIO,
+    buscarShinedustTodasCuentas,
+    etiquetasInventario: () => ETIQUETAS_INVENTARIO,
+    // En comunidad el nombre sale del registro de wr98 de quien hizo el pedido (nunca de la lista
+    // de amigos guardados de esta PC).
+    nombreAmigo: async (guildId, friendId, userId) => {
+        if (comunidad.esComunidad(guildId)) {
+            const r = userId ? await comunidad.registroDe(userId).catch(() => null) : null;
+            if (r && (r.main_id === friendId || r.sec_id === friendId)) return r.name;
+            // 🎁 Regalo de tickets: el perfil es de OTRO miembro.
+            return await comunidad.nombreDeFriendId(friendId).catch(() => null);
+        }
+        return parsearListaFriends((await obtenerRutasInject(guildId)).rutaIni).find(f => f.id === friendId)?.label || null;
+    },
+    rutaMaster: async () => (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url,
+    nombreCarta: async id => resolverNombreCarta(id, (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url)
+});
 
 // Trade quedo bloqueado por completo para TODOS los servidores el 2026-08-30 mientras
 // el mecanismo de wishlist/Main Trade estaba en pruebas en vivo (ver los comentarios
@@ -132,7 +214,8 @@ const COMANDO_CONFIG = {
     card_wishlist: { tipo: 'cmd_card_wishlist', label: 'Cards Wishlist', titulo: '💖 Cards Wishlist', descripcion: 'Exclusive channel for /wishlist.' },
     extract_xlm: { tipo: 'cmd_extract_xlm', label: 'Extract XML', titulo: '📄 Extract XML', descripcion: 'Exclusive channel for /extract xml.' },
     run_instance: { tipo: 'cmd_run_instance', label: 'Trading', titulo: '🔄 Trading', descripcion: 'Exclusive channel for /run instance.' },
-    card_gold: { tipo: 'cmd_card_gold', label: 'Gold Cards', titulo: '🏆 Gold Cards', descripcion: 'Exclusive channel for /goldcards.' }
+    card_gold: { tipo: 'cmd_card_gold', label: 'Gold Cards', titulo: '🏆 Gold Cards', descripcion: 'Exclusive channel for /goldcards.' },
+    all_missions: { tipo: 'cmd_all_missions', label: 'All Missions', titulo: '🎯 All Missions', descripcion: 'Themed collections of every expansion and their rewards.' }
 };
 
 const ETIQUETAS_TIPO_WEBHOOK = {
@@ -605,7 +688,7 @@ async function transferenciasPorCuenta(cartaId) {
 async function auditarStockCarta(fileName, cartaId) {
     const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
     const mapaCopias = construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url);
-    const transferidasPorCuenta = await transferenciasPorCuenta(cartaId);
+    const transferidasPorCuenta = comunidad.usuarioActual() ? {} : await transferenciasPorCuenta(cartaId);
     const cuenta = normalizarCuentaTransferencia(fileName);
     const registros = (mapaCopias?.[cartaId] || []).map(r => {
         const clave = normalizarCuentaTransferencia(r.fileName);
@@ -668,7 +751,18 @@ async function construirEmbedTransferencias(discordId, pagina, guild = null) {
 // mantener una lista propia y paralela. Decidido asi el 2026-09-26 tras ver que ya existia:
 // una segunda lista obligaria al usuario a registrar el mismo ID dos veces y a mantenerlas
 // sincronizadas a mano.
-async function idsFarmRegistrados(discordId) {
+async function idsFarmRegistrados(discordId, userId = null) {
+    // Comunidad (community.js): solo los perfiles que ESE miembro registro con wr98 (su Main y su
+    // secundaria), nunca los amigos guardados de esta PC ni los de otros miembros.
+    if (comunidad.esComunidad(discordId)) {
+        if (!userId) return [];
+        try {
+            return (await destinosComunidad(userId)).map(d => ({ friend_id: d.id, alias: d.label }));
+        } catch (e) {
+            console.error('DEBUG: no se pudo leer el registro de wr98 para Farm Tickets:', e?.message || e);
+            return [];
+        }
+    }
     const rutaIniCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_inject_ini'`);
     const friends = parsearListaFriends(rutaIniCfg?.webhook_url || undefined);
     // Sin repetidos (2026-10-03, bug real de un usuario: "Could not open the panel" siempre): el
@@ -764,6 +858,9 @@ function textoTiempoRestante(ms) {
 // Son los XML de cuentas, las mismas que usa el autotrade. Se listan por nombre de archivo,
 // que es la clave con la que se guardan en likes_dados.
 async function cuentasPoolFarmTickets() {
+    // Comunidad: las cuentas del miembro (resumen de su Monitor Link), nunca las de esta PC.
+    const usuarioComunidad = comunidad.usuarioActual();
+    if (usuarioComunidad) return monitorLink.cuentasDe(usuarioComunidad).map(c => c.fileNameXml);
     const cfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
     const ruta = cfg?.webhook_url;
     if (!ruta || !fs.existsSync(ruta)) return [];
@@ -792,9 +889,9 @@ async function cuentasPoolFarmTickets() {
 // vuelve a estar disponible, y cuantas cuentas le quedan sin usar. Cada ID lleva su propia
 // cuenta de todo, porque el limite de 5 tickets diarios es POR PERFIL que recibe los likes,
 // no global (confirmado con Ale).
-async function construirPanelFarmTickets(discordId) {
+async function construirPanelFarmTickets(discordId, userId = null) {
     await asegurarTablasFarmTickets();
-    const ids = await idsFarmRegistrados(discordId);
+    const ids = await idsFarmRegistrados(discordId, userId);
     const pool = await cuentasPoolFarmTickets();
 
     const embed = new EmbedBuilder()
@@ -802,7 +899,9 @@ async function construirPanelFarmTickets(discordId) {
         .setColor(0xF0A93A);
 
     if (!pool.length) {
-        embed.setDescription('❌ No accounts found. Set the **XML accounts folder** in the setup panel first.');
+        embed.setDescription(comunidad.usuarioActual()
+            ? '❌ Your accounts haven\'t reached the bot yet. Open **Monitor Link** on your PC (it sends them within a minute) — if you never linked it, type **/link**.'
+            : '❌ No accounts found. Set the **XML accounts folder** in the setup panel first.');
         return { embeds: [embed], components: [] };
     }
 
@@ -854,9 +953,20 @@ async function construirPanelFarmTickets(discordId) {
     // Sin botones de agregar/quitar a proposito: la lista de amigos se administra desde el
     // panel de Settings (Status ID -- Saved Friends), que es de donde se lee. Tener aqui una
     // segunda forma de editarla solo llevaria a que las dos se desincronicen.
-    componentes.push(new ActionRowBuilder().addComponents(
+    const filaBotonesFarm = new ActionRowBuilder();
+    // Comunidad (pedido de Ale): regalar tickets a otro miembro del registro de wr98. La Main propia
+    // ya sale en el menu de arriba, asi que no lleva atajo aparte.
+    if (comunidad.esComunidad(discordId)) {
+        filaBotonesFarm.addComponents(
+            new ButtonBuilder().setCustomId('farm_regalo').setLabel('🎁 Gift to a member').setStyle(ButtonStyle.Primary),
+            // (Ale 2026-11-07) Cualquier perfil, pegando su ID de 16 digitos (aunque no este en el registro).
+            new ButtonBuilder().setCustomId('farm_pegar_id').setLabel('📋 Paste an ID').setStyle(ButtonStyle.Primary)
+        );
+    }
+    filaBotonesFarm.addComponents(
         new ButtonBuilder().setCustomId('farmtickets_refrescar').setLabel('🔄 Refresh').setStyle(ButtonStyle.Secondary)
-    ));
+    );
+    componentes.push(filaBotonesFarm);
     return { embeds: [embed], components: componentes };
 }
 
@@ -1236,13 +1346,21 @@ function entradasExtraPorExpansionCompartida(base, cardMap, expansiones) {
 }
 
 function obtenerCartasWishlist(rutaWishlistCfg, rutaMasterCfg) {
-    const archivoWishlist = resolverArchivoWishlist(rutaWishlistCfg?.webhook_url);
-    if (!archivoWishlist) return null;
+    let ids;
+    const usuarioComunidad = comunidad.usuarioActual();
+    if (usuarioComunidad) {
+        // Comunidad: la wishlist que subio su Monitor Link, nunca la de esta PC.
+        ids = monitorLink.wishlistDe(usuarioComunidad);
+        if (!ids) return null;
+    } else {
+        const archivoWishlist = resolverArchivoWishlist(rutaWishlistCfg?.webhook_url);
+        if (!archivoWishlist) return null;
 
-    const wishlistData = leerJsonSeguro(archivoWishlist);
-    const ids = Array.isArray(wishlistData?.cards)
-        ? wishlistData.cards.map(c => c?.id || c?.code || c?.cardId || c?.cardID).filter(Boolean)
-        : [];
+        const wishlistData = leerJsonSeguro(archivoWishlist);
+        ids = Array.isArray(wishlistData?.cards)
+            ? wishlistData.cards.map(c => c?.id || c?.code || c?.cardId || c?.cardID).filter(Boolean)
+            : [];
+    }
 
     const rutaMaster = rutaMasterCfg?.webhook_url;
     const cardmaster = rutaMaster ? leerJsonSeguroConTimeout(path.join(rutaMaster, 'cardmaster.json')) : null;
@@ -1351,7 +1469,10 @@ async function obtenerCartasGoldCacheadas(discordId) {
 
     const umbral = await obtenerUmbralGold(discordId);
     const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-    const claveCache = `${rutaMasterPath}::${rutaJsonCfg?.webhook_url || ''}::${umbral}`;
+    // En la comunidad cada miembro tiene SUS cartas: la cache va por usuario (antes era una sola y
+    // un miembro podia ver las Gold Cards del que busco primero).
+    const usuarioGold = comunidad.usuarioActual();
+    const claveCache = `${rutaMasterPath}::${rutaJsonCfg?.webhook_url || ''}::${umbral}::${usuarioGold || ''}::${usuarioGold ? monitorLink.resumenTs?.(usuarioGold) : ''}`;
     if (!_cartasGoldCacheBot || _cartasGoldCacheBot.clave !== claveCache) {
         const mapaCopias = construirMapaCopiasPorCartaCacheado(rutaJsonCfg?.webhook_url);
         const cartasGold = mapaCopias ? cartas.filter(c => cuentasGoldParaCarta(mapaCopias, c.id, umbral).length > 0) : [];
@@ -2163,9 +2284,13 @@ async function construirEmbedElementosPorCategoria(cartas, expansion, categoria,
 // Se llama SIEMPRE despues de deferUpdate()/deferReply(), nunca antes.
 async function avisarCargandoCartas(interaction) {
     try {
+        // Si otra persona esta cargando sus cartas, se avisa que hay que esperar el turno.
+        const antes = _collagesEnCurso;
         await interaction.editReply({
             embeds: [new EmbedBuilder()
-                .setDescription('⏳ **Please wait a few seconds — loading your data...**')
+                .setDescription(antes > 0
+                    ? `⏳ **Someone else is loading their cards — you're #${antes + 1} in line.** It starts by itself, please wait...`
+                    : '⏳ **Please wait a few seconds — loading your data...**')
                 .setColor(0xE91E63)],
             components: [],
             files: [],
@@ -2362,6 +2487,71 @@ async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, el
         payload.attachments = [];
     }
     return payload;
+}
+
+// ===== 🎯 All Missions (Ale 2026-11-14) =====
+const tarjetaMisiones = require('./tarjeta-misiones.js');
+async function canalSoloLectura(guild, canal) {
+    const negar = { SendMessages: false, SendMessagesInThreads: false, CreatePublicThreads: false, CreatePrivateThreads: false, AddReactions: false, AttachFiles: false };
+    await canal.permissionOverwrites.edit(guild.roles.everyone.id, negar);
+    if (comunidad.esComunidad(guild.id)) {
+        const monitor = await comunidad.rolMonitor(guild).catch(() => null);
+        if (monitor) await canal.permissionOverwrites.edit(monitor.id, negar);
+    }
+    await canal.permissionOverwrites.edit(guild.members.me.id, { SendMessages: true, ViewChannel: true, ManageWebhooks: true });
+}
+let _cardMapMisiones = { ruta: null, mapa: null };
+async function imagenCartaMision(id) {
+    const { rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
+    if (!rutaMasterPath) return null;
+    if (_cardMapMisiones.ruta !== rutaMasterPath || !_cardMapMisiones.mapa) _cardMapMisiones = { ruta: rutaMasterPath, mapa: _ultimoCardMapBot || cargarCardMap(rutaMasterPath) };
+    const ill = _cardMapMisiones.mapa?.[id]?.IllustrationID;
+    if (!ill) return null;
+    return encontrarImagenPorIllustration(rutaMasterPath, ill) || await obtenerImagenRepoCartasBot(rutaMasterPath, ill);
+}
+function menuExpansionesMisiones(elegida = -1) {
+    const lista = tarjetaMisiones.expansiones().slice(0, 25);
+    return new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('missions_exp').setPlaceholder('🎯 Choose an expansion')
+        .addOptions(lista.map((e, i) => ({ label: e.nombre.slice(0, 100), description: `${e.total} missions`, value: String(i), default: i === elegida }))));
+}
+async function paginaMisiones(indiceExp, pagina) {
+    const exp = tarjetaMisiones.expansiones()[indiceExp];
+    if (!exp) return { content: '❌ Expansion not found.', embeds: [], files: [], components: [menuExpansionesMisiones()] };
+    pagina = Math.min(Math.max(0, pagina), exp.paginas - 1);
+    const buffer = await tarjetaMisiones.armarTarjetaMisiones({ expansion: exp.nombre, pagina, imagenCarta: imagenCartaMision });
+    const nav = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`missions_pag::${indiceExp}::${pagina - 1}`).setLabel('◀ Previous').setStyle(ButtonStyle.Secondary).setDisabled(pagina <= 0),
+        new ButtonBuilder().setCustomId('missions_nada').setLabel(`Page ${pagina + 1}/${exp.paginas}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
+        new ButtonBuilder().setCustomId(`missions_pag::${indiceExp}::${pagina + 1}`).setLabel('Next ▶').setStyle(ButtonStyle.Secondary).setDisabled(pagina >= exp.paginas - 1));
+    const detalle = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`missions_det::${indiceExp}::${pagina}`)
+        .setPlaceholder('🔍 View a mission (all its cards)')
+        .addOptions(tarjetaMisiones.misionesDePagina(exp.nombre, pagina).map(m => ({ label: m.nombre.slice(0, 100), value: String(m.indice) }))));
+    return { content: '', embeds: [], files: [{ attachment: buffer, name: 'missions.png' }], attachments: [], components: [nav, detalle, menuExpansionesMisiones(indiceExp)] };
+}
+async function manejarAllMissions(interaction) {
+    const id = interaction.customId;
+    if (id === 'missions_ver') {
+        return await interaction.reply({ content: '🎯 Choose an expansion to see its missions:', components: [menuExpansionesMisiones()], ephemeral: true });
+    }
+    await interaction.deferUpdate().catch(() => {});
+    try {
+        if (id === 'missions_exp') return await interaction.editReply(await paginaMisiones(Number(interaction.values[0]) || 0, 0));
+        if (id.startsWith('missions_pag::')) {
+            const [, i, p] = id.split('::');
+            return await interaction.editReply(await paginaMisiones(Number(i) || 0, Number(p) || 0));
+        }
+        if (id.startsWith('missions_det::')) {
+            const [, i, p] = id.split('::');
+            const exp = tarjetaMisiones.expansiones()[Number(i) || 0];
+            const buffer = await tarjetaMisiones.armarDetalleMision({ expansion: exp?.nombre, indice: Number(interaction.values[0]) || 0, imagenCarta: imagenCartaMision });
+            const volver = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`missions_pag::${i}::${p}`).setLabel('◀ Back to the list').setStyle(ButtonStyle.Primary));
+            return await interaction.editReply({ content: '', embeds: [], files: buffer ? [{ attachment: buffer, name: 'mission.png' }] : [], attachments: [], components: [volver] });
+        }
+    } catch (e) {
+        console.error('DEBUG: all missions:', e?.message || e);
+        return await interaction.editReply({ content: '❌ Could not show the missions. Try again.', components: [menuExpansionesMisiones()] }).catch(() => {});
+    }
 }
 
 function cargarCardMap(rutaMaster) {
@@ -3392,6 +3582,9 @@ async function obtenerImagenGoldBot(cardMap, cartaId) {
 const TTL_CACHE_MAPA_COPIAS_MS = 90 * 1000;
 let _mapaCopiasCacheBot = null;
 function construirMapaCopiasPorCartaCacheado(rutaJsonCuentas) {
+    // Comunidad: las copias de quien pregunta, del resumen de su Monitor Link (no de esta PC).
+    const usuarioComunidad = comunidad.usuarioActual();
+    if (usuarioComunidad) return monitorLink.mapaCopiasDe(usuarioComunidad);
     if (_mapaCopiasCacheBot && _mapaCopiasCacheBot.ruta === rutaJsonCuentas && Date.now() - _mapaCopiasCacheBot.ts < TTL_CACHE_MAPA_COPIAS_MS) {
         return _mapaCopiasCacheBot.mapa;
     }
@@ -3399,6 +3592,28 @@ function construirMapaCopiasPorCartaCacheado(rutaJsonCuentas) {
     _mapaCopiasCacheBot = { ruta: rutaJsonCuentas, mapa, ts: Date.now() };
     return mapa;
 }
+// Ajustes de la sincronizacion con el juego en esta PC (2026-10-24): por cuenta, las cartas que ya no
+// tiene (notOwned) y las nuevas que su JSON no conoce (extra). Los JSON de Kevin/Leanny no se tocan:
+// el ajuste se aplica al leerlos. En memoria para construirMapaCopiasPorCarta (que es sincronica).
+const ajustesLocales = new Map();   // fileName en minusculas sin .xml -> { notOwned, extra }
+const claveAjuste = (f) => String(f || '').replace(/\.xml$/i, '').toLowerCase();
+async function cargarAjustesLocales() {
+    await db.run(`CREATE TABLE IF NOT EXISTS ajustes_cuentas (cuenta TEXT PRIMARY KEY, not_owned TEXT, extra TEXT, ts INTEGER)`);
+    for (const f of (await db.all(`SELECT cuenta, not_owned, extra FROM ajustes_cuentas`)) || []) {
+        try { ajustesLocales.set(f.cuenta, { notOwned: JSON.parse(f.not_owned || '[]'), extra: JSON.parse(f.extra || '[]') }); } catch (e) { /* fila rota */ }
+    }
+}
+cargarAjustesLocales().catch(e => console.error('DEBUG: ajustes de cuentas:', e?.message || e));
+async function guardarAjusteLocal(fileName, { notOwned = [], extra = [] }) {
+    const clave = claveAjuste(fileName);
+    await db.run(`INSERT INTO ajustes_cuentas (cuenta, not_owned, extra, ts) VALUES (?, ?, ?, ?)
+        ON CONFLICT(cuenta) DO UPDATE SET not_owned = excluded.not_owned, extra = excluded.extra, ts = excluded.ts`,
+        [clave, JSON.stringify(notOwned), JSON.stringify(extra), Date.now()]);
+    ajustesLocales.set(clave, { notOwned, extra });
+    _mapaCopiasCacheBot = null;
+    _cartasGoldCacheBot = null;
+}
+
 function construirMapaCopiasPorCarta(rutaJsonCuentas) {
     if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
     const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
@@ -3417,6 +3632,11 @@ function construirMapaCopiasPorCarta(rutaJsonCuentas) {
         }
 
         const fileName = data.metadata?.fileName || archivo;
+        const aj = ajustesLocales.get(claveAjuste(fileName));
+        if (aj) {
+            for (const id of aj.notOwned) delete conteoPorCarta[id];
+            for (const id of aj.extra) if (!conteoPorCarta[id]) conteoPorCarta[id] = 1;
+        }
         for (const [cartaId, cantidad] of Object.entries(conteoPorCarta)) {
             if (!mapa[cartaId]) mapa[cartaId] = [];
             mapa[cartaId].push({ fileName, cantidad });
@@ -3464,7 +3684,19 @@ function maxCopiasCarta(mapaCopias, cartaId) {
 // sin red) -- una miniatura chica no necesita HD, y bajar HD de hasta 25
 // cartas por cada pantalla seria lento y gastaria disco de mas sin necesidad.
 // Las cartas sin imagen local encontrada se saltean (no hay nada que dibujar).
-async function generarCollageCartas(items, rutaMasterPath, mapaCopias, esGoldCards = false, colsFijo = null) {
+// Fila de collages (2026-10-24, pedido de Ale): con dos personas buscando a la vez, los dos collages
+// se armaban intercalados en esta PC y uno quedaba en "loading" mientras el otro avanzaba. Ahora se
+// arman de a uno; el que llega segundo espera su turno (avisarCargandoCartas le muestra su lugar).
+let _colaCollage = Promise.resolve();
+let _collagesEnCurso = 0;
+function generarCollageCartas(...args) {
+    _collagesEnCurso++;
+    const turno = _colaCollage.then(() => generarCollageCartasAhora(...args));
+    _colaCollage = turno.catch(() => {}).finally(() => { _collagesEnCurso = Math.max(0, _collagesEnCurso - 1); });
+    return turno;
+}
+
+async function generarCollageCartasAhora(items, rutaMasterPath, mapaCopias, esGoldCards = false, colsFijo = null) {
     if (!items?.length || !rutaMasterPath) return null;
     const cardMap = cargarCardMap(rutaMasterPath);
     // Celdas agrandadas de nuevo (2026-08-30, a pedido explicito del usuario, repetido):
@@ -4072,6 +4304,29 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     );
 
     const payload = { embeds: [embed], components: [filaXml, filaAcciones] };
+    // ⚡ Gold trade (2026-10-24): varias copias de esta carta en un solo login, sin MuMu.
+    if (datosGold && tradeable && fastTransfer.habilitado(guild?.id)) {
+        payload.components.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`fast_gold::${cartaId}`.slice(0, 100)).setLabel('⚡ Gold trade').setStyle(ButtonStyle.Success)));
+    }
+    // Comunidad: fuera los botones que usan la PC host (XML, Info Accounts, Wishlist, Shinedust por
+    // OCR, Extract XML, Inject). Quedan Home, Trade y Share.
+    comunidad.quitarComponentes(guild?.id, payload, ['wishlist_xml::', 'goldcards_xml::', 'card_extract::', 'goldcards_extract::']);
+    // Comunidad: en vez de botones, una lista desplegable con las mismas opciones (pedido de Ale).
+    // Cada opcion lleva el customId del boton de siempre; 'card_menu' lo despacha igual que el boton.
+    if (comunidad.esComunidad(guild?.id)) {
+        const opciones = [];
+        for (const fila of payload.components || []) {
+            for (const b of (fila.components || [])) {
+                const d = b.data || b;
+                if (!d.custom_id || d.disabled) continue;
+                opciones.push({ label: String(d.label || d.custom_id).slice(0, 100), value: d.custom_id.slice(0, 100) });
+            }
+        }
+        payload.components = opciones.length ? [new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder().setCustomId('card_menu').setPlaceholder('Choose what to do with this card…').addOptions(opciones.slice(0, 25))
+        )] : [];
+    }
     const archivosPayload = [];
     if (imagenPath) {
         // Logo compuesto arriba de la carta en una sola imagen (mismo criterio
@@ -4748,6 +5003,99 @@ function leerIniInject(rutaIni = RUTA_INJECT_INI_DEFAULT) {
     return datos;
 }
 
+// Destinos de un usuario en la comunidad (Main/secundaria del registro de wr98). Amigo de un miembro
+// (Monitor Link 1.9.9+, pedido de Ale): primero el friend ID del juego que el miembro le anoto (y su
+// propio registro, si tiene), despues los del miembro -- asi ve su ID y el del dueño.
+// Sin Main registrada (ni en Monitor Link ni en el panel de wr98): donde registrarla (Ale 2026-11-07).
+const MSG_SIN_MAIN = '❌ You haven\'t registered your Main yet. Open **Monitor Link**, press **My Main ID**, type your Main\'s friend ID (16 digits) and save — then try again.';
+
+// (Ale 2026-11-08) Share/Trade/Farm Tickets: cada uno ve SOLO sus propios IDs (el dueño no ve los de sus
+// amigos y el amigo no ve los del dueño). conAmigos = true (Friend Trade): se suman los de la otra parte.
+async function destinosComunidad(userId, conAmigos = false) {
+    const nombre = async (id) => { const u = await client.users.fetch(String(id)).catch(() => null); return u?.globalName || u?.username || 'Friend'; };
+    const dueno = monitorLink.duenoDe(userId);
+    // Dueño (pedido de Ale): sus IDs y, despues, los de los amigos que anoto en Monitor Link.
+    // Main que el usuario registro en su propio Monitor Link (Ale 2026-11-07): va primero, aunque no este en
+    // el registro de wr98 (Dragonite).
+    const mainPropia = monitorLink.mainDe?.(userId);
+    const deMonitorLink = mainPropia ? [{ id: mainPropia, label: `${await nombre(userId)} — Main` }] : [];
+    if (!dueno) {
+        const propios = [...deMonitorLink, ...await comunidad.destinosDe(userId).catch(() => [])];
+        const deAmigos = [];
+        if (conAmigos) for (const a of monitorLink.amigosDe(userId).filter(a => a.juego)) deAmigos.push({ id: a.juego, label: `${await nombre(a.discordId)} — Main` });
+        const vistos = new Set();
+        return [...propios, ...deAmigos].filter(d => d.id && !vistos.has(String(d.id)) && vistos.add(String(d.id)));
+    }
+    const salida = [...deMonitorLink];
+    const juego = monitorLink.juegoDeAmigo(userId);
+    if (juego) salida.push({ id: juego, label: `${await nombre(userId)} — Main` });
+    salida.push(...await comunidad.destinosDe(userId).catch(() => []));
+    if (conAmigos) salida.push(...await comunidad.destinosDe(dueno).catch(() => []));
+    const vistos = new Set();
+    return salida.filter(d => d.id && !vistos.has(String(d.id)) && vistos.add(String(d.id)));
+}
+
+// Destinos para Share/Trade. En el server de comunidad (community.js) NO se usa la lista de
+// amigos guardados de esta PC: solo la Main/secundaria que ESE miembro registro en el panel de
+// wr98. Si no esta registrado (o la clave del registro vencio) devuelve [] y el llamador avisa.
+async function amigosParaInteraccion(interaction, rutaIni, conAmigos = false) {
+    if (!comunidad.esComunidad(interaction.guildId)) return parsearListaFriends(rutaIni);
+    try {
+        const destinos = await destinosComunidad(interaction.user.id, conAmigos);
+        if (!destinos.length) interaction._sinDestinosMsg = MSG_SIN_MAIN;
+        return destinos;
+    } catch (e) {
+        console.error('DEBUG: no se pudo leer el registro de wr98:', e?.message || e);
+        interaction._sinDestinosMsg = '❌ Could not read the member registry right now (the registry key may have expired). Tell staff and try again later.';
+        return [];
+    }
+}
+
+// 🎁 Gift to a member (modo comunidad, pedido de Ale): en Share/Trade/Gold, ademas de la propia
+// Main, se puede elegir a cualquier miembro del registro de wr98 como destino. El ultimo menu usa el
+// MISMO customId que el de "tu Main" (card_trade_friendid::...), asi que sigue el flujo de siempre.
+function filasGiftComunidad(guildId, origen, modo, cartaId) {
+    if (!comunidad.esComunidad(guildId)) return [];
+    const id = `gift_inicio::${origen}::${modo}::${cartaId}`;
+    if (id.length > 100) return [];
+    return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(id).setLabel('🎁 Gift to a member').setStyle(ButtonStyle.Primary)
+    )];
+}
+
+async function pantallaGiftGrupos(interaction, origen, modo, cartaId) {
+    const grupos = await comunidad.gruposConConteo().catch(() => []);
+    if (!grupos.length) {
+        return await interaction.editReply({ content: '❌ Could not read the member registry right now. Tell staff and try again later.', components: [] });
+    }
+    const menu = new StringSelectMenuBuilder().setCustomId(`gift_grupo::${origen}::${modo}::${cartaId}`.slice(0, 100)).setPlaceholder('Pick the member\'s group')
+        .addOptions(grupos.slice(0, 25).map(g => ({ label: g.grupo.replace(/_/g, ' '), description: `${g.total} member(s)`, value: g.grupo })));
+    return await interaction.editReply({ content: '🎁 **Gift to a member** — pick their group.', components: [
+        new ActionRowBuilder().addComponents(menu),
+        new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('card_trade_cancelar').setLabel('⬅️ Cancel').setStyle(ButtonStyle.Secondary))
+    ] });
+}
+
+async function pantallaGiftMiembros(interaction, grupo, pagina, origen, modo, cartaId) {
+    const miembros = await comunidad.miembrosDeGrupo(grupo).catch(() => []);
+    const totalPag = Math.max(1, Math.ceil(miembros.length / 25));
+    pagina = Math.min(Math.max(0, pagina), totalPag - 1);
+    const items = miembros.slice(pagina * 25, pagina * 25 + 25);
+    const filas = [];
+    if (items.length) {
+        filas.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+            .setCustomId(`card_trade_friendid::${origen}::${modo}::${cartaId}`.slice(0, 100))
+            .setPlaceholder('Pick the member who receives it')
+            .addOptions(items.map(m => ({ label: m.name.slice(0, 100), description: formatearFriendId(m.main_id), value: m.main_id })))));
+    }
+    filas.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`gift_pag::${grupo}::${pagina - 1}::${origen}::${modo}::${cartaId}`.slice(0, 100)).setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(pagina <= 0),
+        new ButtonBuilder().setCustomId(`gift_pag::${grupo}::${pagina + 1}::${origen}::${modo}::${cartaId}`.slice(0, 100)).setLabel('▶️').setStyle(ButtonStyle.Secondary).setDisabled(pagina >= totalPag - 1),
+        new ButtonBuilder().setCustomId(`gift_inicio::${origen}::${modo}::${cartaId}`.slice(0, 100)).setLabel('🔙 Groups').setStyle(ButtonStyle.Secondary)
+    ));
+    return await interaction.editReply({ content: `🎁 **${grupo.replace(/_/g, ' ')}** — page ${pagina + 1} of ${totalPag}. Pick who receives it.`, components: filas });
+}
+
 function parsearListaFriends(rutaIni = RUTA_INJECT_INI_DEFAULT) {
     const datos = leerIniInject(rutaIni);
     const ids = (datos.favoriteFriendIDs || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -4785,6 +5133,13 @@ async function reenviarCartaATrading(interaction, cartaId, datosGold, componente
         return await interaction.editReply({ content: '❌ Could not build this card. Try again.' });
     }
 
+    // Comunidad (pedido de Ale): Trading/Share Cards son solo para el historial de lo completado. La
+    // carta con sus menus (elegir destino, cuenta, ⚡) se muestra en PRIVADO a quien la pidio, en vez
+    // de publicarse en el canal. Todos los pasos siguientes editan ese mismo mensaje privado.
+    if (comunidad.esComunidad(interaction.guildId)) {
+        return await interaction.editReply({ content: '', embeds: payload.embeds, files: payload.files, components: payload.components });
+    }
+
     const canalTrading = await obtenerCanalComando(interaction.guildId, tipoCanal);
     if (!canalTrading?.webhook_url) {
         return await interaction.editReply({ content: `❌ Your **${nombreCanal}** channel isn't set up yet. Run **Sync Channels** first.` });
@@ -4813,8 +5168,9 @@ async function reenviarCartaATrading(interaction, cartaId, datosGold, componente
 // configuración nueva para esto.
 async function actualizarConSeleccionFriendId(interaction, cartaId, origen, modo = 'friend') {
     const { rutaIni } = await obtenerRutasInject(interaction.guildId);
-    const friends = parsearListaFriends(rutaIni);
-    if (!friends.length) {
+    // Friend Trade: tambien los IDs de los amigos / del dueño (Ale 2026-11-08).
+    const friends = await amigosParaInteraccion(interaction, rutaIni, modo === 'friend');  // comunidad: registro de wr98
+    if (!friends.length) { if (interaction._sinDestinosMsg) return await interaction.editReply({ content: interaction._sinDestinosMsg, components: [] });
         return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.', components: [] });
     }
 
@@ -4828,7 +5184,7 @@ async function actualizarConSeleccionFriendId(interaction, cartaId, origen, modo
     const textoAmigo = modo === 'sharemain' ? 'Which saved friend is your **Main** account? (it receives the card)'
         : modo === 'sharefriend' ? 'Which friend do you want to share this card with?'
         : 'Which friend do you want to send the trade request to?';
-    return await interaction.editReply({ content: textoAmigo, components: [new ActionRowBuilder().addComponents(menu)] });
+    return await interaction.editReply({ content: textoAmigo, components: [new ActionRowBuilder().addComponents(menu), ...filasGiftComunidad(interaction.guildId, origen, modo, cartaId)] });
 }
 
 function construirEmbedStatusInstancia(index, name, rutaIni = RUTA_INJECT_INI_DEFAULT) {
@@ -5565,7 +5921,11 @@ const ETIQUETAS_PASOS_MAIN_TRADE = {
 // onProgreso (2026-08-08, a pedido explicito del usuario: log en vivo con check/cruz por
 // paso en el panel de trade de la pagina web) -- opcional, default no-op para no cambiar en
 // nada el comportamiento ya probado cuando se dispara desde Discord (que nunca lo pasa).
-async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, amigo = false, share = false }, onProgreso = () => {}) {
+async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, amigo = false, share = false, gold = false, copias = 1 }, onProgreso = () => {}) {
+    // Gold Trade (2026-10-09, diseño de Ale): el MISMO flujo de Main Trade, repetido `copias` veces
+    // con la misma carta. Entre una copia y otra la donante cierra "Send a thanks?" con la X y vuelve
+    // a ofrecer (modo REPETIR de _DonorOfferCard.ahk, sin wishlist) y Main no se apaga. Solo despues
+    // de la ultima copia la donante entra al perfil y desmarca las estrellas.
     // Share a Main (2026-10-04, trayecto de Ale): mismo arranque que Main Trade (Main acepta la
     // solicitud sola) y Main se APAGA apenas acepta -- despues no hace nada. La donante comparte por el
     // tile Share y desmarca la estrella entrando por Friends (todo en _DonorOfferCard.ahk modo SHARE).
@@ -5573,12 +5933,28 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // un AMIGO (persona) en vez de la instancia Main. No se prende Main ni corren sus pasos; la
     // donante espera a que el amigo acepte la solicitud (puntito rojo en Friends) y despues a que
     // responda la oferta (X + tres personas), 15 min cada espera. El resumen muestra solo la donante.
-    const etiquetaModo = share ? 'Share' : amigo ? 'Friend Trade' : 'Main Trade';
+    const etiquetaModo = gold ? 'Gold Trade' : share ? 'Share' : amigo ? 'Friend Trade' : 'Main Trade';
+    // Cronometro por etapa (2026-10-13, pedido de Ale: medir donde se va el tiempo de un tradeo).
+    // automation/Logs/_tiempos_trade.log: segundos de cada etapa y desde el inicio.
+    const t0Trade = Date.now();
+    const tiempoTrade = (etapa, desde) => {
+        try {
+            const ahora = Date.now();
+            fs.appendFileSync(path.join(__dirname, 'automation', 'Logs', '_tiempos_trade.log'),
+                `${new Date(ahora).toLocaleTimeString('en-GB')} [${etiquetaModo} ${fileName}] ${etapa}: ${desde ? ((ahora - desde) / 1000).toFixed(1) + ' s' : '-'} (total ${((ahora - t0Trade) / 1000).toFixed(1)} s)
+`);
+        } catch (e) { /* solo diagnostico */ }
+    };
+    tiempoTrade('INICIO', null);
+    let copiasEnviadas = 0;
     const botonRetry = () => share
         ? new ButtonBuilder().setCustomId(`share_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
         : amigo
         ? new ButtonBuilder().setCustomId(`friend_trade_retry::${cartaId}::${friendId}::${fileName}::${index}::${nombre}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
-        : botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre);
+        : gold
+        // Retry del Gold: vuelve al Start con las copias que faltan.
+        ? new ButtonBuilder().setCustomId(`card_trade_confirmado::${cartaId}::${friendId}::${fileName}::${index}::${nombre}::goldmain::${Math.max(1, copias - copiasEnviadas)}`.slice(0, 100)).setLabel('🔄 Retry').setStyle(ButtonStyle.Secondary)
+        : botonReintentarMainTrade(cartaId, friendId, fileName, index, nombre).components[0];
     const ahkExe = rutaAutoHotkey();
     const folderPath = carpetaBaseMuMu();
     const scripts = [RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, RUTA_MAIN_ACCEPT_FRIEND_REQUEST_SCRIPT, RUTA_DONOR_OFFER_CARD_SCRIPT, RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, RUTA_DONOR_RESPOND_FINALIZE_SCRIPT];
@@ -5620,9 +5996,11 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     if (prendidaMain && prendidaDonante) await new Promise(r => setTimeout(r, 10000));
     if (!prendidaMain || !prendidaDonante) {
         onProgreso({ paso: 'Turn on instances', estado: 'error', detalle: 'could not turn on one of the instances' });
-        return await enviarErrorMainTrade(interaction, '❌ Could not turn on one of the instances.', [botonRetry()]);
+        return await enviarErrorMainTrade(interaction, '❌ Could not turn on one of the instances.', [new ActionRowBuilder().addComponents(botonRetry())]);
     }
     onProgreso({ paso: 'Turn on instances', estado: 'ok' });
+    tiempoTrade('prender instancias (+10 s de asentamiento)', t0Trade);
+    const tPrep = Date.now();
 
     // Acomoda las ventanas en pantalla (2026-08-19, a pedido explicito del usuario --
     // "igual que el bot de Kevin, que acomoda las instancias en orden al prenderlas"):
@@ -5689,7 +6067,11 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         const pistaAmigo = String(resultado || '').includes('amigo_no_acepto') ? '\n\n⏳ Your friend did not accept the friend request within 15 minutes.'
             : String(resultado || '').includes('amigo_no_respondio') ? '\n\n⏳ Your friend did not respond to the trade offer within 15 minutes.'
             : String(resultado || '').includes('sin_energia_intercambio') ? '\n\n⚡ The account ran out of trade energy and could not recover it with trade hourglasses. Wait for the energy to refill, then press **🔄 Retry**.' : '';
-        const mensaje = `❌ ${etiquetaModo} failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.${pistaBloqueado}${pistaAmigo}`;
+        // Gold Trade (2026-10-09, pedido de Ale): cuantas copias salieron de la cuenta y por que pudo fallar.
+        const pistaGold = gold
+            ? `\n\n🟡 **${copiasEnviadas} of ${copias}** copies of **${nombreCarta}** were sent from \`${fileName}\`. Press **🔄 Retry** to send the remaining ${copias - copiasEnviadas}.\n\nPossible causes:\n1. Not enough trade hourglasses to recover trade energy.\n2. Not enough Shinedust for this card's rarity.\n3. No copies of this card left in the account.`
+            : '';
+        const mensaje = `❌ ${etiquetaModo} failed at step **${nombrePaso}** (${resultado}). Press **🛑 Stop** to clean up, or **🔄 Retry** to try again.${pistaBloqueado}${pistaAmigo}${pistaGold}`;
         try {
             const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
             if (canalRunInstance?.webhook_url) {
@@ -5726,6 +6108,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
                 : Promise.resolve({ ok: true });
             const promesaEspera = new Promise((resolve) => ejecutarWaitWelcomeScreens(infoMain.name, (ok, detalle) => resolve({ ok, detalle }), RUTA_WAIT_WELCOME_SCREENS_MAIN_SCRIPT));
             const [resSpeedModMain, espera] = await Promise.all([promesaSpeedModMain, promesaEspera]);
+            tiempoTrade(`Main: speed mod + pantallas de bienvenida (intento ${intento})`, tPrep);
             if (!resSpeedModMain.ok) onProgreso({ paso: 'Speed Mod (Main)', estado: 'warning', detalle: resSpeedModMain.resultado });
             if (espera.ok) return espera;
             ultimo = espera;
@@ -5755,7 +6138,9 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
                 if (!(await asegurarInstanciaEncendida(index)))
                     return { ok: false, resultado: 'no_se_pudo_reencender_la_instancia' };
             }
+            const tInject = Date.now();
             const resInject = await ejecutarInjectDonante();
+            tiempoTrade(`donante: inyeccion (intento ${intento})`, tInject);
             if (!resInject.ok) {
                 ultimo = resInject;
                 continue;
@@ -5774,7 +6159,9 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
             // del arranque de Main y del chequeo de oferta pendiente. Ademas es lo que arranca el
             // juego de la donante: si quedara como paso posterior, cuando el chequeo de oferta
             // pendiente saltea la solicitud nadie arrancaria la donante y quedaria en Tap to Start.
+            const tSolicitud = Date.now();
             const resSolicitud = await ejecutarPasoAhk(ahkExe, RUTA_SEND_FRIEND_REQUEST_KEVIN_SCRIPT, [nombre, folderPath, friendId], 5 * 60 * 1000, tmp());
+            tiempoTrade('donante: speed mod + solicitud de amistad', tSolicitud);
             if (resSolicitud.ok) return { ok: true, resultado: resSolicitud.resultado };
             ultimo = resSolicitud;
         }
@@ -5785,17 +6172,20 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // donante (que puede tardar minutos) y recien ahi revisaba, con Main parado sin hacer nada.
     const promesaMainYChequeo = promesaEsperaMain.then(async (esperaMain) => {
         if (!esperaMain.ok || amigo || share) return { esperaMain, resultadoCheck: { ok: false } };
+        const tCheck = Date.now();
         const resultadoCheck = await ejecutarPasoAhk(ahkExe, RUTA_CHECK_PENDING_OFFER_SCRIPT, ['Main', folderPath], 45 * 1000, tmp());
+        tiempoTrade('Main: chequeo de oferta pendiente', tCheck);
         return { esperaMain, resultadoCheck };
     });
     const [{ esperaMain, resultadoCheck }, prepDonante] = await Promise.all([promesaMainYChequeo, promesaPrepDonante]);
+    tiempoTrade('preparacion completa (Main y donante en paralelo)', tPrep);
     if (!esperaMain.ok) {
         onProgreso({ paso: 'Reach Main menu', estado: 'error', detalle: esperaMain.detalle });
-        return await enviarErrorMainTrade(interaction, `❌ Could not reach the main menu on instance **${infoMain?.name || 'Main'}** (${esperaMain.detalle}).`, [botonRetry()]);
+        return await enviarErrorMainTrade(interaction, `❌ Could not reach the main menu on instance **${infoMain?.name || 'Main'}** (${esperaMain.detalle}).`, [new ActionRowBuilder().addComponents(botonRetry())]);
     }
     if (!prepDonante.ok) {
         onProgreso({ paso: 'Inject donor account', estado: 'error', detalle: prepDonante.resultado });
-        return await enviarErrorMainTrade(interaction, `❌ Could not prepare the donor instance **${nombre}** (${prepDonante.resultado}).`, [botonRetry()]);
+        return await enviarErrorMainTrade(interaction, `❌ Could not prepare the donor instance **${nombre}** (${prepDonante.resultado}).`, [new ActionRowBuilder().addComponents(botonRetry())]);
     }
     onProgreso({ paso: 'Inject donor account', estado: 'ok' });
     if (!amigo) onProgreso({ paso: 'Reach Main menu', estado: 'ok' });
@@ -5935,178 +6325,201 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     // siguiente varios segundos). Se encadenan para que salgan en el mismo orden de siempre.
     let colaFotos = Promise.resolve();
     const enColaFoto = (fn) => { colaFotos = colaFotos.then(fn).catch(e => console.error('DEBUG: error subiendo foto del trade:', e?.message || e)); };
-    for (const paso of pasos) {
-        if (share && paso.nombre === 'donor_share_card' && infoMain) apagarInstanciaMuMu(infoMain.index);  // Main ya acepto (o ya eran amigos)
-        if (paso.nombre === 'main_accept_friend_request' && saltearAceptarAmigo) {
-            onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok', detalle: 'skipped -- the previous step confirmed they were already friends' });
-            continue;
+    // Copias 2+ del Gold: solo los 4 pasos del tradeo; la donante arranca en modo REPETIR.
+    const pasosRepeticion = [
+        { nombre: 'donor_offer_card', script: RUTA_DONOR_OFFER_CARD_SCRIPT, args: [nombre, folderPath, rutaImagenReferencia, 'REPETIR'], timeoutMs: 5 * 60 * 1000 },
+        { nombre: 'main_accept_trade_offer', script: RUTA_MAIN_ACCEPT_TRADE_OFFER_SCRIPT, args: ['Main', folderPath], timeoutMs: 4 * 60 * 1000 },
+        { nombre: 'donor_respond_finalize', script: RUTA_DONOR_RESPOND_FINALIZE_SCRIPT, args: [nombre, folderPath], timeoutMs: 4 * 60 * 1000 },
+        { nombre: 'main_finalize_own_card', script: RUTA_MAIN_REFRESH_AFTER_TRADE_SCRIPT, args: ['Main', folderPath], timeoutMs: 3 * 60 * 1000 }
+    ];
+    for (let copia = 1; copia <= copias; copia++) {
+        const pasosCopia = copia === 1 ? pasos : pasosRepeticion.map(p => ({ ...p }));
+        mainFinalAnticipado = null;
+        if (copia > 1) {
+            onProgreso({ paso: `Gold copy ${copia}/${copias}`, estado: 'ok' });
+            try { await interaction.followUp({ content: `🟡 Gold Trade: sending copy **${copia} of ${copias}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
         }
-        // Main en paralelo con el swipe de la donante (2026-09-28, idea de Ale): apenas
-        // _DonorRespondAndFinalize.ahk confirma el trade escribe <outputFile>_Confirmado.txt y en
-        // ese momento se lanza main_finalize_own_card (Actualizar + swipe de Main), sin esperar a
-        // que la donante termine su swipe y su pantalla final (~30 s ganados).
-        if (paso.nombre === 'main_finalize_own_card' && mainFinalAnticipado) {
-            paso.outputAnticipado = mainFinalAnticipado.outputFile;
-        }
-        const outputFilePaso = paso.outputAnticipado || tmp();
-        let promesaPaso;
-        if (paso.outputAnticipado) {
-            promesaPaso = mainFinalAnticipado.promesa;
-        } else if (paso.promesa) {
-            promesaPaso = paso.promesa();
-        } else {
-            promesaPaso = ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, outputFilePaso);
-        }
-        if (paso.nombre === 'donor_respond_finalize') {
-            const pasoMainFinal = pasos.find(p => p.nombre === 'main_finalize_own_card');
-            const rutaConfirmado = outputFilePaso.replace(/\.txt$/, '_Confirmado.txt');
-            let donanteTermino = false;
-            promesaPaso.then(() => { donanteTermino = true; }, () => { donanteTermino = true; });
-            while (pasoMainFinal && !donanteTermino && !mainFinalAnticipado) {
-                if (fs.existsSync(rutaConfirmado)) {
-                    const outMain = tmp();
-                    mainFinalAnticipado = {
-                        outputFile: outMain,
-                        promesa: ejecutarPasoAhk(ahkExe, pasoMainFinal.script, pasoMainFinal.args, pasoMainFinal.timeoutMs, outMain)
-                    };
-                    break;
+        for (const paso of pasosCopia) {
+            if (share && paso.nombre === 'donor_share_card' && infoMain) apagarInstanciaMuMu(infoMain.index);  // Main ya acepto (o ya eran amigos)
+            if (paso.nombre === 'main_accept_friend_request' && saltearAceptarAmigo) {
+                onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok', detalle: 'skipped -- the previous step confirmed they were already friends' });
+                continue;
+            }
+            // Main en paralelo con el swipe de la donante (2026-09-28, idea de Ale): apenas
+            // _DonorRespondAndFinalize.ahk confirma el trade escribe <outputFile>_Confirmado.txt y en
+            // ese momento se lanza main_finalize_own_card (Actualizar + swipe de Main), sin esperar a
+            // que la donante termine su swipe y su pantalla final (~30 s ganados).
+            if (paso.nombre === 'main_finalize_own_card' && mainFinalAnticipado) {
+                paso.outputAnticipado = mainFinalAnticipado.outputFile;
+            }
+            const tPaso = Date.now();
+            const outputFilePaso = paso.outputAnticipado || tmp();
+            let promesaPaso;
+            if (paso.outputAnticipado) {
+                promesaPaso = mainFinalAnticipado.promesa;
+            } else if (paso.promesa) {
+                promesaPaso = paso.promesa();
+            } else {
+                promesaPaso = ejecutarPasoAhk(ahkExe, paso.script, paso.args, paso.timeoutMs, outputFilePaso);
+            }
+            if (paso.nombre === 'donor_respond_finalize') {
+                const pasoMainFinal = pasosCopia.find(p => p.nombre === 'main_finalize_own_card');
+                const rutaConfirmado = outputFilePaso.replace(/\.txt$/, '_Confirmado.txt');
+                let donanteTermino = false;
+                promesaPaso.then(() => { donanteTermino = true; }, () => { donanteTermino = true; });
+                while (pasoMainFinal && !donanteTermino && !mainFinalAnticipado) {
+                    if (fs.existsSync(rutaConfirmado)) {
+                        const outMain = tmp();
+                        mainFinalAnticipado = {
+                            outputFile: outMain,
+                            promesa: ejecutarPasoAhk(ahkExe, pasoMainFinal.script, pasoMainFinal.args, pasoMainFinal.timeoutMs, outMain)
+                        };
+                        break;
+                    }
+                    await new Promise(r => setTimeout(r, 300));
                 }
-                await new Promise(r => setTimeout(r, 300));
+                try { fs.unlinkSync(rutaConfirmado); } catch (e) { /* nada que limpiar */ }
             }
-            try { fs.unlinkSync(rutaConfirmado); } catch (e) { /* nada que limpiar */ }
-        }
-        let { ok, resultado } = await promesaPaso;
-        // Si la donante falla DESPUES de confirmar (p. ej. en la pantalla final), Main ya esta
-        // cerrando su lado: se espera a que termine antes de reportar el fallo.
-        if (!ok && paso.nombre === 'donor_respond_finalize' && mainFinalAnticipado) {
-            await mainFinalAnticipado.promesa;
-        }
-        if (paso.nombre === 'send_friend_request' && String(resultado || '').includes('YA_AMIGOS')) saltearAceptarAmigo = true;
-        // Aviso de "no matcheo en el wishlist" (2026-09-03, a pedido explicito del usuario):
-        // chequeado ANTES del "if (!ok) return" de abajo -- el marcador lo deja
-        // _DonorOfferCard.ahk apenas termina de revisar las 3 cartas del wishlist, mucho antes
-        // de que el script llegue a su propio final (paso7b en adelante); si el script falla
-        // en un paso POSTERIOR (bug real reproducido en vivo: fallo en no_aparecio_selectfriend_paso7b
-        // justo despues de esto), el aviso igual tiene que salir -- el wishlist ya se reviso de
-        // verdad, sin importar que el resto del paso haya fallado despues.
-        if (paso.nombre === 'donor_offer_card' || paso.nombre === 'donor_share_card') {
-            const rutaMarcadorSinMatch = outputFilePaso.replace(/\.txt$/, '_WishlistNoMatch.txt');
-            if (fs.existsSync(rutaMarcadorSinMatch)) {
-                try { fs.unlinkSync(rutaMarcadorSinMatch); } catch (e) { /* nada que limpiar */ }
-                // Con Stop y Retry (2026-10-06, pedido de Ale): se marca la carta en Main y se reintenta
-                // desde el mismo aviso. El mensaje de error generico de abajo ya no sale en este caso.
-                const filaAviso = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger),
-                    botonRetry()
-                );
-                await mandarFotoTradeAlCanal(rutaImagenReferencia, `⚠️ <@${interaction.user.id}> The requested card was not found in the friend's profile. Please mark the following card as favorite, then press **🔄 Retry**:`, true, [filaAviso]);
-                avisoWishlistEnviado = true;
+            let { ok, resultado } = await promesaPaso;
+            tiempoTrade(`${copias > 1 ? `copia ${copia} - ` : ''}${paso.nombre}${ok ? '' : ' (FALLO)'}`, tPaso);
+            // Si la donante falla DESPUES de confirmar (p. ej. en la pantalla final), Main ya esta
+            // cerrando su lado: se espera a que termine antes de reportar el fallo.
+            if (!ok && paso.nombre === 'donor_respond_finalize' && mainFinalAnticipado) {
+                await mainFinalAnticipado.promesa;
             }
-        }
-        if (!ok) {
-            await colaFotos;
-            if (avisoWishlistEnviado) {
-                onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'error', detalle: resultado });
-                return;
+            if (paso.nombre === 'send_friend_request' && String(resultado || '').includes('YA_AMIGOS')) saltearAceptarAmigo = true;
+            // Aviso de "no matcheo en el wishlist" (2026-09-03, a pedido explicito del usuario):
+            // chequeado ANTES del "if (!ok) return" de abajo -- el marcador lo deja
+            // _DonorOfferCard.ahk apenas termina de revisar las 3 cartas del wishlist, mucho antes
+            // de que el script llegue a su propio final (paso7b en adelante); si el script falla
+            // en un paso POSTERIOR (bug real reproducido en vivo: fallo en no_aparecio_selectfriend_paso7b
+            // justo despues de esto), el aviso igual tiene que salir -- el wishlist ya se reviso de
+            // verdad, sin importar que el resto del paso haya fallado despues.
+            if (paso.nombre === 'donor_offer_card' || paso.nombre === 'donor_share_card') {
+                const rutaMarcadorSinMatch = outputFilePaso.replace(/\.txt$/, '_WishlistNoMatch.txt');
+                if (fs.existsSync(rutaMarcadorSinMatch)) {
+                    try { fs.unlinkSync(rutaMarcadorSinMatch); } catch (e) { /* nada que limpiar */ }
+                    // Con Stop y Retry (2026-10-06, pedido de Ale): se marca la carta en Main y se reintenta
+                    // desde el mismo aviso. El mensaje de error generico de abajo ya no sale en este caso.
+                    const filaAviso = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`mumu_stop_trade::${index}::${nombre}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger),
+                        botonRetry()
+                    );
+                    await mandarFotoTradeAlCanal(rutaImagenReferencia, `⚠️ <@${interaction.user.id}> The requested card was not found in the friend's profile. Please mark the following card as favorite, then press **🔄 Retry**:`, true, [filaAviso]);
+                    avisoWishlistEnviado = true;
+                }
             }
-            return await reportarFalloPaso(paso.nombre, resultado);
-        }
-        if (paso.nombre === 'donor_respond_finalize' && !promesaDesmarcar) {
-            promesaDesmarcar = ejecutarPasoAhk(ahkExe, RUTA_DONOR_OFFER_CARD_SCRIPT, [nombre, folderPath, 'DESMARCAR'], 2 * 60 * 1000, tmp())
-                .catch(e => ({ ok: false, resultado: e?.message || String(e) }));
-        }
-        onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok' });
-        // Fotos reales del trade en distintos puntos del pipeline (2026-08-09/18, a pedido
-        // explicito del usuario) -- cada script guarda su propia captura al lado de su
-        // outputFile (mismo nombre, extension distinta por foto), justo antes del tap/swipe
-        // que avanza la pantalla, para que quede la evidencia real de que paso en cada paso.
-        if (paso.nombre === 'donor_offer_card') {
-            // Foto de recuperacion (2026-08-25, a pedido explicito del usuario, bug real
-            // reproducido en vivo): _DonorOfferCard.ahk guarda esta SOLO si el toque de
-            // seleccion dejo la carta en vista ampliada en vez de seleccionarla -- se manda
-            // nada mas si el archivo existe de verdad (la mayoria de las corridas no lo
-            // generan). Sirve para confirmar a distancia si el bug pasa sin mirar la pantalla.
-            const rutaFotoZoom = outputFilePaso.replace(/\.txt$/, '_ZoomRecoveryPhoto.png');
-            if (fs.existsSync(rutaFotoZoom)) {
-                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoZoom, `⚠️ <@${interaction.user.id}> The donor got stuck in the zoomed card view while choosing the card -- it recovered on its own and continued.`, true));
+            if (!ok) {
+                await colaFotos;
+                if (avisoWishlistEnviado) {
+                    onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'error', detalle: resultado });
+                    return;
+                }
+                return await reportarFalloPaso(paso.nombre, resultado);
             }
-            // _DonorOfferCard.ahk guarda 2 capturas de este paso, ambas confirmadas con needle
-            // propio sin texto (2026-09-16, ver comentario completo en paso14/paso15 de ese
-            // script): "You have offered the card..." (mascota del rincon superior izquierdo) y
-            // "Waiting for a Response" (icono de Refresh) justo despues. Se arma un collage de
-            // 2 paneles con ambas -- si la segunda no llego a tiempo (best-effort, no corta el
-            // trade), se cae a mandar la primera sola.
-            const rutaFotoOferta = outputFilePaso.replace(/\.txt$/, '_OfferPhoto.png');
-            const rutaFotoEsperando = outputFilePaso.replace(/\.txt$/, '_WaitingResponsePhoto.png');
-            rutaFaseOfertaDonante = fs.existsSync(rutaFotoEsperando) ? rutaFotoEsperando : rutaFotoOferta;
-            const collageOferta = await componerCollageAntesDespues(rutaFotoOferta, 'Oferta enviada', rutaFotoEsperando, 'Esperando respuesta');
-            if (collageOferta) {
-                enColaFoto(() => mandarFotoTradeAlCanal(collageOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → ${amigo ? 'your friend' : 'Main'}`, true));
-            } else {
-                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → ${amigo ? 'your friend' : 'Main'}`));
+            if (paso.nombre === 'donor_respond_finalize' && !promesaDesmarcar && copia === copias) {
+                promesaDesmarcar = ejecutarPasoAhk(ahkExe, RUTA_DONOR_OFFER_CARD_SCRIPT, [nombre, folderPath, 'DESMARCAR'], 2 * 60 * 1000, tmp())
+                    .catch(e => ({ ok: false, resultado: e?.message || String(e) }));
             }
-        }
-        if (paso.nombre === 'main_accept_trade_offer') {
-            // _MainAcceptTradeOffer.ahk guarda la captura de "You have offered the card..."
-            // del lado de Main (2026-08-22, a pedido explicito del usuario) -- misma logica
-            // que la foto de oferta de la donante, pero del lado de Main.
-            // Collage de 2 paneles (2026-09-17, mismo mecanismo que donor_offer_card arriba):
-            // paso11 de _MainAcceptTradeOffer.ahk agrega una segunda foto de "Waiting for a
-            // Response" del lado de Main, confirmada con needle real (icono de Refresh).
-            const rutaFotoMainOferta = outputFilePaso.replace(/\.txt$/, '_MainOfferPhoto.png');
-            const rutaFotoMainEsperando = outputFilePaso.replace(/\.txt$/, '_MainWaitingResponsePhoto.png');
-            rutaFaseOfertaMain = fs.existsSync(rutaFotoMainEsperando) ? rutaFotoMainEsperando : rutaFotoMainOferta;
-            const collageMainOferta = await componerCollageAntesDespues(rutaFotoMainOferta, 'Main ofreció su carta', rutaFotoMainEsperando, 'Esperando respuesta');
-            if (collageMainOferta) {
-                enColaFoto(() => mandarFotoTradeAlCanal(collageMainOferta, `<@${interaction.user.id}> Main offered its card!`, true));
-            } else {
-                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainOferta, `<@${interaction.user.id}> Main offered its card!`, true));
+            onProgreso({ paso: ETIQUETAS_PASOS_MAIN_TRADE[paso.nombre] || paso.nombre, estado: 'ok' });
+            // Fotos reales del trade en distintos puntos del pipeline (2026-08-09/18, a pedido
+            // explicito del usuario) -- cada script guarda su propia captura al lado de su
+            // outputFile (mismo nombre, extension distinta por foto), justo antes del tap/swipe
+            // que avanza la pantalla, para que quede la evidencia real de que paso en cada paso.
+            if (paso.nombre === 'donor_offer_card') {
+                // Foto de recuperacion (2026-08-25, a pedido explicito del usuario, bug real
+                // reproducido en vivo): _DonorOfferCard.ahk guarda esta SOLO si el toque de
+                // seleccion dejo la carta en vista ampliada en vez de seleccionarla -- se manda
+                // nada mas si el archivo existe de verdad (la mayoria de las corridas no lo
+                // generan). Sirve para confirmar a distancia si el bug pasa sin mirar la pantalla.
+                const rutaFotoZoom = outputFilePaso.replace(/\.txt$/, '_ZoomRecoveryPhoto.png');
+                if (fs.existsSync(rutaFotoZoom)) {
+                    enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoZoom, `⚠️ <@${interaction.user.id}> The donor got stuck in the zoomed card view while choosing the card -- it recovered on its own and continued.`, true));
+                }
+                // _DonorOfferCard.ahk guarda 2 capturas de este paso, ambas confirmadas con needle
+                // propio sin texto (2026-09-16, ver comentario completo en paso14/paso15 de ese
+                // script): "You have offered the card..." (mascota del rincon superior izquierdo) y
+                // "Waiting for a Response" (icono de Refresh) justo despues. Se arma un collage de
+                // 2 paneles con ambas -- si la segunda no llego a tiempo (best-effort, no corta el
+                // trade), se cae a mandar la primera sola.
+                const rutaFotoOferta = outputFilePaso.replace(/\.txt$/, '_OfferPhoto.png');
+                const rutaFotoEsperando = outputFilePaso.replace(/\.txt$/, '_WaitingResponsePhoto.png');
+                rutaFaseOfertaDonante = fs.existsSync(rutaFotoEsperando) ? rutaFotoEsperando : rutaFotoOferta;
+                const collageOferta = await componerCollageAntesDespues(rutaFotoOferta, 'Oferta enviada', rutaFotoEsperando, 'Esperando respuesta');
+                if (collageOferta) {
+                    enColaFoto(() => mandarFotoTradeAlCanal(collageOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → ${amigo ? 'your friend' : 'Main'}`, true));
+                } else {
+                    enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoOferta, `<@${interaction.user.id}> The donor offered the card!\n\nCard offered: **${nombreCarta}** → ${amigo ? 'your friend' : 'Main'}`));
+                }
             }
-        }
-        if (paso.nombre === 'donor_respond_finalize') {
-            // _DonorRespondAndFinalize.ahk guarda 2 capturas: una en "Trade for This Card?"
-            // (las 2 cartas juntas) y otra en "Swipe the card..." (la carta sola, justo antes
-            // del swipe que la manda de verdad) -- si esta ahi, se avisa la ruta para que el
-            // panel web la muestre tambien.
-            const rutaFotoTrade = outputFilePaso.replace(/\.txt$/, '_TradePhoto.png');
-            if (fs.existsSync(rutaFotoTrade)) onProgreso({ paso: 'Trade photo', estado: 'ok', fotoPath: rutaFotoTrade });
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoTrade, `<@${interaction.user.id}> Trade in progress!\n\nCard sent: **${nombreCarta}** → Main`));
+            if (paso.nombre === 'main_accept_trade_offer') {
+                // _MainAcceptTradeOffer.ahk guarda la captura de "You have offered the card..."
+                // del lado de Main (2026-08-22, a pedido explicito del usuario) -- misma logica
+                // que la foto de oferta de la donante, pero del lado de Main.
+                // Collage de 2 paneles (2026-09-17, mismo mecanismo que donor_offer_card arriba):
+                // paso11 de _MainAcceptTradeOffer.ahk agrega una segunda foto de "Waiting for a
+                // Response" del lado de Main, confirmada con needle real (icono de Refresh).
+                const rutaFotoMainOferta = outputFilePaso.replace(/\.txt$/, '_MainOfferPhoto.png');
+                const rutaFotoMainEsperando = outputFilePaso.replace(/\.txt$/, '_MainWaitingResponsePhoto.png');
+                rutaFaseOfertaMain = fs.existsSync(rutaFotoMainEsperando) ? rutaFotoMainEsperando : rutaFotoMainOferta;
+                const collageMainOferta = await componerCollageAntesDespues(rutaFotoMainOferta, 'Main ofreció su carta', rutaFotoMainEsperando, 'Esperando respuesta');
+                if (collageMainOferta) {
+                    enColaFoto(() => mandarFotoTradeAlCanal(collageMainOferta, `<@${interaction.user.id}> Main offered its card!`, true));
+                } else {
+                    enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainOferta, `<@${interaction.user.id}> Main offered its card!`, true));
+                }
+            }
+            if (paso.nombre === 'donor_respond_finalize') {
+                // _DonorRespondAndFinalize.ahk guarda 2 capturas: una en "Trade for This Card?"
+                // (las 2 cartas juntas) y otra en "Swipe the card..." (la carta sola, justo antes
+                // del swipe que la manda de verdad) -- si esta ahi, se avisa la ruta para que el
+                // panel web la muestre tambien.
+                const rutaFotoTrade = outputFilePaso.replace(/\.txt$/, '_TradePhoto.png');
+                if (fs.existsSync(rutaFotoTrade)) onProgreso({ paso: 'Trade photo', estado: 'ok', fotoPath: rutaFotoTrade });
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoTrade, `<@${interaction.user.id}> Trade in progress!\n\nCard sent: **${nombreCarta}** → Main`));
 
-            const rutaFotoSwipe = outputFilePaso.replace(/\.txt$/, '_SwipePhoto.png');
-            rutaFaseEnviaDonante = rutaFotoSwipe;
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoSwipe, `Card sent successfully to user <@${interaction.user.id}> (${interaction.user.username})\n\n**${nombreCarta}**`));
+                const rutaFotoSwipe = outputFilePaso.replace(/\.txt$/, '_SwipePhoto.png');
+                rutaFaseEnviaDonante = rutaFotoSwipe;
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoSwipe, `Card sent successfully to user <@${interaction.user.id}> (${interaction.user.username})\n\n**${nombreCarta}**`));
 
-            // Foto DESPUES del swipe (2026-08-22, a pedido explicito del usuario: las 2 fotos
-            // de arriba son ambas de ANTES de mandar la carta -- faltaba una prueba real de
-            // que el swipe se registro de verdad, no solo que se intento.
-            const rutaFotoEnviada = outputFilePaso.replace(/\.txt$/, '_SentPhoto.png');
-            rutaFaseRecibeDonante = rutaFotoEnviada;
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoEnviada, `Swipe registered — card actually sent.\n\n**${nombreCarta}**`));
-        }
-        if (paso.nombre === 'donor_share_card') {
-            // Fotos de Share (2026-10-04): vista previa, pantalla del swipe y vuelta a Share.
-            rutaFaseOfertaDonante = outputFilePaso.replace(/\.txt$/, '_SharePhoto.png');
-            rutaFaseEnviaDonante = outputFilePaso.replace(/\.txt$/, '_ShareSwipePhoto.png');
-            rutaFaseRecibeDonante = outputFilePaso.replace(/\.txt$/, '_ShareSentPhoto.png');
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFaseOfertaDonante, `<@${interaction.user.id}> The donor is sharing the card with Main!\n\nCard shared: **${nombreCarta}**`));
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFaseRecibeDonante, `Swipe registered — card actually shared.\n\n**${nombreCarta}**`));
-        }
-        if (paso.nombre === 'main_finalize_own_card') {
-            // Foto de la carta de Main justo antes de su propio swipe (2026-08-19, a pedido
-            // explicito del usuario) -- no se conoce el nombre de esta carta (se elige a
-            // ciegas por "mas cantidad primero"), asi que el mensaje no la nombra.
-            const rutaFotoMainSwipe = outputFilePaso.replace(/\.txt$/, '_MainSwipePhoto.png');
-            rutaFaseEnviaMain = rutaFotoMainSwipe;
-            if (fs.existsSync(rutaFotoMainSwipe)) onProgreso({ paso: 'Main swipe photo', estado: 'ok', fotoPath: rutaFotoMainSwipe });
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainSwipe, `<@${interaction.user.id}> Main sent its card — the trade is complete on both sides.`, true));
+                // Foto DESPUES del swipe (2026-08-22, a pedido explicito del usuario: las 2 fotos
+                // de arriba son ambas de ANTES de mandar la carta -- faltaba una prueba real de
+                // que el swipe se registro de verdad, no solo que se intento.
+                const rutaFotoEnviada = outputFilePaso.replace(/\.txt$/, '_SentPhoto.png');
+                rutaFaseRecibeDonante = rutaFotoEnviada;
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoEnviada, `Swipe registered — card actually sent.\n\n**${nombreCarta}**`));
+            }
+            if (paso.nombre === 'donor_share_card') {
+                // Fotos de Share (2026-10-04): vista previa, pantalla del swipe y vuelta a Share.
+                rutaFaseOfertaDonante = outputFilePaso.replace(/\.txt$/, '_SharePhoto.png');
+                rutaFaseEnviaDonante = outputFilePaso.replace(/\.txt$/, '_ShareSwipePhoto.png');
+                rutaFaseRecibeDonante = outputFilePaso.replace(/\.txt$/, '_ShareSentPhoto.png');
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFaseOfertaDonante, `<@${interaction.user.id}> The donor is sharing the card with Main!\n\nCard shared: **${nombreCarta}**`));
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFaseRecibeDonante, `Swipe registered — card actually shared.\n\n**${nombreCarta}**`));
+            }
+            if (paso.nombre === 'main_finalize_own_card') {
+                // Foto de la carta de Main justo antes de su propio swipe (2026-08-19, a pedido
+                // explicito del usuario) -- no se conoce el nombre de esta carta (se elige a
+                // ciegas por "mas cantidad primero"), asi que el mensaje no la nombra.
+                const rutaFotoMainSwipe = outputFilePaso.replace(/\.txt$/, '_MainSwipePhoto.png');
+                rutaFaseEnviaMain = rutaFotoMainSwipe;
+                if (fs.existsSync(rutaFotoMainSwipe)) onProgreso({ paso: 'Main swipe photo', estado: 'ok', fotoPath: rutaFotoMainSwipe });
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainSwipe, `<@${interaction.user.id}> Main sent its card — the trade is complete on both sides.`, true));
 
-            // Foto DESPUES del swipe de Main (2026-08-22, mismo motivo que la de la donante).
-            const rutaFotoMainEnviada = outputFilePaso.replace(/\.txt$/, '_MainSentPhoto.png');
-            rutaFaseRecibeMain = rutaFotoMainEnviada;
-            enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainEnviada, `Main swipe registered — card actually sent.`, true));
+                // Foto DESPUES del swipe de Main (2026-08-22, mismo motivo que la de la donante).
+                const rutaFotoMainEnviada = outputFilePaso.replace(/\.txt$/, '_MainSentPhoto.png');
+                rutaFaseRecibeMain = rutaFotoMainEnviada;
+                enColaFoto(() => mandarFotoTradeAlCanal(rutaFotoMainEnviada, `Main swipe registered — card actually sent.`, true));
+            }
+        }
+
+        copiasEnviadas = copia;
+        // Historial por copia: la ultima la registra el bloque de abajo (con su embed).
+        if (copia < copias) {
+            try { await registrarTransferenciaCarta(fileName, cartaId, 'main', interaction.user.id, friendId); } catch (e) { console.error('DEBUG: error guardando el historial de la copia Gold:', e?.message || e); }
         }
     }
-
+    tiempoTrade('tradeo completo', null);
     await colaFotos;  // todas las fotos del trade ya subidas, en orden, antes del resumen
     // Historial de transferencias (2026-09-28, pedido de Ale): trade completo = la carta salio de
     // esta cuenta. Se anota y se avisa con un embed chico: cuenta, carta y cantidad antes/despues.
@@ -6174,7 +6587,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
                         ? `Card shared. Thank you!\n\n**${nombreCarta}**\n\n🏠 **You can now log into your Main account — the card was shared!**`
                         : amigo
                         ? `Trade confirmed. Thank you very much for the trade!\n\n**${nombreCarta}**\n\n🤝 **Your friend can now check their trades — the card was sent!**\n⏳ Please wait a few minutes while we remove the traded card from Favorites to avoid future errors.`
-                        : `Trade confirmed. Thank you very much for the trade!\n\n**${nombreCarta}**\n\n🏠 **You can now log into your Main account!**\n⏳ Please wait a few minutes while we remove the traded card from Favorites to avoid future errors.`)
+                        : `Trade confirmed. Thank you very much for the trade!\n\n**${nombreCarta}**${copias > 1 ? `\n\n🟡 **${copias}/${copias}** copies sent.` : ''}\n\n🏠 **You can now log into your Main account!**\n⏳ Please wait a few minutes while we remove the traded card from Favorites to avoid future errors.`)
                     .setImage('attachment://main_trade_resumen.png');
                 const formCollage = new FormData();
                 formCollage.append('payload_json', JSON.stringify({ embeds: [embedCollage.toJSON()] }));
@@ -6204,6 +6617,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
         try {
             const r = await (promesaDesmarcar || ejecutarPasoAhk(ahkExe, RUTA_DONOR_OFFER_CARD_SCRIPT, [nombre, folderPath, 'DESMARCAR'], 2 * 60 * 1000, tmp()));
             okDesmarcar = !!r?.ok;
+            tiempoTrade(`desmarcar favoritas${okDesmarcar ? '' : ' (FALLO)'}`, null);
             if (!okDesmarcar) console.error('DEBUG: desmarcar favoritas fallo:', r?.resultado);
         } catch (e) {
             console.error('DEBUG: error desmarcando favoritas:', e?.message || e);
@@ -6223,7 +6637,7 @@ async function ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, f
     })();
 
     onProgreso({ paso: 'Trade completed', estado: 'ok', terminado: true });
-    const mensaje = `✅ ${etiquetaModo} completed: **${nombreCarta}** (\`${fileName}\`) ${share ? 'shared with' : 'sent to'} ${amigo ? 'your friend' : 'Main'}.`;
+    const mensaje = `✅ ${etiquetaModo} completed: ${copias > 1 ? `${copias}x ` : ''}**${nombreCarta}** (\`${fileName}\`) ${share ? 'shared with' : 'sent to'} ${amigo ? 'your friend' : 'Main'}.`;
     try {
         const canalRunInstance = await obtenerCanalComando(interaction.guildId, 'cmd_run_instance');
         if (canalRunInstance?.webhook_url) {
@@ -7374,7 +7788,28 @@ async function generarPdfCatalogoCartas(cartas, expansion, opciones = {}) {
 // (ngrok, Cloudflare Tunnel, etc.), no incluido.
 const DASHBOARD_PORT_BASE = Number(process.env.DASHBOARD_PORT) || 3005;
 const dashboardApp = express();
-const _dashboardTokens = new Map();
+// Links de las paginas de cuenta (Info Accounts): vencen a las 24 h aunque el bot no se reinicie
+// (2026-10-24, pedido de Ale: la pagina no pide login, asi que el link no puede durar para siempre).
+// Junto con el link se borra el JSON temporal que arma la comunidad para esa pagina.
+const VIDA_LINK_CUENTA_MS = 24 * 60 * 60 * 1000;
+class TokensConVencimiento extends Map {
+    set(token, datos) { return super.set(token, { ...datos, _creado: Date.now() }); }
+    get(token) {
+        const d = super.get(token);
+        if (d && Date.now() - d._creado > VIDA_LINK_CUENTA_MS) { this.vencer(token, d); return undefined; }
+        return d;
+    }
+    vencer(token, d) {
+        super.delete(token);
+        if (d?.archivoJson && d.archivoJson.includes('monitor_link_info')) fs.rm(d.archivoJson, { force: true }, () => {});
+    }
+}
+const _dashboardTokens = new TokensConVencimiento();
+setInterval(() => {
+    for (const [token, d] of Map.prototype.entries.call(_dashboardTokens)) {
+        if (Date.now() - d._creado > VIDA_LINK_CUENTA_MS) _dashboardTokens.vencer(token, d);
+    }
+}, 60 * 60 * 1000);
 // Sesiones de trade en vivo desde la pagina web (2026-08-08, a pedido explicito del usuario:
 // log en vivo con check/cruz por paso, en vez de solo un mensaje de texto fijo). En memoria
 // (se pierde en un reinicio, igual que _dashboardTokens) -- sesionId -> { pasos: [{paso,
@@ -7394,6 +7829,87 @@ function crearSesionTrade() {
 // Cada pagina del PDF original se pre-rendea una sola vez a PNG (ver assets/tutoriales_web/)
 // y esta ruta las sirve estaticas para la pagina /tutorials.
 dashboardApp.use('/tutorial-img', express.static(path.join(__dirname, 'assets', 'tutoriales_web')));
+// Monitor Link (monitor-link-server.js): rutas /link/* para el programa de cada miembro. Va ANTES
+// del express.json global porque /link/summary manda varios MB como texto.
+if (comunidad.hayComunidad()) monitorLink.registrar(dashboardApp, {
+    db,
+    alVincular: (discordId, guildId) => darRolMonitor(guildId, discordId),
+    alDesvincular: (discordId, guildId) => quitarRolMonitor(guildId, discordId),
+    // Amigo anotado en Monitor Link: solo el rol Monitor (Ale 2026-11-06: sin el rol Trainer).
+    alAgregarAmigo: (discordId, guildId) => darRolMonitor(guildId, discordId),
+    activo: () => hostComunidad.esActivo(),
+    nombreUsuario: async (id) => (await client.users.fetch(id).catch(() => null))?.username || null,
+    // Dragonite (registro de wr98): "My Main ID" de Monitor Link y online/offline (Ale 2026-11-10).
+    dragonite: async (discordId, guildId, accion, datos = {}) => {
+        const guild = client.guilds.cache.get(String(guildId));
+        const miembro = guild ? await guild.members.fetch(String(discordId)).catch(() => null) : null;
+        if (!miembro) return 'no_member';
+        if (accion === 'register') return comunidad.registrarMainDragonite(miembro, datos.main, datos.heartbeatName);
+        if (accion === 'status') return comunidad.estadoDragonite(miembro);
+        if (accion === 'main') return comunidad.mainDragonite(miembro);
+        const r = await comunidad.onlineDragonite(miembro, accion === 'online');
+        if (typeof r === 'object' && r.result === 'ok') avisarDragonite(guild, miembro, accion === 'online', r.grupo).catch(() => {});
+        return typeof r === 'object' ? r.result : r;
+    },
+    avisoGpStop: (discordId, guildId, fase, datos) => avisarGpStop(guildId, discordId, fase, datos)
+});
+// GP farm de la comunidad: los hosts Online (boton en el canal de hosts) se reparten la bolsa de proxies y
+// las cuentas que prestan los miembros (reroll-comunidad.js).
+if (comunidad.hayComunidad()) {
+    monitorLink.usarParteReroll(() => hostComunidad.parteReroll());
+    require('./reroll-comunidad.js').iniciar({ ml: monitorLink, fastTransfer, activo: () => hostComunidad.esActivo(), parte: (modo) => hostComunidad.parteReroll(modo),
+        // El GP farm sigue al panel GP (Start/Stop con "Community farm"); al cambiar se refresca el mensaje de control.
+        marcar: async (online, modo) => { await hostComunidad.marcarReroll(online, modo); hostComunidad.refrescarControl(); },
+        // Anti doble reroll: aviso en el canal de hosts (lo ve staff), una vez por main aunque lo vean varios hosts.
+        hostsFarm: (modo) => hostComunidad.hostsReroll(modo), primeraVez: hostComunidad.primeraVez,
+        marcarBaneada: hostComunidad.marcarBaneada, baneadas: hostComunidad.baneadas, webhookGp: hostComunidad.webhookGp,
+        subirGodPacks: hostComunidad.subirGodPacks, godPacksComunidad: hostComunidad.godPacksComunidad,
+        versionesGodPacks: hostComunidad.versionesGodPacks, guardarWebhookGp: hostComunidad.guardarWebhookGp,
+        nombreMain: (codigo) => comunidad.nombreDeFriendId(codigo),
+        ultimaRelease: hostComunidad.ultimaRelease, estaAlDia: hostComunidad.estaAlDia,
+        // Aviso de Open Packs Only (Ale 2026-11-09): tarjeta en el canal 🔒-hosts; con id se edita esa.
+        avisoOnlyPack: async ({ id, embed, archivo }) => {
+            for (const guild of client.guilds.cache.values()) {
+                if (!comunidad.esComunidad(guild.id)) continue;
+                const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
+                const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+                if (!canal) continue;
+                // (Ale 2026-11-12: "solo deberia haber un embed de cada host") El panel de hosts ya trae la tarjeta de
+                // cada host que farmea (Only Pack incluido): este aviso aparte ya no se publica y los que quedaron se borran.
+                if (MENU_HOSTS) {
+                    const ultimos = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+                    for (const m of ultimos?.values() || []) {
+                        if (m.author.id === client.user.id && [...m.attachments.values()].some(x => x.name === 'only-pack.png')) await m.delete().catch(() => {});
+                    }
+                    if (id) await canal.messages.delete(id).catch(() => {});
+                    return null;
+                }
+                const datos = { embeds: [embed], files: archivo ? [{ attachment: archivo.buffer, name: archivo.nombre }] : [],
+                    attachments: [], allowedMentions: { parse: [] } };
+                const previo = id ? await canal.messages.fetch(id).catch(() => null) : null;
+                if (previo) { await previo.edit(datos); return previo.id; }
+                const { attachments, ...nuevo } = datos;
+                return (await canal.send({ ...nuevo, flags: SIN_AVISO })).id;
+            }
+            return null;
+        },
+        nombreMiembro: async (discordId) => {
+            for (const guild of client.guilds.cache.values()) {
+                if (!comunidad.esComunidad(guild.id)) continue;
+                const m = await guild.members.fetch(discordId).catch(() => null);
+                if (m) return m.displayName;
+            }
+            return null;
+        },
+        avisar: async (texto) => {
+            for (const guild of client.guilds.cache.values()) {
+                if (!comunidad.esComunidad(guild.id)) continue;
+                const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
+                const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+                if (canal) await canal.send({ content: texto.slice(0, 1900), allowedMentions: { parse: [] }, flags: SIN_AVISO }).catch(() => {});
+            }
+        } });
+}
 dashboardApp.use(express.json());
 // Fondos animados de la pantalla de bienvenida de /tutorials (2026-08-08, a pedido
 // explicito del usuario -- reusa el mismo repositorio local de wallpapers ya usado para el
@@ -9184,6 +9700,7 @@ const CLOUDFLARED_URL_OFICIAL = 'https://github.com/cloudflare/cloudflared/relea
 // pisaba entre los dos, dejando a uno con "ENOENT" al renombrar. El nombre
 // temporal ahora incluye el PID de cada proceso para que nunca choquen.
 async function asegurarCloudflaredBot() {
+    if (process.platform !== 'win32') return asegurarCloudflaredMac();
     const rutaCloudflared = path.join(__dirname, 'bin', 'cloudflared.exe');
     if (fs.existsSync(rutaCloudflared)) return { ruta: rutaCloudflared, recienDescargado: false };
     try {
@@ -9209,6 +9726,30 @@ async function asegurarCloudflaredBot() {
     }
 }
 
+// Host en Mac (Arcade, 2026-10-31): Cloudflare publica cloudflared para macOS como .tgz; se baja una
+// vez y se descomprime con tar (viene con el sistema).
+async function asegurarCloudflaredMac() {
+    const rutaCloudflared = path.join(__dirname, 'bin', 'cloudflared');
+    if (fs.existsSync(rutaCloudflared)) return { ruta: rutaCloudflared, recienDescargado: false };
+    if (process.platform !== 'darwin') return null;
+    try {
+        fs.mkdirSync(path.dirname(rutaCloudflared), { recursive: true });
+        const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+        const tgz = path.join(os.tmpdir(), `cloudflared-${process.pid}.tgz`);
+        const respuesta = await axios.get(`https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${arch}.tgz`,
+            { responseType: 'arraybuffer', timeout: 120000, maxRedirects: 5 });
+        fs.writeFileSync(tgz, Buffer.from(respuesta.data));
+        execFileSync('tar', ['-xzf', tgz, '-C', path.dirname(rutaCloudflared)]);
+        fs.rmSync(tgz, { force: true });
+        fs.chmodSync(rutaCloudflared, 0o755);
+        console.log('✅ cloudflared descargado automaticamente (Mac).');
+        return { ruta: rutaCloudflared, recienDescargado: true };
+    } catch (e) {
+        console.log('DEBUG: no se pudo descargar cloudflared para Mac:', e.message);
+        return null;
+    }
+}
+
 // Bug real encontrado en vivo 2026-08-20: entre varios reinicios seguidos del bot en una
 // misma noche, quedaron 2 cloudflared.exe huerfanos vivos -- uno de ellos, apuntando a un
 // puerto que despues paso a usar OTRO proceso (el bot de produccion en esta misma PC),
@@ -9217,6 +9758,11 @@ async function asegurarCloudflaredBot() {
 // (nunca toca un cloudflared de otra instalacion/otro programa en la misma PC) -- mismo
 // patron ya usado para AHK en matarInstanciasAhkPrevias.
 function matarCloudflaredPrevios(rutaCloudflared) {
+    if (process.platform !== 'win32') {
+        // Mac: mismo filtro por la ruta exacta de esta instalacion.
+        try { execFileSync('pkill', ['-f', rutaCloudflared]); } catch (e) { /* no habia ninguno */ }
+        return;
+    }
     try {
         const rutaEscapada = rutaCloudflared.replace(/'/g, "''");
         const script = `Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" | Where-Object { $_.ExecutablePath -eq '${rutaEscapada}' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`;
@@ -9225,6 +9771,10 @@ function matarCloudflaredPrevios(rutaCloudflared) {
 }
 
 let DASHBOARD_PUBLIC_URL = null;
+// La direccion de este host en monitor_link:hosts se renueva (las de mas de 15 min se ignoran: PC apagada).
+setInterval(() => {
+    if (DASHBOARD_PUBLIC_URL && comunidad.hayComunidad()) monitorLink.anotarHost(hostComunidad.nombre(), DASHBOARD_PUBLIC_URL);
+}, 5 * 60 * 1000);
 async function iniciarTunelDashboard(puerto) {
     const resultado = await asegurarCloudflaredBot();
     if (!resultado) {
@@ -9247,6 +9797,9 @@ async function iniciarTunelDashboard(puerto) {
                 const match = texto.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
                 if (match && !DASHBOARD_PUBLIC_URL) {
                     DASHBOARD_PUBLIC_URL = match[0];
+                    if (comunidad.hayComunidad() && hostComunidad.esActivo()) monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL); // libreta de Monitor Link
+                    // Activo o en espera, este host recibe los resumenes de todos (ver monitorLink.anotarHost).
+                    if (comunidad.hayComunidad()) monitorLink.anotarHost(hostComunidad.nombre(), DASHBOARD_PUBLIC_URL);
                     console.log(`🌐 Tunel publico Info Accounts: ${DASHBOARD_PUBLIC_URL}`);
                 }
             };
@@ -9267,6 +9820,130 @@ async function iniciarTunelDashboard(puerto) {
         }
     }
 }
+
+// ---- Vigilante del enlace de Monitor Link (2026-11-07, Ale: el tunel de ZenithBot se cayo con el turno y
+// nadie podia conectar su Monitor Link por una hora) ----
+// 1) Cada host prueba SU direccion publica cada 2 min. Si no tiene direccion por 3 min, o falla 3 veces
+//    seguidas, cierra su cloudflared y abre otro (direccion nueva, que se publica sola).
+// 2) Un host en espera, con su enlace sano, prueba la direccion del host del turno: si no responde en 3
+//    revisiones seguidas (~6 min), toma el turno y avisa en el canal de hosts.
+// "Responde" = cualquier respuesta de nuestro servidor (401 sin clave, 503 "standby"...); los errores de
+// Cloudflare (502, 521-524, 530) o no conectar = caido.
+let tunelFallos = 0, tunelSinUrlDesde = 0, reiniciandoTunel = false, turnoAjenoFallos = 0;
+async function direccionResponde(url) {
+    try {
+        const r = await fetch(String(url).replace(/\/$/, '') + '/link/ping', { signal: AbortSignal.timeout(15000) });
+        return ![502, 521, 522, 523, 524, 530].includes(r.status);
+    } catch (e) { return false; }
+}
+async function reiniciarTunelLink(motivo) {
+    if (reiniciandoTunel || !DASHBOARD_PORT_ACTUAL) return;
+    reiniciandoTunel = true;
+    tunelFallos = 0; tunelSinUrlDesde = 0;
+    console.log(`🌐 Monitor Link tunnel restarted (${motivo})`);
+    try {
+        const r = await asegurarCloudflaredBot();
+        if (r) matarCloudflaredPrevios(r.ruta);
+        DASHBOARD_PUBLIC_URL = null;
+        await new Promise((res) => setTimeout(res, 3000));
+        await iniciarTunelDashboard(DASHBOARD_PORT_ACTUAL);
+    } catch (e) {
+        console.log('DEBUG: no se pudo reiniciar el tunel:', e?.message || e);
+    } finally {
+        reiniciandoTunel = false;
+    }
+}
+// Mensajes del canal 🔒-hosts sin notificación (@silent, Ale 2026-11-12: "me salen muchos pop up").
+const SIN_AVISO = 4096;   // MessageFlags.SuppressNotifications
+// Avisos de texto en 🔒-hosts (Likely banned, Turn moved...) se borran a los 10 min (Ale 2026-11-12).
+// Se revisa cada 2 min (asi tambien se borran los de antes de un reinicio). Solo los mensajes de ESTE bot
+// que son texto solo: los paneles (embeds/botones) no se tocan.
+const AVISO_HOSTS_MS = 10 * 60 * 1000;
+setInterval(async () => {
+    if (!client.isReady?.() || !comunidad.hayComunidad()) return;
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]).catch(() => null);
+        const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+        const ultimos = canal ? await canal.messages.fetch({ limit: 100 }).catch(() => null) : null;
+        for (const m of ultimos?.values() || []) {
+            // (Ale 2026-11-13: avisos de GengarBot seguian ahi desde el dia anterior) Tambien los de los bots de los
+            // otros hosts: si ese host esta apagado, su bot no los borra nunca. Solo bots (no webhooks ni personas).
+            const deUnBot = m.author.id === client.user.id || (m.author.bot && !m.webhookId);
+            if (!deUnBot || m.embeds.length || m.components.length || m.attachments.size) continue;
+            if (Date.now() - m.createdTimestamp >= AVISO_HOSTS_MS) await m.delete().catch(() => {});
+        }
+    }
+}, 2 * 60 * 1000);
+// (Ale 2026-11-13) Cuentas prestadas "probablemente baneadas": en vez de un aviso por cuenta, UN resumen al final del
+// dia (23:55 hora de Peru = 04:55 UTC) con todas las del dia por dueño y su total. Solo el host con el turno lo manda,
+// una vez por dia (candado en Upstash). Va como embed, asi el borrado de 10 min no lo toca. Solo el nombre del archivo
+// XML, nunca su contenido.
+const RESUMEN_BANEADAS_UTC = { h: 4, m: 55 };
+setInterval(async () => {
+    try {
+        if (!client.isReady?.() || !comunidad.hayComunidad() || !hostComunidad.esActivo()) return;
+        const ahora = new Date();
+        const min = ahora.getUTCHours() * 60 + ahora.getUTCMinutes(), desde = RESUMEN_BANEADAS_UTC.h * 60 + RESUMEN_BANEADAS_UTC.m;
+        if (min < desde || min > desde + 45) return;
+        const dia = new Date(ahora.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 10);
+        const todas = await hostComunidad.baneadasConFecha();
+        const hoy = todas.filter(b => Date.now() - b.ts < 24 * 3600 * 1000);
+        if (!hoy.length) return;
+        if (!(await hostComunidad.primeraVez(`zenith:ban_resumen:${dia}`, 3 * 24 * 3600))) return;
+        const porDueno = new Map();
+        for (const b of hoy) (porDueno.get(b.dueno) || porDueno.set(b.dueno, []).get(b.dueno)).push(b.archivo);
+        const totalDe = (d) => todas.filter(b => b.dueno === d).length;
+        let texto = '';
+        for (const [dueno, archivos] of [...porDueno.entries()].sort((a, b) => b[1].length - a[1].length)) {
+            const bloque = `<@${dueno}> — **${archivos.length}** today · ${totalDe(dueno)} in total\n\`\`\`\n${archivos.sort().join('\n')}\n\`\`\`\n`;
+            if (texto.length + bloque.length > 3800) { texto += `…and more (${hoy.length} accounts today in total).`; break; }
+            texto += bloque;
+        }
+        const embed = new EmbedBuilder().setColor(0xE74C3C)
+            .setTitle(`⛔ Likely banned accounts — ${dia}`)
+            .setDescription(texto)
+            .setFooter({ text: `${hoy.length} account(s) today · the game refused them on 2+ different proxies. The GP farm won't open them again; they show as "Banned?" in each owner's Monitor Link.` })
+            .setTimestamp();
+        for (const guild of client.guilds.cache.values()) {
+            if (!comunidad.esComunidad(guild.id)) continue;
+            const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]).catch(() => null);
+            const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+            if (canal) await canal.send({ embeds: [embed], allowedMentions: { parse: [] }, flags: SIN_AVISO }).catch(() => {});
+        }
+    } catch (e) { console.error('DEBUG: banned summary:', e?.message || e); }
+}, 5 * 60 * 1000);
+async function avisarCanalHostsBot(texto) {
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]).catch(() => null);
+        const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+        if (canal) await canal.send({ content: texto.slice(0, 1900), allowedMentions: { parse: [] }, flags: SIN_AVISO }).catch(() => {});
+    }
+}
+setInterval(async () => {
+    if (!DASHBOARD_PORT_ACTUAL || reiniciandoTunel || !comunidad.hayComunidad()) return;
+    // 1) Mi propio enlace
+    if (!DASHBOARD_PUBLIC_URL) {
+        if (!tunelSinUrlDesde) tunelSinUrlDesde = Date.now();
+        else if (Date.now() - tunelSinUrlDesde > 3 * 60 * 1000) await reiniciarTunelLink('no public address');
+        return;
+    }
+    tunelSinUrlDesde = 0;
+    if (await direccionResponde(DASHBOARD_PUBLIC_URL)) tunelFallos = 0;
+    else if (++tunelFallos >= 3) { await reiniciarTunelLink('public address not answering'); return; }
+    if (tunelFallos) return;
+    // 2) El enlace del host del turno (solo si este host esta en espera y sano)
+    if (hostComunidad.esActivo()) { turnoAjenoFallos = 0; return; }
+    const turno = await monitorLink.direccionPublicada?.().catch(() => null);
+    if (!turno || turno === DASHBOARD_PUBLIC_URL || await direccionResponde(turno)) { turnoAjenoFallos = 0; return; }
+    if (++turnoAjenoFallos < 3) return;
+    turnoAjenoFallos = 0;
+    console.log('🔁 The host on turn has an unreachable Monitor Link address - taking the turn');
+    await hostComunidad.tomarTurnoYa().catch(() => {});
+    await monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL).catch(() => {});
+    await avisarCanalHostsBot(`🔁 **Turn moved to ${hostComunidad.nombre()}** — the Monitor Link connection of the host on turn wasn't answering for ~6 min, so members couldn't reach the bot. It's back now (Monitor Links reconnect by themselves).`);
+}, 2 * 60 * 1000);
 
 let DASHBOARD_PORT_ACTUAL = null;
 // Mismo mecanismo de "Ports in use.txt" que ya usan s4t.js/heartbeat.js (2026-08-21, bug
@@ -9359,6 +10036,10 @@ const XML_SELECT_POR_PAGINA = 25;
 // hace el dropdown de Trade (2026-09-15, a pedido explicito del usuario: "no sale al
 // lado la cantidad como en trade" en el dropdown de Inject). El value en ambos casos
 // sigue siendo solo el fileName, para no romper ningun handler que ya lo consume.
+// Listas de cuenta que se abren en un mensaje aparte de la carta: llevan "⬅️ Back" (cierra ese
+// mensaje y deja la carta como estaba).
+const PREFIJOS_CON_VOLVER = new Set(['card_shinedust_cuenta', 'card_inject_cuenta', 'card_info_accounts_cuenta', 'card_extract_cuenta']);
+
 function construirSelectXmlPaginado(fileNames, cartaId, pagina, prefix) {
     const totalPaginas = Math.max(1, Math.ceil(fileNames.length / XML_SELECT_POR_PAGINA));
     const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
@@ -9380,6 +10061,10 @@ function construirSelectXmlPaginado(fileNames, cartaId, pagina, prefix) {
             new ButtonBuilder().setCustomId(`${prefix}_pag::${cartaId}::${paginaSegura - 1}`.slice(0, 100)).setLabel('◀️ Previous').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura <= 0),
             new ButtonBuilder().setCustomId(`${prefix}_pag::${cartaId}::${paginaSegura + 1}`.slice(0, 100)).setLabel('Next ▶️').setStyle(ButtonStyle.Secondary).setDisabled(paginaSegura >= totalPaginas - 1)
         ));
+    }
+    if (PREFIJOS_CON_VOLVER.has(prefix)) {
+        componentes.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('sub_volver').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)));
     }
     return { content: `Which account? (${fileNames.length} found)`, components: componentes };
 }
@@ -9410,7 +10095,54 @@ async function resolverImagenReferenciaCartaBot(cartaId, rutaMasterPath) {
         || null;
 }
 
+// Info Accounts en la comunidad: la XML y el JSON de esa cuenta, solo para quien la pidio (mensaje
+// privado que se borra a los 5 minutos). Los dos salen de su PC por Monitor Link.
+async function mandarArchivosCuentaPrivado(interaction, miembro, fileName, comoRespuesta = false) {
+    const archivos = [];
+    const { archivo: xml } = await xmlDeMiembro(miembro, fileName);
+    if (xml) archivos.push(xml);
+    try {
+        const r = await monitorLink.pedirAccion(miembro, { action: 'account_json', file: fileName }, 60000);
+        if (r.ok && r.json) archivos.push(new AttachmentBuilder(Buffer.from(r.json, 'utf8'), { name: r.jsonName || `${fileName.replace(/\.xml$/i, '')}.json` }));
+    } catch (e) { /* Monitor Link viejo o apagado: se manda lo que haya */ }
+    const enviar = (payload) => comoRespuesta ? interaction.editReply(payload) : interaction.followUp({ ...payload, ephemeral: true });
+    if (!archivos.length) {
+        return await enviar({ content: '⚠️ Could not get the XML/JSON from your Monitor Link (is it running and up to date?).' }).catch(() => {});
+    }
+    const mensaje = await enviar({ content: `🔐 Your account files — only you can see this. They delete themselves in 5 minutes, save them now.`, files: archivos }).catch(() => null);
+    if (mensaje) {
+        setTimeout(() => (comoRespuesta ? interaction.deleteReply() : interaction.webhook.deleteMessage(mensaje.id)).catch(() => {}), 5 * 60 * 1000);
+    }
+}
+
+// La XML que se le mando al miembro (Extract XML en la comunidad) se borra sola a los 5 minutos: es la
+// llave de su cuenta y no conviene que quede en Discord (2026-10-24, pedido de Ale).
+function borrarXmlEnviada(interaction) {
+    setTimeout(() => {
+        interaction.editReply({ content: '🗑️ The XML was deleted for safety. Use Extract XML again if you need it.', files: [], attachments: [], components: [] })
+            .catch(() => {});
+    }, 5 * 60 * 1000);
+}
+
+// Extract XML en la comunidad: la XML se le pide al Monitor Link del miembro y se le manda SOLO a el,
+// en privado (nunca al canal ni al webhook). Devuelve { archivo: AttachmentBuilder } o { error }.
+async function xmlDeMiembro(discordId, nombre) {
+    const nombreXml = /\.xml$/i.test(nombre) ? nombre : `${nombre}.xml`;
+    try {
+        const archivos = await monitorLink.pedirXml(discordId, [nombreXml]);
+        const contenido = Object.entries(archivos).find(([n]) => n.toLowerCase() === nombreXml.toLowerCase())?.[1];
+        if (!contenido) return { error: `❌ \`${nombreXml}\` was not found in your **Saved** folder.` };
+        return { archivo: new AttachmentBuilder(Buffer.from(contenido, 'utf8'), { name: nombreXml }) };
+    } catch (e) {
+        return { error: e.message === 'offline'
+            ? '🔗 Your **Monitor Link** is not running — open it on your PC and try again.'
+            : '⏱️ Your **Monitor Link** did not answer in time — check it is running and try again.' };
+    }
+}
+
 function buscarXmlPorCarta(rutaJsonCuentas, cartaId) {
+    const usuarioComunidad = comunidad.usuarioActual();
+    if (usuarioComunidad) return monitorLink.cuentasPorCartaDe(usuarioComunidad, cartaId);
     if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
     const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
     const resultados = [];
@@ -9444,6 +10176,8 @@ function buscarXmlPorCarta(rutaJsonCuentas, cartaId) {
 // tocar ninguna instancia. El bot NUNCA escribe estos archivos -- son de la herramienta de
 // Kevin, no nuestros.
 function buscarShinedustTodasCuentas(rutaJsonCuentas) {
+    const usuarioComunidad = comunidad.usuarioActual();
+    if (usuarioComunidad) return monitorLink.shinedustDe(usuarioComunidad);
     if (!rutaJsonCuentas || !fs.existsSync(rutaJsonCuentas)) return null;
     const archivos = fs.readdirSync(rutaJsonCuentas).filter(f => f.toLowerCase().endsWith('.json'));
     const resultados = [];
@@ -9467,7 +10201,7 @@ function buscarShinedustTodasCuentas(rutaJsonCuentas) {
 
 const SHINEDUST_POR_PAGINA = 25;
 
-function construirEmbedShinedust(resultados, pagina = 0) {
+function construirEmbedShinedust(resultados, pagina = 0, mapaEmojis = {}) {
     const embed = new EmbedBuilder()
         .setTitle('🍬 Shinedust per account')
         .setColor(0xE91E63);
@@ -9482,6 +10216,9 @@ function construirEmbedShinedust(resultados, pagina = 0) {
     }
 
     const totalGeneral = resultados.reduce((suma, r) => suma + r.valor, 0);
+    // (Ale 2026-11-12) Relojes de sobres (los lee ⚡ Refresh): por cuenta y total, para verlos antes de gastar.
+    const conRelojes = resultados.filter(r => typeof r.relojes === 'number');
+    const totalRelojes = conRelojes.reduce((suma, r) => suma + r.relojes, 0);
     const totalPaginas = Math.max(1, Math.ceil(resultados.length / SHINEDUST_POR_PAGINA));
     const paginaSegura = Math.min(Math.max(pagina, 0), totalPaginas - 1);
     const inicio = paginaSegura * SHINEDUST_POR_PAGINA;
@@ -9490,10 +10227,28 @@ function construirEmbedShinedust(resultados, pagina = 0) {
     // Bloque de codigo (2026-09-16, a pedido explicito del usuario): Discord dibuja
     // automatico un boton de copiar en la esquina de un bloque ``` en la version de
     // escritorio -- nada que el bot tenga que armar, solo envolver el texto en ```.
-    const anchoNombre = Math.max(...items.map(r => r.nombreCuenta.length), 10);
-    const lineas = items.map(r => `${r.nombreCuenta.padEnd(anchoNombre)}  ${r.valor.toLocaleString('en-US')}`);
-    embed.setDescription('```\n' + lineas.join('\n') + '\n```')
-        .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas} • ${resultados.length} account(s) • Total: ${totalGeneral.toLocaleString('en-US')}` });
+    // (Ale 2026-11-13: "que sea mas ordenado") Columnas fijas que entran en el celular: nombre sin ".xml",
+    // Shinedust y relojes alineados a la derecha, con encabezado. Los emojis del juego van arriba (dentro de un
+    // bloque de codigo Discord no los dibuja). G = regalos pendientes, X = no pudo entrar (baneada/borrada?).
+    const nombreCorto = (n) => String(n).replace(/\.xml$/i, '');
+    const fmt = (n) => Number(n || 0).toLocaleString('en-US');
+    const anchoNombre = Math.min(20, Math.max(...items.map(r => nombreCorto(r.nombreCuenta).length), 7));
+    const anchoValor = Math.max(...items.map(r => fmt(r.valor).length), 4);
+    const hayRelojes = items.some(r => typeof r.relojes === 'number');
+    const anchoReloj = Math.max(...items.map(r => typeof r.relojes === 'number' ? fmt(r.relojes).length : 1), 2);
+    const recortar = (n) => { const c = nombreCorto(n); return c.length > anchoNombre ? c.slice(0, anchoNombre - 1) + '~' : c.padEnd(anchoNombre); };
+    const cab = `${'Account'.padEnd(anchoNombre)}  ${'Dust'.padStart(anchoValor)}` + (hayRelojes ? `  ${'HG'.padStart(anchoReloj)}` : '');
+    const lineas = items.map(r => `${recortar(r.nombreCuenta)}  ${fmt(r.valor).padStart(anchoValor)}` +
+        (hayRelojes ? `  ${(typeof r.relojes === 'number' ? fmt(r.relojes) : '-').padStart(anchoReloj)}` : '') +
+        (r.regalos ? ` G${r.regalos}` : '') + (r.estado === 'login_failed' ? ' X' : ''));
+    const emDust = emojiTag(mapaEmojis, 'Polvo_iris_TCGP') || '🍬';
+    const emReloj = emojiTag(mapaEmojis, 'Reloj_de_arena_de_sobres_TCGP') || '⏳';
+    const arriba = `${emDust} **Shinedust:** ${fmt(totalGeneral)}` +
+        (conRelojes.length ? `\n${emReloj} **Pack hourglasses:** ${fmt(totalRelojes)} · ${fmt(Math.floor(totalRelojes / 12))} paid packs` : '');
+    embed.setDescription(arriba + '\n```\n' + cab + '\n' + lineas.join('\n') + '\n```')
+        .setFooter({ text: `Page ${paginaSegura + 1} of ${totalPaginas} • ${resultados.length} account(s)` +
+            (hayRelojes ? ' • HG = pack hourglasses' : '') +
+            (items.some(r => r.regalos || r.estado === 'login_failed') ? '\nG = gifts to claim · X = could not log in (banned or deleted?)' : '') });
 
     // Boton "Track Shinedust" (2026-09-16, a pedido explicito del usuario): deja elegir
     // una cuenta de ESTA pagina para leerla EN VIVO por OCR (mismo motor de
@@ -9642,6 +10397,7 @@ function construirSlashCommands() {
             .addAttachmentOption(opt => opt.setName('image').setDescription('Optional screenshot/photo of the problem').setRequired(false)),
         new SlashCommandBuilder().setName('farmtickets').setDescription('Farm Shop Tickets by liking Community Showcases'),
         new SlashCommandBuilder().setName('shinedust').setDescription('Shows the saved Shinedust total for every account, sorted highest first'),
+        new SlashCommandBuilder().setName('link').setDescription('Link Monitor Link on your PC so the bot works with YOUR cards'),
         new SlashCommandBuilder().setName('transfers').setDescription('Shows the card transfers you have made: accounts used, cards sent and where')
     ].map(cmd => cmd.toJSON());
 }
@@ -9662,11 +10418,19 @@ async function obtenerGuildIdsRegistrables() {
     return [...guildIds];
 }
 
+// Comandos de un server: en la comunidad, ninguno si otro host tiene el turno (asi nunca se ven los
+// comandos de dos bots a la vez).
+function comandosDeGuild(guildId, commands) {
+    if (comunidad.esComunidad(guildId) && !hostComunidad.esActivo()) return [];
+    return comunidad.comandosPara(guildId, commands);
+}
+
 async function registrarSlashCommands() {
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     const commands = construirSlashCommands();
     const guildIds = new Set(client.guilds.cache.map(guild => guild.id));
     for (const guildId of await obtenerGuildIdsRegistrables()) guildIds.add(guildId);
+    if (comunidad.soloComunidad()) for (const id of [...guildIds]) if (!comunidad.esComunidad(id)) guildIds.delete(id);
     const applicationId = CLIENT_ID || client.user?.id;
 
     if (!applicationId) {
@@ -9680,7 +10444,8 @@ async function registrarSlashCommands() {
     }
 
     for (const guildId of guildIds) {
-        await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: commands });
+        // Modo comunidad: ahi solo los comandos de los canales prioritarios (community.js).
+        await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: comandosDeGuild(guildId, commands) });
         console.log(`✅ Slash commands registered in guild ${guildId}`);
     }
 }
@@ -9704,6 +10469,12 @@ async function registrarSlashCommands() {
 // hay dos a la vez -- solo cambia de posición (queda al final), nunca se
 // duplica.
 async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, archivos = [], forzarReubicar = false, guild = null) {
+    // Filas de botones vacias (2026-10-23, bug real en un Sync desde cero: el panel de Trading
+    // sin tutorial armaba una fila sin botones y Discord rechazaba todo el mensaje con 400).
+    if (Array.isArray(payloadJson?.components)) {
+        payloadJson.components = payloadJson.components.filter(fila =>
+            ((fila?.components ?? fila?.data?.components ?? fila?.toJSON?.().components) || []).length > 0);
+    }
     const claveMsg = `interfaz_msg_${clave}`;
     const filaMsg = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [userId, claveMsg]);
     const msgId = filaMsg?.estado || null;
@@ -9779,10 +10550,14 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
         return { data: form, headers: form.getHeaders() };
     };
 
+    // Comunidad: el panel queda anotado como de este bot (ver hostComunidad.anotarPanel).
+    const anotarPanel = (m) => hostComunidad.anotarPanel(m?.id, m?.channel_id, client.user?.id);
+
     if (msgId && !forzarReubicar) {
         try {
             const { data, headers } = construirRequest();
-            await axios.patch(`${webhookUrl}/messages/${msgId}`, data, { headers, timeout: 15000 });
+            const r = await axios.patch(`${webhookUrl}/messages/${msgId}`, data, { headers, timeout: 15000 });
+            await anotarPanel(r.data);
             return;
         } catch (e) {
             // el mensaje ya no existe (borrado a mano) -> se crea uno nuevo abajo
@@ -9798,7 +10573,7 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
     // busca en el historial reciente del canal un mensaje de webhook con el mismo titulo de
     // embed -- si aparece, se adopta su ID (se guarda para la proxima) y se edita ESE en vez
     // de crear uno nuevo.
-    if (!msgId && guild) {
+    if (guild && !forzarReubicar) {
         try {
             const infoWebhook = await axios.get(webhookUrl, { timeout: 8000 });
             const canalId = infoWebhook.data?.channel_id;
@@ -9810,13 +10585,20 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
                 if (existente) {
                     try {
                         const { data, headers } = construirRequest();
-                        await axios.patch(`${webhookUrl}/messages/${existente.id}`, data, { headers, timeout: 15000 });
+                        const r = await axios.patch(`${webhookUrl}/messages/${existente.id}`, data, { headers, timeout: 15000 });
+                        await anotarPanel(r.data);
                         await db.run(
                             `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, ?, ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
                             [userId, claveMsg, String(existente.id), String(existente.id)]
                         );
                         return;
-                    } catch (e) { /* el mensaje encontrado no le pertenece a ESTE webhook -> se sigue abajo */ }
+                    } catch (e) {
+                        // Es de otro webhook. Comunidad con varios hosts (2026-10-25, pedido de Ale: "lo veo
+                        // innecesario"): si es un mensaje solo informativo (sin botones), sirve igual aunque lo
+                        // haya mandado el bot del otro host -- no se duplica. Con botones si hace falta uno propio.
+                        const sinBotones = !(payloadJson.components || []).length && !existente.components?.length;
+                        if (sinBotones && comunidad.esComunidad(guild.id)) return;
+                    }
                 }
             }
         } catch (e) { /* si falla la busqueda, se sigue con el post normal de abajo -- mejor un duplicado ocasional que nunca mandar el mensaje */ }
@@ -9824,6 +10606,7 @@ async function enviarOEditarInterfaz(userId, clave, webhookUrl, payloadJson, arc
 
     const { data, headers } = construirRequest();
     const resp = await axios.post(`${webhookUrl}?wait=true`, data, { headers, timeout: 15000 });
+    await anotarPanel(resp.data);
     await db.run(
         `INSERT INTO configs_extras (discord_id, tipo, estado) VALUES (?, ?, ?) ON CONFLICT(discord_id, tipo) DO UPDATE SET estado = ?`,
         [userId, claveMsg, String(resp.data.id), String(resp.data.id)]
@@ -9847,6 +10630,32 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
         if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
             embed.setThumbnail('attachment://symbol.png');
             archivos.push({ ruta: SYMBOL_EMBEDS_PATH, filename: 'symbol.png' });
+        }
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar, guild);
+        return;
+    }
+    if (commandKey === 'all_missions') {
+        const embed = new EmbedBuilder().setColor(0xFFD54F).setTitle('🎯 All Missions')
+            .setDescription([
+                'Every **themed collection** of Pokémon TCG Pocket, expansion by expansion:',
+                'which cards each mission asks for and **what it gives you** — emblems, icons, binders, hourglasses, shop tickets and more.',
+                '',
+                'Press **🎯 View Missions**, pick an expansion and complete them with your accounts! 🏆'
+            ].join('\n'))
+            .setFooter({ text: 'Data: serebii.net' });
+        const fila = filaBotonesConTutorial('cmd_all_missions',
+            new ButtonBuilder().setCustomId('missions_ver').setLabel('🎯 View Missions').setStyle(ButtonStyle.Primary)
+        );
+        const bannerPath = await elegirBannerAllCardsAleatorio();
+        const symbolPath = path.join(__dirname, 'assets', 'embeds', 'symbol.png');
+        const archivos = [];
+        if (fs.existsSync(bannerPath)) {
+            embed.setImage('attachment://card_banner.png');
+            archivos.push({ ruta: bannerPath, filename: 'card_banner.png' });
+        }
+        if (fs.existsSync(symbolPath)) {
+            embed.setThumbnail('attachment://symbol.png');
+            archivos.push({ ruta: symbolPath, filename: 'symbol.png' });
         }
         await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar, guild);
         return;
@@ -10735,7 +11544,47 @@ async function generarPanelBuildEmbed(userId, guild = null) {
     };
 }
 
+// Panel de /setup del server de comunidad (pedido de Ale): sin S4T, Heartbeat, Auto-Close,
+// Configuration, Tutorial ni Add Friend -- son de la PC host. Agrega 📂 All Main Paths (las carpetas
+// que vinculo cada miembro con Monitor Link).
+async function construirPanelComunidad() {
+    const driveHdRegularOn = await driveHdRegularHabilitado();
+    const embed = new EmbedBuilder()
+        .setTitle(' 👑  Pokemon Home PTCGPB!  👑​')
+        .setDescription(
+            `Hello! This is the **community** version of Monitor Pokémon — every member works with **their own** cards, linked from their PC with **Monitor Link**.\n\n` +
+            `• 🖼️ **Normal Cards in HD:** \`${driveHdRegularOn ? '🟢 ON' : '🔴 OFF'}\`\n` +
+            `-# OFF: normal cards stay low quality, Gold cards always HD. ON: normal cards also HD, but uses more disk space over time.\n\n` +
+            `**🎴 Available Features:**\n` +
+            `• 🔗 **/link** — link Monitor Link on your PC (once).\n` +
+            `• ⚡ **All Cards** — your cards and copies, from your own accounts.\n` +
+            `• 🏆 **Gold Cards** and 🍬 **Shinedust** — your own accounts.\n` +
+            `• 🔄 **Trade** / 🃏 **Share** — ⚡ to your Main, or 🎁 gift to a member.\n` +
+            `• 🎫 **Farm Shop Tickets** — for your Main, or 🎁 gift to a member.\n\n` +
+            `*Press the buttons to interact with the bot's ecosystem.*`
+        )
+        .setColor(0x9B59B6)
+        .setFooter({ text: 'Monitor Pokémon · Community' })
+        .setTimestamp();
+    const fila1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('btn_crear_canales_menu').setLabel('🏗️ Sync Channels').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('toggle_drive_hd_regular').setLabel('🖼️ Normal Cards HD On/Off').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('link_poner_carpeta').setLabel('📁 Set My Folder').setStyle(ButtonStyle.Success)
+    );
+    const fila2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('link_todas_rutas').setLabel('📂 All Main Paths').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('btn_check_updates').setLabel('🔄 Check for Updates').setStyle(ButtonStyle.Secondary)
+    );
+    const archivos = [];
+    if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+        embed.setThumbnail('attachment://symbol.png');
+        archivos.push({ ruta: SYMBOL_EMBEDS_PATH, filename: 'symbol.png' });
+    }
+    return { embeds: [embed], components: [fila1, fila2], archivos };
+}
+
 async function generarPanelControl(guildId) {
+    if (comunidad.esComunidad(guildId)) return await construirPanelComunidad();
     let estadoS4T = await verificarEstadoPM2('trading', 's4t.js');
     let estadoHB = await verificarEstadoPM2('heartbeat', 'heartbeat.js');
 
@@ -10814,7 +11663,10 @@ async function generarPanelControl(guildId) {
         archivos.push({ ruta: SYMBOL_EMBEDS_PATH, filename: 'symbol.png' });
     }
 
-    return { embeds: [embed], components: [filaSistema, filaGestion, filaTrade], archivos };
+    // Comunidad: sin Add Friend / Status ID -- los destinos salen del registro de wr98 (community.js),
+    // nunca de la lista de amigos guardados de esta PC.
+    return comunidad.quitarComponentes(guildId, { embeds: [embed], components: [filaSistema, filaGestion, filaTrade], archivos },
+        ['setup_add_friend', 'setup_status_friends']);
 }
 
 const FUENTES_CARTAS = {
@@ -10910,7 +11762,220 @@ function prefijoDeCartas(customId) {
     return customId.startsWith('allcards') ? 'allcards' : 'wishlist';
 }
 
-client.on('interactionCreate', async interaction => {
+// Comunidad: en los canales del bot solo publica el bot. Si un miembro escribe un mensaje normal, se
+// borra al instante (los comandos /card, /wishlist... no son mensajes y funcionan igual). El staff puede
+// escribir. Solo el host con el turno lo hace.
+const _canalesDelBot = { ts: 0, ids: new Set() };
+client.on('messageCreate', async (message) => {
+    try {
+        if (!message.guild || message.author?.bot || message.webhookId || message.system) return;
+        if (!comunidad.esComunidad(message.guild.id) || !hostComunidad.esActivo()) return;
+        if (Date.now() - _canalesDelBot.ts > 5 * 60 * 1000) {
+            const filas = await db.all(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND canal_id IS NOT NULL`, [message.guild.id]);
+            _canalesDelBot.ids = new Set((filas || []).map(f => f.canal_id));
+            _canalesDelBot.ts = Date.now();
+        }
+        if (!_canalesDelBot.ids.has(message.channelId)) return;
+        if (comunidad.esStaff(message.author.id, message.member)) return;
+        await message.delete().catch(() => {});
+    } catch (e) { /* nada */ }
+});
+
+// Cada interaccion corre con su usuario en comunidad.contexto (ver community.js / monitor-link-server.js).
+client.on('interactionCreate', (interaction) => comunidad.contexto.run(
+    { guildId: interaction.guildId, userId: interaction.user?.id },
+    () => manejarInteraccionPrincipal(interaction).catch(e => console.error('DEBUG: error en interaccion:', e))
+));
+async function manejarInteraccionPrincipal(interaction) {
+    if (comunidad.soloComunidad() && !comunidad.esComunidad(interaction.guildId)) return;
+    // 🌟 GP webhook (staff, cualquier host): ventana privada para guardar el webhook de God Packs de la comunidad.
+    if (interaction.isStringSelectMenu?.() && comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_menu' || interaction.customId.startsWith('host_pick::'))) {
+        return await manejarMenuHosts(interaction);
+    }
+    if (comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_gpwebhook' || interaction.customId === 'host_gpwebhook_modal')) {
+        return await manejarWebhookGp(interaction);
+    }
+    if (interaction.isButton() && comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_tomar' || interaction.customId.startsWith('host_ceder::'))) {
+        return await manejarBotonHost(interaction);
+    }
+    if (interaction.isButton() && comunidad.esComunidad(interaction.guildId) && interaction.customId.startsWith('reroll_')) {
+        return await manejarBotonReroll(interaction);
+    }
+    if (comunidad.esComunidad(interaction.guildId) && !hostComunidad.esActivo()) return;
+    // Amigo de un miembro (lo anoto el miembro en su Monitor Link): sin Monitor Link propio, el bot le
+    // muestra y le deja usar las cuentas del miembro -- todo lo que sigue corre como si fuera el dueño.
+    if (comunidad.esComunidad(interaction.guildId) && interaction.user) {
+        const duenoAmigo = monitorLink.duenoDe(interaction.user.id);
+        if (duenoAmigo && !(await monitorLink.estadoAgente(interaction.user.id).catch(() => ({}))).vinculado) {
+            interaction._usuarioMonitor = duenoAmigo;
+            comunidad.contexto.enterWith({ guildId: interaction.guildId, userId: duenoAmigo });
+        }
+    }
+    // Lista desplegable de la carta (comunidad): la opcion elegida se atiende igual que su boton.
+    if (interaction.isStringSelectMenu() && interaction.customId === 'card_menu') {
+        interaction.customId = interaction.values[0];
+        interaction.isButton = () => true;
+        interaction.isStringSelectMenu = () => false;
+        interaction.isAnySelectMenu = () => false;
+    }
+    // Modo comunidad: fuera del staff, nadie usa el bot ahi todavia (nunca ve datos de esta PC).
+    if (await comunidad.bloquearSiHaceFalta(interaction)) return;
+    // Comunidad: los botones y menus de un mensaje que abrio otra persona (su wishlist, su carta, su
+    // ⚡) solo los puede usar ella -- con todo a la vista, si no cualquiera le cambiaba la pagina o
+    // le abria otra carta. Los paneles de los canales (webhooks) no tienen dueño y siguen abiertos.
+    if (comunidad.esComunidad(interaction.guildId) && interaction.isMessageComponent?.()) {
+        const dueno = interaction.message?.interactionMetadata?.user?.id || interaction.message?.interaction?.user?.id;
+        // Next/Previous de una wishlist si los puede usar cualquiera (pedido de Ale): pasa la pagina
+        // de la wishlist DEL DUEÑO, asi que el resto de esta interaccion corre como si fuera el.
+        if (dueno && dueno !== interaction.user.id && /^wishlist_pagina_-?\d+$/.test(interaction.customId)) {
+            interaction._duenoLista = dueno;
+            comunidad.contexto.enterWith({ guildId: interaction.guildId, userId: dueno });
+            await monitorLink.precargar(dueno).catch(() => false);
+        } else if (dueno && dueno !== interaction.user.id && !/^fast_(lend|use)::/.test(interaction.customId)) {
+            // (fast_lend/fast_use: pedido de ayuda, lo atiende cualquiera en linea; fast-transfer.js valida quien.)
+            return await interaction.reply({ ephemeral: true,
+                content: `🔒 This belongs to <@${dueno}> — only they can use these buttons. Open your own with **📋 View my Wishlist** or **/card**.` }).catch(() => {});
+        }
+    }
+    // Canales a la vista de todos (2026-10-26, pedido de Ale): sin el rol Monitor, los comandos (menos
+    // /link) y los paneles de los canales le dicen donde descargar Monitor Link. Lo de un mensaje con
+    // dueño ya lo cubre el guardia de arriba; los tutoriales quedan abiertos.
+    if (comunidad.esComunidad(interaction.guildId) && interaction.member && !comunidad.esStaff(interaction.user.id, interaction.member)) {
+        const esComando = interaction.isChatInputCommand() && interaction.commandName !== 'link';
+        const esPanel = interaction.isMessageComponent?.() && !interaction.message?.interactionMetadata && !interaction.message?.interaction
+            && !interaction.customId.startsWith('tutorial_');
+        if (esComando || esPanel) {
+            const rol = await comunidad.rolMonitor(interaction.guild).catch(() => null);
+            if (rol && !interaction.member.roles.cache.has(rol.id) && !interaction._usuarioMonitor) return await avisoVincularPrimero(interaction);
+        }
+    }
+    // Comunidad + Monitor Link: las cartas salen del resumen que subio el programa de ESTE usuario.
+    if (comunidad.esComunidad(interaction.guildId) && interaction.user) {
+        const vinculado = await monitorLink.precargar(interaction._usuarioMonitor || interaction.user.id).catch(() => false);
+        if (interaction.isChatInputCommand()) {
+            const cmd = interaction.commandName;
+            // Resultados personales en privado (pedido de Ale): solo los ve quien los pidio, con
+            // "Dismiss message". Se fuerza ephemeral en las respuestas de estos comandos.
+            // /card ya no: la carta queda a la vista de todos y su lista de opciones solo la usa quien la abrio.
+            if (['goldcards', 'shinedust', 'farmtickets', 'transfers', 'wishlist', 'extract'].includes(cmd)) {
+                const deferOriginal = interaction.deferReply.bind(interaction);
+                const replyOriginal = interaction.reply.bind(interaction);
+                interaction.deferReply = (opts = {}) => deferOriginal({ ...opts, ephemeral: true });
+                interaction.reply = (opts = {}) => replyOriginal(typeof opts === 'string' ? { content: opts, ephemeral: true } : { ...opts, ephemeral: true });
+            }
+            if (!vinculado && ['card', 'goldcards', 'shinedust', 'wishlist'].includes(cmd)) {
+                return await interaction.reply({ content: '🔗 Link your PC first: type **/link** and paste the key in **Monitor Link** — then the bot shows **your** cards.', ephemeral: true });
+            }
+        }
+    }
+    // /link (Monitor Link, solo en comunidad): clave de un solo uso para vincular el programa de la PC
+    // del miembro con su usuario de Discord.
+    // 📁 Set My Folder: la ruta se pega en Discord y el Monitor Link de esa persona la toma solo en su
+    // proximo ping (≤ 1 min). Si en su PC no existe, sigue con la anterior y lo avisa en 📂 All Main Paths.
+    // 🎯 All Missions (Ale 2026-11-14): expansion -> paginas de 4 misiones -> detalle de una mision.
+    if ((interaction.isButton() || interaction.isStringSelectMenu()) && /^missions_/.test(interaction.customId)) {
+        return await manejarAllMissions(interaction);
+    }
+    if (interaction.isButton() && interaction.customId === 'link_poner_carpeta') {
+        const estadoCarp = await monitorLink.estadoAgente(interaction.user.id);
+        if (!estadoCarp.vinculado) {
+            return await interaction.reply({ content: '🔗 Link your PC first: type **/link** and paste the key in **Monitor Link**.', ephemeral: true });
+        }
+        const actual = (await monitorLink.vinculados()).find(v => v.discordId === interaction.user.id)?.carpeta || '';
+        const modal = new ModalBuilder().setCustomId('link_modal_carpeta').setTitle('📁 Set My Folder')
+            .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
+                .setCustomId('ruta').setLabel('Your Main Path (bot folder)').setStyle(TextInputStyle.Short)
+                .setPlaceholder('C:\\PTCGPB').setValue(actual.slice(0, 300)).setRequired(true)));
+        return await interaction.showModal(modal);
+    }
+    if (interaction.isModalSubmit() && interaction.customId === 'link_modal_carpeta') {
+        const ruta = interaction.fields.getTextInputValue('ruta').trim();
+        await monitorLink.pedirCarpeta(interaction.user.id, ruta);
+        const estadoCarp = await monitorLink.estadoAgente(interaction.user.id);
+        return await interaction.reply({ ephemeral: true, content: estadoCarp.enLinea
+            ? `📁 Saved. Your Monitor Link switches to \`${ruta}\` within a minute — check it with **📂 All Main Paths**.`
+            : `📁 Saved. Your PC is offline — Monitor Link switches to \`${ruta}\` as soon as you open it.` });
+    }
+    // 📂 All Main Paths (panel de comunidad y /link): carpeta de cada vinculado, si esta en linea, y el
+    // estado de un 📁 Set My Folder pendiente o fallido. (📁 My Folder se quito: repetia esto mismo.)
+    const avisoCarpeta = async (discordId) => {
+        const ec = await monitorLink.estadoCarpeta(discordId);
+        if (ec?.carpeta_pedida) return `\n　⏳ Switching to \`${ec.carpeta_pedida}\` — waiting for Monitor Link`;
+        if (ec?.carpeta_error) return `\n　⚠️ Last change failed: ${ec.carpeta_error}`;
+        return '';
+    };
+    if (interaction.isButton() && (interaction.customId === 'link_todas_rutas' || interaction.customId === 'link_mi_carpeta')) {
+        await interaction.deferReply({ ephemeral: true });
+        const todos = await monitorLink.vinculados();
+        const lista = interaction.customId === 'link_mi_carpeta' ? todos.filter(v => v.discordId === interaction.user.id) : todos;
+        if (!lista.length) {
+            return await interaction.editReply({ content: interaction.customId === 'link_mi_carpeta'
+                ? '🔗 You haven\'t linked your PC yet — type **/link** and paste the key in Monitor Link.'
+                : 'Nobody has linked Monitor Link yet.' });
+        }
+        const lineas = [];
+        for (const v of lista.slice(0, 30)) {
+            const nombre = (await client.users.fetch(v.discordId).catch(() => null))?.username || v.discordId;
+            lineas.push(`${v.enLinea ? '🟢' : '🔴'} **${nombre}** — 📦 ${v.cuentas} accounts` +
+                (v.ts ? ` · updated <t:${Math.floor(v.ts / 1000)}:R>` : '') +
+                `\n　📁 \`${v.carpeta || 'folder not sent yet'}\`` + (await avisoCarpeta(v.discordId)));
+        }
+        const embed = new EmbedBuilder().setColor(0x5865F2)
+            .setTitle(interaction.customId === 'link_mi_carpeta' ? '📁 My Folder' : `📂 All Main Paths · ${todos.length} linked`)
+            .setDescription(lineas.join('\n\n').slice(0, 4000) + (lista.length > 30 ? `\n\n…and ${lista.length - 30} more` : ''))
+            .setFooter({ text: '🟢 Monitor Link online · 🔴 PC off or Monitor Link closed' });
+        return await interaction.editReply({ embeds: [embed] });
+    }
+    if ((interaction.isChatInputCommand() && interaction.commandName === 'link')
+        || (interaction.isButton() && interaction.customId === 'link_nueva_clave')) {
+        if (interaction.isButton()) await interaction.deferUpdate();
+        else await interaction.deferReply({ ephemeral: true });
+        // Ya vinculado: queda vinculado. Se muestra el estado, y solo si el miembro lo pide se arma
+        // una clave nueva (por ejemplo, si cambio de PC).
+        const estadoPrevio = await monitorLink.estadoAgente(interaction.user.id);
+        if (estadoPrevio.vinculado && interaction.isChatInputCommand()) {
+            const resumen = await monitorLink.resumenDe(interaction.user.id);
+            const embedEstado = new EmbedBuilder().setTitle('🔗 Monitor Link').setColor(estadoPrevio.enLinea ? 0x2ECC71 : 0x95A5A6)
+                .setDescription(
+                    `${estadoPrevio.enLinea ? '🟢 Your PC is **online**.' : '🔴 Your PC is **offline** — open Monitor Link on it.'}\n` +
+                    (resumen ? `📦 **${resumen.total}** accounts · last update <t:${Math.floor(resumen.ts / 1000)}:R>\n` : '📦 No cards received yet.\n') +
+                    '\nYou\'re linked — nothing else to do. To use another folder, press **📁 Set My Folder**.\n' +
+                    'Changed PC? Get a new key below.'
+                );
+            return await interaction.editReply({ embeds: [embedEstado], components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('link_poner_carpeta').setLabel('📁 Set My Folder').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('link_todas_rutas').setLabel('📂 All Main Paths').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('link_nueva_clave').setLabel('🔑 Get a new key').setStyle(ButtonStyle.Secondary))] });
+        }
+        const codigo = await monitorLink.crearCodigo(interaction.user.id, interaction.guildId);
+        const url = DASHBOARD_PUBLIC_URL || `http://localhost:${DASHBOARD_PORT_BASE}`;
+        const clave = monitorLink.armarClave(url, codigo);
+        const estado = await monitorLink.estadoAgente(interaction.user.id);
+        const embed = new EmbedBuilder().setTitle('🔗 Link Monitor Link').setColor(0x5865F2)
+            .setDescription(
+                (estado.vinculado ? '⚠️ You already have a PC linked — linking again replaces it.\n\n' : '') +
+                '1. Open **Monitor Link** on your PC.\n' +
+                '2. Paste this key when it asks for it:\n' +
+                '```\n' + clave + '\n```\n' +
+                '3. Pick your accounts folder (it tries to find it by itself).\n\n' +
+                '⏳ The key works **once** and expires in **10 minutes**. Don\'t share it.\n' +
+                '🔒 Monitor Link only sends **which cards your accounts have** — never your passwords.'
+            );
+        return await interaction.editReply({ embeds: [embed], components: [] });
+    }
+    // (2026-11-07, Ale) Los botones de la lista de Shinedust de OTRO miembro (Refresh, Claim, Bulk, paginas)
+    // no se pueden usar: cada uno usa los de la lista que pidio. (Igual usaban las cuentas de quien tocaba.)
+    if ((interaction.isButton() || interaction.isStringSelectMenu())
+        && (interaction.customId.startsWith('fast_') || interaction.customId.startsWith('shinedust_reporte::'))
+        && !/^fast_(lend|use)::/.test(interaction.customId)) {
+        const dueno = interaction.message?.interactionMetadata?.user?.id || interaction.message?.interaction?.user?.id;
+        if (dueno && dueno !== interaction.user.id) {
+            return interaction.reply({ content: `🔒 This list belongs to <@${dueno}>. Use **/shinedust** to get your own.`, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => {});
+        }
+    }
+    if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith('fast_')) {
+        if (await fastTransfer.manejarInteraccion(interaction)) return;
+    }
     if (interaction.isAutocomplete() && interaction.commandName === 'card') {
         const campoFocus = interaction.options.getFocused(true);
         const focused = campoFocus.value.trim().toLowerCase();
@@ -11691,7 +12756,7 @@ client.on('interactionCreate', async interaction => {
         const [, friendIdRun, instanciasTxt] = interaction.customId.split('::');
         const porTanda = Math.max(1, Math.min(parseInt(instanciasTxt, 10) || 1, FARM_TICKETS_MAX_INSTANCIAS));
 
-        const idsRun = await idsFarmRegistrados(interaction.guildId);
+        const idsRun = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
         const aliasRun = (idsRun.find(f => f.friend_id === friendIdRun) || {}).alias || formatearFriendId(friendIdRun);
 
         // Que instancias usar: las primeras N que no sean Main. Main se excluye siempre porque
@@ -11791,7 +12856,7 @@ client.on('interactionCreate', async interaction => {
         }
         await interaction.deferReply();
         try {
-            return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+            return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
         } catch (error) {
             console.error('DEBUG: error abriendo el panel de Farm Shop Tickets:', error?.message || error);
             const causa = String(error?.rawError?.message || error?.message || 'unknown error').slice(0, 300);
@@ -11828,17 +12893,17 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferUpdate();
         await asegurarTablasFarmTickets();
         await agregarIdFarm(interaction.guildId, friendId, alias);
-        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
     }
 
     if (interaction.isButton() && interaction.customId === 'farmtickets_refrescar') {
         await interaction.deferUpdate();
-        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
     }
 
     if (interaction.isButton() && interaction.customId === 'farmtickets_volver') {
         await interaction.deferUpdate();
-        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
     }
 
     // Quitar una cuenta de la LISTA. El historial de likes no se toca a proposito: si el
@@ -11846,8 +12911,8 @@ client.on('interactionCreate', async interaction => {
     // Sin eso, reagregar un ID sortearia cuentas ya usadas y las quemaria sin dar ticket.
     if (interaction.isButton() && interaction.customId === 'farmtickets_quitar_id') {
         await interaction.deferUpdate();
-        const ids = await idsFarmRegistrados(interaction.guildId);
-        if (!ids.length) return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        const ids = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
+        if (!ids.length) return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
         const menu = new StringSelectMenuBuilder()
             .setCustomId('farmtickets_confirmar_quitar')
             .setPlaceholder('Which account do you want to remove?')
@@ -11869,16 +12934,126 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isStringSelectMenu() && interaction.customId === 'farmtickets_confirmar_quitar') {
         await interaction.deferUpdate();
         await quitarIdFarm(interaction.guildId, interaction.values[0]);
-        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId));
+        return await interaction.editReply(await construirPanelFarmTickets(interaction.guildId, interaction.user.id));
     }
 
     // Elegido el perfil, se pasa a elegir cuantas instancias.
     if (interaction.isStringSelectMenu() && interaction.customId === 'farmtickets_elegir_id') {
         await interaction.deferUpdate();
         const friendId = interaction.values[0];
-        const ids = await idsFarmRegistrados(interaction.guildId);
+        const ids = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
         const alias = (ids.find(f => f.friend_id === friendId) || {}).alias;
-        return await interaction.editReply(await construirPanelInstanciasFarm(friendId, alias));
+        return await mostrarPerfilFarm(interaction, friendId, alias);
+    }
+
+    // 🎁 Regalar tickets a otro miembro (modo comunidad, pedido de Ale): grupo -> miembro (25 por
+    // pagina) -> el mismo panel del perfil con ⚡ Fast Farm. El tope diario y las cuentas ya usadas
+    // se respetan igual, porque se cuentan por el perfil que RECIBE los likes.
+    if (interaction.isButton() && interaction.customId === 'farm_mi_main') {
+        await interaction.deferUpdate();
+        const propios = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
+        if (!propios.length) {
+            return await interaction.followUp({ content: MSG_SIN_MAIN, ephemeral: true });
+        }
+        return await mostrarPerfilFarm(interaction, propios[0].friend_id, propios[0].alias);
+    }
+    // 🎁 Gift en Share/Trade/Gold (ver filasGiftComunidad).
+    if (interaction.isButton() && interaction.customId.startsWith('gift_inicio::')) {
+        await interaction.deferUpdate();
+        const [, origen, modo, cartaId] = interaction.customId.split('::');
+        return await pantallaGiftGrupos(interaction, origen, modo, cartaId);
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('gift_grupo::')) {
+        await interaction.deferUpdate();
+        const [, origen, modo, cartaId] = interaction.customId.split('::');
+        return await pantallaGiftMiembros(interaction, interaction.values[0], 0, origen, modo, cartaId);
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('gift_pag::')) {
+        await interaction.deferUpdate();
+        const [, grupo, pagina, origen, modo, cartaId] = interaction.customId.split('::');
+        return await pantallaGiftMiembros(interaction, grupo, parseInt(pagina, 10) || 0, origen, modo, cartaId);
+    }
+    if (interaction.isButton() && interaction.customId === 'farm_regalo') {
+        await interaction.deferUpdate();
+        const grupos = await comunidad.gruposConConteo().catch(() => []);
+        if (!grupos.length) {
+            return await interaction.editReply({ content: '❌ Could not read the member registry right now. Tell staff and try again later.', embeds: [], components: [] });
+        }
+        const embed = new EmbedBuilder().setTitle('🎁 Gift Shop Tickets').setColor(0xF0A93A)
+            .setDescription('Pick the **group** of the member you want to give tickets to.\nThe likes come from **your** accounts.');
+        const menu = new StringSelectMenuBuilder().setCustomId('farm_regalo_grupo').setPlaceholder('Pick a group')
+            .addOptions(grupos.slice(0, 25).map(g => ({ label: g.grupo.replace(/_/g, ' '), description: `${g.total} member(s)`, value: g.grupo })));
+        return await interaction.editReply({ content: '', embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('farmtickets_volver').setLabel('🔙 Back').setStyle(ButtonStyle.Secondary))
+        ] });
+    }
+    if ((interaction.isStringSelectMenu() && interaction.customId === 'farm_regalo_grupo')
+        || (interaction.isButton() && interaction.customId.startsWith('farm_regalo_pag::'))) {
+        await interaction.deferUpdate();
+        const [grupo, paginaTxt] = interaction.isStringSelectMenu()
+            ? [interaction.values[0], '0']
+            : interaction.customId.replace('farm_regalo_pag::', '').split('::');
+        const miembros = await comunidad.miembrosDeGrupo(grupo).catch(() => []);
+        const totalPag = Math.max(1, Math.ceil(miembros.length / 25));
+        const pagina = Math.min(Math.max(0, parseInt(paginaTxt, 10) || 0), totalPag - 1);
+        const items = miembros.slice(pagina * 25, pagina * 25 + 25);
+        const embed = new EmbedBuilder().setTitle('🎁 Gift Shop Tickets').setColor(0xF0A93A)
+            .setDescription(`**${grupo.replace(/_/g, ' ')}** — pick the member who gets the tickets.`)
+            .setFooter({ text: `Page ${pagina + 1} of ${totalPag} • ${miembros.length} member(s)` });
+        const filas = [];
+        if (items.length) {
+            filas.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('farm_regalo_miembro').setPlaceholder('Pick a member')
+                .addOptions(items.map(m => ({ label: m.name.slice(0, 100), description: formatearFriendId(m.main_id), value: m.main_id })))));
+        }
+        filas.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`farm_regalo_pag::${grupo}::${pagina - 1}`).setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(pagina <= 0),
+            new ButtonBuilder().setCustomId(`farm_regalo_pag::${grupo}::${pagina + 1}`).setLabel('▶️').setStyle(ButtonStyle.Secondary).setDisabled(pagina >= totalPag - 1),
+            new ButtonBuilder().setCustomId('farm_regalo').setLabel('🔙 Groups').setStyle(ButtonStyle.Secondary)
+        ));
+        return await interaction.editReply({ content: '', embeds: [embed], components: filas });
+    }
+    // 📋 Paste an ID (Ale 2026-11-07): el mismo panel de Fast Farm para cualquier ID de 16 digitos.
+    if (interaction.isButton() && interaction.customId === 'farm_pegar_id') {
+        const modal = new ModalBuilder().setCustomId('farm_pegar_id_modal').setTitle('Farm tickets for an ID');
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('friend_id')
+            .setLabel('Friend ID (16 digits)').setPlaceholder('1234-5678-9012-3456').setStyle(TextInputStyle.Short)
+            .setMinLength(16).setMaxLength(19).setRequired(true)));
+        return await interaction.showModal(modal);
+    }
+    if (interaction.isModalSubmit() && interaction.customId === 'farm_pegar_id_modal') {
+        const friendId = interaction.fields.getTextInputValue('friend_id').replace(/\D/g, '');
+        if (friendId.length !== 16) {
+            return await interaction.reply({ content: '❌ The friend ID has 16 digits (e.g. 1234-5678-9012-3456).', ephemeral: true });
+        }
+        await interaction.deferUpdate();
+        const nombre = await comunidad.nombreDeFriendId(friendId).catch(() => null);
+        return await mostrarPerfilFarm(interaction, friendId, nombre ? `🎁 ${nombre}` : `📋 ${formatearFriendId(friendId)}`);
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId === 'farm_regalo_miembro') {
+        await interaction.deferUpdate();
+        const friendId = interaction.values[0];
+        const nombre = await comunidad.nombreDeFriendId(friendId).catch(() => null);
+        return await mostrarPerfilFarm(interaction, friendId, nombre ? `🎁 ${nombre}` : null);
+    }
+
+    // (resto de la seleccion de perfil, compartido con el regalo de tickets)
+    async function mostrarPerfilFarm(interaction, friendId, alias) {
+        const panelFarm = await construirPanelInstanciasFarm(friendId, alias);
+        // ⚡ Fast Farm (fast-transfer.js): sin MuMu, solo donde esta habilitado y si quedan tickets hoy.
+        const filaFastFarm = fastTransfer.filaBotonFarm(interaction.guildId, friendId);
+        if (filaFastFarm && (await ticketsFarmeadosHoy(friendId)) < FARM_TICKETS_MAX_DIARIO) {
+            panelFarm.components.splice(panelFarm.components.length - 1, 0, filaFastFarm);
+        }
+        // Modo comunidad: sin el menu de instancias de MuMu, solo ⚡ Fast Farm y Back.
+        if (comunidad.esComunidad(interaction.guildId)) {
+            panelFarm.components = panelFarm.components.filter(fila =>
+                !fila.components?.some(c => (c.data?.custom_id || '').startsWith('farmtickets_elegir_instancias::')));
+            if (panelFarm.embeds?.[0]?.data?.description) {
+                panelFarm.embeds[0].setDescription(panelFarm.embeds[0].data.description.replace('How many instances do you want to run at once?', 'Press ⚡ Fast Farm to claim them — no MuMu needed.'));
+            }
+        }
+        return await interaction.editReply(panelFarm);
     }
 
     // Elegidas las instancias: confirmacion con el desglose de tandas antes de arrancar.
@@ -11887,7 +13062,7 @@ client.on('interactionCreate', async interaction => {
         try {
             const friendId = interaction.customId.split('::')[1];
             const instancias = parseInt(interaction.values[0], 10) || 1;
-            const ids = await idsFarmRegistrados(interaction.guildId);
+            const ids = await idsFarmRegistrados(interaction.guildId, interaction.user.id);
             const alias = (ids.find(f => f.friend_id === friendId) || {}).alias;
             const hechos = await ticketsFarmeadosHoy(friendId);
             const restantes = FARM_TICKETS_MAX_DIARIO - hechos;
@@ -11955,16 +13130,25 @@ client.on('interactionCreate', async interaction => {
         }
         await interaction.deferReply();
         const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-        const resultados = buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url);
-        return await interaction.editReply(construirEmbedShinedust(resultados, 0));
+        // ⚡ Fast Shinedust (fast-transfer.js): valores leidos del servidor + botones de refresco.
+        const resultados = await fastTransfer.mezclarShinedust(buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url), rutaJsonCfg?.webhook_url);
+        const payloadSd = comunidad.quitarComponentes(interaction.guildId, construirEmbedShinedust(resultados, 0, await obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))), ['shinedust_track_select::']);
+        const filaSd = fastTransfer.filaBotonesDust(interaction.guildId, 0);
+        if (filaSd && payloadSd.components) payloadSd.components.push(filaSd);
+        payloadSd.content = `<@${interaction.user.id}>, here's your Shinedust list! 🍬`;
+        return await interaction.editReply(payloadSd);
     }
 
     if (interaction.isButton() && interaction.customId.startsWith('shinedust_reporte::')) {
         const pagina = parseInt(interaction.customId.split('::')[1], 10) || 0;
         await interaction.deferUpdate();
         const rutaJsonCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`);
-        const resultados = buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url);
-        return await interaction.editReply(construirEmbedShinedust(resultados, pagina));
+        const resultados = await fastTransfer.mezclarShinedust(buscarShinedustTodasCuentas(rutaJsonCfg?.webhook_url), rutaJsonCfg?.webhook_url);
+        const payloadSd = comunidad.quitarComponentes(interaction.guildId, construirEmbedShinedust(resultados, pagina, await obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))), ['shinedust_track_select::']);
+        const filaSd = fastTransfer.filaBotonesDust(interaction.guildId, Math.max(0, pagina));
+        if (filaSd && payloadSd.components) payloadSd.components.push(filaSd);
+        payloadSd.content = `<@${interaction.user.id}>, here's your Shinedust list! 🍬`;
+        return await interaction.editReply(payloadSd);
     }
 
     // "Track Shinedust" (2026-09-16, a pedido explicito del usuario): elegir una cuenta de
@@ -12380,6 +13564,13 @@ client.on('interactionCreate', async interaction => {
         if (interaction.customId === 'modal_extract_xml') {
             await interaction.deferReply({ ephemeral: true });
             const nombreBuscado = interaction.fields.getTextInputValue('input_xml_nombre');
+            const miembroExtract = comunidad.usuarioActual();
+            if (miembroExtract) {
+                const { archivo, error } = await xmlDeMiembro(miembroExtract, nombreBuscado.trim());
+                if (error) return await interaction.editReply({ content: error });
+                await interaction.editReply({ content: `✅ Found: \`${archivo.name}\` — only you can see this. It deletes itself in 5 minutes, save it now.`, files: [archivo] });
+                return borrarXmlEnviada(interaction);
+            }
             const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
             const archivo = buscarArchivoXmlPorNombre(rutaXmlCfg?.webhook_url, nombreBuscado);
 
@@ -12921,13 +14112,24 @@ client.on('interactionCreate', async interaction => {
         const [, cartaId, friendId, modo] = interaction.customId.split('::');
         const fileName = interaction.values[0];
         await interaction.deferUpdate(); // MuMuManager puede tardar más de 3s
+        // ⚡ Fast Share/Trade (fast-transfer.js): solo aparece donde esta habilitado; no necesita MuMu.
+        const filaFast = fastTransfer.filaBoton(interaction.guildId, { cartaId, friendId, fileName, modo });
+        const extraFast = filaFast ? [filaFast] : [];
+        // Modo comunidad: sin MuMu (las instancias son de la PC del host, no del miembro) -- solo ⚡.
+        if (comunidad.esComunidad(interaction.guildId)) {
+            return await interaction.editReply({
+                content: filaFast ? `⚡ Ready to send \`${fileName}\` — no MuMu needed.` : '❌ This option isn\'t available here.',
+                components: [...extraFast, new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('card_trade_cancelar').setLabel('⬅️ Cancel').setStyle(ButtonStyle.Secondary))]
+            });
+        }
 
         const instancias = obtenerInstanciasMuMu();
         if (instancias === null) {
-            return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
+            return await interaction.editReply({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: extraFast });
         }
         if (!instancias.length) {
-            return await interaction.editReply({ content: '❌ No MuMuPlayer instances found.', components: [] });
+            return await interaction.editReply({ content: '❌ No MuMuPlayer instances found.', components: extraFast });
         }
 
         const menu = new StringSelectMenuBuilder()
@@ -12945,11 +14147,18 @@ client.on('interactionCreate', async interaction => {
         const filaCancelar = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('card_trade_cancelar').setLabel('⬅️ Cancel').setStyle(ButtonStyle.Secondary)
         );
-        return await interaction.editReply({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu), filaCancelar] });
+        return await interaction.editReply({ content: `Which instance do you want to inject \`${fileName}\` into?`, components: [new ActionRowBuilder().addComponents(menu), ...extraFast, filaCancelar] });
     }
 
     if (interaction.isButton() && interaction.customId === 'card_trade_cancelar') {
-        return await interaction.update({ content: '❌ Cancelled -- nothing was injected.', components: [] });
+        // Cancel borra el mensaje de la carta (2026-10-23, pedido de Ale): en Trading/Share solo
+        // quedan los trades y shares que se completaron. Si no se puede borrar, queda el aviso viejo.
+        await interaction.deferUpdate();
+        try {
+            return await interaction.deleteReply();
+        } catch (e) {
+            return await interaction.editReply({ content: '❌ Cancelled -- nothing was injected.', components: [] });
+        }
     }
 
     // Aggressive Trade (2026-08-24) -- selects del flujo de seleccion, ver el comentario
@@ -13016,6 +14225,13 @@ client.on('interactionCreate', async interaction => {
         return await mostrarPasoAsignacionAggressive(interaction, sesionId);
     }
 
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_shinedust_cuenta::') && comunidad.usuarioActual()) {
+        if (!fastTransfer.habilitado(interaction.guildId)) {
+            return await interaction.update({ content: '❌ Shinedust is not available right now.', components: [] });
+        }
+        return await fastTransfer.refrescarCuentaElegida(interaction);
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_shinedust_cuenta::')) {
         const [, cartaId] = interaction.customId.split('::');
         const fileName = interaction.values[0];
@@ -13037,6 +14253,63 @@ client.on('interactionCreate', async interaction => {
                 value: `${i.index}::${i.name}`
             })));
         return await interaction.update({ content: `Which instance do you want to run the check on for \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_inject_cuenta::') && comunidad.usuarioActual()) {
+        const [, cartaId] = interaction.customId.split('::');
+        const fileName = interaction.values[0];
+        await interaction.update({ content: '⏳ Asking your PC for its MuMu instances…', components: [] });
+        let r;
+        try {
+            r = await monitorLink.pedirAccion(comunidad.usuarioActual(), { action: 'mumu_list' }, 30000);
+        } catch (e) {
+            return await interaction.editReply({ content: e.message === 'offline'
+                ? '🔗 Your **Monitor Link** is not running — open it on your PC and try again.'
+                : '⏱️ Your **Monitor Link** didn\'t answer — it may be an old version. Close it and open it again (it updates by itself).' });
+        }
+        if (!r.ok || !r.instances?.length) {
+            return await interaction.editReply({ content: `❌ ${r.error || 'No MuMuPlayer instances found on your PC.'}` });
+        }
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`inject_ml::${cartaId}::${fileName}`.slice(0, 100))
+            .setPlaceholder('Select an instance on your PC')
+            .addOptions([...r.instances].sort((a, b) => Number(a.index) - Number(b.index)).slice(0, 25).map(i => ({
+                label: `${i.index}. ${i.name}`.slice(0, 100), description: i.on ? 'On' : 'Off', value: `${i.index}::${i.name}`.slice(0, 100)
+            })));
+        return await interaction.editReply({ content: `Which instance on **your PC** should open \`${fileName}\`?`, components: [new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sub_volver').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary))] });
+    }
+
+    if (interaction.isButton() && interaction.customId === 'sub_volver') {
+        await interaction.deferUpdate();
+        return await interaction.deleteReply().catch(() => interaction.editReply({ content: '↩️ Closed.', components: [] }).catch(() => {}));
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('ia_archivos::')) {
+        const [, dueno, ...resto] = interaction.customId.split('::');
+        const fileName = resto.join('::');
+        if (interaction.user.id !== dueno) {
+            return await interaction.reply({ content: `🔒 Only <@${dueno}> can get these files.`, ephemeral: true });
+        }
+        await interaction.deferReply({ ephemeral: true });
+        return await mandarArchivosCuentaPrivado(interaction, dueno, fileName, true);
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('inject_ml::')) {
+        const [, , fileName] = interaction.customId.split('::');
+        const [index, ...resto] = interaction.values[0].split('::');
+        const nombreInstancia = resto.join('::');
+        await interaction.update({ content: `💉 Opening \`${fileName}\` on instance **${nombreInstancia}** of your PC… (turning it on and injecting can take up to 3 minutes)`, components: [] });
+        try {
+            const r = await monitorLink.pedirAccion(comunidad.usuarioActual(), { action: 'inject', file: fileName, index, name: nombreInstancia }, 5 * 60 * 1000);
+            return await interaction.editReply({ content: r.ok
+                ? `✅ \`${fileName}\` is open on instance **${nombreInstancia}** of your PC.`
+                : `❌ Could not inject on your PC: ${r.error || 'unknown error'}.` });
+        } catch (e) {
+            return await interaction.editReply({ content: e.message === 'offline'
+                ? '🔗 Your **Monitor Link** is not running — open it on your PC and try again.'
+                : '⏱️ Your PC didn\'t finish in time — check the instance; it may still be loading.' });
+        }
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_inject_cuenta::')) {
@@ -13068,6 +14341,16 @@ client.on('interactionCreate', async interaction => {
         const [, cartaId] = interaction.customId.split('::');
         const fileName = interaction.values[0];
         await interaction.deferUpdate();
+
+        const miembroExtract = comunidad.usuarioActual();
+        if (miembroExtract) {
+            await interaction.editReply({ content: '⏳ Getting the account from your Monitor Link…', components: [] });
+            const { archivo, error } = await xmlDeMiembro(miembroExtract, fileName);
+            return await interaction.editReply(error
+                ? { content: error, components: [] }
+                : { content: `📄 \`${fileName}\` — only you can see this. It deletes itself in 5 minutes, save it now.`, files: [archivo], components: [] })
+                .then(() => { if (!error) borrarXmlEnviada(interaction); });
+        }
 
         try {
             const rutaXmlCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_xml_cuentas'`);
@@ -13170,6 +14453,84 @@ client.on('interactionCreate', async interaction => {
     // Cuando vienen datos, se agregan como campos extra al embed; nunca dispara una
     // inyeccion nueva aca, eso ya paso antes (o no, si el usuario entro por el camino normal).
     async function enviarInfoAccounts(interaction, fileName, datosInventario = null) {
+        // Comunidad: sale del resumen que subio su Monitor Link (cartas por cuenta), sin XML ni JSON
+        // de esta PC, y en privado. La pagina lee un JSON armado con ese resumen.
+        const miembroInfo = comunidad.usuarioActual();
+        if (miembroInfo) {
+            await monitorLink.precargar(miembroInfo);
+            const clave = String(fileName).toLowerCase().replace(/\.xml$/, '');
+            const cuenta = ((await monitorLink.resumenDe(miembroInfo))?.cuentas || [])
+                .find(c => String(c.f).toLowerCase().replace(/\.xml$/, '') === clave);
+            if (!cuenta) return await interaction.followUp({ content: `❌ \`${fileName}\` is not in your Monitor Link summary.`, ephemeral: true });
+            const pulls = [{ cards: Object.entries(cuenta.c || {}).flatMap(([id, n]) => Array(n).fill(id)) }];
+            const dirInfo = path.join(os.tmpdir(), 'monitor_link_info');
+            fs.mkdirSync(dirInfo, { recursive: true });
+            const archivoJsonMl = path.join(dirInfo, `${miembroInfo}_${crypto.createHash('sha1').update(clave).digest('hex').slice(0, 12)}.json`);
+            fs.writeFileSync(archivoJsonMl, JSON.stringify({ metadata: { fileName: cuenta.f, accountName: cuenta.n }, pulls }));
+            // Datos en vivo de la cuenta (Shinedust, tickets, relojes, nivel), leidos con ⚡ directo del
+            // juego como hace 👛 Shinedust -- sin MuMu. Si no se puede, sale igual con lo del resumen.
+            let vivo = null;
+            let motivoSinVivo = null;
+            if (fastTransfer.habilitado(interaction.guildId)) {
+                await interaction.editReply({ content: `⏳ Reading \`${cuenta.n || cuenta.f}\` live from the game…`, embeds: [], components: [] }).catch(() => {});
+                const r = await fastTransfer.leerInventarioCuenta(miembroInfo, cuenta.f);
+                vivo = r.datos || null;
+                motivoSinVivo = r.error || null;
+                await interaction.editReply({ content: `📋 \`${cuenta.n || cuenta.f}\``, embeds: [], components: [] }).catch(() => {});
+            }
+            if (vivo && !datosInventario) {
+                datosInventario = { shinedust: vivo.dust.toLocaleString('en-US') };
+                for (const [clave, valor] of Object.entries(vivo.inv || {})) {
+                    if (typeof valor === 'number') datosInventario[clave] = valor.toLocaleString('en-US');
+                }
+            }
+            const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
+            const token = generarTokenDashboard(rutaMasterCfg?.webhook_url, archivoJsonMl, datosInventario, interaction.guildId, fileName);
+            const mapaEmojisInventario = await obtenerMapaEmojisGuild(interaction.guild);
+            // Mismo embed que Info Accounts de siempre (campos y orden), con lo de esta cuenta.
+            const embed = new EmbedBuilder()
+                .setTitle('📋 Info Accounts')
+                .setDescription(`Hi <@${interaction.user.id}>, here's **${cuenta.n || cuenta.f}**!` + (vivo?.inv?.level ? ` (Lv. ${vivo.inv.level})` : ''))
+                .addFields(
+                    { name: '💠 Data XML', value: `\`${cuenta.f}\``, inline: true },
+                    { name: `${emojiTag(mapaEmojisInventario, 'Card_Back_TCGP')} Total Cards`.trim(), value: `${pulls[0].cards.length}`, inline: true }
+                )
+                .setColor(0xE91E63);
+            if (datosInventario) {
+                embed.addFields({ name: `${emojiTag(mapaEmojisInventario, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: `${datosInventario.shinedust}`, inline: true });
+                embed.addFields(...camposInventarioEmbed(datosInventario, mapaEmojisInventario));
+            } else if (typeof cuenta.d === 'number') {
+                embed.addFields({ name: `${emojiTag(mapaEmojisInventario, 'Polvo_iris_TCGP')} Shinedust`.trim(), value: cuenta.d.toLocaleString('en-US'), inline: true });
+            }
+            if (DASHBOARD_PUBLIC_URL) embed.addFields({ name: '🔗 Pages we mentioned', value: `🌐 [From any network](${DASHBOARD_PUBLIC_URL}/account/${token})` });
+            // (2026-11-06) ABORTED = la cuenta esta abierta en otro lado en ese momento (GP farm, otra instancia):
+            // un aviso claro en vez del error crudo de gRPC.
+            const motivoTexto = !motivoSinVivo ? ''
+                : /ABORTED/i.test(motivoSinVivo) ? ' — couldn\'t read it live: the account is open somewhere else right now (e.g. the GP farm), try again in a few minutes'
+                : /UNAVAILABLE|DEADLINE|timeout|proxy/i.test(motivoSinVivo) ? ' — couldn\'t read it live: connection problem, try again in a few minutes'
+                : ` (live read failed: ${String(motivoSinVivo).split('\n')[0].slice(0, 120)})`;
+            embed.setFooter({ text: vivo ? 'Live from the game · the link works for 24 hours.' : `Saved data${motivoTexto} · the link works for 24 hours.`.slice(0, 2000) });
+            const archivosEmbed = [];
+            if (fs.existsSync(SYMBOL_EMBEDS_PATH)) {
+                embed.setThumbnail('attachment://symbol.png');
+                archivosEmbed.push(new AttachmentBuilder(SYMBOL_EMBEDS_PATH, { name: 'symbol.png' }));
+            }
+            // Al canal de Info Accounts, como el Info Accounts de siempre (pedido de Ale). Sin canal, en privado.
+            const canalInfoMl = await obtenerCanalComando(interaction.guildId, 'info_accounts');
+            if (canalInfoMl?.webhook_url) {
+                try {
+                    // Boton para que SOLO el dueño baje su XML y su JSON, en privado y en ese mismo canal.
+                    const filaArchivos = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`ia_archivos::${miembroInfo}::${cuenta.f}`.slice(0, 100)).setLabel('🔐 My XML & JSON').setStyle(ButtonStyle.Secondary));
+                    await new WebhookClient({ url: canalInfoMl.webhook_url }).send({ embeds: [embed], files: archivosEmbed, components: [filaArchivos] });
+                    return await interaction.followUp({ content: `✅ Sent to <#${canalInfoMl.canal_id}> — your XML & JSON are in the 🔐 button there (only you can use it).`, ephemeral: true });
+                } catch (e) {
+                    console.error('DEBUG: Info Accounts (comunidad) al canal:', e?.message || e);
+                }
+            }
+            await interaction.followUp({ embeds: [embed], files: archivosEmbed, ephemeral: true });
+            return await mandarArchivosCuentaPrivado(interaction, miembroInfo, cuenta.f);
+        }
         // followUp en vez de editReply en TODA esta funcion (2026-08-03, bug real reportado
         // por el usuario): cuando se llama desde el boton de un resultado de Shinedust
         // (shinedust_result_info_accounts::), el "mensaje original" de la interaccion es la
@@ -13265,6 +14626,10 @@ client.on('interactionCreate', async interaction => {
     // hace a ciegas. Si dice que no, sigue igual que antes (PDF solo con lo ya guardado).
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('card_info_accounts_cuenta::')) {
         const fileName = interaction.values[0];
+        if (comunidad.usuarioActual()) {
+            await interaction.update({ content: `📋 \`${fileName}\``, components: [] });
+            return await enviarInfoAccounts(interaction, fileName);
+        }
         const fila = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`info_accounts_extra_si::${fileName}`.slice(0, 100)).setLabel('Yes, get live data').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId(`info_accounts_extra_no::${fileName}`.slice(0, 100)).setLabel('No, just the PDF').setStyle(ButtonStyle.Secondary)
@@ -13482,7 +14847,7 @@ client.on('interactionCreate', async interaction => {
         const nombreCartaConfirm = resolverNombreCarta(cartaId, rutaMasterCfgConfirm?.webhook_url);
         const payloadCartaConfirm = await construirEmbedDetalleCarta(cartaId, nombreCartaConfirm, rutaMasterCfgConfirm?.webhook_url, null, interaction.guild);
         const embedConfirmacion = payloadCartaConfirm.embeds[0]
-            .setTitle(`📋 Confirm ${modo === 'main' ? 'Main Trade' : modo === 'sharemain' ? 'Share to Main' : modo === 'sharefriend' ? 'Share to Friend' : 'Friend Trade'}`)
+            .setTitle(`📋 Confirm ${modo === 'goldmain' ? 'Gold Trade' : modo === 'main' ? 'Main Trade' : modo === 'sharemain' ? 'Share to Main' : modo === 'sharefriend' ? 'Share to Friend' : 'Friend Trade'}`)
             .addFields(
                 { name: 'Instance', value: `**${nombre}**`, inline: true },
                 { name: 'Friend ID', value: `\`${friendId}\``, inline: true },
@@ -13498,6 +14863,11 @@ client.on('interactionCreate', async interaction => {
                 ? `✅ No previous transfers of this card from this account.\nAvailable: **x${auditoria.disponible}**`
                 : `This account already transferred this card **${auditoria.transferidas}** time(s).\nIn account: x${auditoria.enJson} − ${auditoria.transferidas} transferred = **x${auditoria.disponible}** available`;
             embedConfirmacion.addFields({ name: '🔎 Transfer audit', value: textoAuditoria.slice(0, 1024) });
+            // Gold Trade: tantas copias como el umbral del panel de Gold Cards, sin pasar de las disponibles.
+            if (modo === 'goldmain' && auditoria.disponible > 0) {
+                const copiasGold = Math.min(await obtenerUmbralGold(interaction.user.id), auditoria.disponible);
+                embedConfirmacion.addFields({ name: '🟡 Copies to send', value: `**x${copiasGold}** (one trade per copy)` });
+            }
             if (auditoria.disponible <= 0) {
                 const sugeridas = auditoria.otras.slice(0, 5).map(r => `\`${r.fileName}\` — x${r.disponible}`).join('\n');
                 embedConfirmacion.setColor(0xE74C3C).addFields({
@@ -13516,7 +14886,7 @@ client.on('interactionCreate', async interaction => {
     // Botón "Start" del embed de confirmación de arriba -- recién acá arranca la
     // automatización de verdad.
     if (interaction.isButton() && interaction.customId.startsWith('card_trade_confirmado::')) {
-        const [, cartaId, friendId, fileName, index, nombre, modo] = interaction.customId.split('::');
+        const [, cartaId, friendId, fileName, index, nombre, modo, copiasTexto] = interaction.customId.split('::');
         await interaction.update({ components: [] });
         try { await interaction.followUp({ content: `🟢 Preparing instance **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
 
@@ -13535,6 +14905,19 @@ client.on('interactionCreate', async interaction => {
             if (modo !== 'sharemain') return await interaction.followUp({ content: '❌ Share is only available to your Main account.', ephemeral: true });
             try { await interaction.followUp({ content: `🎁 Running Share: turning on **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
             return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, share: true });
+        }
+        // Gold Trade (2026-10-09): copias = umbral del panel de Gold Cards (o las que faltaban, si
+        // viene del Retry), sin pasar de las que le quedan a la cuenta. Solo en el servidor propio.
+        if (modo === 'goldmain') {
+            if (!esServidorPropio(interaction.guildId)) return await interaction.followUp({ content: '❌ Trade from Gold Cards is disabled.', ephemeral: true });
+            let copias = parseInt(copiasTexto, 10) || await obtenerUmbralGold(interaction.user.id);
+            try {
+                const auditoriaGold = await auditarStockCarta(fileName, cartaId);
+                if (auditoriaGold.disponible > 0) copias = Math.min(copias, auditoriaGold.disponible);
+            } catch (e) { /* sin auditoria, se usa el pedido */ }
+            copias = Math.max(1, copias);
+            try { await interaction.followUp({ content: `🟡 Running Gold Trade (${copias} ${copias === 1 ? 'copy' : 'copies'}): turning on **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
+            return await ejecutarMainTradeDesdeDiscord(interaction, { cartaId, friendId, fileName, archivo, index, nombre, gold: true, copias });
         }
         if (modo === 'main') {
             try { await interaction.followUp({ content: `🏠 Running Main Trade: turning on **Main** and **${nombre}**...`, ephemeral: true }); } catch (e) { /* interacción puede haber expirado */ }
@@ -13984,8 +15367,11 @@ client.on('interactionCreate', async interaction => {
             // no se responde nada. Ahora se difiere ANTES de cualquier trabajo pesado, publico
             // (mismo motivo que ya usa allcards_ver_expansiones) para que la navegacion
             // encadenada de despues siga funcionando igual.
+            // Comunidad: All/Gold Cards en privado; la wishlist queda a la vista de todos (pedido de
+            // Ale), pero sus botones solo los usa quien la abrio (ver guardia de dueño mas arriba).
+            const enComunidadCartas = comunidad.esComunidad(interaction.guildId);
             if (esPrimeraVez) {
-                await interaction.deferReply();
+                await interaction.deferReply({ ephemeral: enComunidadCartas && prefijo !== 'wishlist' });
             } else {
                 await interaction.deferUpdate();
             }
@@ -13994,7 +15380,10 @@ client.on('interactionCreate', async interaction => {
             const { cartas, rutaMasterPath, mapaCopias } = await fuente.obtenerCartas(interaction.user.id);
 
             if (cartas === null) {
-                return await interaction.editReply({ content: fuente.errorSinDatos, embeds: [], components: [] });
+                const sinWishlistMiembro = enComunidadCartas && prefijo === 'wishlist';
+                return await interaction.editReply({ content: sinWishlistMiembro
+                    ? '💔 Your Monitor Link didn\'t find a wishlist in your PTCGPB folder (`Accounts\\Cards\\wishlist.json`).\nMark your favorite cards with ❤️ in the Card Database of your bot, and it shows up here within 10 minutes.'
+                    : fuente.errorSinDatos, embeds: [], components: [] });
             }
 
             const mapaEmojis = await obtenerMapaEmojisGuild(interaction.guild);
@@ -14008,6 +15397,9 @@ client.on('interactionCreate', async interaction => {
                 opcionesLista.mapaCopias = mapaCopias;
             }
             const payload = await construirEmbedListaCartas(cartas, pagina, opcionesLista);
+            // Saludo en todas las listas (pedido de Ale: "esta es tu lista @usuario").
+            const saludos = { wishlist: "here's your wishlist! 💖", goldcards: "here are your Gold Cards! 🏆", allcards: "here are all the cards! ⚡" };
+            if (saludos[prefijo]) payload.content = `<@${interaction._duenoLista || interaction.user.id}>, ${saludos[prefijo]}`;
             return await interaction.editReply(payload);
         }
 
@@ -14474,8 +15866,8 @@ client.on('interactionCreate', async interaction => {
             // Share solo a Main (2026-10-04, pedido de Ale): va directo a elegir cual amigo guardado es
             // Main, sin preguntar Main o amigo (antes habia "Share to Main" / "Share to Friend").
             const { rutaIni } = await obtenerRutasInject(interaction.guildId);
-            const friends = parsearListaFriends(rutaIni);
-            if (!friends.length) {
+            const friends = await amigosParaInteraccion(interaction, rutaIni);  // comunidad: registro de wr98
+            if (!friends.length) { if (interaction._sinDestinosMsg) return await interaction.editReply({ content: interaction._sinDestinosMsg, components: [] });
                 return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add your Main account first from **🆔 Add Friend** in /setup.' });
             }
             const menuShare = new StringSelectMenuBuilder()
@@ -14485,7 +15877,7 @@ client.on('interactionCreate', async interaction => {
                     label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
                     value: f.id
                 })));
-            return await reenviarCartaATrading(interaction, cartaId, null, [new ActionRowBuilder().addComponents(menuShare)], 'share-cards', 'Share Cards');
+            return await reenviarCartaATrading(interaction, cartaId, null, [new ActionRowBuilder().addComponents(menuShare), ...filasGiftComunidad(interaction.guildId, 'normal', 'sharemain', cartaId)], 'share-cards', 'Share Cards');
         }
         if (interaction.customId.startsWith('card_share_main::') || interaction.customId.startsWith('card_share_friend::')) {
             // Share to Friend quitado (2026-10-04): solo Main. Cubre botones viejos de mensajes anteriores.
@@ -14619,21 +16011,21 @@ client.on('interactionCreate', async interaction => {
             const cartaId = interaction.customId.replace('goldcards_trade::', '');
             await interaction.deferReply({ ephemeral: true }); // obtenerCartasGoldCacheadas + armar la carta pueden tardar más de 3s
             const { rutaIni } = await obtenerRutasInject(interaction.guildId);
-            const friends = parsearListaFriends(rutaIni);
-            if (!friends.length) {
+            const friends = await amigosParaInteraccion(interaction, rutaIni);  // comunidad: registro de wr98
+            if (!friends.length) { if (interaction._sinDestinosMsg) return await interaction.editReply({ content: interaction._sinDestinosMsg, components: [] });
                 return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.' });
             }
             const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
             const datosGold = mapaCopias ? { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral } : null;
             const menu = new StringSelectMenuBuilder()
                 // Modo Main Trade (2026-09-29): Friend Trade quedo deshabilitado.
-                .setCustomId(`card_trade_friendid::gold::main::${cartaId}`.slice(0, 100))
+                .setCustomId(`card_trade_friendid::gold::goldmain::${cartaId}`.slice(0, 100))
                 .setPlaceholder('Select your Main account')
                 .addOptions(friends.slice(0, 25).map(f => ({
                     label: `${f.label || '(no name)'} — ${f.id}`.slice(0, 100),
                     value: f.id
                 })));
-            return await reenviarCartaATrading(interaction, cartaId, datosGold, [new ActionRowBuilder().addComponents(menu)]);
+            return await reenviarCartaATrading(interaction, cartaId, datosGold, [new ActionRowBuilder().addComponents(menu), ...filasGiftComunidad(interaction.guildId, 'gold', 'goldmain', cartaId)]);
         }
 
         if (interaction.customId.startsWith('goldcards_shinedust::')) {
@@ -14789,6 +16181,19 @@ client.on('interactionCreate', async interaction => {
             const rutaWishlistCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_wishlist'`);
             const rutaMasterCfg = await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`);
             const nombreCarta = resolverNombreCarta(cartaId, rutaMasterCfg?.webhook_url);
+            // Comunidad: la wishlist esta en la PC del miembro; se la escribe su Monitor Link.
+            const miembroWishlist = comunidad.usuarioActual();
+            if (miembroWishlist) {
+                try {
+                    const r = await monitorLink.pedirAccion(miembroWishlist, { action: 'wishlist_add', card: cartaId, name: nombreCarta });
+                    if (!r.ok) return await interaction.editReply({ content: `❌ Your Monitor Link could not save it${r.error ? ` (${r.error})` : ''}.` });
+                    return await interaction.editReply({ content: r.already ? `💖 \`${nombreCarta}\` was already in your wishlist.` : `💖 \`${nombreCarta}\` added to your wishlist!` });
+                } catch (e) {
+                    return await interaction.editReply({ content: e.message === 'offline'
+                        ? '🔗 Your **Monitor Link** is not running — open it on your PC and try again.'
+                        : '⏱️ Your **Monitor Link** didn\'t answer — it may be an old version. Close it and open it again (it updates by itself).' });
+                }
+            }
             const resultado = agregarCartaAWishlist(rutaWishlistCfg, cartaId, nombreCarta);
             if (!resultado.ok) {
                 return await interaction.editReply({ content: '❌ Could not find the configured **Wishlist Path**. Check it in the panel/`/setup`.' });
@@ -15170,286 +16575,7 @@ client.on('interactionCreate', async interaction => {
 
             case 'btn_crear_canales_menu':
                 await interaction.deferReply({ ephemeral: true });
-                try {
-                    const grupos = [
-                        {
-                            categoria: '🔔 UPDATES 🔔',
-                            tipoCategoria: 'actualizaciones_categoria',
-                            canales: [
-                                { tipo: 'actualizaciones', name: '🔔-updates' },
-                                { tipo: 'tutoriales', name: '📚-tutorials' },
-                                { tipo: 'apoyo', name: '☕-donate' },
-                                { tipo: 'cmd_feedback', name: '📝-feedback' }
-                            ]
-                        },
-                        {
-                            categoria: '⚙️ SETTINGS ⚙️',
-                            tipoCategoria: 'settings_categoria',
-                            canales: [
-                                { tipo: 'cmd_setup', name: '⚙-settings' },
-                                { tipo: 'cmd_build_embed', name: '🔧-build-embed' },
-                                { tipo: 'cmd_build_webhooks', name: '🔗-build-webhooks' }
-                            ]
-                        },
-                        {
-                            categoria: '💓 HEARTBEAT 💓',
-                            tipoCategoria: 'heartbeat_categoria',
-                            canales: [
-                                { tipo: 'heartbeat', name: '💓-heartbeat' }
-                            ]
-                        },
-                        {
-                            categoria: '📦 PTCG POCKET DROPS 📦',
-                            tipoCategoria: 'crear_canales',
-                            canales: [
-                                { tipo: 's4t', name: '🤖-s4t' },
-                                { tipo: 's4t-categoria', name: '📊-s4t-category' },
-                                { tipo: '3-diamond', name: '🔷-3-diamond' },
-                                { tipo: '4-diamond', name: '💠-4-diamond' },
-                                { tipo: '1-star', name: '⭐-1-star' },
-                                { tipo: '1-star-shiny', name: '🌟-1-star-shiny' },
-                                { tipo: '2-star-trainer', name: '⭐⭐-trainer' },
-                                { tipo: '2-star-rainbow', name: '🌈-2-star-rainbow' },
-                                { tipo: '2-star-full-art', name: '🎨-2-star-full-art' },
-                                { tipo: '2-star-shiny', name: '✨-2-star-shiny' },
-                                { tipo: 'immersive', name: '🌌-immersive' },
-                                { tipo: 'crown-rare', name: '👑-crown-rare' },
-                                { tipo: 'wishlist', name: '💖-wishlist' }
-                            ]
-                        },
-                        {
-                            categoria: '📦 GOD PACKS 📦',
-                            tipoCategoria: 'godpack_categoria',
-                            canales: [
-                                { tipo: 'godpack-general', name: '📦-godpack-general' },
-                                { tipo: 'godpack-alive', name: '👼-godpack-alive' },
-                                { tipo: 'godpack-dead', name: '☠️-godpack-dead' }
-                            ]
-                        },
-                        {
-                            categoria: '🔥 MANAGER 🔥',
-                            tipoCategoria: 'manager_categoria',
-                            canales: [
-                                { tipo: 'cmd_card_wishlist', name: '💖-cards-wishlist' },
-                                { tipo: 'cmd_card_all', name: '⚡-all-cards' },
-                                { tipo: 'cmd_card_gold', name: '🏆-gold-cards' },
-                                { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' },
-                                { tipo: 'shinedust', name: '🍬-shinedust' },
-                                { tipo: 'info_accounts', name: '📋-info-accounts' }
-                            ]
-                        },
-                        {
-                            categoria: '🎮 RUN MUMU PLAYER 🎮',
-                            tipoCategoria: 'run_mumu_categoria',
-                            canales: [
-                                { tipo: 'cmd_run_instance', name: '🔄-trading' },
-                                // Agregados 2026-08-24 a pedido explicito del usuario -- canales
-                                // nuevos, todavia sin comando propio (igual que Donate/Heartbeat).
-                                { tipo: 'share-cards', name: '🃏-share-cards' },
-                                { tipo: 'farm-shop-tickets', name: '🎫-farm-shop-tickets' }
-                            ]
-                        }
-                    ];
-
-                    // Solo canales que tienen un comando real asignado (aunque no se pueda
-                    // "ejecutar" solo, como /embed, /webhook, /feedback) o que explican algo
-                    // que no se repite (Updates/Support) reciben un embed al sincronizar. El
-                    // resto (rareza, godpacks, s4t, heartbeat, wishlist-feed) no tiene ningún
-                    // comando propio — meter un embed ahí es ruido innecesario en canales que
-                    // además reciben cartas todo el tiempo.
-                    // Lista mostrada en el canal de Tutorials (2026-08-06, a pedido explicito
-                    // del usuario): un item por fila, cada uno con su boton para abrir el PDF
-                    // correspondiente reusando tutorial_pdf:: (mismo botón que ya usa cada
-                    // canal individual) -- si a algún tipo todavía no se le subió el PDF real,
-                    // el handler de tutorial_pdf:: ya responde "No tutorial available yet" solo.
-                    // TUTORIALES_LISTA ahora vive a nivel de modulo (ver mas arriba) -- se
-                    // reusa tambien en la pagina web /tutorials.
-
-                    const EMBEDS_BIENVENIDA_POR_TIPO = {
-                        actualizaciones: { title: '🔔 Updates', description: 'You\'ll get notified here whenever there\'s a new bot update, with a button to install it right away.' },
-                        tutoriales: {
-                            title: '📚 Tutorials',
-                            description: 'Here you can find all the tutorials for the bot\'s commands and features:',
-                            fields: TUTORIALES_LISTA.map((t, i) => ({ name: `${i + 1}- ${t.label}`, value: '​', inline: false }))
-                        },
-                        apoyo: { title: '☕ Donate', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
-                        'share-cards': { title: '🃏 Share Cards', description: 'Post cards here that you\'re giving away or open to trading.' },
-                        'farm-shop-tickets': { title: '🎫 Farm Shop Tickets', description: 'Track Shop Tickets farmed across your accounts here.' },
-                        cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
-                        cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
-                        cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot — you can attach a screenshot too.' },
-                        shinedust: { title: '🍬 Shinedust', description: 'Results from the 👛 Shinedust button on card lookups land here — the card, the account, and its current Shinedust balance, with buttons to jump straight into Trade or Extract XML for that same account.' },
-                        info_accounts: { title: '📋 Info Accounts', description: 'Press 📋 Info Accounts on a message in your Extract XML channel to get a full PDF report of that account here — every card it has, grouped by expansion, with quantities.' }
-                    };
-
-                    // Canales con un comando real y no-efímero asignado: en vez del embed
-                    // genérico de "acá usas /x", se ejecuta el comando de verdad para que el
-                    // usuario vea la interfaz funcionando apenas se crea el canal.
-                    // cmd_build_embed/cmd_build_webhooks/cmd_feedback quedan afuera porque
-                    // esos comandos responden de forma efímera (o abren un modal), así que no
-                    // hay nada persistente que publicar en el canal sin una interacción real.
-                    const COMANDOS_REALES_POR_TIPO = {
-                        cmd_card_wishlist: 'card_wishlist',
-                        cmd_card_all: 'card_all',
-                        cmd_extract_xlm: 'extract_xlm',
-                        cmd_run_instance: 'run_instance'
-                    };
-
-                    const crearCategoriaSiNoExiste = async (nombreCategoria) => {
-                        let categoria = interaction.guild.channels.cache.find(c => c.name === nombreCategoria && c.type === ChannelType.GuildCategory);
-                        if (!categoria) {
-                            categoria = await interaction.guild.channels.create({
-                                name: nombreCategoria,
-                                type: ChannelType.GuildCategory,
-                                permissionOverwrites: [{
-                                    id: interaction.guild.members.me.id,
-                                    allow: [PermissionsBitField.Flags.Administrator]
-                                }]
-                            });
-                        }
-                        return categoria;
-                    };
-
-
-                    const crearCanalSincronizado = async (categoria, tipo, nombreCanal) => {
-                        let canal = interaction.guild.channels.cache.find(ch => ch.name === nombreCanal && ch.parentId === categoria.id);
-                        if (!canal) {
-                            // Si el canal ya existe en otra categoría (reorganización), lo movemos en vez de duplicarlo.
-                            canal = interaction.guild.channels.cache.find(ch => ch.name === nombreCanal && ch.type === ChannelType.GuildText);
-                            if (canal) {
-                                await canal.setParent(categoria.id, { lockPermissions: false });
-                            } else {
-                                canal = await interaction.guild.channels.create({ name: nombreCanal, type: ChannelType.GuildText, parent: categoria.id });
-                            }
-                        }
-
-                        // REVERTIDO (2026-09-07, bug real reproducido en vivo: "se me desactivo el
-                        // heartbeat, y cuando lo activo no deja" -- toggle/panel tiraba "First
-                        // configure the Heartbeat Webhook" pese a estar configurado): el intento de
-                        // 2026-09-05 de guardar aca el USER ID en vez del guildId para 'heartbeat'
-                        // rompia tieneConfiguracion(guildId, 'heartbeat') y el toggle On/Off del
-                        // panel, que buscan esta fila por guildId igual que TODOS los demas tipos --
-                        // discord_id tiene que seguir siendo guildId siempre, sin excepcion, para que
-                        // el panel funcione. El DM de heartbeat.js ahora resuelve al dueño real del
-                        // servidor por su cuenta (ver avisarInstanciaCongeladaSiHaceFalta), sin
-                        // depender de este valor.
-                        const filaExistente = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
-                        if (filaExistente && filaExistente.canal_id === canal.id && filaExistente.webhook_url && filaExistente.webhook_url !== 'N/A' && (await webhookEstaVivo(filaExistente.webhook_url))) {
-                            return canal;
-                        }
-
-                        // Si se llega hasta acá es porque el webhook viejo se va a recrear
-                        // (invalido, o el chequeo de arriba dio falso) -- sin esto, el mensaje
-                        // de bienvenida/panel que ya se habia mandado con el webhook VIEJO
-                        // queda huerfano en el canal (el webhook que lo mando ya no existe) y
-                        // el de abajo manda uno nuevo, duplicando el mensaje para siempre.
-                        if (filaExistente?.webhook_url && filaExistente.webhook_url !== 'N/A') {
-                            const claveInterfazVieja = COMANDOS_REALES_POR_TIPO[tipo] || (tipo === 'cmd_setup' ? 'setup' : tipo);
-                            const filaMsgVieja = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, `interfaz_msg_${claveInterfazVieja}`]);
-                            if (filaMsgVieja?.estado) {
-                                try { await axios.delete(`${filaExistente.webhook_url}/messages/${filaMsgVieja.estado}`, { timeout: 10000 }); } catch (e) { /* ya no existia o el webhook viejo ya estaba muerto */ }
-                            }
-                        }
-
-                        const webhooks = await canal.fetchWebhooks();
-                        // Borrar TODOS los webhooks que creo este bot en el canal, no solo los que
-                        // conservan el nombre por defecto (2026-09-30, bug real de un usuario:
-                        // "30007 - Maximum number of webhooks reached (15)"). Los renombrados con
-                        // /webhook no se reconocian por nombre, quedaban, y cada sincronizacion
-                        // sumaba uno nuevo hasta el tope de 15 por canal. Los webhooks de otros
-                        // bots o creados a mano (ej. los del bot de Kevin) no se tocan.
-                        const idBot = interaction.client.user.id;
-                        const existingHooks = webhooks.filter(w =>
-                            w.owner?.id === idBot || w.applicationId === idBot
-                            || w.name === `Bot ${tipo}` || w.name === nombreDefaultWebhook(tipo));
-                        for (const oldWebhook of existingHooks.values()) {
-                            await oldWebhook.delete('Recreating invalid webhook').catch(console.error);
-                        }
-
-                        const webhook = await canal.createWebhook({ name: nombreDefaultWebhook(tipo), avatar: avatarDefaultWebhook(tipo) });
-                        await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
-                        await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.guildId, tipo, canal.id, webhook.url]);
-                        // Si el usuario ya le había puesto nombre/foto propia a este webhook
-                        // con /webhook, se la reaplica al nuevo — si no, se queda con el
-                        // nombre/foto por defecto (nada que reaplicar).
-                        await aplicarPersonalizacionWebhookSiExiste(interaction.user.id, tipo, webhook.url);
-
-                        const commandKeyReal = COMANDOS_REALES_POR_TIPO[tipo];
-                        if (commandKeyReal) {
-                            await enviarComandoAlCanal(commandKeyReal, interaction.user, { webhook_url: webhook.url, canal_id: canal.id }, false, interaction.guild);
-                        } else if (tipo === 'cmd_setup') {
-                            const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.guildId);
-                            await enviarOEditarInterfaz(interaction.user.id, 'setup', webhook.url, panel, archivosPanel || [], false, interaction.guild);
-                        } else {
-                            const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
-                            if (embedBienvenida) {
-                                const payloadBienvenida = { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] };
-                                // Botón de link (style 5) — no requiere que el bot
-                                // maneje ninguna interacción, Discord abre la URL
-                                // directo en el cliente, así que funciona igual
-                                // mandado desde un webhook plano.
-                                if (tipo === 'apoyo') {
-                                    payloadBienvenida.components = [{
-                                        type: 1,
-                                        components: [{ type: 2, style: 5, label: '☕ Donate on Ko-fi', url: 'https://ko-fi.com/alecast' }]
-                                    }];
-                                }
-                                if (tipo === 'tutoriales') {
-                                    const filasTutoriales = [];
-                                    for (let j = 0; j < TUTORIALES_LISTA.length; j += 5) {
-                                        filasTutoriales.push(new ActionRowBuilder().addComponents(
-                                            TUTORIALES_LISTA.slice(j, j + 5).map(t =>
-                                                new ButtonBuilder().setCustomId(`tutorial_pdf::${t.tipo}`).setLabel(`📄 ${t.label}`).setStyle(ButtonStyle.Secondary)
-                                            )
-                                        ));
-                                    }
-                                    payloadBienvenida.components = filasTutoriales;
-                                }
-                                await enviarOEditarInterfaz(interaction.user.id, tipo, webhook.url, payloadBienvenida, [], false, interaction.guild);
-                            }
-                        }
-
-                        return canal;
-                    };
-
-                    const reportePartes = [];
-                    const categoriasGestionadas = [];
-                    for (let i = 0; i < grupos.length; i++) {
-                        const grupo = grupos[i];
-                        const categoria = await crearCategoriaSiNoExiste(grupo.categoria);
-                        categoriasGestionadas.push(categoria);
-                        await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, grupo.tipoCategoria]);
-                        await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, 'N/A')`, [interaction.guildId, grupo.tipoCategoria, categoria.id]);
-
-                        for (const c of grupo.canales) {
-                            const canal = await crearCanalSincronizado(categoria, c.tipo, c.name);
-                            reportePartes.push(`🔹 <#${canal.id}>`);
-                        }
-                    }
-
-                    // Reordenar TODAS las categorías del servidor en un solo request (bulk): las
-                    // nuestras primero en el orden deseado, y el resto (no gestionadas por el bot)
-                    // a continuación, respetando su orden actual entre sí. Mandar solo un subconjunto
-                    // hace que Discord reinterprete las posiciones de forma inconsistente.
-                    const idsGestionados = new Set(categoriasGestionadas.map(c => c.id));
-                    const otrasCategorias = interaction.guild.channels.cache
-                        .filter(ch => ch.type === ChannelType.GuildCategory && !idsGestionados.has(ch.id))
-                        .sort((a, b) => a.position - b.position);
-
-                    const posicionesCategorias = [
-                        ...categoriasGestionadas.map((categoria, i) => ({ id: categoria.id, position: i })),
-                        ...[...otrasCategorias.values()].map((ch, i) => ({ id: ch.id, position: categoriasGestionadas.length + i }))
-                    ];
-                    await interaction.client.rest.patch(Routes.guildChannels(interaction.guildId), { body: posicionesCategorias }).catch(console.error);
-
-                    await interaction.editReply({ content: `✅ **Channels synced successfully!**\n\n${reportePartes.join('\n')}` });
-                } catch (e) {
-                    console.error(e);
-                    // Mostrar la causa real (2026-09-30, reporte de un usuario con Administrador que
-                    // igual veia "revisa los permisos"): cualquier fallo caia en ese texto generico.
-                    const causa = [e?.code, e?.rawError?.message || e?.message].filter(Boolean).join(' - ').slice(0, 300);
-                    await interaction.editReply({ content: `❌ Error syncing channels${causa ? `: \`${causa}\`` : '.'}\nIf the bot already has Administrator, send this message to the developer.` });
-                }
+                await sincronizarCanales(interaction);
                 break;
 
             case 'toggle_trading':
@@ -15513,7 +16639,7 @@ client.on('interactionCreate', async interaction => {
                 break;
         }
     }
-});
+}
 
 // El link de invitación no es secreto (cualquiera puede rearmar uno con el mismo
 // client ID), así que el bot se autoriza solo al primer servidor donde se usa y
@@ -15539,8 +16665,1090 @@ async function rechazarGuildNoAutorizado(guild) {
     try { await guild.leave(); } catch (e) { console.error('❌ Error al salir del servidor no autorizado:', e); }
 }
 
+// Sync Channels (antes vivia dentro del case de btn_crear_canales_menu). Funcion aparte para que el
+// host de la comunidad tambien la use al tomar el turno (community-host.js) con una "interaccion"
+// armada a mano: { guild, guildId, user, client, editReply }.
+// Categorias y canales que arma Sync Channels (a nivel de modulo desde 2026-11-01: tambien los usa
+// adoptarCanalesComunidad para que un host nuevo encuentre los canales que ya existen).
+const GRUPOS_SYNC = [
+    {
+        categoria: '🔔 UPDATES 🔔',
+        tipoCategoria: 'actualizaciones_categoria',
+        canales: [
+            { tipo: 'actualizaciones', name: '🔔-updates' },
+            { tipo: 'tutoriales', name: '📚-tutorials' },
+            { tipo: 'apoyo', name: '☕-donate' },
+            { tipo: 'cmd_feedback', name: '📝-feedback' }
+        ]
+    },
+    {
+        categoria: '⚙️ SETTINGS ⚙️',
+        tipoCategoria: 'settings_categoria',
+        canales: [
+            { tipo: 'cmd_setup', name: '⚙-settings' },
+            { tipo: 'cmd_build_embed', name: '🔧-build-embed' },
+            { tipo: 'cmd_build_webhooks', name: '🔗-build-webhooks' }
+        ]
+    },
+    {
+        categoria: '💓 HEARTBEAT 💓',
+        tipoCategoria: 'heartbeat_categoria',
+        canales: [
+            { tipo: 'heartbeat', name: '💓-heartbeat' }
+        ]
+    },
+    {
+        categoria: '📦 PTCG POCKET DROPS 📦',
+        tipoCategoria: 'crear_canales',
+        canales: [
+            { tipo: 's4t', name: '🤖-s4t' },
+            { tipo: 's4t-categoria', name: '📊-s4t-category' },
+            { tipo: '3-diamond', name: '🔷-3-diamond' },
+            { tipo: '4-diamond', name: '💠-4-diamond' },
+            { tipo: '1-star', name: '⭐-1-star' },
+            { tipo: '1-star-shiny', name: '🌟-1-star-shiny' },
+            { tipo: '2-star-trainer', name: '⭐⭐-trainer' },
+            { tipo: '2-star-rainbow', name: '🌈-2-star-rainbow' },
+            { tipo: '2-star-full-art', name: '🎨-2-star-full-art' },
+            { tipo: '2-star-shiny', name: '✨-2-star-shiny' },
+            { tipo: 'immersive', name: '🌌-immersive' },
+            { tipo: 'crown-rare', name: '👑-crown-rare' },
+            { tipo: 'wishlist', name: '💖-wishlist' }
+        ]
+    },
+    {
+        categoria: '📦 GOD PACKS 📦',
+        tipoCategoria: 'godpack_categoria',
+        canales: [
+            { tipo: 'godpack-general', name: '📦-godpack-general' },
+            { tipo: 'godpack-alive', name: '👼-godpack-alive' },
+            { tipo: 'godpack-dead', name: '☠️-godpack-dead' }
+        ]
+    },
+    {
+        categoria: '🔥 MANAGER 🔥',
+        tipoCategoria: 'manager_categoria',
+        canales: [
+            { tipo: 'cmd_card_wishlist', name: '💖-cards-wishlist' },
+            { tipo: 'cmd_card_all', name: '⚡-all-cards' },
+            { tipo: 'cmd_card_gold', name: '🏆-gold-cards' },
+            { tipo: 'cmd_all_missions', name: '🎯-all-missions' },
+            { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' },
+            { tipo: 'shinedust', name: '🍬-shinedust' },
+            { tipo: 'info_accounts', name: '📋-info-accounts' }
+        ]
+    },
+    {
+        categoria: '🎮 RUN MUMU PLAYER 🎮',
+        tipoCategoria: 'run_mumu_categoria',
+        canales: [
+            { tipo: 'cmd_run_instance', name: '🔄-trading' },
+            // Agregados 2026-08-24 a pedido explicito del usuario -- canales
+            // nuevos, todavia sin comando propio (igual que Donate/Heartbeat).
+            { tipo: 'share-cards', name: '🃏-share-cards' },
+            { tipo: 'farm-shop-tickets', name: '🎫-farm-shop-tickets' }
+        ]
+    }
+];;
+
+// Host nuevo de la comunidad (2026-11-01, Arcade): su base esta vacia y nunca corrio Sync Channels,
+// asi que no sabia cual era 🔒-hosts (no publicaba su mensaje de control) ni los canales de comandos.
+// Al arrancar, cada canal de la comunidad que falte en su base se busca por nombre en el server y se
+// anota. Sin webhook ('N/A'): el proximo Sync Channels lo crea; los canales ya anotados no se tocan.
+async function adoptarCanalesComunidad() {
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        try {
+            await guild.channels.fetch();
+            for (const grupo of comunidad.gruposSync(guild.id, GRUPOS_SYNC)) {
+                for (const { tipo, name } of grupo.canales) {
+                    const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [guild.id, tipo]);
+                    if (fila?.canal_id) continue;
+                    const canal = guild.channels.cache.find(c => c.name === name && c.type === ChannelType.GuildText);
+                    if (!canal) continue;
+                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [guild.id, tipo]);
+                    await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, 'N/A')`, [guild.id, tipo, canal.id]);
+                    console.log(`🔗 Community channel found: ${name}`);
+                }
+            }
+        } catch (e) {
+            console.log('DEBUG: no se pudieron adoptar los canales de la comunidad:', e?.message || e);
+        }
+    }
+}
+
+async function sincronizarCanales(interaction) {
+        try {
+            const grupos = GRUPOS_SYNC;
+            // Solo canales que tienen un comando real asignado (aunque no se pueda
+            // "ejecutar" solo, como /embed, /webhook, /feedback) o que explican algo
+            // que no se repite (Updates/Support) reciben un embed al sincronizar. El
+            // resto (rareza, godpacks, s4t, heartbeat, wishlist-feed) no tiene ningún
+            // comando propio — meter un embed ahí es ruido innecesario en canales que
+            // además reciben cartas todo el tiempo.
+            // Lista mostrada en el canal de Tutorials (2026-08-06, a pedido explicito
+            // del usuario): un item por fila, cada uno con su boton para abrir el PDF
+            // correspondiente reusando tutorial_pdf:: (mismo botón que ya usa cada
+            // canal individual) -- si a algún tipo todavía no se le subió el PDF real,
+            // el handler de tutorial_pdf:: ya responde "No tutorial available yet" solo.
+            // TUTORIALES_LISTA ahora vive a nivel de modulo (ver mas arriba) -- se
+            // reusa tambien en la pagina web /tutorials.
+
+            const EMBEDS_BIENVENIDA_POR_TIPO = {
+                actualizaciones: { title: '🔔 Updates', description: 'You\'ll get notified here whenever there\'s a new bot update, with a button to install it right away.' },
+                tutoriales: {
+                    title: '📚 Tutorials',
+                    description: 'Here you can find all the tutorials for the bot\'s commands and features:',
+                    fields: TUTORIALES_LISTA.map((t, i) => ({ name: `${i + 1}- ${t.label}`, value: '​', inline: false }))
+                },
+                apoyo: { title: '☕ Donate', description: 'If this bot has been useful to you, any support to keep improving it is appreciated. Thanks for using it! 💛' },
+                'share-cards': { title: '🃏 Share Cards', description: 'Post cards here that you\'re giving away or open to trading.' },
+                'farm-shop-tickets': { title: '🎫 Farm Shop Tickets', description: 'Track Shop Tickets farmed across your accounts here.' },
+                cmd_build_embed: { title: '🔧 Build Embed', description: 'This is where you use `/embed` to configure what information is shown in the embeds for found cards.' },
+                cmd_build_webhooks: { title: '🔗 Build Webhooks', description: 'This is where you use `/webhook` to change the name and avatar of each channel\'s webhooks.' },
+                cmd_feedback: { title: '📝 Feedback', description: 'This is where you use `/feedback` to send suggestions, report problems, or share your thoughts about the bot — you can attach a screenshot too.' },
+                shinedust: { title: '🍬 Shinedust', description: 'Results from the 👛 Shinedust button on card lookups land here — the card, the account, and its current Shinedust balance, with buttons to jump straight into Trade or Extract XML for that same account.' },
+                info_accounts: { title: '📋 Info Accounts', description: 'Press 📋 Info Accounts on a message in your Extract XML channel to get a full PDF report of that account here — every card it has, grouped by expansion, with quantities.' }
+            };
+
+            // Canales con un comando real y no-efímero asignado: en vez del embed
+            // genérico de "acá usas /x", se ejecuta el comando de verdad para que el
+            // usuario vea la interfaz funcionando apenas se crea el canal.
+            // cmd_build_embed/cmd_build_webhooks/cmd_feedback quedan afuera porque
+            // esos comandos responden de forma efímera (o abren un modal), así que no
+            // hay nada persistente que publicar en el canal sin una interacción real.
+            for (const e of Object.values(EMBEDS_BIENVENIDA_POR_TIPO)) TITULOS_BIENVENIDA.add(e.title);
+            TITULOS_BIENVENIDA.add('🔗 Start here — link your PC');
+
+            const COMANDOS_REALES_POR_TIPO = {
+                cmd_card_wishlist: 'card_wishlist',
+                cmd_card_all: 'card_all',
+                cmd_extract_xlm: 'extract_xlm',
+                cmd_run_instance: 'run_instance',
+                cmd_all_missions: 'all_missions'
+            };
+
+            const crearCategoriaSiNoExiste = async (nombreCategoria, privada = false, acceso = 'monitor') => {
+                let categoria = interaction.guild.channels.cache.find(c => c.name === nombreCategoria && c.type === ChannelType.GuildCategory);
+                // Categoria privada del modo comunidad (🔒 STAFF): solo el bot y el staff la ven.
+                // Se reaplica en cada Sync por si alguien toco los permisos a mano.
+                const enComunidad = comunidad.esComunidad(interaction.guildId);
+                const permisos = privada ? await comunidad.permisosPrivados(interaction.guild)
+                    : enComunidad ? await comunidad.permisosCategoria(interaction.guild, acceso)
+                    : [{
+                        id: interaction.guild.members.me.id,
+                        allow: [PermissionsBitField.Flags.Administrator]
+                    }];
+                if (!categoria) {
+                    categoria = await interaction.guild.channels.create({
+                        name: nombreCategoria,
+                        type: ChannelType.GuildCategory,
+                        permissionOverwrites: permisos
+                    });
+                } else if (privada || enComunidad) {
+                    await categoria.permissionOverwrites.set(permisos).catch(console.error);
+                }
+                return categoria;
+            };
+
+
+            const crearCanalSincronizado = async (categoria, tipo, nombreCanal) => {
+                let canal = interaction.guild.channels.cache.find(ch => ch.name === nombreCanal && ch.parentId === categoria.id);
+                if (!canal) {
+                    // Si el canal ya existe en otra categoría (reorganización), lo movemos en vez de duplicarlo.
+                    canal = interaction.guild.channels.cache.find(ch => ch.name === nombreCanal && ch.type === ChannelType.GuildText);
+                    if (canal) {
+                        await canal.setParent(categoria.id, { lockPermissions: false });
+                    } else {
+                        canal = await interaction.guild.channels.create({ name: nombreCanal, type: ChannelType.GuildText, parent: categoria.id });
+                    }
+                }
+                // 🎯 All Missions es solo para mirar (Ale 2026-11-14): nadie escribe ahi; los botones si funcionan.
+                if (tipo === 'cmd_all_missions') await canalSoloLectura(interaction.guild, canal).catch(e => console.error('DEBUG: all missions read-only:', e?.message || e));
+
+                // REVERTIDO (2026-09-07, bug real reproducido en vivo: "se me desactivo el
+                // heartbeat, y cuando lo activo no deja" -- toggle/panel tiraba "First
+                // configure the Heartbeat Webhook" pese a estar configurado): el intento de
+                // 2026-09-05 de guardar aca el USER ID en vez del guildId para 'heartbeat'
+                // rompia tieneConfiguracion(guildId, 'heartbeat') y el toggle On/Off del
+                // panel, que buscan esta fila por guildId igual que TODOS los demas tipos --
+                // discord_id tiene que seguir siendo guildId siempre, sin excepcion, para que
+                // el panel funcione. El DM de heartbeat.js ahora resuelve al dueño real del
+                // servidor por su cuenta (ver avisarInstanciaCongeladaSiHaceFalta), sin
+                // depender de este valor.
+                const filaExistente = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
+                if (filaExistente && filaExistente.canal_id === canal.id && filaExistente.webhook_url && filaExistente.webhook_url !== 'N/A' && (await webhookEstaVivo(filaExistente.webhook_url))) {
+                    return canal;
+                }
+
+                // Si se llega hasta acá es porque el webhook viejo se va a recrear
+                // (invalido, o el chequeo de arriba dio falso) -- sin esto, el mensaje
+                // de bienvenida/panel que ya se habia mandado con el webhook VIEJO
+                // queda huerfano en el canal (el webhook que lo mando ya no existe) y
+                // el de abajo manda uno nuevo, duplicando el mensaje para siempre.
+                if (filaExistente?.webhook_url && filaExistente.webhook_url !== 'N/A') {
+                    const claveInterfazVieja = COMANDOS_REALES_POR_TIPO[tipo] || (tipo === 'cmd_setup' ? 'setup' : tipo);
+                    const filaMsgVieja = await db.get(`SELECT estado FROM configs_extras WHERE discord_id = ? AND tipo = ?`, [interaction.user.id, `interfaz_msg_${claveInterfazVieja}`]);
+                    if (filaMsgVieja?.estado) {
+                        try { await axios.delete(`${filaExistente.webhook_url}/messages/${filaMsgVieja.estado}`, { timeout: 10000 }); } catch (e) { /* ya no existia o el webhook viejo ya estaba muerto */ }
+                    }
+                }
+
+                const webhooks = await canal.fetchWebhooks();
+                // Borrar TODOS los webhooks que creo este bot en el canal, no solo los que
+                // conservan el nombre por defecto (2026-09-30, bug real de un usuario:
+                // "30007 - Maximum number of webhooks reached (15)"). Los renombrados con
+                // /webhook no se reconocian por nombre, quedaban, y cada sincronizacion
+                // sumaba uno nuevo hasta el tope de 15 por canal. Los webhooks de otros
+                // bots o creados a mano (ej. los del bot de Kevin) no se tocan.
+                const idBot = interaction.client.user.id;
+                // Comunidad con varios hosts (2026-10-25, bug real): los webhooks de los otros bots se
+                // llaman igual ("Bot tipo") -- por nombre se borraban los del otro host. Ahi solo los propios.
+                const porNombre = !comunidad.esComunidad(interaction.guildId);
+                const existingHooks = webhooks.filter(w =>
+                    w.owner?.id === idBot || w.applicationId === idBot
+                    || (porNombre && (w.name === `Bot ${tipo}` || w.name === nombreDefaultWebhook(tipo))));
+                for (const oldWebhook of existingHooks.values()) {
+                    await oldWebhook.delete('Recreating invalid webhook').catch(console.error);
+                }
+
+                const webhook = await canal.createWebhook({ name: nombreDefaultWebhook(tipo), avatar: avatarDefaultWebhook(tipo) });
+                await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
+                await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, ?)`, [interaction.guildId, tipo, canal.id, webhook.url]);
+                // Si el usuario ya le había puesto nombre/foto propia a este webhook
+                // con /webhook, se la reaplica al nuevo — si no, se queda con el
+                // nombre/foto por defecto (nada que reaplicar).
+                await aplicarPersonalizacionWebhookSiExiste(interaction.user.id, tipo, webhook.url);
+
+                const commandKeyReal = COMANDOS_REALES_POR_TIPO[tipo];
+                if (commandKeyReal) {
+                    await enviarComandoAlCanal(commandKeyReal, interaction.user, { webhook_url: webhook.url, canal_id: canal.id }, false, interaction.guild);
+                } else if (tipo === 'cmd_setup') {
+                    const { archivos: archivosPanel, ...panel } = await generarPanelControl(interaction.guildId);
+                    await enviarOEditarInterfaz(interaction.user.id, 'setup', webhook.url, panel, archivosPanel || [], false, interaction.guild);
+                } else {
+                    // Bienvenida de la comunidad: como vincular la PC (con el ultimo Monitor Link publicado).
+                    if (tipo === 'start_here') {
+                        const ml = await monitorLink.ultimoMonitorLink().catch(() => null);
+                        EMBEDS_BIENVENIDA_POR_TIPO.start_here = {
+                            title: '🔗 Start here — link your PC',
+                            description: [
+                                'To use the bot with **your own accounts**, link your PC once:',
+                                '',
+                                `**1.** Download **Monitor Link**: ${ml?.fija || ml?.url ? `[MonitorLink.ahk](${ml.fija || ml.url})` : 'ask staff for the link'}`,
+                                '**2.** Put it **inside your PTCGPB folder** (next to PTCGPB.ahk) and double-click it.',
+                                '**3.** Type **/link** here, copy the key and paste it in Monitor Link → **Link**.',
+                                '',
+                                '✅ You get the **Monitor** role and the bot channels appear.',
+                                '🔒 It only sends which cards your accounts have — never your passwords.'
+                            ].join('\n')
+                        };
+                    }
+                    const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
+                    if (embedBienvenida) {
+                        const payloadBienvenida = { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] };
+                        // Botón de link (style 5) — no requiere que el bot
+                        // maneje ninguna interacción, Discord abre la URL
+                        // directo en el cliente, así que funciona igual
+                        // mandado desde un webhook plano.
+                        if (tipo === 'apoyo') {
+                            payloadBienvenida.components = [{
+                                type: 1,
+                                components: [{ type: 2, style: 5, label: '☕ Donate on Ko-fi', url: 'https://ko-fi.com/alecast' }]
+                            }];
+                        }
+                        if (tipo === 'tutoriales') {
+                            const filasTutoriales = [];
+                            for (let j = 0; j < TUTORIALES_LISTA.length; j += 5) {
+                                filasTutoriales.push(new ActionRowBuilder().addComponents(
+                                    TUTORIALES_LISTA.slice(j, j + 5).map(t =>
+                                        new ButtonBuilder().setCustomId(`tutorial_pdf::${t.tipo}`).setLabel(`📄 ${t.label}`).setStyle(ButtonStyle.Secondary)
+                                    )
+                                ));
+                            }
+                            payloadBienvenida.components = filasTutoriales;
+                        }
+                        await enviarOEditarInterfaz(interaction.user.id, tipo, webhook.url, payloadBienvenida, [], false, interaction.guild);
+                    }
+                }
+
+                return canal;
+            };
+
+            const reportePartes = [];
+            const categoriasGestionadas = [];
+            // Comunidad: fuera los canales que ahi ya no van (ej. 📄-extract-xml).
+            if (comunidad.esComunidad(interaction.guildId)) {
+                for (const tipo of comunidad.CANALES_FUERA_DE_COMUNIDAD) {
+                    const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
+                    const canalViejo = fila?.canal_id ? interaction.guild.channels.cache.get(fila.canal_id) : null;
+                    if (canalViejo) await canalViejo.delete('Not used in the community').catch(console.error);
+                    await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
+                }
+                const huerfano = interaction.guild.channels.cache.find(ch => ch.name === '📄-extract-xml');
+                if (huerfano) await huerfano.delete('Not used in the community').catch(console.error);
+            }
+            // Modo comunidad: solo MANAGER + RUN MUMU PLAYER + 🔒 STAFF. En cualquier otro
+            // server la lista queda igual que siempre.
+            const gruposSync = comunidad.gruposSync(interaction.guildId, grupos);
+            for (let i = 0; i < gruposSync.length; i++) {
+                const grupo = gruposSync[i];
+                const categoria = await crearCategoriaSiNoExiste(grupo.categoria, !!grupo.privado, grupo.acceso || 'monitor');
+                categoriasGestionadas.push(categoria);
+                await db.run(`DELETE FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, grupo.tipoCategoria]);
+                await db.run(`INSERT INTO configs_canales (discord_id, tipo, canal_id, webhook_url) VALUES (?, ?, ?, 'N/A')`, [interaction.guildId, grupo.tipoCategoria, categoria.id]);
+
+                for (const c of grupo.canales) {
+                    const canal = await crearCanalSincronizado(categoria, c.tipo, c.name);
+                    // Comunidad: cada canal con los permisos de su categoria (por si alguien los toco).
+                    if (comunidad.esComunidad(interaction.guildId)) await canal.lockPermissions().catch(() => {});
+                    reportePartes.push(`🔹 <#${canal.id}>`);
+                }
+            }
+
+            // Reordenar TODAS las categorías del servidor en un solo request (bulk): las
+            // nuestras primero en el orden deseado, y el resto (no gestionadas por el bot)
+            // a continuación, respetando su orden actual entre sí. Mandar solo un subconjunto
+            // hace que Discord reinterprete las posiciones de forma inconsistente.
+            const idsGestionados = new Set(categoriasGestionadas.map(c => c.id));
+            const otrasCategorias = interaction.guild.channels.cache
+                .filter(ch => ch.type === ChannelType.GuildCategory && !idsGestionados.has(ch.id))
+                .sort((a, b) => a.position - b.position);
+
+            const posicionesCategorias = [
+                ...categoriasGestionadas.map((categoria, i) => ({ id: categoria.id, position: i })),
+                ...[...otrasCategorias.values()].map((ch, i) => ({ id: ch.id, position: categoriasGestionadas.length + i }))
+            ];
+            await interaction.client.rest.patch(Routes.guildChannels(interaction.guildId), { body: posicionesCategorias }).catch(console.error);
+
+            await interaction.editReply({ content: `✅ **Channels synced successfully!**\n\n${reportePartes.join('\n')}` });
+        } catch (e) {
+            console.error(e);
+            // Mostrar la causa real (2026-09-30, reporte de un usuario con Administrador que
+            // igual veia "revisa los permisos"): cualquier fallo caia en ese texto generico.
+            const causa = [e?.code, e?.rawError?.message || e?.message].filter(Boolean).join(' - ').slice(0, 300);
+            await interaction.editReply({ content: `❌ Error syncing channels${causa ? `: \`${causa}\`` : '.'}\nIf the bot already has Administrator, send this message to the developer.` });
+        }
+}
+// Toma del turno en la comunidad: comandos propios, canales/paneles con sus webhooks (Sync), fuera los
+// paneles del bot anterior, y la direccion de Monitor Link en la libreta.
+async function tomarTurnoComunidad() {
+    // Primero la direccion: los Monitor Link se pasan a este host y mandan su resumen ya. Cada paso
+    // por separado (2026-10-25, bug real al cambiar de host): un error en uno cortaba todos los demas.
+    if (DASHBOARD_PUBLIC_URL) await monitorLink.publicarDireccion(DASHBOARD_PUBLIC_URL);
+    const applicationId = CLIENT_ID || client.user?.id;
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    const paso = async (nombre, fn) => { try { await fn(); } catch (e) { console.error(`❌ Community turn — ${nombre}:`, e?.rawError?.message || e?.message || e); } };
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        await paso('commands', () => rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: comandosDeGuild(guild.id, construirSlashCommands()) }));
+        const dueno = await guild.fetchOwner().then(m => m.user).catch(() => client.user);
+        await paso('channels', () => sincronizarCanales({ guild, guildId: guild.id, user: dueno, client, editReply: async () => {} }));
+        await paso('Monitor role', async () => { for (const v of await monitorLink.vinculados()) await darRolMonitor(guild.id, v.discordId); });
+        await paso('old panels', () => limpiarPanelesDeOtrosBots(guild));
+        await paso('duplicated welcomes', () => limpiarBienvenidasDuplicadas(guild));
+        await paso('own panels', () => anotarPanelesPropios(guild, dueno.id));
+        console.log(`✅ Community turn: commands and panels published in ${guild.name}`);
+    }
+}
+
+// Estado de esta PC para el panel de hosts: bot, version, bot de Miguel y Monitor Links en linea.
+async function estadoDeEsteHost() {
+    let version = 'dev';
+    try { version = fs.readFileSync(path.join(__dirname, 'host-version.txt'), 'utf8').trim() || version; } catch (e) {
+        try { version = execSync('git rev-parse --short HEAD', { cwd: __dirname, windowsHide: true }).toString().trim(); } catch (e2) { /* sin git */ }
+    }
+    const motor = process.env.FAST_TRANSFER_ENGINE_DIR || '';
+    let links = null;
+    if (hostComunidad.esActivo() && comunidad.hayComunidad()) {
+        try { links = (await monitorLink.vinculados()).filter(v => v.enLinea).length; } catch (e) { /* sin tablas */ }
+    }
+    // Version del juego para la que esta actualizado el motor (2026-10-29, pedido de Ale): sale de
+    // engine\config\current-version.txt, lo escribe scripts\update_bot.py al actualizar con el XAPK.
+    // (2026-11-01) Tambien se mira engine\core\session.py: quien actualiza a mano (copiando session.py)
+    // no toca current-version.txt y el panel lo marcaba "outdated". Se usa la version mas alta de las dos.
+    const numV = (v) => String(v || '').split('.').map(n => n.padStart(4, '0')).join('.');
+    const candidatas = [];
+    try { candidatas.push(fs.readFileSync(path.join(motor, 'engine', 'config', 'current-version.txt'), 'utf8').trim().replace(/^v/i, '')); } catch (e) { /* sin archivo */ }
+    try {
+        const sesion = fs.readFileSync(path.join(motor, 'engine', 'core', 'session.py'), 'utf8');
+        for (const m of sesion.matchAll(/"x-takasho-app-version"\s*:\s*"(\d+\.\d+\.\d+)"/g)) candidatas.push(m[1]);
+    } catch (e) { /* sin motor */ }
+    const versionMotor = candidatas.filter(v => /^\d+\.\d+\.\d+$/.test(v)).sort((a, b) => numV(b).localeCompare(numV(a)))[0] || null;
+    // GP farm: cuantas proxies de la bolsa le tocan a este host (null = Offline).
+    const reroll = await hostComunidad.parteReroll().catch(() => null) ? await monitorLink.escribirProxiesMotor().catch(() => 0) : null;
+    // Cuentas prestadas que le tocan a este host (para la seccion "Lent accounts" del panel).
+    const prestadas = reroll === null ? null : await require('./reroll-comunidad.js').resumenPrestadas().catch(() => null);
+    // Nombre del panel GP ("Ale Cast") y cuantas cuentas propias corre ahi, para su recuadro.
+    const farm = reroll === null ? null : require('./reroll-comunidad.js').infoFarm();
+    return { bot: client.user?.tag || '?', version, motor: !!motor && fs.existsSync(path.join(motor, 'auto_trade.py')), versionMotor, links, reroll, prestadas, farm,
+        duenos: await duenosDelBot() };
+}
+
+// Dueño(s) en Discord de la app de ESTE bot (Ale 2026-11-12): "Take the turn" le muestra a cada uno solo su host.
+let _duenosBot = null;
+async function duenosDelBot() {
+    if (_duenosBot) return _duenosBot;
+    try {
+        const app = await client.application?.fetch();
+        const o = app?.owner;
+        const ids = o?.members ? [...o.members.keys()] : o?.id ? [o.id] : [];
+        if (ids.length) _duenosBot = ids.map(String);
+    } catch (e) { /* sin red */ }
+    return _duenosBot || [];
+}
+
+// Seccion "Lent accounts" del panel de hosts (2026-11-01, pedido de Ale): por miembro, cuantas cuentas
+// presta, cuantas estan listas para abrir y como se reparten entre los hosts Online del GP farm. Cada host
+// manda su parte en estadoDeEsteHost().prestadas; aca se suma. El estado del Monitor Link (🟢/🔴) lo
+// sabe solo el host del turno. Tambien queda en Upstash (zenith:miembros) para LatiasBot de wr98:
+// quien presta cuentas cuenta como online sin heartbeat propio.
+async function seccionPrestadas(hosts) {
+    const farm = hosts.filter(h => h.enLinea && h.prestadas && typeof h.prestadas === 'object');
+    if (!farm.length) return null;
+    const miembros = {};
+    for (const h of farm) {
+        for (const [id, [total, mias, listas, noElegibles]] of Object.entries(h.prestadas)) {
+            const m = (miembros[id] ||= { total: 0, listas: 0, noElegibles: 0, porHost: [] });
+            m.total = Math.max(m.total, total);
+            m.listas += listas;
+            m.noElegibles += noElegibles || 0;
+            m.porHost.push(`${h.nombre} ${mias}`);
+        }
+    }
+    const ids = Object.keys(miembros).sort((a, b) => miembros[b].total - miembros[a].total);
+    if (!ids.length) return null;
+    let enLinea = new Map();
+    try { enLinea = new Map((await monitorLink.vinculados()).map(v => [String(v.discordId), v.enLinea])); } catch (e) { /* sin tablas */ }
+    const ahora = Date.now();
+    const registro = Object.fromEntries(ids.map(id => [id, {
+        monitorLink: enLinea.get(id) === true, lent: miembros[id].total, ready: miembros[id].listas, notGpEligible: miembros[id].noElegibles, ts: ahora
+    }]));
+    hostComunidad.anotarMiembros?.(registro);
+    // Un recuadro por host (pedido de Ale: "cada host con las cuentas que esta abriendo, por separado"):
+    // cada miembro con sus cuentas que le tocan a ESE host, listas/total.
+    const punto = (id) => enLinea.has(id) ? (enLinea.get(id) ? '🟢' : '🔴') : '⚪';
+    // (2026-11-06, Ale) Cada host: disponibles ahora y abiertas por ESE host (24 h), por miembro y en total;
+    // abajo, una sola vez, el total de cuentas prestadas y el total abiertas entre todos los hosts.
+    const suma = (h, i) => Object.values(h.prestadas).reduce((a, v) => a + (Number(v[i]) || 0), 0);
+    const totalPrestadas = Object.values(miembros).reduce((a, m) => a + m.total, 0);
+    const totalAbiertas = farm.reduce((a, h) => a + suma(h, 4), 0);
+    // (2026-11-06, Ale) Segun el Run Mode del host: Only Pack = farm de 96P (cuentas NO elegibles de cada
+    // miembro); God Pack = GP farm (cuentas elegibles). Por miembro: cuantas de ese tipo le tocan a este
+    // host y cuantas ya abrio. Los hosts del mismo modo se reparten las cuentas (community-host.js).
+    const recuadros = farm.slice(0, 8).map(h => {   // 8: Discord admite 10 recuadros (hosts + status de cuentas + farms)
+        const sobres = h.farm?.modo === 'packs-only';
+        const delModo = (v) => sobres ? (Number(v[3]) || 0) : (v[5] ?? Math.max(0, (Number(v[1]) || 0) - (Number(v[3]) || 0)));
+        // (Ale 2026-11-06) Ordenado como el heartbeat: columnas de ancho fijo (total del modo, abiertas por
+        // este host en 24 h, las que QUEDAN por abrir ahora) y el miembro al final para no correr las columnas.
+        const n = (x) => (Number(x) || 0).toLocaleString('en-US');
+        const datos = Object.entries(h.prestadas).filter(([, v]) => delModo(v) > 0)
+            .sort((a, b) => delModo(b[1]) - delModo(a[1]))
+            .map(([id, v]) => ({ id, total: n(delModo(v)), abiertas: n(v[4]), quedan: n(v[2]) }));
+        const ancho = (k, titulo) => Math.max(titulo.length, ...datos.map(d => d[k].length));
+        const aT = ancho('total', 'Total'), aA = ancho('abiertas', 'Opened'), aQ = ancho('quedan', 'Left');
+        const icono = sobres ? '🔒' : '⭐';
+        const caja = (texto, w) => '`' + String(texto).padStart(w) + '`';
+        const cabecera = `> ⚪ ${caja('Total', aT)} ${icono} | ${caja('Opened', aA)} ✅ | ${caja('Left', aQ)} ⏳ | Member`;
+        const filas = datos.map(d => `> ${punto(d.id)} ${caja(d.total, aT)} ${icono} | ${caja(d.abiertas, aA)} ✅ | ${caja(d.quedan, aQ)} ⏳ | <@${d.id}>`);
+        const totalModo = Object.values(h.prestadas).reduce((a, v) => a + delModo(v), 0);
+        const modoTexto = sobres ? '📦 Mode: **Only packs** — 96P farm (not-eligible accounts)' : '✨ Mode: **God Pack farm** (eligible accounts)';
+        const resumen = [
+            `> 🖥️ Own accounts: ${caja(n(h.farm?.propias), 1)}`,
+            `> ${icono} This mode on this host: ${caja(n(totalModo), 1)}`,
+            `> ✅ Opened (24 h): ${caja(n(suma(h, 4)), 1)} | ⏳ Left now: ${caja(n(suma(h, 2)), 1)}`
+        ].join('\n');
+        return new EmbedBuilder().setColor(sobres ? 0xF0A93A : 0x57F287)
+            .setTitle(`🎲 ${h.farm?.nombre || h.nombre} — ${sobres ? '96P pack farm' : 'GP farm'} host`)
+            .setDescription(`${modoTexto}\n${resumen}\n\n${datos.length ? [cabecera, ...filas].join('\n') : 'No lent accounts for this mode.'}`.slice(0, 4000))
+            .setFooter({ text: `Total = ${sobres ? 'not-eligible' : 'GP-eligible'} accounts on this host · Opened = by this host in the last 24 h · Left = can be opened right now (the rest wait their 24 h or recharge) · 🟢 Monitor Link on · 🔴 off` });
+    });
+    const ultimo = recuadros[recuadros.length - 1];
+    if (ultimo) {
+        const desc = ultimo.data.description || '';
+        const pie = `\n\n━━━━━━━━━━\n> 🌐 **All hosts** | 📦 Shared: \`${totalPrestadas.toLocaleString('en-US')}\``
+            + ` | ✅ Opened (24 h): \`${totalAbiertas.toLocaleString('en-US')}\``;
+        ultimo.setDescription(desc.slice(0, 4096 - pie.length) + pie);
+    }
+    return recuadros;
+}
+
+// Status de las cuentas de toda la comunidad (pedido de Ale 2026-11-06): total de los Monitor Link
+// vinculados, cuantas tienen 96+ sobres, cuantas son elegibles a God Pack y cuantas estan bloqueadas.
+async function seccionCuentasComunidad() {
+    const e = await monitorLink.estadoCuentasComunidad();
+    if (!e.miembros) return null;
+    const n = (x) => Number(x || 0).toLocaleString('en-US');
+    const pct = e.n96 ? ` (${Math.round(e.elegibles * 100 / e.n96)}%)` : '';
+    return new EmbedBuilder().setTitle('📊 Community accounts').setColor(0xFEE75C)
+        .setDescription([
+            `👥 Linked members: **${n(e.miembros)}** · 🟢 Monitor Link on now: **${n(e.enLinea)}**`,
+            `📦 Accounts in total: **${n(e.cuentas)}**`,
+            ``,
+            `🎴 With 96+ packs: **${n(e.n96)}**`,
+            `✅ God Pack eligible: **${n(e.elegibles)}**${pct}`,
+            `🔒 Not eligible yet (locked): **${n(e.bloqueadas)}**`,
+            `🎲 Shared for the GP farm: **${n(e.prestadas)}**`,
+            ``,
+            `-# GP totals from ${n(e.conGp)} of ${n(e.miembros)} members (Monitor Link 1.9.8+, sent every 10 min).`
+        ].join('\n'))
+        .setFooter({ text: 'Not eligible = a 30+ day pause; it needs 96 packs again (a new pause restarts from 0)' });
+}
+
+// Panel de hosts en el canal 🔒-hosts (lo arma y lo mantiene el host que tiene el turno).
+// Tarjetas del canal 🔒-hosts (Ale 2026-11-12: "que sea similar a los embed" de Only Pack): hosts, cuentas de la
+// comunidad, amigos de Monitor Link y una por host que farmea. Devuelve { embeds, files } o null si algo falla.
+async function tarjetasPanelHosts(guild, hosts) {
+    const { tarjetaHosts, tarjetaCuentas, tarjetaAmigos } = require('./tarjetas-comunidad.js');
+    const { armarTarjetaGp } = require('./tarjeta-gp-farm.js');
+    const release = await hostComunidad.ultimaRelease().catch(() => null);
+    const hace = (ts) => { const m = Math.max(0, Math.round((Date.now() - (ts || 0)) / 60000)); return m < 60 ? `${m} MIN AGO` : m < 2880 ? `${Math.round(m / 60)} H AGO` : `${Math.round(m / 1440)} D AGO`; };
+    const listaHosts = hosts.map(h => ({ nombre: h.nombre, estado: !h.enLinea ? 'off' : h.turno ? 'turn' : 'standby', desde: h.enLinea ? null : hace(h.ts),
+        bot: h.bot, version: h.version ? `v${h.version}` : '', alDia: hostComunidad.estaAlDia(h.version, release) !== false,
+        motor: h.motor ? (h.versionMotor ? `v${h.versionMotor}` : 'on') : null, links: h.turno && typeof h.links === 'number' ? h.links : null,
+        proxies: typeof h.reroll === 'number' ? h.reroll : null }));
+    // Nombres de Discord (apodo en el servidor) de quien haga falta, con cache del propio discord.js.
+    const nombre = async (id) => { const m = await guild.members.fetch(String(id)).catch(() => null); return m ? { nombre: m.displayName, user: m.user.username } : null; };
+    let enLinea = new Map();
+    try { enLinea = new Map((await monitorLink.vinculados()).map(v => [String(v.discordId), v.enLinea])); } catch (e) { /* sin tablas */ }
+    const piezas = [];
+    piezas.push({ archivo: 'hosts.png', color: 0x5865F2, buffer: await tarjetaHosts(listaHosts) });
+    const e = await monitorLink.estadoCuentasComunidad().catch(() => null);
+    if (e?.miembros) piezas.push({ archivo: 'accounts.png', color: 0xF5C518, buffer: await tarjetaCuentas({ miembros: e.miembros, linkOn: e.enLinea,
+        cuentas: e.cuentas, con96: e.n96, elegibles: e.elegibles, bloqueadas: e.bloqueadas, compartidas: e.prestadas, deMiembros: e.conGp }) });
+    const pares = await db.all(`SELECT amigo_id, dueno_id FROM link_amigos`).catch(() => []) || [];
+    if (pares.length) {
+        const grupos = {};
+        for (const p of pares) (grupos[p.dueno_id] ||= []).push(String(p.amigo_id));
+        const lista = [];
+        for (const [dueno, amigos] of Object.entries(grupos)) {
+            const d = await nombre(dueno);
+            lista.push({ dueno: d?.nombre || dueno, duenoUser: d?.user, online: enLinea.get(String(dueno)) === true,
+                amigos: await Promise.all(amigos.map(async a => { const x = await nombre(a); return { nombre: x?.nombre || null, user: x?.user, id: a }; })) });
+        }
+        piezas.push({ archivo: 'friends.png', color: 0xA970FF, buffer: await tarjetaAmigos(lista) });
+    }
+    // Una por host que farmea (God Pack = verde, Only Pack = amarillo), solo los miembros con Monitor Link prendido.
+    const farm = hosts.filter(h => h.enLinea && h.prestadas && typeof h.prestadas === 'object').slice(0, 10 - piezas.length);
+    for (const h of farm) {
+        const sobres = h.farm?.modo === 'packs-only';
+        const delModo = (v) => sobres ? (Number(v[3]) || 0) : (v[5] ?? Math.max(0, (Number(v[1]) || 0) - (Number(v[3]) || 0)));
+        const miembros = [];
+        for (const [id, v] of Object.entries(h.prestadas)) {
+            if (!(delModo(v) > 0) || enLinea.get(String(id)) !== true) continue;
+            miembros.push({ nombre: (await nombre(id))?.nombre || id, online: true, total: delModo(v), abiertas: Number(v[4]) || 0, quedan: Number(v[2]) || 0 });
+        }
+        const { buffer } = await armarTarjetaGp({ sobre: h.farm?.sobre, motor: fastTransfer.rutaMotor(), packId: 'CN001_0010_00_000',
+            host: h.farm?.nombre || h.nombre, modo: sobres ? 'packs-only' : 'godpack', propias: h.farm?.propias || 0, miembros });
+        piezas.push({ archivo: `farm-${piezas.length}.png`, color: sobres ? 0xF5C518 : 0x3DDC84, buffer });
+    }
+    return {
+        embeds: piezas.map(p => new EmbedBuilder().setColor(p.color).setImage(`attachment://${p.archivo}`)),
+        files: piezas.map(p => ({ attachment: p.buffer, name: p.archivo })),
+    };
+}
+
+async function actualizarPanelHosts(hosts) {
+    const recuadrosPrestadas = await seccionPrestadas(hosts).catch(() => null) || [];
+    const recuadroCuentas = await seccionCuentasComunidad().catch(() => null);
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
+        const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+        if (!canal) continue;
+        const hace = (ts) => `<t:${Math.floor((ts || 0) / 1000)}:R>`;
+        // El motor mas nuevo entre los hosts: el que tenga uno mas viejo sale con ⚠️ (sus ⚡ fallan con ABORTED).
+        const numVersion = (v) => String(v || '').split('.').map(n => n.padStart(4, '0')).join('.');
+        const motorMasNuevo = hosts.map(h => h.versionMotor).filter(Boolean).sort((a, b) => numVersion(b).localeCompare(numVersion(a)))[0];
+        const textoMotor = (h) => !h.motor ? '❌' : `✅${h.versionMotor ? ` v${h.versionMotor}` : ''}`
+            + (h.versionMotor && motorMasNuevo && numVersion(h.versionMotor) < numVersion(motorMasNuevo) ? ' ⚠️ outdated' : '');
+        const release = await hostComunidad.ultimaRelease().catch(() => null);
+        const lineas = hosts.map(h => {
+            const estado = !h.enLinea ? `🔴 **${h.nombre}** — offline since ${hace(h.ts)}`
+                : h.turno ? `👑🟢 **${h.nombre}** — **has the turn**` : `⏸️🟢 **${h.nombre}** — standby, ready to take over`;
+            // (Ale) Version al dia o no, comparada con la ultima publicada (zenith:release).
+            const alDia = hostComunidad.estaAlDia(h.version, release);
+            const textoVersion = h.version ? `v${h.version}${alDia === true ? ' ✅ up to date' : alDia === false ? ' ⚠️ outdated (updating…)' : ''}` : null;
+            const detalles = [h.bot && `bot ${h.bot}`, textoVersion, h.enLinea ? `Miguel's bot ${textoMotor(h)}` : null,
+                h.enLinea && h.turno && typeof h.links === 'number' ? `${h.links} Monitor Link(s) online` : null,
+                h.enLinea && typeof h.reroll === 'number' ? `🎲 GP farm (${h.reroll} proxies)` : null].filter(Boolean).join(' · ');
+            return `${estado}\n　${detalles}`;
+        });
+        const embed = new EmbedBuilder().setTitle('🖥️ Community hosts').setColor(0x5865F2)
+            .setDescription((lineas.join('\n\n') || 'No hosts yet.').slice(0, 4000))
+            .setFooter({ text: '👑 has the turn · ⏸️ standby · 🟢 PC on · 🔴 PC off · updates every 2 min' }).setTimestamp();
+        let embeds = [embed, ...(recuadroCuentas ? [recuadroCuentas] : []), ...recuadrosPrestadas];
+        const components = menuHosts();
+        // Tarjetas (imagenes); si fallan, va el texto de siempre. attachments: [] = reemplaza las imagenes viejas.
+        // (Ale 2026-11-12) 2 mensajes: 1) Community hosts + la lista (Discord pone la lista al final del mensaje,
+        // asi queda pegada a esa tarjeta); 2) las demas tarjetas (cuentas, amigos, farms).
+        const tarjetas = await tarjetasPanelHosts(guild, hosts).catch(e => { console.error('DEBUG: hosts cards:', e?.message || e); return null; });
+        const uno = tarjetas ? { embeds: tarjetas.embeds.slice(0, 1), files: tarjetas.files.slice(0, 1), components } : { embeds, files: [], components };
+        const dos = tarjetas && tarjetas.embeds.length > 1 ? { embeds: tarjetas.embeds.slice(1), files: tarjetas.files.slice(1), components: [] } : null;
+        const guardado = await hostComunidad.panelGuardado();
+        const leer = (id) => id ? canal.messages.fetch(id).catch(() => null) : Promise.resolve(null);
+        if (guardado?.canal === canal.id && guardado.bot === client.user.id) {
+            const msg = await leer(guardado.msg);
+            if (msg) {
+                await msg.edit({ ...uno, attachments: [] }).catch(() => {});
+                let msg2 = await leer(guardado.msg2);
+                if (dos) {
+                    if (msg2) await msg2.edit({ ...dos, attachments: [] }).catch(() => {});
+                    else msg2 = await canal.send({ ...dos, flags: SIN_AVISO }).catch(() => null);
+                } else if (msg2) { await msg2.delete().catch(() => {}); msg2 = null; }
+                if ((msg2?.id || null) !== (guardado.msg2 || null)) await hostComunidad.guardarPanel({ ...guardado, msg2: msg2?.id || null });
+                continue;
+            }
+            // Guardado pero no se pudo leer: si Discord no responde, se reintenta en la proxima vuelta sin publicar otro.
+            const prueba = await canal.messages.fetch({ limit: 1 }).catch(() => null);
+            if (!prueba) continue;
+        }
+        // Era de otro bot (otro host) o no existe: se borran los viejos y los propios que hayan quedado, y se publica.
+        if (guardado?.canal === canal.id) {
+            for (const id of [guardado.msg, guardado.msg2]) if (id) await canal.messages.delete(id).catch(() => {});
+        }
+        const ultimos = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+        for (const m of ultimos?.values() || []) {
+            const esPanel = m.author.id === client.user.id && (m.embeds?.[0]?.title === '🖥️ Community hosts'
+                || [...m.attachments.values()].some(a => /^(hosts|accounts|friends|farm-\d+)\.png$/.test(a.name)));
+            if (esPanel) await m.delete().catch(() => {});
+        }
+        const nuevo = await canal.send({ ...uno, flags: SIN_AVISO }).catch(() => null);
+        const nuevo2 = nuevo && dos ? await canal.send({ ...dos, flags: SIN_AVISO }).catch(() => null) : null;
+        if (nuevo) await hostComunidad.guardarPanel({ canal: canal.id, msg: nuevo.id, msg2: nuevo2?.id || null, bot: client.user.id });
+    }
+}
+
+// (Ale 2026-11-12: "me salen muchos pop up, deben usar los mismos") Si no se encuentra el mensaje guardado
+// (Upstash o Discord fallaron un momento), antes de publicar otro se busca el propio en los ultimos 50 del canal
+// y se edita ese; los repetidos se borran. Asi nunca se acumulan mensajes ni avisos nuevos.
+async function mensajePropioEnCanal(canal, titulo) {
+    const ultimos = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+    if (!ultimos) return { msg: null, fallo: true };
+    const propios = [...ultimos.values()].filter(m => m.author.id === client.user.id && titulo(m.embeds?.[0]?.title || ''))
+        .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+    for (const extra of propios.slice(1)) await extra.delete().catch(() => {});
+    return { msg: propios[0] || null, fallo: false };
+}
+
+// Mensaje de control de ESTE host en el canal de hosts (lo publica y lo atiende su propio bot, activo o en
+// espera): en espera "👑 Take the turn"; con el turno, "🔁 Hand over to X" por cada otro host prendido.
+async function actualizarControlHost(hosts, conTurno) {
+    const yo = hostComunidad.nombre();
+    // (Ale 2026-11-12) Take the turn / Hand over / GP webhook estan ahora en la lista del panel "Community hosts":
+    // el mensaje propio de cada host ya no se publica y el que haya quedado se borra.
+    if (MENU_HOSTS) {
+        const guardado = await hostComunidad.controlGuardado();
+        for (const guild of client.guilds.cache.values()) {
+            if (!comunidad.esComunidad(guild.id)) continue;
+            const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
+            const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+            if (!canal) continue;
+            if (guardado?.canal === canal.id && guardado.msg) await canal.messages.delete(guardado.msg).catch(() => {});
+            const { msg: propio } = await mensajePropioEnCanal(canal, t => t.startsWith(`🖥️ ${yo} — `));
+            if (propio) await propio.delete().catch(() => {});
+        }
+        if (guardado) await hostComunidad.guardarControl(null);
+        return;
+    }
+    for (const guild of client.guilds.cache.values()) {
+        if (!comunidad.esComunidad(guild.id)) continue;
+        const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'hosts'`, [guild.id]);
+        const canal = fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+        if (!canal) continue;
+        const otros = hosts.filter(h => h.nombre !== yo && h.enLinea).slice(0, 5);
+        const reroll = await textoRerollHost();
+        const embed = new EmbedBuilder().setColor(conTurno ? 0xF0A93A : 0x5865F2)
+            .setTitle(`🖥️ ${yo}${conTurno ? ' — 👑 has the turn' : ' — ⏸️ standby'}`)
+            .setDescription((conTurno
+                ? (otros.length ? 'Hand the turn over to another PC that is on:' : 'No other host is on right now.')
+                : 'If the host PC turned off (or you want this PC to serve the community), take the turn here. Staff only.')
+                + (reroll ? `\n\n${reroll.texto}` : ''))
+            .setFooter({ text: `bot ${client.user.tag}` }).setTimestamp();
+        const botones = conTurno
+            ? otros.map(h => new ButtonBuilder().setCustomId(`host_ceder::${h.nombre}`.slice(0, 100)).setLabel(`🔁 Hand over to ${h.nombre}`.slice(0, 80)).setStyle(ButtonStyle.Secondary))
+            : [new ButtonBuilder().setCustomId('host_tomar').setLabel('👑 Take the turn').setStyle(ButtonStyle.Success)];
+        if (botones.length < 5) botones.push(new ButtonBuilder().setCustomId('host_gpwebhook').setLabel('🌟 GP webhook').setStyle(ButtonStyle.Secondary));
+        const filas = botones.length ? [new ActionRowBuilder().addComponents(botones)] : [];
+        // (2026-11-01) Sin botones de GP farm: se prende y se apaga desde el God Pack UI (Start/Stop
+        // con "Community farm"), en la PC del host. Este mensaje solo muestra el estado.
+        const payload = { embeds: [embed], components: filas };
+        const guardado = await hostComunidad.controlGuardado();
+        if (guardado?.canal === canal.id) {
+            const msg = await canal.messages.fetch(guardado.msg).catch(() => null);
+            if (msg && msg.author.id === client.user.id) { await msg.edit(payload).catch(() => {}); continue; }
+        }
+        const { msg: propio, fallo } = await mensajePropioEnCanal(canal, t => t.startsWith(`🖥️ ${yo} — `));
+        if (fallo) continue;   // Discord no respondio: se reintenta en la proxima vuelta, sin publicar otro
+        if (propio) {
+            await propio.edit(payload).catch(() => {});
+            await hostComunidad.guardarControl({ canal: canal.id, msg: propio.id });
+            continue;
+        }
+        const nuevo = await canal.send(payload).catch(() => null);
+        if (nuevo) await hostComunidad.guardarControl({ canal: canal.id, msg: nuevo.id });
+    }
+}
+
+// Aviso privado para quien usa un comando o panel sin haber vinculado su PC (sin rol Monitor).
+async function avisoVincularPrimero(interaction) {
+    const ml = await monitorLink.ultimoMonitorLink().catch(() => null);
+    const descarga = ml?.fija || ml?.url;
+    const inicio = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'start_here'`, [interaction.guildId]).catch(() => null);
+    const embed = new EmbedBuilder().setColor(0xF0A93A).setTitle('🔗 Link your PC to use the bot')
+        .setDescription([
+            'The bot works with **your own accounts** — link your PC once:',
+            '',
+            `**1.** Download **Monitor Link**: ${descarga ? `[MonitorLink.ahk](${descarga})` : 'ask staff for the link'}`,
+            '**2.** Put it **inside your PTCGPB folder** (next to PTCGPB.ahk) and double-click it.',
+            '**3.** Type **/link**, copy the key and paste it in Monitor Link → **Link**.',
+            '',
+            `✅ You get the **Monitor** role and every command works.${inicio?.canal_id ? `\nMore info in <#${inicio.canal_id}>.` : ''}`
+        ].join('\n'));
+    const payload = { embeds: [embed], ephemeral: true };
+    return interaction.deferred || interaction.replied ? interaction.followUp(payload).catch(() => {}) : interaction.reply(payload).catch(() => {});
+}
+
+// Botones de control de host. Se atienden ANTES del filtro de "solo el host activo contesta": el que
+// esta en espera tiene que poder tomar el turno.
+// Webhook de God Packs de la comunidad: el staff lo pega en una ventana privada (nunca queda en el chat) y se
+// guarda en Upstash; los motores lo usan cuando el panel de un host no tiene webhook propio.
+async function manejarWebhookGp(interaction) {
+    if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
+        return await interaction.reply({ content: '🔒 Only staff can set the God Pack webhook.', ephemeral: true }).catch(() => {});
+    }
+    if (interaction.isButton() || interaction.isStringSelectMenu?.()) {
+        const modal = new ModalBuilder().setCustomId('host_gpwebhook_modal').setTitle('🌟 Community God Pack webhook')
+            .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
+                .setCustomId('url').setLabel('Webhook of the GP channel KyuremBot reads').setStyle(TextInputStyle.Short)
+                .setPlaceholder('https://discord.com/api/webhooks/...').setRequired(false).setMaxLength(200)));
+        return await interaction.showModal(modal).catch(() => {});
+    }
+    const url = String(interaction.fields.getTextInputValue('url') || '').trim();
+    if (url && !/^https:\/\/(\w+\.)?discord(app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(url)) {
+        return await interaction.reply({ content: '❌ That is not a Discord webhook URL.', ephemeral: true }).catch(() => {});
+    }
+    await hostComunidad.guardarWebhookGp(url);
+    await interaction.reply({ ephemeral: true, content: url
+        ? '🌟 Saved. Every host uses it for God Pack alerts when the "God Pack Hit Webhook URL" of its God Pack UI is empty (it reaches each host within a minute).'
+        : '🗑️ Community God Pack webhook removed.' }).catch(() => {});
+}
+
+// Lista del panel "Community hosts" (Ale 2026-11-12): Take the turn (solo tus hosts) / Hand over (todos los
+// prendidos). (El GP webhook ya esta puesto: Ale lo saco de la lista; su ventana sigue para botones viejos.) Al elegir, el mensaje se vuelve a dibujar para que la lista quede en "Select an option".
+const MENU_HOSTS = true;
+function menuHosts() {
+    return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('host_menu')
+        .setPlaceholder('⚙️ Select an option')
+        .addOptions(
+            { label: 'Take the turn', value: 'take', emoji: '👑', description: 'Make your own host the main one' },
+            { label: 'Hand over the turn', value: 'give', emoji: '🔁', description: 'Pass the turn to another host that is on' }))];
+}
+
+async function manejarMenuHosts(interaction) {
+    if (interaction.customId === 'host_menu') {
+        const opcion = interaction.values[0];
+        if (opcion === 'gpwebhook') return await manejarWebhookGp(interaction);
+        // Se vuelve a dibujar la lista (queda sin nada elegido) y se contesta en privado.
+        await interaction.update({ components: menuHosts() }).catch(() => {});
+        const hosts = (await hostComunidad.hostsConocidos().catch(() => [])).filter(h => h.enLinea);
+        const conTurno = hosts.find(h => h.turno)?.nombre || hostComunidad.nombre();
+        const mios = hosts.filter(h => (h.duenos || []).includes(interaction.user.id));
+        let lista, texto;
+        if (opcion === 'take') {
+            lista = mios.filter(h => h.nombre !== conTurno);
+            texto = lista.length ? '👑 Choose your host to make it the main one:'
+                : mios.length ? `👑 Your host already has the turn (**${conTurno}**).` : "🔒 You don't have a host that is on right now.";
+        } else {
+            if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
+                return await interaction.followUp({ ephemeral: true, content: '🔒 Only staff can hand over the turn.' }).catch(() => {});
+            }
+            lista = hosts.filter(h => h.nombre !== conTurno);
+            texto = lista.length ? `🔁 **${conTurno}** has the turn. Hand it over to:` : '🔁 No other host is on right now.';
+        }
+        const comps = lista.length ? [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`host_pick::${opcion}`)
+            .setPlaceholder('Select a host').addOptions(lista.slice(0, 25).map(h => ({ label: h.nombre.slice(0, 100), value: h.nombre.slice(0, 100),
+                emoji: '🖥️', ...(h.bot ? { description: `bot ${h.bot}`.slice(0, 100) } : {}) }))))] : [];
+        return await interaction.followUp({ ephemeral: true, content: texto, components: comps }).catch(() => {});
+    }
+    // host_pick::take | host_pick::give
+    const opcion = interaction.customId.split('::')[1];
+    const destino = interaction.values[0];
+    const hosts = (await hostComunidad.hostsConocidos().catch(() => [])).filter(h => h.enLinea);
+    const h = hosts.find(x => x.nombre === destino);
+    const permitido = opcion === 'take' ? (h?.duenos || []).includes(interaction.user.id) : comunidad.esStaff(interaction.user.id, interaction.member);
+    if (!h || !permitido) return await interaction.update({ content: '⚠️ That host is not available anymore.', components: [] }).catch(() => {});
+    const ok = await hostComunidad.cederTurnoA(destino);
+    return await interaction.update({ components: [], content: ok
+        ? `${opcion === 'take' ? '👑' : '🔁'} **${destino}** takes the turn within 30 s.`
+        : "⚠️ This bot doesn't have the turn anymore — try again from the newest panel." }).catch(() => {});
+}
+
+async function manejarBotonHost(interaction) {
+    if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
+        return await interaction.reply({ content: '🔒 Only staff can change the host.', ephemeral: true });
+    }
+    await interaction.deferReply({ ephemeral: true });
+    if (interaction.customId === 'host_tomar') {
+        await hostComunidad.tomarTurnoYa();
+        await interaction.editReply({ content: `👑 **${hostComunidad.nombre()}** is taking the turn — commands and panels are being published (≈1 min). If the other host is still on, it steps back by itself within 30 s.` });
+    } else {
+        const destino = interaction.customId.slice('host_ceder::'.length);
+        const ok = await hostComunidad.cederTurnoA(destino);
+        await interaction.editReply({ content: ok
+            ? `🔁 Turn handed over to **${destino}** — it takes over within 30 s.`
+            : '⚠️ This host doesn\'t have the turn anymore.' });
+    }
+}
+
+// ---- GP farm Online/Offline (2026-10-31, pedido de Ale) ----
+// Los hosts Online se reparten la bolsa de proxies y las cuentas que prestan los miembros (ver
+// reroll-comunidad.js): uno solo se lleva todo, dos mitad y mitad. Solo en hosts con el bot de Miguel.
+async function textoRerollHost() {
+    if (!fastTransfer.rutaMotor()) return null;
+    const parte = await hostComunidad.parteReroll().catch(() => null);
+    if (!parte) return { online: false, texto: '🎲 **GP farm: Offline** — to farm the lent accounts, open the **God Pack UI** on this PC, tick **Community farm** and press **Start**.' };
+    const proxies = await monitorLink.escribirProxiesMotor().catch(() => 0);
+    const con = parte.hosts.filter(h => h !== hostComunidad.nombre());
+    return { online: true, texto: `🎲 **GP farm: Online** — ${proxies} prox${proxies === 1 ? 'y' : 'ies'} for this PC (\`proxies_reroll.txt\`)`
+        + (con.length ? `, split with **${con.join(', ')}**` : ', all of them (only host online)') + '.' };
+}
+
+async function manejarBotonReroll(interaction) {
+    // (2026-11-01) Botones viejos de mensajes que todavia no se refrescaron: el GP farm ya no se
+    // cambia desde Discord, sino con Start/Stop en el God Pack UI de cada host.
+    return await interaction.reply({ ephemeral: true,
+        content: '🎲 The GP farm is now started and stopped from the **God Pack UI** on the host PC: tick **Community farm** and press **Start** (Stop or closing the window turns it off).' });
+    // eslint-disable-next-line no-unreachable
+    if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
+        return await interaction.reply({ content: '🔒 Only staff can change the GP farm.', ephemeral: true });
+    }
+    const otros = (await hostComunidad.hostsReroll().catch(() => [])).filter(h => h !== hostComunidad.nombre());
+    // Entrar cuando otro ya esta haciendo GP farm: se pregunta antes de partirle las proxies.
+    if (interaction.customId === 'reroll_online' && otros.length) {
+        return await interaction.reply({
+            ephemeral: true,
+            content: `🎲 **${otros.join(', ')}** ${otros.length === 1 ? 'is' : 'are'} doing GP farm right now.\nSplit the proxies and the lent accounts with ${otros.length === 1 ? 'them' : 'everyone online'} so this PC can do GP farm too?`,
+            components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('reroll_split_yes').setLabel('✅ Yes, split').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('reroll_split_no').setLabel('No').setStyle(ButtonStyle.Secondary))]
+        });
+    }
+    if (interaction.customId === 'reroll_split_no') {
+        return await interaction.update({ content: `👍 Nothing changed — ${otros.join(', ') || 'the other host'} keeps all the proxies.`, components: [] });
+    }
+    const online = interaction.customId !== 'reroll_offline';
+    if (interaction.customId === 'reroll_split_yes') await interaction.update({ content: '⏳ Splitting…', components: [] });
+    else await interaction.deferReply({ ephemeral: true });
+    await hostComunidad.marcarReroll(online);
+    const proxies = await monitorLink.escribirProxiesMotor().catch(() => 0);
+    hostComunidad.refrescarControl();
+    await interaction.editReply({ content: online
+        ? `🎲 **GP farm Online** — this PC now has **${proxies}** prox${proxies === 1 ? 'y' : 'ies'} in \`proxies_reroll.txt\` (use it as *Proxy file* in the God Pack panel) and opens its share of the lent accounts.${otros.length ? ` ${otros.join(', ')} gets the other half within a minute.` : ''}`
+        : `🔴 **GP farm Offline** — this PC stops using the community proxies and lent accounts.${otros.length ? ` ${otros.join(', ')} takes all of them within a minute.` : ''}`,
+        components: [] });
+}
+
+// Rol Monitor: se da al vincular la PC con /link (y al tomar el turno, a todos los ya vinculados).
+// Amigo quitado de la lista de un miembro (Monitor Link): pierde el rol Monitor.
+async function quitarRolMonitor(guildId, discordId) {
+    const guild = client.guilds.cache.get(String(guildId));
+    if (!guild || !comunidad.esComunidad(guild.id) || comunidad.esStaff(String(discordId))) return;
+    const rol = await comunidad.rolMonitor(guild);
+    const miembro = rol ? await guild.members.fetch(String(discordId)).catch(() => null) : null;
+    if (miembro && miembro.roles.cache.has(rol.id)) await miembro.roles.remove(rol, 'Removed from a Monitor Link friends list').catch(() => {});
+}
+
+// (Ale 2026-11-10) Aviso en #logging (canal del panel de Dragonite) cuando alguien queda online/offline
+// desde Monitor Link. Se borra a los 2 min para no tapar el panel de wr98.
+const CANAL_LOGGING_DRAGONITE = '1494760619985862676';
+async function avisarDragonite(guild, miembro, online, grupo) {
+    let canal = await guild.channels.fetch(CANAL_LOGGING_DRAGONITE).catch(() => null);
+    if (!canal) canal = guild.channels.cache.find(c => c.isTextBased?.() && /logging/i.test(c.name)) || null;
+    if (!canal) return;
+    const nombreGrupo = String(grupo || '').replace(/_/g, ' ');
+    const texto = online
+        ? `🟢 <@${miembro.id}> you are now **ONLINE** in **${nombreGrupo}** (Sync reroll for Zenith Rise).`
+        : `🔴 <@${miembro.id}> you are now **OFFLINE** in **${nombreGrupo}**.`;
+    const msg = await canal.send({ content: texto, allowedMentions: { users: [miembro.id] } }).catch(() => null);
+    if (msg) setTimeout(() => msg.delete().catch(() => {}), 2 * 60 * 1000);
+}
+
+// (Ale 2026-11-11) Offline -> GP test -> cerrar. Monitor Link avisa start / step (cada paso o cada 15 s) /
+// done|timeout. Un embed en #logging que se edita en vivo con el paso y el contador (igual que la ventana del
+// Monitor Link); al final uno nuevo que menciona, con los God Packs que quedaron de amigos (la lista VIP).
+const avisosGpStop = new Map();   // discordId -> mensaje en vivo
+function tiempoGp(seg) {
+    seg = Math.max(0, Math.round(seg || 0));
+    return `${Math.floor(seg / 60)}:${String(seg % 60).padStart(2, '0')}`;
+}
+// "Dual Pikachu" de un tag como "[DualPikachu]"; estrellas de "[3/5]".
+function sobreDeTags(tags) {
+    const partes = (String(tags || '').match(/\[([^\]]+)\]/g) || []).map(t => t.slice(1, -1));
+    const estrellas = partes.find(p => /^\d\/5$/.test(p)) || '';
+    const sobre = partes.filter(p => !/^\d\/5$/.test(p) && !/^\d+P$/.test(p)).pop() || '';
+    return { estrellas, sobre: sobre.replace(/([a-z])([A-Z])/g, '$1 $2') };
+}
+async function avisarGpStop(guildId, discordId, fase, datos = {}) {
+    const guild = client.guilds.cache.get(String(guildId));
+    if (!guild) return;
+    let canal = await guild.channels.fetch(CANAL_LOGGING_DRAGONITE).catch(() => null);
+    if (!canal) canal = guild.channels.cache.find(c => c.isTextBased?.() && /logging/i.test(c.name)) || null;
+    if (!canal) return;
+    const id = String(discordId);
+    const emojis = await obtenerMapaEmojisGuild(guild).catch(() => ({}));
+    const em = (clave, otro) => tagTipoBot(clave, emojis) || otro;
+    const miembro = await guild.members.fetch(id).catch(() => null);
+    const nombre = miembro?.displayName || miembro?.user?.username || 'Member';
+
+    if (fase === 'start' || fase === 'step') {
+        const paso = fase === 'start' ? 'Step 1/3: Favouriting VIP friends...' : String(datos.step || '');
+        const n = Number((/Step (\d)\/3/.exec(paso) || [])[1] || (/done/i.test(paso) ? 4 : 1));
+        const marca = (i) => (i < n ? em('nice', '✅') : i === n ? em('Reloj_de_arena_de_sobres_TCGP', '⏳') : '▫️');
+        const embed = new EmbedBuilder()
+            .setColor(0xF39C12)
+            .setTitle(`🧪 GP Test running — ${nombre}`)
+            .setDescription(`🔴 <@${id}> is **OFFLINE** — Standard GP test.\nDon't touch the bot: MuMu Player and the AHK close by themselves at the end.`)
+            .addFields(
+                { name: 'Progress', value: `${marca(1)} Favourite VIPs   ${marca(2)} Wait   ${marca(3)} Remove non-VIPs` },
+                { name: 'Now', value: `**${paso.replace(/^Step \d\/3:\s*/, '') || 'Starting...'}**`, inline: true },
+                { name: 'Time', value: `⏱ ${tiempoGp(datos.seconds)}`, inline: true })
+            .setFooter({ text: 'Monitor Link · updates live' })
+            .setTimestamp();
+        const viejo = avisosGpStop.get(id);
+        if (fase === 'step') {
+            if (viejo) await viejo.edit({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
+            return;
+        }
+        const msg = await canal.send({ content: `<@${id}>`, embeds: [embed], allowedMentions: { users: [id] } }).catch(() => null);
+        if (msg) {
+            viejo?.delete().catch(() => {});
+            avisosGpStop.set(id, msg);
+            setTimeout(() => { if (avisosGpStop.get(id) === msg) { avisosGpStop.delete(id); msg.delete().catch(() => {}); } }, 20 * 60 * 1000);
+        }
+        return;
+    }
+
+    // done / timeout: el en vivo se borra y sale uno nuevo (asi menciona al dueño).
+    avisosGpStop.get(id)?.delete().catch(() => {});
+    avisosGpStop.delete(id);
+    const ok = fase === 'done';
+    let vip = Array.isArray(datos.vip) ? datos.vip : [];
+    // (Ale 2026-11-11) Solo los God Packs que salieron mientras estuvo conectado: desde que arranco su Main
+    // (since, Monitor Link 1.9.33+) hasta ahora. La lista VIP es la acumulada del grupo. Sin since (Monitor
+    // Link viejo) se muestran todos, como antes.
+    const desde = Number(datos.since) || 0, hasta = Math.floor(Date.now() / 1000);
+    let lineas = [];
+    if (vip.length) {
+        const conocidos = new Map();
+        for (const viejos of [true, false]) {
+            for (const h of await hostComunidad.godPacksComunidad(viejos).catch(() => null) || []) if (h?.id) conocidos.set(String(h.id), h);
+        }
+        if (desde) vip = vip.filter(v => { const t = Number(conocidos.get(v)?.ts) || 0; return t >= desde * 1000 && t <= hasta * 1000; });
+        const estrella = em('rareza_estrella', '⭐');
+        lineas = vip.map(v => {
+            const h = conocidos.get(v);
+            if (!h) return `${em('Card_Back_TCGP', '🃏')} \`${v}\``;
+            const { estrellas, sobre } = sobreDeTags(h.tags);
+            return `${em('Card_Back_TCGP', '🃏')} **${h.name || v}**${estrellas ? ` · ${estrella} ${estrellas}` : ''}${sobre ? ` · ${sobre}` : ''}`;
+        });
+    }
+    const rango = desde ? `Online <t:${desde}:t> → <t:${hasta}:t>\n` : '';
+    const lista = rango + (lineas.slice(0, 15).join('\n') + (lineas.length > 15 ? `\n…and ${lineas.length - 15} more` : '') || 'None in this time');
+    const embed = new EmbedBuilder()
+        .setColor(ok ? 0x2ECC71 : 0xE74C3C)
+        .setTitle(ok ? `${em('nice', '✅')} GP Test finished — ${nombre}` : `${em('bad', '⚠️')} GP Test did not finish — ${nombre}`)
+        .setDescription(ok
+            ? (datos.mumu ? 'MuMu Player and AHK closed correctly.' : 'AHK closed correctly (MuMu Main was not found).')
+            : 'It was cancelled or got stuck (more than 10 min). MuMu Player and AHK were closed anyway.')
+        .addFields(
+            { name: 'Time', value: `⏱ ${tiempoGp(datos.seconds)}`, inline: true },
+            // Donde se quedo (Ale 2026-11-11: el de alerieva se corto y no se sabia en que paso).
+            ...(!ok && datos.step ? [{ name: 'Stuck at', value: datos.step, inline: true }] : []),
+            { name: `${em('rareza_estrella', '💎')} ${desde ? 'God Packs while you were online' : 'God Packs kept as friends'} (${vip.length})`, value: lista || 'None' })
+        .setFooter({ text: 'Monitor Link' })
+        .setTimestamp();
+    const msg = await canal.send({ content: `<@${id}>`, embeds: [embed], allowedMentions: { users: [id] } }).catch(() => null);
+    if (msg) setTimeout(() => msg.delete().catch(() => {}), 30 * 60 * 1000);
+}
+
+async function darRolMonitor(guildId, discordId) {
+    const guild = client.guilds.cache.get(String(guildId));
+    if (!guild || !comunidad.esComunidad(guild.id)) return;
+    const rol = await comunidad.rolMonitor(guild);
+    const miembro = rol ? await guild.members.fetch(String(discordId)).catch(() => null) : null;
+    if (miembro && !miembro.roles.cache.has(rol.id)) await miembro.roles.add(rol, 'Linked Monitor Link').catch(() => {});
+}
+
+async function soltarTurnoComunidad() {
+    const applicationId = CLIENT_ID || client.user?.id;
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    for (const guild of client.guilds.cache.values()) {
+        if (comunidad.esComunidad(guild.id)) await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: [] }).catch(() => {});
+    }
+}
+
+// Paneles que publico el bot de OTRO host: sus botones solo los atiende ese otro bot, asi que se
+// borran al tomar el turno. SOLO los paneles anotados en Upstash -- nunca el historial (2026-10-25,
+// bug real: antes se borraba todo mensaje con botones de otro bot y se fueron los resultados de
+// /card, Shinedust, Fast Farm... de todos los canales).
+// Los paneles que ya estaban (con su webhook vivo, el Sync no los vuelve a mandar) tambien se anotan:
+// su id esta en configs_extras (interfaz_msg_<clave>) y el canal en configs_canales.
+async function anotarPanelesPropios(guild, duenoId) {
+    const TIPO_DE_CLAVE = { card_wishlist: 'cmd_card_wishlist', card_all: 'cmd_card_all', extract_xlm: 'cmd_extract_xlm', run_instance: 'cmd_run_instance', setup: 'cmd_setup' };
+    const filas = await db.all(`SELECT tipo, estado FROM configs_extras WHERE discord_id = ? AND tipo LIKE 'interfaz_msg_%' AND estado IS NOT NULL`, [String(duenoId)]) || [];
+    for (const f of filas) {
+        const clave = f.tipo.slice('interfaz_msg_'.length);
+        const canal = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [guild.id, TIPO_DE_CLAVE[clave] || clave]);
+        if (canal?.canal_id) await hostComunidad.anotarPanel(f.estado, canal.canal_id, client.user.id);
+    }
+}
+
+// Bienvenidas informativas (sin botones) repetidas porque cada host publico la suya: queda una sola.
+// Solo los titulos de bienvenida de Sync (TITULOS_BIENVENIDA, se llena en sincronizarCanales) -- nunca el
+// historial; los paneles con botones los maneja limpiarPanelesDeOtrosBots.
+const TITULOS_BIENVENIDA = new Set();
+async function limpiarBienvenidasDuplicadas(guild) {
+    const filas = await db.all(`SELECT DISTINCT canal_id FROM configs_canales WHERE discord_id = ? AND canal_id IS NOT NULL AND webhook_url != 'N/A'`, [guild.id]) || [];
+    for (const { canal_id } of filas) {
+        const canal = guild.channels.cache.get(canal_id);
+        if (!canal?.isTextBased?.()) continue;
+        const mensajes = await canal.messages.fetch({ limit: 30 }).catch(() => null);
+        if (!mensajes) continue;
+        const vistos = new Map();
+        // De mas viejo a mas nuevo: se queda el primero, se borran las copias de otros bots.
+        for (const m of [...mensajes.values()].reverse()) {
+            const titulo = m.webhookId && !m.components?.length ? m.embeds?.[0]?.title : null;
+            if (!titulo || !TITULOS_BIENVENIDA.has(titulo)) continue;
+            if (!vistos.has(titulo)) { vistos.set(titulo, m); continue; }
+            await m.delete().catch(() => {});
+        }
+    }
+}
+
+async function limpiarPanelesDeOtrosBots(guild) {
+    for (const p of await hostComunidad.panelesDeOtros(client.user.id)) {
+        const canal = guild.channels.cache.get(p.canal);
+        if (!canal?.isTextBased?.()) continue;
+        const m = await canal.messages.fetch(p.msg).catch(() => null);
+        // Solo con botones (2026-10-27, bug real: se borro la bienvenida de Start here -- el bot nuevo no
+        // publica una bienvenida si ya esta la del otro, y aca se la llevaba igual).
+        if (m && m.components?.length && m.author?.id !== client.user.id && m.applicationId !== client.user.id) await m.delete().catch(() => {});
+        await hostComunidad.olvidarPanel(p.msg);
+    }
+}
+
 client.once('ready', async () => {
     try {
+        // Hosts de la comunidad: datos de cartas al dia (sets nuevos), ver card-data-sync.js.
+        if (comunidad.hayComunidad()) {
+            try {
+                const rutaMaster = (await db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_master'`))?.webhook_url;
+                if (sincronizarDatosCartas(rutaMaster).length) _todasCartasCacheBot = null;
+            } catch (e) { console.error('DEBUG: datos de cartas:', e?.message || e); }
+        }
+        if (comunidad.hayComunidad()) await adoptarCanalesComunidad();
+        await hostComunidad.iniciar({ alTomar: tomarTurnoComunidad, alSoltar: soltarTurnoComunidad, estado: estadoDeEsteHost, panel: actualizarPanelHosts, control: actualizarControlHost });
         await registrarSlashCommands();
         console.log(`🤖 Bot ready as ${client.user.tag}`);
 
@@ -15557,21 +17765,25 @@ client.once('ready', async () => {
         // autorizarse — justo el bug real que reportó el usuario probando como
         // usuario nuevo.
         let guildsAutorizados = await obtenerGuildsAutorizados();
-        if (!guildsAutorizados || guildsAutorizados.length === 0) {
+        if (comunidad.soloComunidad()) {
+            // Host de la comunidad: solo atiende COMMUNITY_GUILD_IDS y no se sale de ningun otro.
+        } else if (!guildsAutorizados || guildsAutorizados.length === 0) {
             guildsAutorizados = [...client.guilds.cache.keys()];
             await guardarGuildsAutorizados(guildsAutorizados);
         } else {
             for (const g of client.guilds.cache.values()) {
-                if (!guildsAutorizados.includes(g.id)) await rechazarGuildNoAutorizado(g);
+                if (!guildsAutorizados.includes(g.id) && !comunidad.esComunidad(g.id)) await rechazarGuildNoAutorizado(g);
             }
         }
     } catch (error) {
         console.error('❌ Error registrando slash commands:', error?.response?.data || error?.message || error);
     }
 
-    chequearActualizaciones(client);
-    avisarActualizacionAplicadaSiHaceFalta(client);
-    avisarActualizacionFallidaSiHaceFalta(client);
+    if (!comunidad.soloComunidad()) {
+        chequearActualizaciones(client);
+        avisarActualizacionAplicadaSiHaceFalta(client);
+        avisarActualizacionFallidaSiHaceFalta(client);
+    }
 
     // Chequeo al arrancar (2026-08-11, a pedido explicito del usuario): si Drive HD
     // regular esta prendido pero no hay NINGUNA API key configurada (ej. la borraron del
@@ -15667,6 +17879,7 @@ client.once('ready', async () => {
 
     const refrescarEmojisTodosLosGuilds = () => {
         for (const guild of client.guilds.cache.values()) {
+            if (comunidad.soloComunidad() && !comunidad.esComunidad(guild.id)) continue;
             obtenerMapaEmojisGuild(guild)
                 .then((mapa) => avisarEmojisFaltantesSiHaceFalta(guild, mapa))
                 .catch((e) => console.error(`❌ Error refrescando emojis de ${guild.name}:`, e?.message || e));
@@ -15677,8 +17890,11 @@ client.once('ready', async () => {
 });
 
 client.on('guildCreate', async (guild) => {
+    if (comunidad.soloComunidad() && !comunidad.esComunidad(guild.id)) return;
     const guildsAutorizados = (await obtenerGuildsAutorizados()) || [];
-    if (!guildsAutorizados.includes(guild.id)) {
+    // El server de comunidad (COMMUNITY_GUILD_IDS del .env) cuenta como autorizado: si no, al
+    // invitar el bot ahi se saldria solo.
+    if (!guildsAutorizados.includes(guild.id) && !comunidad.esComunidad(guild.id)) {
         if (guildsAutorizados.length > 0) {
             await rechazarGuildNoAutorizado(guild);
             return;
@@ -15696,7 +17912,7 @@ client.on('guildCreate', async (guild) => {
         const rest = new REST({ version: '10' }).setToken(TOKEN);
         const applicationId = CLIENT_ID || client.user?.id;
         if (applicationId) {
-            await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: construirSlashCommands() });
+            await rest.put(Routes.applicationGuildCommands(applicationId, guild.id), { body: comandosDeGuild(guild.id, construirSlashCommands()) });
             console.log(`✅ Slash commands registered in guild ${guild.id}`);
         }
     } catch (error) {
@@ -15707,5 +17923,16 @@ client.on('guildCreate', async (guild) => {
 // Solo intenta loguearse si de verdad hay un token guardado -- ver comentario completo arriba
 // de "if (!TOKEN)". Sin esto, discord.js tira un error al recibir undefined/'' como token.
 if (TOKEN) {
-    client.login(TOKEN);
+    // Motivos comunes con un aviso claro en el registro (caso real 2026-10-24: el bot de un host nuevo sin
+    // Message Content Intent quedaba offline y solo se veia en el log como "Used disallowed intents").
+    client.login(TOKEN).catch(e => {
+        const m = String(e?.message || e);
+        if (/disallowed intents/i.test(m)) {
+            console.error('❌ Discord rejected the bot: turn on MESSAGE CONTENT INTENT (Developer Portal → your bot → Bot → Privileged Gateway Intents → Save), then restart.');
+        } else if (/invalid token/i.test(m)) {
+            console.error('❌ Discord rejected the bot token: reset it in the Developer Portal and put the new one in the setup.');
+        } else {
+            console.error('❌ Could not log in to Discord:', m);
+        }
+    });
 }
