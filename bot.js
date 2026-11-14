@@ -46,6 +46,8 @@ fastTransfer.init({
     // 🙋 Pedido de ayuda (Ale 2026-11-14): miembros con Monitor Link en linea que tienen la carta; correr
     // un ⚡ "como" otro miembro (el que presta sus cuentas).
     comoMiembro: (guildId, userId, fn) => comunidad.contexto.run({ guildId, userId }, fn),
+    // ⚡ Get these cards (All Missions): la Main de quien pide (Monitor Link "My Main ID" o Dragonite).
+    mainDe: async (userId) => (await destinosComunidad(userId).catch(() => []))[0] || null,
     vinculados: () => monitorLink.vinculados(),
     cuentasConCarta: async (discordId, cartaId) => {
         if (!(await monitorLink.precargar(discordId).catch(() => false))) return [];
@@ -2546,6 +2548,12 @@ async function manejarAllMissions(interaction) {
             const buffer = await tarjetaMisiones.armarDetalleMision({ expansion: exp?.nombre, indice: Number(interaction.values[0]) || 0, imagenCarta: imagenCartaMision });
             const volver = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`missions_pag::${i}::${p}`).setLabel('◀ Back to the list').setStyle(ButtonStyle.Primary));
+            // (Ale 2026-11-14) Traer a tu Main las cartas de esta mision que tengas en tus cuentas (⚡ Trade).
+            if (comunidad.esComunidad(interaction.guildId) && fastTransfer.habilitado(interaction.guildId)
+                && tarjetaMisiones.cartasDeMision(Number(i) || 0, Number(interaction.values[0]) || 0)?.cartas.length) {
+                volver.addComponents(new ButtonBuilder().setCustomId(`fast_mis::${Number(i) || 0}::${Number(interaction.values[0]) || 0}`)
+                    .setLabel('⚡ Get these cards').setStyle(ButtonStyle.Success));
+            }
             return await interaction.editReply({ content: '', embeds: [], files: buffer ? [{ attachment: buffer, name: 'mission.png' }] : [], attachments: [], components: [volver] });
         }
     } catch (e) {

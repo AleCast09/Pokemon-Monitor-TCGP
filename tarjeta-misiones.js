@@ -299,4 +299,15 @@ ${partir(c.name, 46).map((l, i, a) => `<text x="${PAD}" y="${a.length > 1 ? 92 +
 const misionesDePagina = (expansion, pagina) => (buscar(expansion)?.collections || [])
     .map((c, i) => ({ indice: i, nombre: c.name })).slice(pagina * POR_PAGINA, (pagina + 1) * POR_PAGINA);
 
-module.exports = { armarTarjetaMisiones, armarDetalleMision, misionesDePagina, expansiones, POR_PAGINA };
+// Cartas (ids sin repetir) y nombre de una mision, para "⚡ Get these cards".
+function cartasDeMision(indiceExp, indice) {
+    const exp = datos().expansions[indiceExp];
+    const c = exp?.collections[indice];
+    if (!c) return null;
+    const vistas = new Set();
+    const cartas = [];
+    for (const g of c.groups) for (const k of g.cards) if (k.id && !vistas.has(k.id)) { vistas.add(k.id); cartas.push({ id: k.id, nombre: k.name }); }
+    return { mision: c.name, expansion: exp.expansion, cartas };
+}
+
+module.exports = { armarTarjetaMisiones, armarDetalleMision, misionesDePagina, cartasDeMision, expansiones, POR_PAGINA };

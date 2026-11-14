@@ -1304,6 +1304,7 @@ async function ejecutarBulk(interaction, { fileName, cartas, friendId, miembro, 
     const stopFile = path.join(os.tmpdir(), `fast_transfer_stop_${runId}`);
     try { fs.unlinkSync(stopFile); } catch (e) { /* no existia */ }
     corridas.set(runId, { hijo: null, detenido: false, stopFile });
+    corridas.get(runId).dueno = interaction.user?.id;   // solo quien lo inicio puede cancelarlo (puede ir en un canal publico)
     const nombre = (id) => deps.infoCartaBulk(id, rutaMaster).nombre;
     const estados = cartas.map(c => ({ carta: c, icono: '⏳', msg: '' }));
     let indice = -1;
@@ -1391,6 +1392,10 @@ async function manejarInteraccion(interaction) {
     if (!interaction.isButton()) return false;
     if (id.startsWith('fast_stop::')) {
         const corrida = corridas.get(id.replace('fast_stop::', ''));
+        if (corrida?.dueno && corrida.dueno !== interaction.user.id) {
+            await interaction.reply({ content: `🔒 Only <@${corrida.dueno}> can cancel this.`, ephemeral: true, allowedMentions: { parse: [] } });
+            return true;
+        }
         if (!corrida) {
             await interaction.reply({ content: 'This run already finished.', ephemeral: true });
             return true;
@@ -1453,6 +1458,7 @@ async function manejarInteraccion(interaction) {
         return true;
     }
     if (/^fast_(help|lend|use|usecta)::/.test(id)) return await manejarAyuda(interaction);
+    if (/^fast_mis(sel|go)?::/.test(id)) return await manejarMisionTrade(interaction);
     if (!id.startsWith('fast_go::')) return false;
     if (!habilitado(interaction.guildId)) {
         await interaction.reply({ content: '❌ Fast Share/Trade is not available here.', ephemeral: true });
@@ -1568,6 +1574,95 @@ async function manejarAyuda(interaction) {
         p.msg?.edit({ content: `✅ <@${p.ayuda}> helped <@${p.pide}> with **${carta}**.`, components: [], allowedMentions: { parse: [] } }).catch(() => {});
         // El ⚡ corre "como" quien presta: su Monitor Link da la XML y el ajuste de copias queda en sus cuentas.
         deps.comoMiembro(interaction.guildId, p.ayuda, () => ejecutar(interaction, { cartaId: p.cartaId, friendId: p.friendId, fileName, modo: p.modo }));
+        return true;
+    }
+    return false;
+}
+
+// ===== ⚡ Get these cards (All Missions, Ale 2026-11-14) =====
+// Detalle de una mision -> lista de sus cartas con la cuenta del miembro que la tiene (o ❌ / 🚫 no se tradea)
+// -> el miembro marca las que le faltan -> ▶ Start: en el canal de Trading, un Bulk trade por cuenta (cada
+// cuenta entra una sola vez y manda sus cartas seguidas a la Main de quien pidio).
+const seleccionMision = new Map();   // userId -> { mision, items, elegidas, ts }
+
+async function manejarMisionTrade(interaction) {
+    const id = interaction.customId;
+    const yo = interaction.user.id;
+    const miembro = deps.usuarioComunidad?.() || null;
+    if (!miembro) return !!(await interaction.reply({ content: '❌ Only in the community server, with Monitor Link linked.', ephemeral: true }).catch(() => {}));
+    const rutaMaster = await deps.rutaMaster?.().catch(() => null);
+
+    const pantalla = (s) => {
+        const tiene = s.items.filter(x => x.cuenta && x.tradeable);
+        const lineas = s.items.map(x => !x.tradeable ? `🚫 **${x.nombre}** — can't be traded (rarity)`
+            : x.cuenta ? `${s.elegidas.includes(x.id) ? '☑️' : '✅'} **${x.nombre}** — \`${x.cuenta.replace(/\.xml$/i, '')}\` (x${x.copias})`
+            : `❌ **${x.nombre}** — none of your accounts has it`);
+        const embed = new EmbedBuilder().setColor(0x3DDC84).setTitle(`⚡ Get these cards — ${s.mision}`.slice(0, 256))
+            .setDescription([...lineas, '', s.elegidas.length ? `👉 **${s.elegidas.length}** selected — press **▶ Start**.` : '👉 Pick the cards your Main is **missing** in the list below.'].join('\n').slice(0, 4000))
+            .setFooter({ text: 'Trade to your Main · one login per account · ❌ cards: use 🙋 Ask for help from the card' });
+        const filas = [];
+        if (tiene.length) {
+            filas.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`fast_missel::${yo}`)
+                .setPlaceholder('Cards your Main is missing').setMinValues(1).setMaxValues(Math.min(25, tiene.length))
+                .addOptions(tiene.slice(0, 25).map(x => ({ label: x.nombre.slice(0, 100), description: `${x.cuenta.replace(/\.xml$/i, '')} · x${x.copias}`.slice(0, 100), value: x.id, default: s.elegidas.includes(x.id) })))));
+        }
+        filas.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`fast_misgo::${yo}`).setLabel('▶ Start')
+            .setStyle(ButtonStyle.Success).setDisabled(!s.elegidas.length)));
+        return { content: '', embeds: [embed], components: filas };
+    };
+
+    if (id.startsWith('fast_mis::')) {
+        const [, e, m] = id.split('::');
+        const datos = require('./tarjeta-misiones.js').cartasDeMision(Number(e) || 0, Number(m) || 0);
+        if (!datos?.cartas.length) return !!(await interaction.reply({ content: '❌ This mission has no cards to trade.', ephemeral: true }).catch(() => {}));
+        await interaction.reply({ content: '🔎 Checking your accounts…', ephemeral: true }).catch(() => {});
+        const items = [];
+        for (const k of datos.cartas) {
+            const info = deps.infoCartaBulk(k.id, rutaMaster);
+            const cuentas = (await deps.cuentasConCarta(miembro, k.id).catch(() => [])).filter(c => Number(c.cantidad) > 0);
+            items.push({ id: k.id, nombre: info?.nombre && info.nombre !== k.id ? info.nombre : k.nombre, tradeable: info ? info.tradeable !== false : true, cuentas, cuenta: null, copias: 0 });
+        }
+        // Una cuenta por carta, prefiriendo las que ya se usan (menos logins).
+        const usadas = [];
+        for (const x of items) {
+            const c = x.cuentas.find(a => usadas.includes(a.fileName)) || x.cuentas[0];
+            if (c) { x.cuenta = c.fileName; x.copias = c.cantidad; if (!usadas.includes(c.fileName)) usadas.push(c.fileName); }
+        }
+        const s = { mision: datos.mision, items, elegidas: [], ts: Date.now() };
+        seleccionMision.set(yo, s);
+        await interaction.editReply(pantalla(s)).catch(() => {});
+        return true;
+    }
+
+    const s = seleccionMision.get(yo);
+    if (!s || id.split('::')[1] !== yo) return !!(await interaction.reply({ content: '⌛ This list expired — open the mission again.', ephemeral: true }).catch(() => {}));
+
+    if (id.startsWith('fast_missel::')) {
+        s.elegidas = interaction.values;
+        await interaction.update(pantalla(s)).catch(() => {});
+        return true;
+    }
+
+    if (id.startsWith('fast_misgo::')) {
+        const destino = await deps.mainDe?.(yo).catch(() => null);
+        if (!destino?.id) return !!(await interaction.reply({ ephemeral: true, content: "❌ You haven't registered your Main yet. Open **Monitor Link**, press **My Main ID**, type your Main's friend ID and save — then try again." }).catch(() => {}));
+        const fila = await deps.obtenerCanalComando(interaction.guildId, 'cmd_run_instance').catch(() => null);
+        const canal = fila?.canal_id ? await interaction.client.channels.fetch(fila.canal_id).catch(() => null) : null;
+        if (!canal) return !!(await interaction.reply({ content: '❌ The Trading channel is not synced.', ephemeral: true }).catch(() => {}));
+        // Agrupar por cuenta: cada cuenta = un Bulk trade (una sola entrada al juego).
+        const grupos = new Map();
+        for (const x of s.items) if (s.elegidas.includes(x.id) && x.cuenta) (grupos.get(x.cuenta) || grupos.set(x.cuenta, []).get(x.cuenta)).push(x.id);
+        seleccionMision.delete(yo);
+        await interaction.update({ content: `▶ Started — follow it in <#${canal.id}> (${grupos.size} account(s), ${s.elegidas.length} card(s) to **${destino.label || 'your Main'}**).`, embeds: [], components: [] }).catch(() => {});
+        await canal.send({ content: `<@${yo}> ⚡ **${s.mision}** — trading ${s.elegidas.length} card(s) to ${destino.label || 'your Main'}`, allowedMentions: { users: [yo] } }).catch(() => {});
+        let n = 0;
+        for (const [fileName, cartas] of grupos) {
+            const msg = await canal.send({ embeds: [new EmbedBuilder().setColor(0xF0A93A).setTitle(`📦 Bulk trade — ${fileName}`).setDescription('🕒 Queued…')] }).catch(() => null);
+            if (!msg) continue;
+            const falsa = { id: `${interaction.id}_${n++}`, guild: interaction.guild, guildId: interaction.guildId, user: interaction.user,
+                editReply: (p) => msg.edit(p) };
+            ejecutarBulk(falsa, { fileName, cartas, friendId: destino.id, miembro, rutaMaster });
+        }
         return true;
     }
     return false;
