@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-13 (tarde) — diegoikrew123 — Bot: resumen de baneadas, /shinedust ordenado
+- "Likely banned": ya no un aviso por cuenta; **un resumen al día** (23:55 Perú = 04:55 UTC) en 🔒-hosts por dueño con los nombres XML (`zenith:baneadas`, lo manda el host del turno, candado `zenith:ban_resumen:<día>`). Embed: no lo toca el borrado de 10 min.
+- Cualquier bot host borra los avisos de texto viejos de los otros bots host (los de GengarBot quedaban si Arcade estaba apagado).
+- `/shinedust`: columnas Account / Dust / HG, totales arriba con emojis del juego (Polvo_iris, Reloj_de_arena_de_sobres).
+- Publicado host-2026.11.13-0710; bot de Ale reiniciado. `/shinedust` falló justo después del reinicio (turno volviendo de Arcade + comandos re-registrados); falta que Ale confirme que ya anda. El resumen de baneadas aún no se vio en Discord.
+
 ### 2026-11-13 — diegoikrew123 — Motor: varios sobres, relojes, regalos; /shinedust con relojes
 - God Pack UI (Open Packs Only): lista con casillas de sobres, las cuentas se turnan (`--pack-rotation`, también en el GP farm).
 - Casillas: **Spend all hourglasses** (solo Open Packs Only, cuentas propias), **Claim gifts & finished missions** (cuentas propias); botón **⏳ Hourglasses list** (`reports/hourglasses.json` + `hourglasses_history.jsonl`). Las prestadas nunca gastan ni se tocan.
