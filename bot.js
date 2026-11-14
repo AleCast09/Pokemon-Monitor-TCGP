@@ -206,7 +206,8 @@ const COMANDO_CONFIG = {
     card_wishlist: { tipo: 'cmd_card_wishlist', label: 'Cards Wishlist', titulo: '💖 Cards Wishlist', descripcion: 'Exclusive channel for /wishlist.' },
     extract_xlm: { tipo: 'cmd_extract_xlm', label: 'Extract XML', titulo: '📄 Extract XML', descripcion: 'Exclusive channel for /extract xml.' },
     run_instance: { tipo: 'cmd_run_instance', label: 'Trading', titulo: '🔄 Trading', descripcion: 'Exclusive channel for /run instance.' },
-    card_gold: { tipo: 'cmd_card_gold', label: 'Gold Cards', titulo: '🏆 Gold Cards', descripcion: 'Exclusive channel for /goldcards.' }
+    card_gold: { tipo: 'cmd_card_gold', label: 'Gold Cards', titulo: '🏆 Gold Cards', descripcion: 'Exclusive channel for /goldcards.' },
+    all_missions: { tipo: 'cmd_all_missions', label: 'All Missions', titulo: '🎯 All Missions', descripcion: 'Themed collections of every expansion and their rewards.' }
 };
 
 const ETIQUETAS_TIPO_WEBHOOK = {
@@ -2478,6 +2479,71 @@ async function construirEmbedCartasPorExpansion(cartas, expansion, categoria, el
         payload.attachments = [];
     }
     return payload;
+}
+
+// ===== 🎯 All Missions (Ale 2026-11-14) =====
+const tarjetaMisiones = require('./tarjeta-misiones.js');
+async function canalSoloLectura(guild, canal) {
+    const negar = { SendMessages: false, SendMessagesInThreads: false, CreatePublicThreads: false, CreatePrivateThreads: false, AddReactions: false, AttachFiles: false };
+    await canal.permissionOverwrites.edit(guild.roles.everyone.id, negar);
+    if (comunidad.esComunidad(guild.id)) {
+        const monitor = await comunidad.rolMonitor(guild).catch(() => null);
+        if (monitor) await canal.permissionOverwrites.edit(monitor.id, negar);
+    }
+    await canal.permissionOverwrites.edit(guild.members.me.id, { SendMessages: true, ViewChannel: true, ManageWebhooks: true });
+}
+let _cardMapMisiones = { ruta: null, mapa: null };
+async function imagenCartaMision(id) {
+    const { rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
+    if (!rutaMasterPath) return null;
+    if (_cardMapMisiones.ruta !== rutaMasterPath || !_cardMapMisiones.mapa) _cardMapMisiones = { ruta: rutaMasterPath, mapa: _ultimoCardMapBot || cargarCardMap(rutaMasterPath) };
+    const ill = _cardMapMisiones.mapa?.[id]?.IllustrationID;
+    if (!ill) return null;
+    return encontrarImagenPorIllustration(rutaMasterPath, ill) || await obtenerImagenRepoCartasBot(rutaMasterPath, ill);
+}
+function menuExpansionesMisiones(elegida = -1) {
+    const lista = tarjetaMisiones.expansiones().slice(0, 25);
+    return new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('missions_exp').setPlaceholder('🎯 Choose an expansion')
+        .addOptions(lista.map((e, i) => ({ label: e.nombre.slice(0, 100), description: `${e.total} missions`, value: String(i), default: i === elegida }))));
+}
+async function paginaMisiones(indiceExp, pagina) {
+    const exp = tarjetaMisiones.expansiones()[indiceExp];
+    if (!exp) return { content: '❌ Expansion not found.', embeds: [], files: [], components: [menuExpansionesMisiones()] };
+    pagina = Math.min(Math.max(0, pagina), exp.paginas - 1);
+    const buffer = await tarjetaMisiones.armarTarjetaMisiones({ expansion: exp.nombre, pagina, imagenCarta: imagenCartaMision });
+    const nav = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`missions_pag::${indiceExp}::${pagina - 1}`).setLabel('◀ Previous').setStyle(ButtonStyle.Secondary).setDisabled(pagina <= 0),
+        new ButtonBuilder().setCustomId('missions_nada').setLabel(`Page ${pagina + 1}/${exp.paginas}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
+        new ButtonBuilder().setCustomId(`missions_pag::${indiceExp}::${pagina + 1}`).setLabel('Next ▶').setStyle(ButtonStyle.Secondary).setDisabled(pagina >= exp.paginas - 1));
+    const detalle = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`missions_det::${indiceExp}::${pagina}`)
+        .setPlaceholder('🔍 View a mission (all its cards)')
+        .addOptions(tarjetaMisiones.misionesDePagina(exp.nombre, pagina).map(m => ({ label: m.nombre.slice(0, 100), value: String(m.indice) }))));
+    return { content: '', embeds: [], files: [{ attachment: buffer, name: 'missions.png' }], attachments: [], components: [nav, detalle, menuExpansionesMisiones(indiceExp)] };
+}
+async function manejarAllMissions(interaction) {
+    const id = interaction.customId;
+    if (id === 'missions_ver') {
+        return await interaction.reply({ content: '🎯 Choose an expansion to see its missions:', components: [menuExpansionesMisiones()], ephemeral: true });
+    }
+    await interaction.deferUpdate().catch(() => {});
+    try {
+        if (id === 'missions_exp') return await interaction.editReply(await paginaMisiones(Number(interaction.values[0]) || 0, 0));
+        if (id.startsWith('missions_pag::')) {
+            const [, i, p] = id.split('::');
+            return await interaction.editReply(await paginaMisiones(Number(i) || 0, Number(p) || 0));
+        }
+        if (id.startsWith('missions_det::')) {
+            const [, i, p] = id.split('::');
+            const exp = tarjetaMisiones.expansiones()[Number(i) || 0];
+            const buffer = await tarjetaMisiones.armarDetalleMision({ expansion: exp?.nombre, indice: Number(interaction.values[0]) || 0, imagenCarta: imagenCartaMision });
+            const volver = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`missions_pag::${i}::${p}`).setLabel('◀ Back to the list').setStyle(ButtonStyle.Primary));
+            return await interaction.editReply({ content: '', embeds: [], files: buffer ? [{ attachment: buffer, name: 'mission.png' }] : [], attachments: [], components: [volver] });
+        }
+    } catch (e) {
+        console.error('DEBUG: all missions:', e?.message || e);
+        return await interaction.editReply({ content: '❌ Could not show the missions. Try again.', components: [menuExpansionesMisiones()] }).catch(() => {});
+    }
 }
 
 function cargarCardMap(rutaMaster) {
@@ -10560,6 +10626,32 @@ async function enviarComandoAlCanal(commandKey, user, row, forzarReubicar = fals
         await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar, guild);
         return;
     }
+    if (commandKey === 'all_missions') {
+        const embed = new EmbedBuilder().setColor(0xFFD54F).setTitle('🎯 All Missions')
+            .setDescription([
+                'Every **themed collection** of Pokémon TCG Pocket, expansion by expansion:',
+                'which cards each mission asks for and **what it gives you** — emblems, icons, binders, hourglasses, shop tickets and more.',
+                '',
+                'Press **🎯 View Missions**, pick an expansion and complete them with your accounts! 🏆'
+            ].join('\n'))
+            .setFooter({ text: 'Data: serebii.net' });
+        const fila = filaBotonesConTutorial('cmd_all_missions',
+            new ButtonBuilder().setCustomId('missions_ver').setLabel('🎯 View Missions').setStyle(ButtonStyle.Primary)
+        );
+        const bannerPath = await elegirBannerAllCardsAleatorio();
+        const symbolPath = path.join(__dirname, 'assets', 'embeds', 'symbol.png');
+        const archivos = [];
+        if (fs.existsSync(bannerPath)) {
+            embed.setImage('attachment://card_banner.png');
+            archivos.push({ ruta: bannerPath, filename: 'card_banner.png' });
+        }
+        if (fs.existsSync(symbolPath)) {
+            embed.setThumbnail('attachment://symbol.png');
+            archivos.push({ ruta: symbolPath, filename: 'symbol.png' });
+        }
+        await enviarOEditarInterfaz(user.id, commandKey, row.webhook_url, { embeds: [embed], components: [fila] }, archivos, forzarReubicar, guild);
+        return;
+    }
     if (commandKey === 'card_all') {
         const embed = construirEmbedAllCardsInicio(user);
         const fila = filaBotonesConTutorial('cmd_card_all',
@@ -11771,6 +11863,10 @@ async function manejarInteraccionPrincipal(interaction) {
     // del miembro con su usuario de Discord.
     // 📁 Set My Folder: la ruta se pega en Discord y el Monitor Link de esa persona la toma solo en su
     // proximo ping (≤ 1 min). Si en su PC no existe, sigue con la anterior y lo avisa en 📂 All Main Paths.
+    // 🎯 All Missions (Ale 2026-11-14): expansion -> paginas de 4 misiones -> detalle de una mision.
+    if ((interaction.isButton() || interaction.isStringSelectMenu()) && /^missions_/.test(interaction.customId)) {
+        return await manejarAllMissions(interaction);
+    }
     if (interaction.isButton() && interaction.customId === 'link_poner_carpeta') {
         const estadoCarp = await monitorLink.estadoAgente(interaction.user.id);
         if (!estadoCarp.vinculado) {
@@ -16626,6 +16722,7 @@ const GRUPOS_SYNC = [
             { tipo: 'cmd_card_wishlist', name: '💖-cards-wishlist' },
             { tipo: 'cmd_card_all', name: '⚡-all-cards' },
             { tipo: 'cmd_card_gold', name: '🏆-gold-cards' },
+            { tipo: 'cmd_all_missions', name: '🎯-all-missions' },
             { tipo: 'cmd_extract_xlm', name: '📄-extract-xml' },
             { tipo: 'shinedust', name: '🍬-shinedust' },
             { tipo: 'info_accounts', name: '📋-info-accounts' }
@@ -16717,7 +16814,8 @@ async function sincronizarCanales(interaction) {
                 cmd_card_wishlist: 'card_wishlist',
                 cmd_card_all: 'card_all',
                 cmd_extract_xlm: 'extract_xlm',
-                cmd_run_instance: 'run_instance'
+                cmd_run_instance: 'run_instance',
+                cmd_all_missions: 'all_missions'
             };
 
             const crearCategoriaSiNoExiste = async (nombreCategoria, privada = false, acceso = 'monitor') => {
@@ -16755,6 +16853,8 @@ async function sincronizarCanales(interaction) {
                         canal = await interaction.guild.channels.create({ name: nombreCanal, type: ChannelType.GuildText, parent: categoria.id });
                     }
                 }
+                // 🎯 All Missions es solo para mirar (Ale 2026-11-14): nadie escribe ahi; los botones si funcionan.
+                if (tipo === 'cmd_all_missions') await canalSoloLectura(interaction.guild, canal).catch(e => console.error('DEBUG: all missions read-only:', e?.message || e));
 
                 // REVERTIDO (2026-09-07, bug real reproducido en vivo: "se me desactivo el
                 // heartbeat, y cuando lo activo no deja" -- toggle/panel tiraba "First
