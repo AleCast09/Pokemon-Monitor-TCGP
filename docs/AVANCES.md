@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-14 — diegoikrew123 — Bot: 🎯 All Missions (colecciones temáticas)
+- Canal nuevo **🎯-all-missions** en MANAGER, solo lectura (nadie escribe; los botones sí). Lo crea el host del turno al sincronizar (`cmd_all_missions`).
+- **🎯 View Missions** (respuesta privada) → elegir expansión → páginas de 4 misiones (imagen) → "🔍 View a mission" muestra todas las cartas de una.
+- Datos: `assets/missions/themed_collections.json` (Serebii, 23 expansiones, 505 misiones, cartas mapeadas a nuestros IDs) + 116 logos de premios en `assets/missions/` (`rewards_icons.json`). Imagen: `tarjeta-misiones.js`.
+- Publicado host-2026.11.14-0218; bot de Ale reiniciado. Falta ver el canal creado y probar los botones en Discord. Para actualizar datos cuando salga una expansión: volver a sacar la página de Serebii (scripts de prueba en el scratchpad, no en el repo).
+
 ### 2026-11-14 — diegoikrew123 — Bot: comandos "La aplicación no ha respondido"
 - Causa: `/link/summary` (monitor-link-server.js) leía y limpiaba el resumen en el hilo principal; uno de 8.000 cuentas (119 MB) congelaba el bot ~13 s y ningún comando respondía (le pasó a TTKLord con TradeBot, y a Ale con /shinedust).
 - Arreglo: se procesa en un worker_thread (`limpiarResumenEnHilo`); medido: congelamiento máx. 14 ms, mismo resultado. Publicado host-2026.11.14-0117; bot de Ale reiniciado.
