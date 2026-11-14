@@ -24,6 +24,11 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-14 (2) — diegoikrew123 — Bot: 🙋 pedido de ayuda en ⚡ Share/Trade
+- Si la PC del dueño de las cuentas está offline (ej. un amigo usa las de Ale): mensaje privado "🔴 PC offline" + **🙋 Ask for help** (ya no un error).
+- El pedido menciona **solo** a miembros con Monitor Link en línea que tienen esa carta; uno presiona **🤝 Lend my accounts**; quien pidió presiona **⚡ Use their accounts**, elige cuenta y corre el ⚡ como el que presta (su Monitor Link da la XML). Pedido vence a los 30 min. Código: `manejarAyuda` en fast-transfer.js.
+- Publicado host-2026.11.14-0238; bot de Ale reiniciado. Sin probar en Discord.
+
 ### 2026-11-14 — diegoikrew123 — Bot: 🎯 All Missions (colecciones temáticas)
 - Canal nuevo **🎯-all-missions** en MANAGER, solo lectura (nadie escribe; los botones sí). Lo crea el host del turno al sincronizar (`cmd_all_missions`).
 - **🎯 View Missions** (respuesta privada) → elegir expansión → páginas de 4 misiones (imagen) → "🔍 View a mission" muestra todas las cartas de una.
