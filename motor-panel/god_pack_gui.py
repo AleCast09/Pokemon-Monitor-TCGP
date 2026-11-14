@@ -394,6 +394,37 @@ QToolTip {{
 """
 
 
+# (Ale 2026-11-14: "reemplazar esos emojis feos por nuestros emojis") Iconos del juego, 40 px, en base64.
+ICONOS_JUEGO = {
+    "hourglass": "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",
+    "star": "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",
+    "alert": "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",
+    "gift": "iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAALXUlEQVR42u2Ya4xd1X3Ff3uf1z33NfcxD9vjGT9jsIl51yYExYRHEyhtqiLShrZqqdKqRSUVStQ2qRTbyhfyaFSSSo2DSBMRSMAFooSSgELADcSBYDA2NjYej8f2vGfunbnPc+7ZZ5/dD2PADlHwAPnG+nx09tpr/9d/r/2H9/AeFgUJD1hgJGyVYMS78MO3CyPuvPNR74Wp2uXPjVb/6LEDJz70r3f/fCXclQJhQdXhkm/a7xbRxUIAjGv9HxVj9IwxZjxWejxSE8P19v8+eWjskx/8yx2DgM9lt/ts2XqK6O8cpyux1tszPrG7ZoyZTLSZTLSZMcbMGWMqxpgTQfTSD188dgt8opvy3+S46QH37ai5aOn/9DsPrTOW/FzG899/WTF17qb16zL9y/pIjMEY8/p3nrSIjeHE+PzdN9z071+YbNs1lpYCflJVsD052/WsRbHbulWuzvV99+rz19941ftWLJubm3enJ6eIIkUul8FzXARgAG0MQsCSfPriK3//Av9bX7p/N35Ks5aY47uS341JJpZZsTF9jkm4qLfE5nPXom2HoWMn2P3cixweGqbRbC/sXEqEECTAQF/+TzZe98E+RjsOMyzqmK1FVcOeHyXlK/6wFYrkeiWF3VPI4+VzNBNDu9WmMlthYnKaSnWeZqtNEIQ0mq14/6Gpe3d84+e7k14T0uzpUN2sYftZrWr/dkMITp0YYKzrvvK9NZ5rMzszP7onM722IyVZ18EtlSCXI2o2abeahHPzTFeqWFIyja2//9irh1Rba/LZRdvS/s2+MYAwALd974k1mbx7ndLxDfVOuDlOTCFsNJganSQMO6zu76U76xPrhLqwCBwfYbl4xkCSMDLf9JatyXzm+Ibi83PHW/N0x5KhbeKNjS+aoOGjt93pXX7jFR9xHftmS5pry9lsaSCXxkk0zx47ycF2m6zto2otDjZG6CrlyKZT6CQhiBRRrNGJZn6+TidSrBhcsjzYzPlPPvXUCOvw2IJilzGvibAogp959Ok1pXxmh59yr/Ycl8FMisv7eyimPAB6Mj62tGk0FUGnQxCGhJUG89PzNGOFMgnSksRK0Wy16R/o5/w1g6zu6b79+OHK/uFnZ17FzzuwLTkbFc8wyV/998OFJb2lH+bzuSuk1jjCsLGnyNJsBsRC6zBCoGyLyEgynrdQEsaQkpKMbZNCEgchtWbDTE42dtaqPNq7JL929UDfIFnSL96z9ymWSEPfMsXEj8xbmeWMNtPb3/dnXiZ9aRwGSCHwHIf5KKYadghiTRQnhEqjVEwz6RDKhGJXjmIui2VZCAS+Y+Na0F3MixXL+8oD+3/2q8zL97emK3OUi+mrV3ykZzXjjoequ2dzUchfk/OjJAkIcF0bKSVTrYDjtQYTjRYz7YC5dkgrjGi2Q8brdU606zRFgnBtnJSDlXKI5YLZPN/acvPfn/+15av7lj+z75ARcb3n9g+MbFtSrhfwVIoN2+y36olvENzypG1IBuI4BgRCCGpByPFqjf2TFQ7PVjlRqxMkIdJK6M7bLC04uFZCLGNk1kZkU6QLOfJdXYRxzPhcw27raInJlexDY3Ni+OT44XNWZ953/YflxYzYDj24sE2cSXLrGVHtdZNsuXLEVnptKtaaxBJ0lKYTR6S8hK68oFyI8eyEtOuQK3qsQ2JMQhQb4sSQJIbZRsRorU0Ye1RqNmB48BWLf7tkr/zc5hLp+vTqVSvLzt8OcP23vlp5himhwItARLfdeU/+H28sbrrl8wee/cUv2x0OflwDyesEO/WMUEqJjnKwEaS9hPMGbHry1qnmEzMcTCCVYKnbjSMcjADPlsQ6IJaK7pJFK10lU5YgHILIp648vrrXrt9cOrjXhI3Lnh+rHV65Iv0Hn9o++NDDT+X2Xnptyf/sP7+0cVV387O6eWxp3DEfBua55JoOex54g+AvR9EXRFEnch3QERettujr8oj1Qh3ERkMCJSePK1wEAmkWam0uqtOI2zjCoUvmUV7MhRcI4ihmZFTRSLq9Wx676Dt/V3ripas+kPtkKp3xP/3XpW/f/ulLx41bcFzRXpWzpjl0eOKu5+4NEn7P82iNRyBOq8GdH1cqiucjpYk6VVwCHFw8bBxs0sLjHH+QJXaZNC5pXGwjkQbOTa1gQ2oVWZEiI33s0KJvrsCqrhQ60diW8Daslx/78kMXf+Poic5P09kM2VIxm8r461KOXiWjcaLqEK8c6xzFI0XSea0mzekuNjpJpuPEoJRi94Fnee7Qi/jGpUtkKIosXSKLYyyKIkdRZNFxwoHZIVSoMBhUqBgeO8nk2Ay5kz65dg5sSaw1rivW0yu9B1/I3HFkqD4byTLKGHRnBqt5FFtV0SZJgbfAyV9m3tRmYsOIThKksZCRZmhsiMmZKaKgQxwqDs8OU+nUmGvWkFrga4dDI0c5NHmU/ScOs2/4MM3JFtlmhmFnlppIQNokGIxJbLtLO08+2DtUcXI/1VYGmQTYrWNY7THQHTauiC/HMTYSm9lxC4w446qLY/2q1jEai4LM4AuFanf42dQvGKlN0NYhA+VlVJvzeMJlrRigP+4hd9JnSI/i+C4XFjbgBT6TssF0p4lKErAsopAj8YRqQkfZ5f4R23EgGCOlxpC2JjGCVX3xlV//L/+K2/7J+TEblc2mneoMgmEQv+q6obFsIcqiiC0NYydPMJNMI0mwjeDE9ChSWgQmZELMYCTknCxFu4TBZrzdIGcbZoKEV2bmSJKEJI51ZSp8CEEIB+PBgUsHclJRmxtn74ujVKstCgWfczf47jUX8Rd49uM0bQsOnKlgIzDD6XRcbQur3GVWss5O8wL76BNZHHy6RQ/zpsnxZIKSKBAKRSwMh8QYXVYRV6Yo2jlOBi0eP36SehhiOzb12c49R/6v8jRWKvjYP/QXUu25a0f2V2Yff+SF+3c939ynQQ901zeuPKI+VI0L9+EUFZYyb0oztfvmprtvLR7F2OU97Um6PZeS8ClYOWw8BsUKhpNROiKgLEq4MkUgY3wrS49VxkhBHEp+cGQvs50Ax/WYn2o9vO+R6f/EtVqMOs3Na1N9w7uf+8ETe5K77777/GOssCyUUQR9/8PqV9PURMyySOMRsevgm+/BP95x7x2pTPZfhAq5oUeyyrPRxiZBApIAhcTDIOizltBr9zJsppCWw/FmiweOHGSm08a2HRpz0c49j8x+Ea0r+Pk6BbvFTz6lQCbwFZ9LlEs20EDMWGkhevVXBb0k7DxPw03Jm/JgZbq1o9TLJ6TnDv543nB1Cc6xBb2yTICiC4kjfOqmTUgIGPrtHh6fPcLDx47QihUiSXR1orVj36PVHVjU8TlFrqoWMuDnJVvqClDsIoFtb+TCoTPS/a8raAQIc9Udd23yC+lv24X0euNJVvk2F1s2a5GstAaJUFSpYQufRmzx9NQMj08dRSNQHTUzMxp+8cijc49QtgKyhTpjMmDo9Pfw6ev+9lT9G6LOVgnbk/W3fnnFwMXLt9tl/89NLm2bRNOTGC7UXaw0LvNxhekW/KoyyXTUxhIWQSN6ZvRA+0vjz7ZfZjkhMU30soA943oxj/W3IGjEQgQ6KCDtbPraNVdn+3O3Ss+6Ukg7Hbc70Agw7Q5aKaQBHUb1+ar65stP1u+jJaoU4oBWtkWx2WHXNn02Sr2N0cdWyRYku7YbuC1zzhcuen+xN73F1mqzUGqN0bpoYqPCltozfaR1z8mnq/spZjvkrDZWGLDrPAU3JW+X2FnOZk6pecmExZ45AQ0Bgyk2Lc2Vlvm5qK1N82CrgZOJKUUalQ1w8tHCkW4z75TcIoZHp4huQTKDpIVE5wWlRFJsCpokBMScd55m5ztX7Z1Mt8Rrb+eFOj0d745i7+Hdxv8DolCYUHalxDAAAAAASUVORK5CYII=",
+}
+_RUTAS_ICONO: dict = {}
+
+
+def icono_juego(nombre: str) -> QIcon:
+    import base64
+    pm = QPixmap()
+    pm.loadFromData(base64.b64decode(ICONOS_JUEGO[nombre]), "PNG")
+    return QIcon(pm)
+
+
+def img_juego(nombre: str, alto: int = 16) -> str:
+    """<img> para texto con formato (QLabel): se escribe una vez a la carpeta temporal."""
+    import base64, tempfile
+    if nombre not in _RUTAS_ICONO:
+        ruta = os.path.join(tempfile.gettempdir(), f"gpui_{nombre}.png")
+        try:
+            with open(ruta, "wb") as f:
+                f.write(base64.b64decode(ICONOS_JUEGO[nombre]))
+        except Exception:
+            pass
+        _RUTAS_ICONO[nombre] = ruta.replace("\\", "/")
+    return f'<img src="{_RUTAS_ICONO[nombre]}" height="{alto}" style="vertical-align: middle;">'
+
+
 class NoScrollSpinBox(QSpinBox):
     def wheelEvent(self, event):
         event.ignore()
@@ -652,14 +683,16 @@ class GodPackGui(QMainWindow):
 
         pool_top_bar = QHBoxLayout()
         pool_top_bar.setSpacing(8)
-        pool_header = QLabel("✨ LIVE GOD PACK HITS & CRITICAL ALERTS")
+        pool_header = QLabel(f"{img_juego('star', 15)}&nbsp; LIVE GOD PACK HITS &amp; CRITICAL ALERTS")
+        pool_header.setTextFormat(Qt.RichText)
         pool_header.setStyleSheet(
             f"color: {D['GOLD']}; font-size: 12px; font-weight: 800; letter-spacing: 1px;"
         )
         pool_top_bar.addWidget(pool_header)
         pool_top_bar.addStretch(1)
 
-        self.live_label = QLabel("0 Hits · 0 Alerts")
+        self.live_label = QLabel(f"{img_juego('star', 14)} 0 Hits &nbsp;·&nbsp; {img_juego('alert', 14)} 0 Alerts")
+        self.live_label.setTextFormat(Qt.RichText)
         self.live_label.setStyleSheet(f"color: {D['TEXT2']}; font-size: 11px; font-weight: 700;")
         pool_top_bar.addWidget(self.live_label)
 
@@ -814,11 +847,12 @@ class GodPackGui(QMainWindow):
         self.w_spend_all.toggled.connect(lambda on: on and self.w_free_only.setChecked(False))
         self.w_free_only.toggled.connect(lambda on: on and self.w_spend_all.setChecked(False))
         l_flags.addWidget(self.w_spend_all)
-        self.w_claim_rewards = QCheckBox("Claim gifts & finished missions — your accounts")
+        self.w_claim_rewards = QCheckBox("Claim gifts && finished missions — your accounts")
         self.w_claim_rewards.setToolTip("Before opening: receive everything in the gift box (often hourglasses).\n"
                                         "After opening: claim the missions that got finished.")
         l_flags.addWidget(self.w_claim_rewards)
-        self.btn_hourglasses = QPushButton("⏳  Hourglasses list")
+        self.btn_hourglasses = QPushButton("  Hourglasses list")
+        self.btn_hourglasses.setIcon(icono_juego("hourglass"))
         self.btn_hourglasses.setToolTip("Hourglasses left on each of your accounts (updated while the bot runs).")
         self.btn_hourglasses.clicked.connect(self._show_hourglasses)
         l_flags.addWidget(self.btn_hourglasses)
@@ -828,7 +862,7 @@ class GodPackGui(QMainWindow):
         lay.addWidget(c_flags)
 
         lay.addStretch(1)
-        self.tabs.addTab(page, "🎯 Farm & Pack")
+        self.tabs.addTab(page, "🎯 Farm && Pack")
 
     # ── TAB 2: COLLECTORS & DISCORD ────────────────────────────────
     def _build_tab_collectors(self):
@@ -913,7 +947,7 @@ class GodPackGui(QMainWindow):
         lay.addWidget(c_disc)
 
         lay.addStretch(1)
-        self.tabs.addTab(page, "👥 Collectors & Discord")
+        self.tabs.addTab(page, "👥 Collectors && Discord")
 
     # ── TAB 3: TIMING & PROXIES ────────────────────────────────────
     def _build_tab_timing_proxy(self):
@@ -1041,7 +1075,7 @@ class GodPackGui(QMainWindow):
         lay.addWidget(c_prox)
 
         lay.addStretch(1)
-        self.tabs.addTab(page, "⚡ Timing & Proxies")
+        self.tabs.addTab(page, "⚡ Timing && Proxies")
 
     # ── TAB 4: PATHS & SAFETY ──────────────────────────────────────
     def _build_tab_paths_safety(self):
@@ -1098,7 +1132,7 @@ class GodPackGui(QMainWindow):
         lay.addWidget(c_safe)
 
         lay.addStretch(1)
-        self.tabs.addTab(page, "📂 Paths & Safety")
+        self.tabs.addTab(page, "📂 Paths && Safety")
 
     # ── UI HELPERS ─────────────────────────────────────────────────
     def _make_scrollable_tab(self) -> tuple[QScrollArea, QVBoxLayout]:
@@ -2380,7 +2414,7 @@ class GodPackGui(QMainWindow):
     def _update_live_label(self, running: bool = False):
         t0 = self._live.get("t0")
         if t0 is None:
-            self.live_label.setText(f"{self._events_count['hits']} Hits · {self._events_count['errors']} Alerts")
+            self.live_label.setText(f"{img_juego('star', 14)} {self._events_count['hits']} Hits &nbsp;·&nbsp; {img_juego('alert', 14)} {self._events_count['errors']} Alerts")
             return
         mins = max(0.01, (time.time() - t0) / 60.0)
         ppm = self._live["packs"] / mins if mins > 0 else 0.0
@@ -2392,7 +2426,7 @@ class GodPackGui(QMainWindow):
         self.stat_ppm._val_label.setText(f"{mins:.1f}m | {ppm:.1f} PPM")
 
         self.live_label.setText(
-            f"🌟 {self._events_count['hits']} Hits  ·  🚨 {self._events_count['errors']} Alerts"
+            f"{img_juego('star', 14)} {self._events_count['hits']} Hits &nbsp;·&nbsp; {img_juego('alert', 14)} {self._events_count['errors']} Alerts"
         )
 
     # ── Historical Pool Report Dialog (.md) ───────────────────────
