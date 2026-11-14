@@ -24,6 +24,10 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-14 — diegoikrew123 — Bot: comandos "La aplicación no ha respondido"
+- Causa: `/link/summary` (monitor-link-server.js) leía y limpiaba el resumen en el hilo principal; uno de 8.000 cuentas (119 MB) congelaba el bot ~13 s y ningún comando respondía (le pasó a TTKLord con TradeBot, y a Ale con /shinedust).
+- Arreglo: se procesa en un worker_thread (`limpiarResumenEnHilo`); medido: congelamiento máx. 14 ms, mismo resultado. Publicado host-2026.11.14-0117; bot de Ale reiniciado.
+
 ### 2026-11-13 (tarde) — diegoikrew123 — Bot: resumen de baneadas, /shinedust ordenado
 - "Likely banned": ya no un aviso por cuenta; **un resumen al día** (23:55 Perú = 04:55 UTC) en 🔒-hosts por dueño con los nombres XML (`zenith:baneadas`, lo manda el host del turno, candado `zenith:ban_resumen:<día>`). Embed: no lo toca el borrado de 10 min.
 - Cualquier bot host borra los avisos de texto viejos de los otros bots host (los de GengarBot quedaban si Arcade estaba apagado).
