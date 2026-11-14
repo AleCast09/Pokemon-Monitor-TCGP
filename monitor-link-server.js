@@ -461,17 +461,12 @@ function registrar(app, dependencias) {
             await asegurarTablas();
             const agente = await agenteDe(req);
             if (!agente) return res.status(401).json({ error: 'not_linked' });
-            let datos;
-            try { datos = JSON.parse(req.body || '{}'); } catch (e) { return res.status(400).json({ error: 'bad_json' }); }
-            const cuentas = Array.isArray(datos.accounts) ? datos.accounts : [];
-            // Solo campos esperados: nombre de archivo, nombre visible, cartas {id: copias}, Shinedust.
-            const limpias = cuentas.slice(0, 20000).map(c => ({
-                f: String(c.f || '').slice(0, 120),
-                n: String(c.n || '').slice(0, 120),
-                d: Number.isFinite(c.d) ? c.d : null,
-                c: Object.fromEntries(Object.entries(c.c || {})
-                    .filter(([id, n]) => /^[A-Za-z0-9_]{5,40}$/.test(id) && Number.isInteger(n) && n > 0 && n < 100000))
-            })).filter(c => c.f);
+            // (Ale 2026-11-14: "/card no responde") Un resumen grande (8.000 cuentas, 119 MB) tardaba ~13 s en
+            // leerse y limpiarse, y en ese rato el bot no atendia NINGUN comando ("La aplicacion no ha respondido").
+            // Ahora se procesa en otro hilo: el bot sigue respondiendo mientras tanto.
+            let datos, limpiasTexto, nLimpias;
+            try { ({ datos, limpiasTexto, nLimpias } = await limpiarResumenEnHilo(req.body || '{}')); }
+            catch (e) { return res.status(400).json({ error: 'bad_json' }); }
             const ajustes = limpiarAjustes(datos.adjust);
             // null = ese Monitor Link no manda wishlist (version vieja o no tiene el archivo).
             const wishlist = Array.isArray(datos.wishlist)
@@ -481,7 +476,7 @@ function registrar(app, dependencias) {
                 `INSERT INTO link_resumen (discord_id, guild_id, datos, cuentas, ts, carpeta, wishlist, ajustes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(discord_id) DO UPDATE SET guild_id = excluded.guild_id, datos = excluded.datos, cuentas = excluded.cuentas, ts = excluded.ts,
                     carpeta = excluded.carpeta, wishlist = excluded.wishlist, ajustes = COALESCE(excluded.ajustes, link_resumen.ajustes)`,
-                [agente.discord_id, agente.guild_id, JSON.stringify(limpias), limpias.length, Date.now(), String(datos.folder || "").slice(0, 300) || null, wishlist,
+                [agente.discord_id, agente.guild_id, limpiasTexto, nLimpias, Date.now(), String(datos.folder || "").slice(0, 300) || null, wishlist,
                     ajustes ? JSON.stringify(ajustes) : null]);
             // Respuesta al 📁 Set My Folder: si ya se esta usando la carpeta pedida, o si en esa PC no
             // existe (folderError), el pedido se cierra.
@@ -494,7 +489,7 @@ function registrar(app, dependencias) {
                     await db.run(`UPDATE link_agentes SET carpeta_pedida = NULL, carpeta_error = NULL WHERE discord_id = ?`, [agente.discord_id]);
                 }
             }
-            res.json({ ok: true, accounts: limpias.length });
+            res.json({ ok: true, accounts: nLimpias });
         } catch (e) {
             console.error('DEBUG: Monitor Link /summary:', e?.message || e);
             res.status(500).json({ error: 'server_error' });
@@ -1114,6 +1109,40 @@ function cuentasDe(discordId) {
 }
 
 // Para los comandos: resumen subido por un usuario (o null) y si su Monitor Link esta en linea.
+// Lee y limpia el resumen que manda un Monitor Link en OTRO hilo (worker_threads), para no congelar el bot.
+// Solo campos esperados: nombre de archivo, nombre visible, cartas {id: copias}, Shinedust.
+const CODIGO_LIMPIAR_RESUMEN = `
+const { parentPort, workerData } = require('worker_threads');
+const ID = /^[A-Za-z0-9_]{5,40}$/;
+try {
+    const datos = JSON.parse(workerData || '{}');
+    const cuentas = Array.isArray(datos.accounts) ? datos.accounts.slice(0, 20000) : [];
+    const limpias = [];
+    for (const c of cuentas) {
+        const f = String((c && c.f) || '').slice(0, 120);
+        if (!f) continue;
+        const cartas = {};
+        const crudas = (c && c.c) || {};
+        for (const id in crudas) {
+            const n = crudas[id];
+            if (Number.isInteger(n) && n > 0 && n < 100000 && ID.test(id)) cartas[id] = n;
+        }
+        limpias.push({ f, n: String(c.n || '').slice(0, 120), d: Number.isFinite(c.d) ? c.d : null, c: cartas });
+    }
+    delete datos.accounts;
+    parentPort.postMessage({ ok: true, datos, limpiasTexto: JSON.stringify(limpias), nLimpias: limpias.length });
+} catch (e) { parentPort.postMessage({ ok: false, error: String(e && e.message || e) }); }
+`;
+function limpiarResumenEnHilo(texto) {
+    const { Worker } = require('worker_threads');
+    return new Promise((resolve, reject) => {
+        const w = new Worker(CODIGO_LIMPIAR_RESUMEN, { eval: true, workerData: texto });
+        w.once('message', m => { m?.ok ? resolve(m) : reject(new Error(m?.error || 'bad_json')); w.terminate().catch(() => {}); });
+        w.once('error', reject);
+        w.once('exit', code => { if (code) reject(new Error(`worker exit ${code}`)); });
+    });
+}
+
 async function resumenDe(discordId) {
     await asegurarTablas();
     const fila = await db.get(`SELECT datos, cuentas, ts, wishlist, ajustes FROM link_resumen WHERE discord_id = ?`, [String(discordId)]);
