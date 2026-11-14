@@ -81,9 +81,9 @@ async function armarTarjetaMisiones({ expansion, pagina = 0, imagenCarta }) {
         const archivo = ICONOS_BOT[base] ? path.join(__dirname, 'assets', 'element', ICONOS_BOT[base])
             : r.logo ? path.join(DIR, r.logo) : null;
         if (/card$/i.test(r.item) && !ICONOS_BOT[base]) {
-            // premio = una carta: la imagen del bot (mas nitida que el logo)
+            // premio = una carta: la imagen del bot (mas nitida que el logo). cardId: puesta a mano (ej. Mew del Kanto PokeDex).
             const nombre = r.item.replace(/ card$/i, '').toLowerCase();
-            const id = exp.collections.flatMap(c => c.groups.flatMap(g => g.cards)).find(c => c.name.toLowerCase() === nombre)?.id;
+            const id = r.cardId || exp.collections.flatMap(c => c.groups.flatMap(g => g.cards)).find(c => c.name.toLowerCase() === nombre)?.id;
             const p = id ? await imagenCarta(id).catch(() => null) : null;
             if (p) return sharp(p).resize(Math.round(ICO * 0.72), ICO, { fit: 'cover' }).png().toBuffer();
         }
@@ -144,8 +144,9 @@ async function armarTarjetaMisiones({ expansion, pagina = 0, imagenCarta }) {
             const tl = partir(c.name, 46);
             svg += tl.map((l, i) => `<text x="${(ZX0 + ZX1) / 2}" y="${y + (tl.length > 1 ? 30 + i * 24 : 38)}" text-anchor="middle" font-family="Segoe UI, Arial" font-weight="700" font-size="${tl.length > 1 ? 20 : 23}" fill="#ffd54f">${esc(l)}</text>`).join('');
         }
+        if (c.secret) svg += `<rect x="${ZX0}" y="${y + 14}" width="92" height="24" rx="12" fill="#5b2a86"/><text x="${ZX0 + 46}" y="${y + 31}" text-anchor="middle" font-family="Segoe UI, Arial" font-weight="800" font-size="12" fill="#e9d5ff" letter-spacing="1">SECRET</text>`;
         if (!m.lineas.length && !m.anyVer) {
-            svg += `<text x="${(ZX0 + ZX1) / 2}" y="${y + m.alto / 2 + 22}" text-anchor="middle" font-family="Segoe UI, Arial" font-weight="800" font-size="19" fill="#7CF29A">NO CARDS NEEDED — just do what the title says</text>`;
+            svg += `<text x="${(ZX0 + ZX1) / 2}" y="${y + m.alto / 2 + 22}" text-anchor="middle" font-family="Segoe UI, Arial" font-weight="800" font-size="19" fill="#7CF29A">${esc(c.desc || "NO CARDS NEEDED — just do what the title says")}</text>`;
         }
         // 2) Cartas: cada linea centrada en su zona; bloque centrado en alto.
         const altoBloque = (m.anyVer ? 34 : 0) + m.lineas.length * LINEA;
@@ -240,15 +241,15 @@ async function armarDetalleMision({ expansion, indice, imagenCarta }) {
     let svg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
 <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#151a2e"/><stop offset="1" stop-color="#0d1020"/></linearGradient></defs>
 <rect width="${W}" height="${H}" rx="26" fill="url(#bg)"/>
-<text x="${PAD}" y="56" font-family="Segoe UI, Arial" font-size="19" fill="#9aa3c7" letter-spacing="1.5">${esc(exp.expansion.toUpperCase())} · MISSION ${indice + 1}/${exp.collections.length}</text>
+<text x="${PAD}" y="56" font-family="Segoe UI, Arial" font-size="19" fill="#9aa3c7" letter-spacing="1.5">${esc(exp.expansion.toUpperCase())} · MISSION ${indice + 1}/${exp.collections.length}${c.secret ? ' · SECRET MISSION' : ''}</text>
 ${partir(c.name, 46).map((l, i, a) => `<text x="${PAD}" y="${a.length > 1 ? 92 + i * 32 : 100}" font-family="Segoe UI, Arial" font-weight="800" font-size="${a.length > 1 ? 27 : 32}" fill="#ffd54f">${esc(l)}</text>`).join('')}
 <line x1="${PAD}" y1="${TOP - 22}" x2="${W - PAD}" y2="${TOP - 22}" stroke="#2c3560" stroke-width="2"/>`;
     let y = TOP;
     if (!juntos.length) {
         // Mision de texto (abrir X sobres, registrar X cartas...): el titulo ya dice que hacer.
         svg += `<rect x="${ZX0}" y="${y + 10}" width="${ZX1 - ZX0 - 20}" height="110" rx="18" fill="#1d2340" stroke="#2c3560"/>
-<text x="${(ZX0 + ZX1 - 20) / 2}" y="${y + 58}" text-anchor="middle" font-family="Segoe UI, Arial" font-weight="800" font-size="22" fill="#7CF29A">NO CARDS NEEDED</text>
-<text x="${(ZX0 + ZX1 - 20) / 2}" y="${y + 92}" text-anchor="middle" font-family="Segoe UI, Arial" font-size="18" fill="#c7d0ff">Just do what the title says to get the rewards.</text>`;
+<text x="${(ZX0 + ZX1 - 20) / 2}" y="${y + 58}" text-anchor="middle" font-family="Segoe UI, Arial" font-weight="800" font-size="22" fill="#7CF29A">${c.desc ? "REQUIREMENT" : "NO CARDS NEEDED"}</text>
+<text x="${(ZX0 + ZX1 - 20) / 2}" y="${y + 92}" text-anchor="middle" font-family="Segoe UI, Arial" font-size="18" fill="#c7d0ff">${esc(c.desc || "Just do what the title says to get the rewards.")}</text>`;
     }
     for (const b of juntos) {
         if (b.texto) {
@@ -272,7 +273,10 @@ ${partir(c.name, 46).map((l, i, a) => `<text x="${PAD}" y="${a.length > 1 ? 92 +
     for (const r of c.rewards) {
         const base = r.item.replace(/\s*\(.*\)$/, '');
         const archivo = ICONOS_BOT[base] ? path.join(__dirname, 'assets', 'element', ICONOS_BOT[base]) : r.logo ? path.join(DIR, r.logo) : null;
-        if (archivo && fs.existsSync(archivo)) {
+        const pCarta = r.cardId ? await imagenCarta(r.cardId).catch(() => null) : null;
+        if (pCarta) {
+            capas.push({ input: await sharp(pCarta).resize(Math.round(ICO * 0.72), ICO, { fit: 'cover' }).png().toBuffer(), left: RX0 + Math.round(ICO * 0.14), top: ry });
+        } else if (archivo && fs.existsSync(archivo)) {
             const redondo = ['icon', 'binders', 'playmats', 'sleeves'].includes(r.type);
             let s = sharp(archivo).resize(ICO, ICO, { fit: redondo ? 'cover' : 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } });
             if (redondo) s = s.composite([{ input: Buffer.from(`<svg width="${ICO}" height="${ICO}"><rect width="${ICO}" height="${ICO}" rx="${r.type === 'icon' ? ICO / 2 : 12}"/></svg>`), blend: 'dest-in' }]);
