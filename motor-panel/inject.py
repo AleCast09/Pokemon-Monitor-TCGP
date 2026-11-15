@@ -1764,6 +1764,29 @@ def _claim_rewards(sess, tag: str = "", gifts: bool = True) -> None:
                 req.present_ids.extend(lote)
                 r = sess._call("/takasho.schema.lettuce_server.player_api.PresentBox/ReceiveV1", req,
                                present_box_receive_v1_pb2.PresentBoxReceiveV1.Types.Response)
+                # (Ale 2026-11-15) A pack in the gift box is OPENED when received (like in the game): log its cards
+                # like any other pack, so a God Pack from a gift shows up in the panel.
+                for x in list(getattr(r, "results", [])) + ([r] if getattr(r, "is_pack", False) else []):
+                    if not getattr(x, "is_pack", False):
+                        continue
+                    try:
+                        cartas, tablas = [], []
+                        for order in x.pack_result.unpack_orders:
+                            tablas.append(_unknown_string(order, PACK_TABLE_ID_FIELD))
+                            for stock in order.produces.card_instances:
+                                cid = getattr(stock.card_instance, "card_id", "")
+                                if cid:
+                                    cartas.extend([cid] * int(getattr(stock, "amount", 1) or 1))
+                        if not cartas:
+                            continue
+                        info = gp_cards.classify_pack(cartas, next((t for t in tablas if t), ""))
+                        marca = (f" <-- GOD PACK {info['label']} (WONDER-PICKABLE)" if info.get("is_god_pickable")
+                                 else f" <-- [!!] god pack drawn but UNPICKABLE ({info['label']})" if info.get("is_god_unpickable")
+                                 else " <-- RARE PACK (2xSR - GP&Double eligible)" if info.get("is_rare_2sr") else "")
+                        log(f"gift pack opened cards={len(cartas)} table={','.join(t for t in tablas if t) or '?'}{marca}", tag=tag)
+                        log(f"  cards: {gp_cards.summarize_cards(cartas)}", tag=tag)
+                    except Exception as exc:
+                        log(f"[rewards] gift pack: could not read its cards ({str(exc)[:80]})", tag=tag)
                 return sum(1 for x in getattr(r, "results", []) if getattr(x, "is_successe", False)) or len(lote)
 
             # (Ale 2026-11-15) 23 at once -> INTERNAL; 10 at once works. A batch that fails goes one by one.
@@ -3050,6 +3073,7 @@ def inject_one(
     spend_all_hg: bool = False,          # (Ale 2026-11-12) open as many paid packs as the hourglasses allow
     track_hg: bool = False,              # (Ale 2026-11-12) write the hourglasses left to reports/hourglasses.json
     claim_rewards: bool = False,         # (Ale 2026-11-12) claim gifts (present box) and finished missions
+    claim_only: bool = False,            # CLAIM_ONLY_V1 (Ale 2026-11-15): log in, claim everything, no packs
 ) -> dict:
     """
     Run the full injection flow for one account.
@@ -3185,8 +3209,13 @@ def inject_one(
                     tag=tag)
 
         # 1b2. (Ale 2026-11-12) Gifts and finished missions first: gifts often bring hourglasses.
-        if claim_rewards and not dry_run:
+        # (Ale 2026-11-15: "se debe abrir cuando no estemos farmeando god packs") Claiming opens the gift packs:
+        # only in Open Packs Only or Claim only, never while farming God Packs.
+        if ((claim_rewards and run_mode != "godpack") or claim_only) and not dry_run:
             _claim_rewards(sess, tag)
+        if claim_only:
+            log("[rewards] claim only: done (no packs opened)", tag=tag)
+            return result
         hg_before = -1
         if (track_hg or spend_all_hg) and not dry_run:
             hg_before, _ = gp_resources.pack_power_charger_count(sess, "LARGE")
@@ -3788,7 +3817,7 @@ def inject_one(
                            f"no match ({','.join(pack_labels) or '-'})")
         log(f"-- ACCOUNT SUMMARY: {outcome_str}", tag=tag)
         # (Ale 2026-11-12) Missions finished by opening packs, then the hourglasses left -> list.
-        if claim_rewards and not dry_run and result["packs_opened"]:
+        if claim_rewards and run_mode != "godpack" and not dry_run and result["packs_opened"]:
             _claim_rewards(sess, tag, gifts=False)
         if track_hg and not dry_run:
             _hg_after, _ = gp_resources.pack_power_charger_count(sess, "LARGE")
@@ -4459,6 +4488,10 @@ def run_injection(args) -> int:
     if not args.dry_run:
         sweep_fr_ledger("startup (leftovers from previous run)")
 
+    if getattr(args, "claim_only", False):
+        # Claim only: every account, even the ones resting (the cooldown is only for opening packs).
+        args.cooldown_hours = 0.0
+        log("[info] claim only: logging into your accounts to claim gifts, missions and event days - no packs")
     # Discover eligible accounts (XML dir + JSON dir override accounts_dir when set)
     accounts = discover_accounts(
         xml_dir=getattr(args, "xml_dir", None),
@@ -4574,7 +4607,10 @@ def run_injection(args) -> int:
             spend_all_hg=bool(getattr(args, "spend_all_hourglasses", False)),
             track_hg=bool(getattr(args, "track_hourglasses", False)),
             claim_rewards=bool(getattr(args, "claim_rewards", False)),
+            claim_only=bool(getattr(args, "claim_only", False)),
         )
+        if getattr(args, "claim_only", False):
+            return r   # nothing opened: no history, no pack count, no cooldown change
         # Record state (touch mtime only on successful attempt)
         _record_kwargs = dict(
             account_key=r["account_key"],
@@ -4867,6 +4903,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Write each account's hourglasses left to reports/hourglasses.json (+ history).")
     p.add_argument("--claim-rewards", action="store_true",
                    help="Claim gifts (present box) and finished missions on each account.")
+    p.add_argument("--claim-only", action="store_true",
+                   help="Only claim gifts, missions and event days on every own account (ignores the cooldown, opens no packs).")
     p.add_argument("--pack-rotation", default="",
                    help="Several packs, one per account in turn: 'pack_id:product_id:packs,pack_id:product_id:packs'. "
                         "Account 1 opens the 1st, account 2 the 2nd, ... (overrides --pack-id/--product-id/--packs).")

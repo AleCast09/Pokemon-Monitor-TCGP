@@ -495,10 +495,14 @@ ES: dict = {
     "Spend all hourglasses — Open Packs Only, your accounts": "Gastar todos los relojes — Solo abrir sobres, tus cuentas",
     "Each account opens its free packs + every paid pack its LARGE hourglasses can pay\n(12 per pack). Ignores 'Packs per Account'. Lent accounts never spend hourglasses.":
         "Cada cuenta abre sus sobres gratis + todos los que pueda pagar con relojes\n(12 por sobre). No usa 'Sobres por cuenta'. Las cuentas prestadas nunca gastan relojes.",
-    "Claim gifts && finished missions — your accounts": "Cobrar regalos y misiones — tus cuentas",
+    "Claim gifts && finished missions — Open Packs Only, your accounts": "Cobrar regalos y misiones — Solo abrir sobres, tus cuentas",
     "Before opening: receive everything in the gift box (often hourglasses).\nAfter opening: claim the missions that got finished.":
         "Antes de abrir: recibe todo el buzón de regalos (suelen ser relojes).\nDespués de abrir: cobra las misiones terminadas y los días de los eventos.",
     "  Hourglasses list": "  Lista de relojes",
+    "  Claim only — your accounts": "  Solo cobrar — tus cuentas",
+    "Logs into every one of your accounts (even the resting ones) and claims gifts,\nfinished missions and event days. Opens no packs and doesn't touch the cooldown.":
+        "Entra a todas tus cuentas (aunque estén descansando) y cobra regalos,\nmisiones terminadas y días de eventos. No abre sobres ni cambia el descanso.",
+    "Update needed": "Falta actualizar",
     "Hourglasses left on each of your accounts (updated while the bot runs).": "Relojes que le quedan a cada cuenta tuya (se actualiza mientras corre).",
     "▶  START INJECTION": "▶  INICIAR",
     "■  STOP": "■  DETENER",
@@ -1111,7 +1115,7 @@ class GodPackGui(QMainWindow):
         self.w_spend_all.toggled.connect(lambda on: on and self.w_free_only.setChecked(False))
         self.w_free_only.toggled.connect(lambda on: on and self.w_spend_all.setChecked(False))
         l_flags.addWidget(self.w_spend_all)
-        self.w_claim_rewards = QCheckBox("Claim gifts && finished missions — your accounts")
+        self.w_claim_rewards = QCheckBox("Claim gifts && finished missions — Open Packs Only, your accounts")
         self.w_claim_rewards.setToolTip("Before opening: receive everything in the gift box (often hourglasses).\n"
                                         "After opening: claim the missions that got finished.")
         l_flags.addWidget(self.w_claim_rewards)
@@ -1120,6 +1124,13 @@ class GodPackGui(QMainWindow):
         self.btn_hourglasses.setToolTip("Hourglasses left on each of your accounts (updated while the bot runs).")
         self.btn_hourglasses.clicked.connect(self._show_hourglasses)
         l_flags.addWidget(self.btn_hourglasses)
+        # CLAIM_ONLY_V1 (Ale 2026-11-15): claim on every own account even while resting, without opening packs.
+        self.btn_claim_only = QPushButton("  Claim only — your accounts")
+        self.btn_claim_only.setIcon(icono_juego("gift") if "gift" in ICONOS_JUEGO else QIcon())
+        self.btn_claim_only.setToolTip("Logs into every one of your accounts (even the resting ones) and claims gifts,\n"
+                                       "finished missions and event days. Opens no packs and doesn't touch the cooldown.")
+        self.btn_claim_only.clicked.connect(self._start_claim_only)
+        l_flags.addWidget(self.btn_claim_only)
 
         self.w_dry_run = QCheckBox("Dry run (test flow without opening packs)")
         l_flags.addWidget(self.w_dry_run)
@@ -1967,6 +1978,20 @@ class GodPackGui(QMainWindow):
         return (cab + "<table cellspacing='0' cellpadding='4' width='100%'>"
                 "<tr><th align='left'>Account</th><th align='right'>Hourglasses</th><th align='right'>Before</th>"
                 "<th align='right'>Packs</th><th align='left'>Seen</th></tr>" + tr + "</table>")
+
+    def _start_claim_only(self):
+        try:
+            inj = Path(INJECT_SCRIPT).read_text("utf-8", errors="ignore")
+        except Exception:
+            inj = ""
+        if "--claim-only" not in inj:
+            QMessageBox.information(self, "Update needed", "The engine doesn't have 'Claim only' yet: restart the bot so it installs it.")
+            return
+        cmd = self._build_cmd()
+        if not cmd:
+            return
+        cmd = [c for c in cmd if c not in ("--spend-all-hourglasses",)] + ["--claim-only"]
+        self._start_injection(cmd_override=cmd)
 
     def _show_hourglasses(self):
         dlg = QDialog(self)
