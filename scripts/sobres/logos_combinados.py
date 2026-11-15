@@ -26,15 +26,15 @@ for code, sobres in logos.items():
     exp = recortar(Image.open(base + '.png' if os.path.exists(base + '.png') else base + '.webp').convert('RGBA'))
     for sobre, archivo in sobres.items():
         oficial = os.path.join(EXP, nombre, f'{nombre} - {sobre}.png')   # logo oficial ya combinado (si lo hay)
-        if os.path.exists(oficial):
+        if False and os.path.exists(oficial):   # (Ale 2026-11-15) todos armados igual, con espacio
             nom = os.path.splitext(archivo)[0] + '.png'
             recortar(Image.open(oficial).convert('RGBA')).save(os.path.join(OUT, nom))
             mapa[f'{nombre} · {sobre}'] = nom
             continue
         pk = recortar(Image.open(os.path.join(PACKS, archivo)).convert('RGBA'))
-        ancho_pk = int(exp.width * 0.62)
+        ancho_pk = int(exp.width * 0.58)
         pk = pk.resize((ancho_pk, round(pk.height * ancho_pk / pk.width)), Image.LANCZOS)
-        solape = int(exp.height * 0.12)   # el sobre se monta un poco sobre el logo, como en el juego
+        solape = -int(exp.height * 0.10)   # (Ale 2026-11-15: "que no se choquen") espacio entre logo y sobre
         W, H = exp.width, exp.height + pk.height - solape
         lienzo = Image.new('RGBA', (W, H), (0, 0, 0, 0))
         lienzo.alpha_composite(exp, (0, 0))

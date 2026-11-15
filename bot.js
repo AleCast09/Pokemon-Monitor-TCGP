@@ -4314,7 +4314,12 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
     }
 
     // (Ale 2026-11-14) Si se llego desde un sobre ("Wisdom of Sea and Sky · Lugia"), su logo y el sobre.
-    const expansionConSobre = String(volver?.expansion || '').includes(sobresExpansion.SEP) ? volver.expansion : null;
+    // (Ale 2026-11-15) Sin venir de un sobre: si la carta sale en UN solo sobre de su expansion, tambien su logo.
+    let expansionConSobre = String(volver?.expansion || '').includes(sobresExpansion.SEP) ? volver.expansion : null;
+    if (!expansionConSobre && expansionIdCarta && sobresExpansion.sobresDe(expansionIdCarta)) {
+        const suyos = sobresExpansion.sobresDeCarta({ id: cartaId, nombre, expansionId: expansionIdCarta }, cardMap);
+        if (suyos.length === 1) expansionConSobre = `${expansionNombre}${sobresExpansion.SEP}${suyos[0]}`;
+    }
     const sobreElegido = expansionConSobre ? expansionConSobre.split(sobresExpansion.SEP)[1] : null;
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${nombre}`)
@@ -4432,7 +4437,8 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         // aparte en la esquina.
         let buffer = fs.readFileSync(imagenPath);
         const rutaLogo = buscarLogoExpansionBot(expansionConSobre || expansionNombre);
-        if (rutaLogo) buffer = await componerLogoSobreImagenBot(buffer, rutaLogo);
+        // (Ale 2026-11-15: "un poquito mas abajo") El logo con sobre baja un poco.
+        if (rutaLogo) buffer = await componerLogoSobreImagenBot(buffer, rutaLogo, expansionConSobre ? 18 : 0);
         if (cantidadTotal > 0) buffer = await superponerBadgeCantidadCartaBot(buffer, cantidadTotal);
         embed.setImage('attachment://carta.png');
         archivosPayload.push(new AttachmentBuilder(buffer, { name: 'carta.png' }));
@@ -11413,7 +11419,7 @@ async function elegirExpansionYCartasPreview(cantidad) {
 // Misma composición que usa s4t.js en componerLogoSobreImagen(): se duplica acá
 // porque bot.js no puede hacer require('./s4t.js') sin levantar su propio
 // servidor Express en el puerto 3000 (ya lo tiene ocupado el proceso "trading").
-async function componerLogoSobreImagenBot(bufferCarta, rutaLogo) {
+async function componerLogoSobreImagenBot(bufferCarta, rutaLogo, extraArriba = 0) {
     if (!rutaLogo) return bufferCarta;
     try {
         const metaCarta = await sharp(bufferCarta).metadata();
@@ -11425,7 +11431,7 @@ async function componerLogoSobreImagenBot(bufferCarta, rutaLogo) {
         const metaLogo = await sharp(logoBuffer).metadata();
 
         const relleno = 20;
-        const altoFranja = metaLogo.height + relleno * 2;
+        const altoFranja = metaLogo.height + relleno * 2 + extraArriba;
         const altoFinal = metaCarta.height + altoFranja;
 
         return await sharp({
@@ -11433,7 +11439,7 @@ async function componerLogoSobreImagenBot(bufferCarta, rutaLogo) {
         })
             .composite([
                 { input: bufferCarta, left: 0, top: altoFranja },
-                { input: logoBuffer, left: Math.round((anchoFinal - metaLogo.width) / 2), top: relleno }
+                { input: logoBuffer, left: Math.round((anchoFinal - metaLogo.width) / 2), top: relleno + extraArriba }
             ])
             .png()
             .toBuffer();
@@ -11818,7 +11824,7 @@ const FUENTES_CARTAS = {
 
 // --- Busqueda de cartas por texto con TODOS los resultados (2026-09-29, pedido de Ale) ---
 const PREFIJO_BUSQUEDA_CARTA = '__buscar__:';
-const BUSQUEDA_CARTAS_POR_PAGINA = 25;
+const BUSQUEDA_CARTAS_POR_PAGINA = 15;   // (Ale 2026-11-15) 3 filas de 5 fotos por pagina
 
 function buscarCartasPorTexto(cartas, texto) {
     const t = String(texto || '').trim().toLowerCase();
@@ -11831,7 +11837,50 @@ function buscarCartasPorTexto(cartas, texto) {
         .sort((a, b) => a.nombre.localeCompare(b.nombre) || String(a.expansion).localeCompare(String(b.expansion)));
 }
 
-function construirListaBusquedaCartas(resultados, texto, pagina, mapaEmojis = {}) {
+// (Ale 2026-11-15: "deberia mostrar la foto en lugar del nombre") Collage de la busqueda: cada carta con su numero
+// arriba a la izquierda y el logo de su expansion debajo, 5 por fila.
+async function generarCollageBusqueda(items, inicio, rutaMasterPath) {
+    if (!items?.length || !rutaMasterPath) return null;
+    const cardMap = cargarCardMap(rutaMasterPath);
+    const CW = 200, CH = 280, LOGO_H = 46, GAP = 14, PAD = 20, COLS = Math.min(5, items.length);
+    const filas = Math.ceil(items.length / COLS);
+    const ALTO_CELDA = CH + LOGO_H + 10;
+    const W = PAD * 2 + COLS * CW + (COLS - 1) * GAP;
+    const H = PAD * 2 + filas * ALTO_CELDA + (filas - 1) * GAP;
+    const capas = [];
+    for (let i = 0; i < items.length; i++) {
+        const c = items[i];
+        const x = PAD + (i % COLS) * (CW + GAP), y = PAD + Math.floor(i / COLS) * (ALTO_CELDA + GAP);
+        const info = cardMap?.[c.id];
+        const ruta = encontrarImagenPorIllustration(rutaMasterPath, info?.IllustrationID)
+            || (await obtenerImagenRepoCartasBot(rutaMasterPath, info?.IllustrationID).catch(() => null));
+        if (ruta) {
+            const carta = await sharp(ruta).resize(CW, CH, { fit: 'cover' }).png().toBuffer().catch(() => null);
+            if (carta) capas.push({ input: carta, left: x, top: y });
+        }
+        const n = String(inicio + i + 1);
+        const anchoN = 22 + n.length * 12;
+        capas.push({ input: Buffer.from(`<svg width="${anchoN}" height="30"><rect width="${anchoN}" height="30" rx="8" fill="black" fill-opacity="0.85"/>`
+            + `<text x="${anchoN / 2}" y="21" font-size="18" font-family="Arial" font-weight="bold" fill="#FFD700" text-anchor="middle">${n}</text></svg>`), left: x + 6, top: y + 6 });
+        const rutaLogo = buscarLogoExpansionBot(String(c.expansion || '').replace('Deluxe Pack: ', 'Deluxe Pack '));
+        if (rutaLogo) {
+            const lg = await sharp(rutaLogo).resize(CW, LOGO_H, { fit: 'inside' }).png().toBuffer().catch(() => null);
+            if (lg) {
+                const meta = await sharp(lg).metadata();
+                capas.push({ input: lg, left: x + Math.round((CW - meta.width) / 2), top: y + CH + 8 });
+            }
+        }
+    }
+    try {
+        return await sharp({ create: { width: W, height: H, channels: 4, background: { r: 30, g: 30, b: 36, alpha: 1 } } })
+            .composite(capas).png().toBuffer();
+    } catch (e) {
+        console.error('DEBUG: collage de busqueda:', e?.message || e);
+        return null;
+    }
+}
+
+async function construirListaBusquedaCartas(resultados, texto, pagina, mapaEmojis = {}, rutaMasterPath = null) {
     const paginas = Math.max(1, Math.ceil(resultados.length / BUSQUEDA_CARTAS_POR_PAGINA));
     pagina = Math.min(Math.max(0, pagina), paginas - 1);
     const inicio = pagina * BUSQUEDA_CARTAS_POR_PAGINA;
@@ -11841,12 +11890,8 @@ function construirListaBusquedaCartas(resultados, texto, pagina, mapaEmojis = {}
     const embed = new EmbedBuilder()
         .setColor(0x3498DB)
         .setTitle(`🔎 Results for "${texto}"`)
-        // Con el emoji del tipo y los de la rareza (2026-10-30, a pedido de Ale), como en el resto del bot.
-        .setDescription(items.map((c, i) => {
-            const tipo = tagTipoBot(emojiKeyDesdeElemento(c.elemento), mapaEmojis);
-            const rareza = formatearCategoriaConIcono(c.tipoRareza, mapaEmojis) || textoSinEmoji(c.categoria);
-            return `**${inicio + i + 1}.** ${tipo ? `${tipo} ` : ''}${c.nombre} — ${c.expansion} · ${rareza}`;
-        }).join('\n').slice(0, 4000))
+        // (Ale 2026-11-15) Las cartas van en la foto de abajo (collage con numero y logo de expansion).
+        .setDescription('Pick a card by its **number** in the list below.')
         .setFooter({ text: `${resultados.length} card(s) · Page ${pagina + 1}/${paginas} · Pick one below` });
     const menu = new StringSelectMenuBuilder()
         .setCustomId(`cardsearch_sel::${pagina}::${textoId}`.slice(0, 100))
@@ -11864,7 +11909,9 @@ function construirListaBusquedaCartas(resultados, texto, pagina, mapaEmojis = {}
             new ButtonBuilder().setCustomId(`cardsearch_pag::${pagina + 1}::${textoId}`.slice(0, 100)).setLabel('▶').setStyle(ButtonStyle.Secondary).setDisabled(pagina >= paginas - 1)
         ));
     }
-    return { content: '', embeds: [embed], components: componentes, files: [], attachments: [] };
+    const collage = await generarCollageBusqueda(items, inicio, rutaMasterPath).catch(() => null);
+    if (collage) embed.setImage('attachment://busqueda.png');
+    return { content: '', embeds: [embed], components: componentes, files: collage ? [new AttachmentBuilder(collage, { name: 'busqueda.png' })] : [], attachments: [] };
 }
 
 function prefijoDeCartas(customId) {
@@ -12277,7 +12324,7 @@ async function manejarInteraccionPrincipal(interaction) {
                 const texto = esBusqueda ? cartaId.slice(PREFIJO_BUSQUEDA_CARTA.length) : cartaId;
                 const resultados = buscarCartasPorTexto(cartas, texto);
                 if (!resultados.length) return await interaction.editReply({ content: `❌ No card found for "${texto}".` });
-                if (resultados.length > 1) return await interaction.editReply(construirListaBusquedaCartas(resultados, texto, 0, await obtenerMapaEmojisGuild(interaction.guild)));
+                if (resultados.length > 1) return await interaction.editReply(await construirListaBusquedaCartas(resultados, texto, 0, await obtenerMapaEmojisGuild(interaction.guild), rutaMasterPath));
                 const unica = resultados[0];
                 return await interaction.editReply(await construirEmbedDetalleCarta(unica.id, unica.nombre, rutaMasterPath, null, interaction.guild));
             }
@@ -12305,8 +12352,8 @@ async function manejarInteraccionPrincipal(interaction) {
         const [, paginaTxt, ...resto] = interaction.customId.split('::');
         const texto = resto.join('::');
         await interaction.deferUpdate();
-        const { cartas } = await obtenerTodasLasCartasCacheadas();
-        return await interaction.editReply(construirListaBusquedaCartas(buscarCartasPorTexto(cartas, texto), texto, parseInt(paginaTxt, 10) || 0, await obtenerMapaEmojisGuild(interaction.guild)));
+        const { cartas, rutaMasterPath } = await obtenerTodasLasCartasCacheadas();
+        return await interaction.editReply(await construirListaBusquedaCartas(buscarCartasPorTexto(cartas, texto), texto, parseInt(paginaTxt, 10) || 0, await obtenerMapaEmojisGuild(interaction.guild), rutaMasterPath));
     }
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('cardsearch_sel::')) {
         await interaction.deferUpdate();

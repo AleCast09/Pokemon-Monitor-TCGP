@@ -46,11 +46,48 @@ function entradasPorSobre(cartas, cardMap) {
     return extra;
 }
 
-// Imagen para elegir sobre: los logos uno al lado del otro, sobre fondo oscuro.
+// (Ale 2026-11-15: "deberian aparecer los sobres") Arte real del sobre (assets/expansions/Serie X), si existe.
+function arteSobre(expansionId, nombreExpansion, sobre) {
+    const serie = path.join(__dirname, 'assets', 'expansions', `Serie ${String(expansionId || '').charAt(0).toUpperCase()}`);
+    let archivos = [];
+    try { archivos = fs.readdirSync(serie); } catch (e) { return null; }
+    const ne = norm(nombreExpansion), ns = norm(sobre);
+    const f = archivos.find(a => { const n = norm(path.parse(a).name); return n.startsWith(ne) && n.includes(ns); });
+    return f ? path.join(serie, f) : null;
+}
+
+// Imagen para elegir sobre: logo de la expansion arriba y cada sobre (su arte) con su nombre debajo.
 async function imagenSobres(expansionId, titulo) {
     const sharp = require('sharp');
     const sobres = sobresDe(expansionId);
     if (!sobres) return null;
+    const artes = sobres.map(s => arteSobre(expansionId, titulo, s));
+    if (artes.every(Boolean)) {
+        const W = 1000, ALTO_ARTE = 300, H = 560, ancho = Math.floor((W - 80) / sobres.length);
+        const capas = [];
+        const dirExp = path.join(__dirname, 'assets', 'expansions', titulo);
+        const logoExp = ['.png', '.webp'].map(e => path.join(dirExp, titulo + e)).find(f => fs.existsSync(f));
+        if (logoExp) {
+            const lg = await sharp(logoExp).resize(320, 92, { fit: 'inside' }).png().toBuffer();
+            const m = await sharp(lg).metadata();
+            capas.push({ input: lg, left: Math.round((W - m.width) / 2), top: 18 });
+        }
+        for (let i = 0; i < sobres.length; i++) {
+            const x = 40 + i * ancho;
+            const arte = await sharp(artes[i]).resize(ancho - 40, ALTO_ARTE, { fit: 'inside' }).png().toBuffer();
+            const ma = await sharp(arte).metadata();
+            capas.push({ input: arte, left: x + Math.round((ancho - ma.width) / 2), top: 160 });
+            const f = logoDe(expansionId, sobres[i]);
+            if (f && fs.existsSync(f)) {
+                const b = await sharp(f).resize(ancho - 60, 60, { fit: 'inside' }).png().toBuffer();
+                const mb = await sharp(b).metadata();
+                capas.push({ input: b, left: x + Math.round((ancho - mb.width) / 2), top: 160 + ALTO_ARTE + 20 });
+            }
+        }
+        const svg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg"><rect width="${W}" height="${H}" rx="24" fill="#151a2e"/>
+<text x="${W / 2}" y="134" font-family="Segoe UI, Arial" font-weight="700" font-size="18" fill="#9aa3c7" letter-spacing="1.5" text-anchor="middle">CHOOSE A BOOSTER PACK</text></svg>`;
+        return sharp(Buffer.from(svg)).composite(capas).png().toBuffer();
+    }
     const W = 1000, H = 230, ALTO = 74;
     const ancho = Math.floor((W - 80) / sobres.length) - 20;
     const capas = [];
