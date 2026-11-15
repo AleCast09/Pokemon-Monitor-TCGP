@@ -285,7 +285,8 @@ const NOMBRES_DEFAULT_WEBHOOK = {
     'cmd_extract_xlm': 'Extract XML 📄',
     'cmd_run_instance': 'Trading 🔄',
     'shinedust': 'Shinedust 🍬',
-    'info_accounts': 'Info Accounts 📋'
+    'info_accounts': 'Info Accounts 📋',
+    'cmd_all_missions': 'All Missions 🎯'
 };
 function nombreDefaultWebhook(tipo) {
     return NOMBRES_DEFAULT_WEBHOOK[tipo] || `Bot ${tipo}`;
@@ -348,7 +349,8 @@ const AVATARES_DEFAULT_WEBHOOK = {
     'cmd_card_wishlist': path.join(__dirname, 'assets', 'element', 'Rango_Master_Ball_TCGP.png'),
     'cmd_card_gold': path.join(__dirname, 'assets', 'element', 'Rango_Ultra_Ball_TCGP.png'),
     'shinedust': path.join(__dirname, 'assets', 'element', 'Rango_Master_Ball_TCGP.png'),
-    'info_accounts': path.join(__dirname, 'assets', 'element', 'Rango_Poke_Ball_TCGP.png')
+    'info_accounts': path.join(__dirname, 'assets', 'element', 'Rango_Poke_Ball_TCGP.png'),
+    'cmd_all_missions': path.join(__dirname, 'assets', 'element', 'Kit_de_explorador_DBPR.png')
 };
 function avatarDefaultWebhook(tipo) {
     return AVATARES_DEFAULT_WEBHOOK[tipo] || 'https://i.imgur.com/gK1q9yS.png';
@@ -2531,13 +2533,56 @@ async function paginaMisiones(indiceExp, pagina) {
         .addOptions(tarjetaMisiones.misionesDePagina(exp.nombre, pagina).map(m => ({ label: m.nombre.slice(0, 100), value: String(m.indice) }))));
     return { content: '', embeds: [], files: [{ attachment: buffer, name: 'missions.png' }], attachments: [], components: [nav, detalle, menuExpansionesMisiones(indiceExp)] };
 }
+// (Ale 2026-11-15: "que tenga como las expansiones en All Cards") Grupo A / B / C con el collage de logos.
+function grupoDeExpansionMision(nombre) {
+    const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cartas = _todasCartasCacheBot?.cartas || [];
+    const una = cartas.find(c => !c.sobre && norm(c.expansion) === norm(nombre));
+    const g = una ? grupoDeRelease(categoriaBaseExpansionId(una.expansionId)) : null;
+    if (g) return g;
+    if (/dual fusion/i.test(nombre)) return 'C';
+    return /genetic apex|mythical island|space.time|triumphant|shining revelry|celestial|extradimensional|eevee grove|wisdom of sea|secluded springs|deluxe pack ex/i.test(nombre) ? 'A' : 'B';
+}
+function embedIntroMisiones() {
+    return new EmbedBuilder().setColor(0xFFD54F).setTitle('🎯 All Missions')
+        .setDescription([
+            'Every **themed collection** of Pokémon TCG Pocket, expansion by expansion:',
+            'which cards each mission asks for and **what it gives you** — emblems, icons, binders, hourglasses, shop tickets and more.',
+            '',
+            'Pick a group, then an expansion, and complete them with your accounts! 🏆'
+        ].join('\n'))
+        .setFooter({ text: 'Data: serebii.net' });
+}
+async function pantallaGruposMisiones(letra = null) {
+    await obtenerTodasLasCartasCacheadas().catch(() => null);
+    const lista = tarjetaMisiones.expansiones().map((e, i) => ({ ...e, i, grupo: grupoDeExpansionMision(e.nombre) }));
+    const letras = [...new Set(lista.map(e => e.grupo))].sort();
+    const actual = letras.includes(letra) ? letra : letras[0];
+    const otra = letras[(letras.indexOf(actual) + 1) % letras.length];
+    const delGrupo = lista.filter(e => e.grupo === actual);
+    const embed = new EmbedBuilder().setTitle(`📦 Group ${actual}`)
+        .setDescription(`🔎 **Select an expansion below** to see its missions, or check another group.`)
+        .setColor({ A: 0x3498DB, B: 0xE91E63, C: 0x9B59B6 }[actual] || 0x3498DB)
+        .setFooter({ text: `${delGrupo.length} expansions • ${delGrupo.reduce((n, e) => n + e.total, 0)} missions` });
+    const files = [];
+    const collage = await generarCollageGrupoSerie(actual, delGrupo.map(e => e.nombre)).catch(() => null);
+    if (collage) { embed.setImage(`attachment://misiones_${actual}.png`); files.push(new AttachmentBuilder(collage, { name: `misiones_${actual}.png` })); }
+    const filas = [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('missions_exp').setPlaceholder('🎯 Choose an expansion')
+        .addOptions(delGrupo.slice(0, 25).map(e => ({ label: e.nombre.slice(0, 100), description: `${e.total} missions`, value: String(e.i) }))))];
+    if (letras.length > 1) filas.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`missions_grp::${otra}`).setLabel(`Group ${otra} ➡️`).setStyle(ButtonStyle.Secondary)));
+    return { content: '', embeds: [embedIntroMisiones(), embed], components: filas, files, attachments: [] };
+}
+
 async function manejarAllMissions(interaction) {
     const id = interaction.customId;
     if (id === 'missions_ver') {
-        return await interaction.reply({ content: '🎯 Choose an expansion to see its missions:', components: [menuExpansionesMisiones()], ephemeral: true });
+        await interaction.deferReply({ ephemeral: true });
+        return await interaction.editReply(await pantallaGruposMisiones());
     }
     await interaction.deferUpdate().catch(() => {});
     try {
+        if (id.startsWith('missions_grp::')) return await interaction.editReply(await pantallaGruposMisiones(id.split('::')[1]));
         if (id === 'missions_exp') return await interaction.editReply(await paginaMisiones(Number(interaction.values[0]) || 0, 0));
         if (id.startsWith('missions_pag::')) {
             const [, i, p] = id.split('::');
@@ -2552,8 +2597,11 @@ async function manejarAllMissions(interaction) {
             // (Ale 2026-11-14) Traer a tu Main las cartas de esta mision que tengas en tus cuentas (⚡ Trade).
             if (comunidad.esComunidad(interaction.guildId) && fastTransfer.habilitado(interaction.guildId)
                 && tarjetaMisiones.cartasDeMision(Number(i) || 0, Number(interaction.values[0]) || 0)?.cartas.length) {
-                volver.addComponents(new ButtonBuilder().setCustomId(`fast_mis::${Number(i) || 0}::${Number(interaction.values[0]) || 0}`)
-                    .setLabel('⚡ Get these cards').setStyle(ButtonStyle.Success));
+                const boton = new ButtonBuilder().setCustomId(`fast_mis::${Number(i) || 0}::${Number(interaction.values[0]) || 0}`)
+                    .setLabel('Get these cards').setStyle(ButtonStyle.Success);
+                const fichaId = (await obtenerMapaEmojisGuild(interaction.guild).catch(() => ({})))?.Ficha_de_intercambio_TCGP;
+                if (fichaId) boton.setEmoji({ id: fichaId, name: 'Ficha_de_intercambio_TCGP' });
+                volver.addComponents(boton);
             }
             return await interaction.editReply({ content: '', embeds: [], files: buffer ? [{ attachment: buffer, name: 'mission.png' }] : [], attachments: [], components: [volver] });
         }
@@ -13172,7 +13220,9 @@ async function manejarInteraccionPrincipal(interaction) {
 
     // /missions (Ale 2026-11-15): lo mismo que "🎯 View Missions" del canal All Missions, privado y en cualquier canal.
     if (interaction.isChatInputCommand() && interaction.commandName === 'missions') {
-        return await interaction.reply({ content: '🎯 Choose an expansion to see its missions:', components: [menuExpansionesMisiones()], ephemeral: true });
+        // (Ale 2026-11-15) El embed de All Missions + el grupo con el collage de logos, como All Cards.
+        await interaction.deferReply({ ephemeral: true });
+        return await interaction.editReply(await pantallaGruposMisiones());
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'transfers') {
@@ -16974,6 +17024,18 @@ async function sincronizarCanales(interaction) {
                 // depender de este valor.
                 const filaExistente = await db.get(`SELECT canal_id, webhook_url FROM configs_canales WHERE discord_id = ? AND tipo = ?`, [interaction.guildId, tipo]);
                 if (filaExistente && filaExistente.canal_id === canal.id && filaExistente.webhook_url && filaExistente.webhook_url !== 'N/A' && (await webhookEstaVivo(filaExistente.webhook_url))) {
+                    // (Ale 2026-11-15, 🎯-all-missions vacio) El webhook sigue vivo pero el panel pudo haberse
+                    // borrado: si en el canal no hay ningun mensaje de ese webhook, se manda de nuevo.
+                    const claveP = COMANDOS_REALES_POR_TIPO[tipo];
+                    if (claveP) {
+                        const idWebhook = (String(filaExistente.webhook_url).match(/webhooks\/(\d+)\//) || [])[1];
+                        const recientes = idWebhook ? await canal.messages.fetch({ limit: 50 }).catch(() => null) : null;
+                        if (recientes && !recientes.some(m => m.webhookId === idWebhook)) {
+                            console.log(`🔁 Sync: panel missing in #${canal.name} - sending it again`);
+                            await enviarComandoAlCanal(claveP, interaction.user, { webhook_url: filaExistente.webhook_url, canal_id: canal.id }, false, interaction.guild)
+                                .catch(e => console.error('DEBUG: no se pudo reponer el panel:', e?.message || e));
+                        }
+                    }
                     return canal;
                 }
 
@@ -17383,6 +17445,15 @@ async function actualizarPanelHosts(hosts) {
         const dos = tarjetas && tarjetas.embeds.length > 1 ? { embeds: tarjetas.embeds.slice(1), files: tarjetas.files.slice(1), components: [] } : null;
         const guardado = await hostComunidad.panelGuardado();
         const leer = (id) => id ? canal.messages.fetch(id).catch(() => null) : Promise.resolve(null);
+        // (Ale 2026-11-15: "cuando quedo fuera no borra mis embed... crea mucho spam") Solo queda el panel del host
+        // con el turno: las tarjetas de hosts que dejaron otros bots (de cuando tenian el turno) se borran.
+        const ajenos = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+        for (const m of ajenos?.values() || []) {
+            if (!m.author?.bot || m.author.id === client.user.id || m.webhookId) continue;
+            const esPanelHosts = m.embeds?.[0]?.title === '🖥️ Community hosts'
+                || [...m.attachments.values()].some(a => /^(hosts|accounts|friends|farm-\d+)\.png$/.test(a.name));
+            if (esPanelHosts) await m.delete().catch(() => {});
+        }
         if (guardado?.canal === canal.id && guardado.bot === client.user.id) {
             const msg = await leer(guardado.msg);
             if (msg) {

@@ -221,7 +221,17 @@ async function salir() {
     // quedaba vivo, pm2 no lograba matarlo en Windows y cada restart dejaba una copia vieja del bot
     // contestando comandos con el codigo anterior. 6 s < kill-timeout de pm2 (8 s).
     setTimeout(() => process.exit(0), 6000).unref();
-    if (activo) {
+    // (Ale 2026-11-15: "no me quites el host, cada rato lo haces") Reinicio a proposito: quien reinicia deja el
+    // archivo .reiniciando (de menos de 2 min) y el turno NO se suelta; el candado dura 90 s y al volver
+    // (SCRIPT_TOMAR acepta al mismo dueño) este host lo retoma, sin que otro lo agarre en el medio.
+    let reinicio = false;
+    try {
+        const marca = require('path').join(__dirname, '.reiniciando');
+        reinicio = Date.now() - require('fs').statSync(marca).mtimeMs < 2 * 60 * 1000;
+        require('fs').unlinkSync(marca);
+    } catch (e) { /* no hay marca: apagado normal */ }
+    if (activo && reinicio) console.log(`🔁 Restarting — ${YO} keeps the community turn.`);
+    if (activo && !reinicio) {
         await alSoltar().catch(() => {});
         await redis('EVAL', SCRIPT_SOLTAR, '1', CLAVE, YO).catch(() => {});
     }

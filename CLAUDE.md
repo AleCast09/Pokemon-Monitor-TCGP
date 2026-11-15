@@ -20,6 +20,7 @@ Este archivo resume lo que hace falta saber para trabajar acá con cualquier cue
 
 Deben ser **4**: `bot` (bot.js), `trading` (s4t.js), `heartbeat` (heartbeat.js), `monitorlink` (monitor-link/monitor-link.js).
 En Windows `pm2 restart bot` a veces deja una copia vieja viva: reiniciar con `pm2 stop bot` → cerrar los `ProcessContainerFork` sobrantes → `pm2 start bot`, y contar que queden 4.
+**Sin perder el turno** (Ale lo pidió 2026-11-15): antes de `pm2 stop bot`, crear el archivo vacío `C:\Users\Ale TCG\Documents\Monitor Pokemon\.reiniciando` (el bot lo ve al apagarse, no suelta el turno y lo retoma al volver).
 
 ## Archivos principales
 
@@ -44,7 +45,7 @@ Carpeta en la PC de Ale: `C:\Users\Ale TCG\Desktop\ptcgp-capturedeluxe`. Habla d
 ## Comunidad Zenith Rise
 
 **Hosts** (nombre del host / bot de Discord):
-- Ale → `DESKTOP-SLADB1P` / Pokedex! (corre desde este repo, no se autoactualiza). Su Monitor Link es `C:\POKEMON\PTCGPB-ALE\Monitor Link.ahk`, vinculado a Discord **alecast_09** (Ale Cast).
+- Ale → `AleCast` (antes `DESKTOP-SLADB1P`, renombrada 2026-11-15) / Pokedex! (corre desde este repo, no se autoactualiza). Su Monitor Link es `C:\POKEMON\PTCGPB-ALE\Monitor Link.ahk`, vinculado a Discord **alecast_09** (Ale Cast).
 - wr98 → `ZenithBot` / TradeBot (Windows). wr98 también maneja **LatiasBot** (telemetría/PPM de Zenith) y **Dragonite** (registro de Mains, Upstash `users:<grupo>`).
 - Arcade → `ArcaWindows` / GengarBot (Windows desde 2026-11-07; la Mac `ArcaMac` se desinstaló: daba demasiados problemas).
 

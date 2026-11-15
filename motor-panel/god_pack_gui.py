@@ -425,6 +425,254 @@ def img_juego(nombre: str, alto: int = 16) -> str:
     return f'<img src="{_RUTAS_ICONO[nombre]}" height="{alto}" style="vertical-align: middle;">'
 
 
+# ── EN / ES (Ale 2026-11-15: "un botón de traductor en el God Pack UI") ────────────────────────────────
+# The panel is written in English; a timer swaps the visible texts to Spanish (and back) using these tables.
+# Code keeps setting English texts (status, badge...): the next tick translates them. Combo boxes are read by
+# currentData(), never by their text, so translating their items is safe. The choice is saved in lang.txt.
+LANG_FILE = ROOT / "tools" / "god_pack_gui" / "lang.txt"
+
+ES: dict = {
+    # window / header / stats
+    "God Pack Injection — Command Center": "God Pack Injection — Centro de control",
+    "⚡ GOD PACK INJECTION": "⚡ GOD PACK INJECTION",
+    "Headless Wonder-Pick Automation & Live Telemetry": "Automatización sin MuMu y telemetría en vivo",
+    "Monitor Pokemon: checking version…": "Monitor Pokemon: revisando versión…",
+    "Monitor Pokemon: version unknown (bot not running?)": "Monitor Pokemon: versión desconocida (¿el bot está apagado?)",
+    "ACCOUNTS LEFT | OPENED": "CUENTAS RESTANTES | ABIERTAS",
+    "ACCOUNTS PROCESSED": "CUENTAS PROCESADAS",
+    "PACKS OPENED": "SOBRES ABIERTOS",
+    "GOD PACK HITS": "GOD PACKS",
+    "ELAPSED & SPEED": "TIEMPO Y VELOCIDAD",
+    "click to view ▸": "clic para ver ▸",
+    "Click to see the God Packs of this session": "Clic para ver los God Packs de esta sesión",
+    "◈ LIVE ACTIVITY & PACK STREAM": "◈ ACTIVIDAD EN VIVO Y SOBRES",
+    "Show FR cleanup": "Ver limpieza de solicitudes",
+    "Raw RPC stream": "Log completo (RPC)",
+    "Show individual DeleteV1 / CancelSentRequestsV1 lines.": "Muestra cada línea de DeleteV1 / CancelSentRequestsV1.",
+    "Show 100% of raw console output including headers and debug lines.": "Muestra el 100% de la salida, con encabezados y líneas de depuración.",
+    "Clear": "Limpiar",
+    "Clear Feed": "Limpiar",
+    "📄 View Pool .md": "📄 Ver Pool .md",
+    "Open the historical god_pack_pool.md report.": "Abre el historial god_pack_pool.md.",
+    "Waiting for activity... Any God Pack / Rare Pack hits (with full card lists) and critical headless errors (ABORTED, proxy dead, login failed) will be pinned here live.":
+        "Esperando actividad... Los God Packs / sobres raros (con todas sus cartas) y los errores graves (ABORTED, proxy caído, login fallido) se fijan aquí en vivo.",
+    # tabs
+    "🎯 Farm && Pack": "🎯 Farmeo y sobres",
+    "👥 Collectors && Discord": "👥 Mains y Discord",
+    "⚡ Timing && Proxies": "⚡ Tiempos y proxies",
+    "📂 Paths && Safety": "📂 Carpetas y seguridad",
+    # tab Farm & Pack
+    "📦 Pack & Mode Selection": "📦 Sobre y modo",
+    "Run Mode": "Modo",
+    "God Pack Farming (Send FR + Wishlist Match)": "God Pack (manda solicitudes + wishlist)",
+    "Open Packs Only (No FR, No Wishlist)": "Solo abrir sobres (sin solicitudes ni wishlist)",
+    "Pack to Open": "Sobre a abrir",
+    "Packs to Open (tick one or more - the accounts take turns)": "Sobres a abrir (marca uno o más: las cuentas se turnan)",
+    "Packs per Account": "Sobres por cuenta",
+    "Packs to open per account per run.": "Sobres que abre cada cuenta en cada corrida.",
+    "Min Hourglasses (0=off)": "Mín. relojes (0 = no)",
+    "Skip accounts with fewer LARGE hourglasses than this (0 = off).": "Salta las cuentas con menos relojes que esto (0 = no).",
+    "🌟 Wishlist & Threshold (God Pack Mode)": "🌟 Wishlist y mínimo (modo God Pack)",
+    "Farming Mode": "Qué buscar",
+    "Only GP (99% of members)": "Solo God Pack (99% de los miembros)",
+    "GP & Double (2xSR normal packs too)": "God Pack y dobles (sobres normales con 2 SR)",
+    "GP & Single or Double (1xSR or 2xSR normal packs)": "God Pack, simples o dobles (1 o 2 SR)",
+    "Pack Power Minimum Threshold": "Calidad mínima del God Pack",
+    "1/5 ☆ Minimum (one 2-star) (and higher)": "1/5 ☆ Mínimo (una de 2 estrellas) o más",
+    "2/5 ☆☆ Good (two 2-star) (and higher)": "2/5 ☆☆ Bueno (dos de 2 estrellas) o más",
+    "3/5 ☆☆☆ Very Good (three 2-star) (and higher)": "3/5 ☆☆☆ Muy bueno (tres de 2 estrellas) o más",
+    "4/5 ☆☆☆☆ Excellent (four 2-star) (and higher)": "4/5 ☆☆☆☆ Excelente (cuatro de 2 estrellas) o más",
+    "5/5 ☆☆☆☆☆ Perfect (all 2-star) (and higher)": "5/5 ☆☆☆☆☆ Perfecto (todas de 2 estrellas)",
+    "⚙️ Quick Run Toggles": "⚙️ Opciones rápidas",
+    "Free packs only — never spend hourglasses": "Solo sobres gratis — nunca gastar relojes",
+    "Community Farm — also open lent accounts (Monitor Link)": "Granja de la comunidad — abrir también cuentas prestadas (Monitor Link)",
+    "Ticked: your accounts + the community's lent accounts (counters show all).\nUnticked: only your own accounts (counters show only yours).":
+        "Marcado: tus cuentas + las prestadas por la comunidad (los contadores muestran todo).\nDesmarcado: solo tus cuentas (los contadores muestran solo las tuyas).",
+    "Your accounts + the community's lent accounts (counters show all).": "Tus cuentas + las prestadas por la comunidad (los contadores muestran todo).",
+    "Only your own accounts (counters show only yours).": "Solo tus cuentas (los contadores muestran solo las tuyas).",
+    "Tick at least one pack.": "Marca al menos un sobre.",
+    "1 pack: every account opens it.": "1 sobre: todas las cuentas abren ese.",
+    "Spend all hourglasses — Open Packs Only, your accounts": "Gastar todos los relojes — Solo abrir sobres, tus cuentas",
+    "Each account opens its free packs + every paid pack its LARGE hourglasses can pay\n(12 per pack). Ignores 'Packs per Account'. Lent accounts never spend hourglasses.":
+        "Cada cuenta abre sus sobres gratis + todos los que pueda pagar con relojes\n(12 por sobre). No usa 'Sobres por cuenta'. Las cuentas prestadas nunca gastan relojes.",
+    "Claim gifts && finished missions — your accounts": "Cobrar regalos y misiones — tus cuentas",
+    "Before opening: receive everything in the gift box (often hourglasses).\nAfter opening: claim the missions that got finished.":
+        "Antes de abrir: recibe todo el buzón de regalos (suelen ser relojes).\nDespués de abrir: cobra las misiones terminadas y los días de los eventos.",
+    "  Hourglasses list": "  Lista de relojes",
+    "Hourglasses left on each of your accounts (updated while the bot runs).": "Relojes que le quedan a cada cuenta tuya (se actualiza mientras corre).",
+    "▶  START INJECTION": "▶  INICIAR",
+    "■  STOP": "■  DETENER",
+    "⚠ FORCE KILL": "⚠ FORZAR CIERRE",
+    "💾 Save Settings": "💾 Guardar ajustes",
+    "🧹 Cleanup Leftover FRs": "🧹 Limpiar solicitudes",
+    "Runs inject.py --cleanup-only: logs into accounts in fr_ledger.json and withdraws pending/accepted collector friend requests.":
+        "Entra a las cuentas de fr_ledger.json y retira las solicitudes de amistad pendientes o aceptadas de los Mains.",
+    "Idle. Ready to start.": "En espera. Listo para iniciar.",
+    "Running injection...": "Abriendo sobres...",
+    "Stopping — cleaning up friend requests...": "Deteniendo — limpiando solicitudes de amistad...",
+    "Community farm running.": "Granja de la comunidad en marcha.",
+    "Idle (Community farm stopped).": "En espera (granja de la comunidad detenida).",
+    "Own accounts done — Community farm still running.": "Tus cuentas listas — la granja de la comunidad sigue.",
+    "Cleared all manual collector codes.": "Se borraron todos los códigos de Mains.",
+    # tab Collectors & Discord
+    "👥 Collector Friend Codes & Live Worker": "👥 Códigos de Mains y Worker en vivo",
+    "Manual Collector IDs (16-digit friend codes or UUIDs):": "IDs de Mains a mano (código de amigo de 16 dígitos o UUID):",
+    "9370-0010-9308-6237 or UUID...": "9370-0010-9308-6237 o UUID...",
+    "+ Add": "+ Agregar",
+    "Remove": "Quitar",
+    "Clear All": "Borrar todo",
+    "Cloudflare Worker URL (Live IDs)": "URL del Worker de Cloudflare (IDs en vivo)",
+    "Cloudflare Worker URL for live online collector IDs.": "URL del Worker con los IDs de los Mains en línea.",
+    "Friend requests go to ALL listed collectors + live Worker URL. If no god pack is pulled, all links are automatically removed.":
+        "Las solicitudes van a TODOS los Mains de la lista + los del Worker. Si no sale God Pack, se borran solas.",
+    "🔔 Discord Webhooks & Heartbeat": "🔔 Webhooks de Discord y heartbeat",
+    "God Pack Hit Webhook URL": "Webhook para los God Packs",
+    "Mention ID on God Pack Hit": "ID a mencionar con un God Pack",
+    "Discord User/Role ID to ping on hit (empty = none)": "ID de usuario o rol de Discord a mencionar (vacío = nadie)",
+    "PPM Status Monitor Webhook URL": "Webhook del estado de PPM",
+    "https://discord.com/api/webhooks/... (empty = disabled)": "https://discord.com/api/webhooks/... (vacío = apagado)",
+    "PPM Heartbeat Interval": "Cada cuánto manda el PPM",
+    "Host Name (shown in Discord)": "Nombre del host (se ve en Discord)",
+    "❤️ Showcase Collection Likes": "❤️ Likes a colecciones",
+    "Send collection likes (first 5 accounts, once per 24h cycle)": "Dar likes a colecciones (primeras 5 cuentas, una vez cada 24 h)",
+    "Like Targets File": "Archivo de destinos de likes",
+    "📝 Open / Edit Like Targets File": "📝 Abrir / editar destinos de likes",
+    "Browse for Like Targets File": "Buscar el archivo de destinos de likes",
+    # tab Timing & Proxies
+    "⚡ Concurrency, Delays & Rate Limits": "⚡ Simultáneas, pausas y límites",
+    "Parallel Workers": "Cuentas a la vez",
+    "Max Accounts Limit (0=all)": "Máx. de cuentas (0 = todas)",
+    "Wait After FR Send": "Espera tras mandar solicitud",
+    "Poll Accept Timeout (0=off)": "Esperar que acepten (0 = no)",
+    "Account Cooldown": "Descanso de cada cuenta",
+    "Delay Between Packs": "Pausa entre sobres",
+    "Delay Between Accounts": "Pausa entre cuentas",
+    "Max FR/min (per collector)": "Máx. solicitudes/min (por Main)",
+    "Packs/min Cap (per collector)": "Tope de sobres/min (por Main)",
+    "Auto-Stop After N Fails": "Parar tras N fallos",
+    "Account Processing Order": "Orden de las cuentas",
+    "Filename (alphabetical, default)": "Por nombre (alfabético, normal)",
+    "Newest first (most recently drained)": "Más recientes primero",
+    "Oldest first (longest since last pack)": "Más antiguas primero (las que más esperaron)",
+    "🌐 Proxy Pool & Health Checks": "🌐 Proxies y chequeos",
+    "Proxy List File": "Archivo de proxies",
+    "Browse for Proxy List File": "Buscar el archivo de proxies",
+    "Proxy Scheme": "Tipo de proxy",
+    "Max Proxies Tried / Account": "Máx. proxies por cuenta",
+    "Health Checks Before Dead": "Chequeos antes de darlo por caído",
+    "Gap Between Checks": "Pausa entre chequeos",
+    "Revive Dead Proxy After": "Revivir proxy caído después de",
+    "Shuffle proxy pool order on startup": "Mezclar el orden de los proxies al iniciar",
+    "Verify pack power with server before sending FR": "Confirmar el poder de sobre con el servidor antes de mandar solicitudes",
+    # tab Paths & Safety
+    "📂 Account Credential Directories": "📂 Carpetas de cuentas",
+    "XML Directory (searched recursively)": "Carpeta de XML (incluye subcarpetas)",
+    "Browse for XML Directory (searched recursively)": "Buscar la carpeta de XML",
+    "JSON Directory (matched by basename or deviceAccount)": "Carpeta de JSON (por nombre o deviceAccount)",
+    "Browse for JSON Directory (matched by basename or deviceAccount)": "Buscar la carpeta de JSON",
+    "(optional) leave blank to use Fallback Accounts dir": "(opcional) vacío = usar la carpeta de respaldo",
+    "Fallback Accounts Directory (when XML/JSON blank)": "Carpeta de respaldo (si XML/JSON están vacías)",
+    "Browse for Fallback Accounts Directory (when XML/JSON blank)": "Buscar la carpeta de respaldo",
+    "When XML/JSON dirs are set, XML dir is scanned recursively and matched to JSONs automatically.":
+        "Con las carpetas XML/JSON puestas, se revisan todos los XML y se emparejan solos con sus JSON.",
+    "🛡️ Safety, Popups & Quarantine": "🛡️ Seguridad, avisos y cuarentena",
+    "Dismiss welcome-back / 60HG popups on old accounts (recommended)": "Cerrar avisos de bienvenida / 60 relojes en cuentas viejas (recomendado)",
+    "Quarantine locked/banned accounts (moves to QUARANTINE/ folder)": "Poner en cuarentena las cuentas bloqueadas/baneadas (carpeta QUARANTINE)",
+    "Dry run (test flow without opening packs)": "Prueba en seco (sin abrir sobres)",
+}
+
+# Texts that change while it runs: (English regex, Spanish template).
+ES_RE = [
+    (r"^Time left: (.*)$", r"Tiempo restante: \1"),
+    (r"^(\d+) packs: account 1 opens the 1st, account 2 the 2nd, \.\.\. and it starts over\.$",
+     r"\1 sobres: la cuenta 1 abre el 1º, la cuenta 2 el 2º, ... y vuelve a empezar."),
+    (r"^Idle \(last exit: (.*)\)\.$", r"En espera (última salida: \1)."),
+    (r"^Settings saved to (.*)\.$", r"Ajustes guardados en \1."),
+    (r"^Already in list: (.*)$", r"Ya está en la lista: \1"),
+    (r"^Added (.*)\. (\d+) collector\(s\) total\.$", r"Agregado \1. \2 Main(s) en total."),
+    (r"^Removed (\d+)\. (\d+) collector\(s\) remaining\.$", r"Quitados \1. Quedan \2 Main(s)."),
+    (r"^Speed set for (.*?): Parallel (.*?) · (.*?)s between accounts · (.*?)s between packs \(Timing tab\)\.$",
+     r"Velocidad para \1: \2 a la vez · \3 s entre cuentas · \4 s entre sobres (pestaña Tiempos)."),
+    (r"^● IDLE$", "● EN ESPERA"), (r"^● RUNNING$", "● CORRIENDO"), (r"^● STOPPING$", "● DETENIENDO"),
+    (r"^● COMMUNITY$", "● COMUNIDAD"),
+    (r"^(✅ Monitor Pokemon v\S+) — up to date$", r"\1 — al día"),
+    (r"^(⏳ Monitor Pokemon v\S+) — updating to (v\S+)…$", r"\1 — actualizando a \2…"),
+    (r"^⚠️ Monitor Pokemon updated to (v\S+) — close and reopen this window$",
+     r"⚠️ Monitor Pokemon se actualizó a \1 — cierra y abre esta ventana"),
+]
+# Pieces inside rich text (labels with game icons).
+ES_TROZOS = [("LIVE GOD PACK HITS &amp; CRITICAL ALERTS", "GOD PACKS EN VIVO &amp; ALERTAS CRÍTICAS"),
+             (" Alerts", " Alertas")]
+
+
+def _a_es(t: str) -> str:
+    if t in ES:
+        return ES[t]
+    for pat, rep in ES_RE:
+        nuevo, n = re.subn(pat, rep, t)
+        if n:
+            return nuevo
+    if "<img" in t:
+        for a, b in ES_TROZOS:
+            t = t.replace(a, b)
+    return t
+
+
+def leer_idioma() -> str:
+    try:
+        return "es" if LANG_FILE.read_text("utf-8").strip().lower() == "es" else "en"
+    except Exception:
+        return "en"
+
+
+def traducir_ventana(win, idioma: str) -> None:
+    """Each text keeps (english, spanish); in ES a new English text is translated, in EN the original comes back."""
+    widgets = [win] + win.findChildren(QWidget)
+    for top in QApplication.topLevelWidgets():
+        if top is not win and top.isVisible():
+            widgets += [top] + top.findChildren(QWidget)
+    for w in widgets:
+        memo = w.property("_tr")
+        memo = dict(memo) if isinstance(memo, dict) else {}
+        cambio = False
+        pares = []
+        for get, set_ in (("text", "setText"), ("title", "setTitle"), ("placeholderText", "setPlaceholderText"),
+                          ("toolTip", "setToolTip"), ("windowTitle", "setWindowTitle")):
+            if isinstance(w, QLineEdit) and get == "text":
+                continue   # what the user typed (paths, IDs, URLs)
+            f = getattr(w, get, None)
+            if callable(f) and callable(getattr(w, set_, None)):
+                pares.append((get, f, getattr(w, set_)))
+        if isinstance(w, QComboBox):
+            for i in range(w.count()):
+                pares.append((f"item{i}", (lambda i=i, w=w: w.itemText(i)), (lambda v, i=i, w=w: w.setItemText(i, v))))
+        if isinstance(w, QTabWidget):
+            for i in range(w.count()):
+                pares.append((f"tab{i}", (lambda i=i, w=w: w.tabText(i)), (lambda v, i=i, w=w: w.setTabText(i, v))))
+        for clave, get, set_ in pares:
+            try:
+                actual = get()
+            except Exception:
+                continue
+            if not isinstance(actual, str) or not actual:
+                continue
+            en, es = memo.get(clave, (None, None))
+            if idioma == "es":
+                if actual == es:
+                    continue
+                trad = _a_es(actual)
+                memo[clave] = (actual, trad)
+                cambio = True
+                if trad != actual:
+                    set_(trad)
+            elif es is not None and actual == es and en != es:
+                set_(en)
+                memo[clave] = (en, en)
+                cambio = True
+        if cambio:
+            w.setProperty("_tr", memo)
+
+
 class NoScrollSpinBox(QSpinBox):
     def wheelEvent(self, event):
         event.ignore()
@@ -465,6 +713,12 @@ class GodPackGui(QMainWindow):
 
         self._build_ui()
         self._load_settings()
+
+        self._lang = leer_idioma()
+        self._lang_timer = QTimer(self)
+        self._lang_timer.timeout.connect(self._apply_lang)
+        self._lang_timer.start(500)
+        self._apply_lang()
 
         # Auto-start if launched from AutoStart.ahk with --autostart
         if "--autostart" in sys.argv:
@@ -533,6 +787,16 @@ class GodPackGui(QMainWindow):
             f"border-radius: 11px; padding: 4px 12px; font-size: 11px; font-weight: 800;"
         )
         header_row.addWidget(self.badge_status, 0, Qt.AlignRight | Qt.AlignVCenter)
+        # EN / ES (Ale 2026-11-15): shows the language you switch TO.
+        self.btn_lang = QPushButton()
+        self.btn_lang.setCursor(Qt.PointingHandCursor)
+        self.btn_lang.setFixedWidth(46)
+        self.btn_lang.setStyleSheet(
+            f"QPushButton {{ background: {D['CARD']}; color: {D['TEXT']}; border: 1px solid {D['BORDER2']}; "
+            f"border-radius: 11px; padding: 4px 6px; font-size: 11px; font-weight: 800; }}"
+            f"QPushButton:hover {{ border-color: {D['ACCENT']}; }}")
+        self.btn_lang.clicked.connect(self._toggle_lang)
+        header_row.addWidget(self.btn_lang, 0, Qt.AlignRight | Qt.AlignVCenter)
         left_vbox.addLayout(header_row)
 
         # 2. Tab Widget (4 Categorized Tabs)
@@ -1249,6 +1513,20 @@ class GodPackGui(QMainWindow):
             txt, color = f"Monitor Pokemon v{ver}", D["TEXT3"]
         self.lbl_version.setText(txt)
         self.lbl_version.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: 700;")
+
+    def _apply_lang(self):
+        self.btn_lang.setText("EN" if self._lang == "es" else "ES")
+        self.btn_lang.setToolTip("Switch to English" if self._lang == "es" else "Cambiar a español")
+        traducir_ventana(self, self._lang)
+
+    def _toggle_lang(self):
+        self._lang = "en" if self._lang == "es" else "es"
+        try:
+            LANG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LANG_FILE.write_text(self._lang, "utf-8")
+        except Exception:
+            pass
+        self._apply_lang()
 
     def _set_badge(self, text: str, color: str):
         self.badge_status.setText(f"● {text}")

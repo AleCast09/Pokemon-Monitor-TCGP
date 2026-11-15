@@ -1389,6 +1389,8 @@ async function manejarInteraccion(interaction) {
         }
         return await manejarDust(interaction);
     }
+    // Get these cards: su lista de cartas es un menu (no un boton), va antes del corte de abajo (Ale 2026-11-15).
+    if (/^fast_mis(sel|go)?::/.test(id)) return await manejarMisionTrade(interaction);
     if (!interaction.isButton()) return false;
     if (id.startsWith('fast_stop::')) {
         const corrida = corridas.get(id.replace('fast_stop::', ''));
@@ -1458,7 +1460,6 @@ async function manejarInteraccion(interaction) {
         return true;
     }
     if (/^fast_(help|lend|use|usecta)::/.test(id)) return await manejarAyuda(interaction);
-    if (/^fast_mis(sel|go)?::/.test(id)) return await manejarMisionTrade(interaction);
     if (!id.startsWith('fast_go::')) return false;
     if (!habilitado(interaction.guildId)) {
         await interaction.reply({ content: '❌ Fast Share/Trade is not available here.', ephemeral: true });
@@ -1591,23 +1592,30 @@ async function manejarMisionTrade(interaction) {
     const miembro = deps.usuarioComunidad?.() || null;
     if (!miembro) return !!(await interaction[interaction.deferred ? 'followUp' : 'reply']({ content: '❌ Only in the community server, with Monitor Link linked.', ephemeral: true }).catch(() => {}));
     const rutaMaster = await deps.rutaMaster?.().catch(() => null);
+    // (Ale 2026-11-15: "usemos nuestros emojis") Emojis del servidor; si faltan, un punto.
+    const mapa = (await deps.obtenerMapaEmojisGuild?.(interaction.guild).catch(() => ({}))) || {};
+    const em = (n) => mapa[n] ? `<:${n}:${mapa[n]}>` : '';
+    const OK = em('nice') || '•', NO = em('bad') || '•', ELEGIDA = em('item_poke_ball') || OK;
+    const FICHA = em('Ficha_de_intercambio_TCGP');
 
     const pantalla = (s) => {
         const tiene = s.items.filter(x => x.cuenta && x.tradeable);
-        const lineas = s.items.map(x => !x.tradeable ? `🚫 **${x.nombre}** — can't be traded (rarity)`
-            : x.cuenta ? `${s.elegidas.includes(x.id) ? '☑️' : '✅'} **${x.nombre}** — \`${x.cuenta.replace(/\.xml$/i, '')}\` (x${x.copias})`
-            : `❌ **${x.nombre}** — none of your accounts has it`);
-        const embed = new EmbedBuilder().setColor(0x3DDC84).setTitle(`⚡ Get these cards — ${s.mision}`.slice(0, 256))
-            .setDescription([...lineas, '', s.elegidas.length ? `👉 **${s.elegidas.length}** selected — press **▶ Start**.` : '👉 Pick the cards your Main is **missing** in the list below.'].join('\n').slice(0, 4000))
-            .setFooter({ text: 'Trade to your Main · one login per account · ❌ cards: use 🙋 Ask for help from the card' });
+        const lineas = s.items.map(x => !x.tradeable ? `${NO} **${x.nombre}** — can't be traded (rarity)`
+            : x.cuenta ? `${s.elegidas.includes(x.id) ? ELEGIDA : OK} **${x.nombre}** — \`${x.cuenta.replace(/\.xml$/i, '')}\` (x${x.copias})`
+            : `${NO} **${x.nombre}** — none of your accounts has it`);
+        const embed = new EmbedBuilder().setColor(0x3DDC84).setTitle(`Get these cards — ${s.mision}`.slice(0, 256))
+            .setDescription([...(FICHA ? [`${FICHA} Trade the cards your Main is missing`, ''] : []), ...lineas, '',
+                s.elegidas.length ? `**${s.elegidas.length}** selected — press **Start**.` : 'Pick the cards your Main is **missing** in the list below.'].join('\n').slice(0, 4000))
+            .setFooter({ text: 'Trade to your Main · one login per account · missing cards: use "Ask for help" from the card' });
         const filas = [];
         if (tiene.length) {
             filas.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`fast_missel::${yo}`)
                 .setPlaceholder('Cards your Main is missing').setMinValues(1).setMaxValues(Math.min(25, tiene.length))
                 .addOptions(tiene.slice(0, 25).map(x => ({ label: x.nombre.slice(0, 100), description: `${x.cuenta.replace(/\.xml$/i, '')} · x${x.copias}`.slice(0, 100), value: x.id, default: s.elegidas.includes(x.id) })))));
         }
-        filas.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`fast_misgo::${yo}`).setLabel('▶ Start')
-            .setStyle(ButtonStyle.Success).setDisabled(!s.elegidas.length)));
+        const start = new ButtonBuilder().setCustomId(`fast_misgo::${yo}`).setLabel('Start').setStyle(ButtonStyle.Success).setDisabled(!s.elegidas.length);
+        if (mapa.Ficha_de_intercambio_TCGP) start.setEmoji({ id: mapa.Ficha_de_intercambio_TCGP, name: 'Ficha_de_intercambio_TCGP' });
+        filas.push(new ActionRowBuilder().addComponents(start));
         return { content: '', embeds: [embed], components: filas };
     };
 

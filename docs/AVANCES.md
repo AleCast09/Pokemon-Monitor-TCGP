@@ -24,6 +24,23 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-15 (mediodía) — cuenta 1 — Bot: PUBLICADO todo lo del 14-15/11
+- Eventos que cobra "Claim gifts & finished missions": Pikachu, 30 Days of Gifts (+barra 1/15/30), 1★★ (login `_07_01..14` + Collect cards `_07_15..`), Bonus Week, Welcome Back (`MI_AC_2607000_RETURN_01_NN`, "any": prueba cada una; barra a las 4 `MI_GR_RS_2607000_RETURN_01_01`). Barra de 1★★ (12/20/24) no encontrada. Scripts: `scripts/misiones/buscar_ids_evento.py` (--raros, --grupos) y `buscar_premios_barra.py` (GetGroupRewardStepStatesV1 solo devuelve IDs que existen).
+- God Pack UI: botón ES/EN (traduce todo, `tools/god_pack_gui/lang.txt`), cooldown mín. 0 h.
+- `/missions` y "View Missions": embed + grupos A/B/C con collage de logos, como All Cards. Webhook "All Missions 🎯" con avatar.
+- Get these cards: el menú nunca llegaba (fast-transfer cortaba todo lo que no era botón) -> arreglado; emojis del servidor.
+- Sync Channels repone paneles borrados (webhook vivo pero sin mensaje suyo en el canal).
+- 🔒-hosts: el host del turno borra los paneles de hosts viejos de otros bots. Host de Ale renombrado a **AleCast** (borrado DESKTOP-SLADB1P de zenith:hosts/hosts_ctrl/reroll).
+- Reiniciar sin perder el turno: archivo `.reiniciando` antes de `pm2 stop` (community-host.js).
+
+### 2026-11-15 (mañana) — cuenta 1 — Bot: más eventos + premios de la barra (SOLO en el bot de Ale, sin publicar)
+- IDs sacados con una cuenta prestada por Arcade (XML borrado después): 30 Days of Gifts `MI_AC_2602000_06_NN`, 1★★ Card Guaranteed `MI_AC_2610000_07_NN`, Bonus Week `MI_AC_2610000_12_NN`. En `LOGIN_EVENTS` de `motor-panel/inject.py`.
+- Premios de la barra de 30 Days (1/15/30 misiones, 120 relojes c/u): `MI_GR_RS_2602000_EVENT_04_01..03` (`MILESTONES`).
+- Pedir otra vez un premio de la barra ya cobrado responde OK con "120", pero NO los suma (Ale lo verificó en el juego: 552). GetGroupRewardStepStatesV1 dice "cleared" siempre. El motor igual solo lo pide cuando en esa corrida cruza el número (antes < N <= después), para no hacer llamadas de más.
+- Cuenta de prueba: **Ale_Cast_192_7** (`C:\POKEMON\PTCGPB-ALE\Accounts\Saved\1`). Cobró 30 días + Day 1 de 1★★ y Bonus Week + 3 premios; quedó con 552 relojes (sin repetidos). Está cargada en la instancia 1 de MuMu.
+- Buzón: recibir 23 juntos da INTERNAL; ahora de a 10 (y de a 1 si falla).
+- Falta: IDs de premios de barra de Pikachu/1★★/Bonus Week, Welcome Back; publicar cuando Ale diga.
+
 ### 2026-11-15 (madrugada) — cuenta 1 — Bot: misiones de evento, Spend all, varios (SIN PUBLICAR, probado en el bot de Ale)
 - **Cobro de días de login de eventos** (`motor-panel/inject.py`, `_claim_login_events`, marca `EVENT_LOGIN_CLAIM_V1`): el barrido vacío de Mission/CompleteV2 no cobra "Log in (Day N)". IDs Pika Pika! Pikachu = `MI_AC_2609000_06_01..` (2 dígitos). Probado: cobró Day 1 en Ale_Cast_192_7 (sobre EVP001 al buzón). Ahora cobra misiones antes que el buzón. OJO: el juego solo suma días si la cuenta entra por MuMu/celular, no por el motor.
 - Cómo sacar IDs nuevos: cobrar a mano en el juego una vez y correr `scripts/misiones/buscar_ids_evento.py` (Mission/IsCompletedV1 solo devuelve las ya cobradas). `engine/config/eventMission.json` del motor tiene IDs viejos (hasta 2604). Faltan: **30 Days of Gifts** (cuentas nuevas; Arcade va a prestar una) y **Welcome Back**.

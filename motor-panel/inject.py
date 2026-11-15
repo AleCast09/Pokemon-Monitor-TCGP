@@ -1758,12 +1758,25 @@ def _claim_rewards(sess, tag: str = "", gifts: bool = True) -> None:
                              present_box_list_v1_pb2.PresentBoxListV1.Types.Response)
             ids = [p.present_id for p in getattr(lst, "presents", [])]
             got = 0
-            for i in range(0, len(ids), 50):
+
+            def _recibir(lote):
                 req = present_box_receive_v1_pb2.PresentBoxReceiveV1.Types.Request()
-                req.present_ids.extend(ids[i:i + 50])
+                req.present_ids.extend(lote)
                 r = sess._call("/takasho.schema.lettuce_server.player_api.PresentBox/ReceiveV1", req,
                                present_box_receive_v1_pb2.PresentBoxReceiveV1.Types.Response)
-                got += sum(1 for x in getattr(r, "results", []) if getattr(x, "is_successe", False)) or len(ids[i:i + 50])
+                return sum(1 for x in getattr(r, "results", []) if getattr(x, "is_successe", False)) or len(lote)
+
+            # (Ale 2026-11-15) 23 at once -> INTERNAL; 10 at once works. A batch that fails goes one by one.
+            for i in range(0, len(ids), 10):
+                lote = ids[i:i + 10]
+                try:
+                    got += _recibir(lote)
+                except Exception:
+                    for one in lote:
+                        try:
+                            got += _recibir([one])
+                        except Exception:
+                            pass
             if ids:
                 log(f"[rewards] gifts received: {got} of {len(ids)}", tag=tag)
         except Exception as exc:
@@ -1773,9 +1786,15 @@ def _claim_rewards(sess, tag: str = "", gifts: bool = True) -> None:
 # EVENT_LOGIN_CLAIM_V1 (Ale 2026-11-15, report from Arcade): the empty Mission/CompleteV2 sweep doesn't pay the
 # event "Log in (Day N)" missions; the game needs their exact IDs. Found with scripts/misiones/buscar_ids_evento.py
 # (claim by hand once in the game, then read them back with Mission/IsCompletedV1).
-# (prefix, digits, last day). Add new events here.
+# (prefix, digits, first, last): missions that go in order (login days, "Collect N cards"...). Each range is
+# claimed from its first unclaimed one until the game says no. Add new events here.
 LOGIN_EVENTS = [
-    ("MI_AC_2609000_06_", 2, 60),   # Pika Pika! Pikachu Missions
+    ("MI_AC_2609000_06_", 2, 1, 60),    # Pika Pika! Pikachu Missions
+    ("MI_AC_2602000_06_", 2, 1, 30),    # 30 Days of Gifts (new accounts)          (account lent by Arcade, 2026-11-15)
+    ("MI_AC_2610000_07_", 2, 1, 14),    # 1★★ Card Guaranteed Booster Pack Missions: log in (Day N)
+    ("MI_AC_2610000_07_", 2, 15, 30),   # 1★★ Card Guaranteed: Collect 70 / 80 / 90... cards (_15 = 70)
+    ("MI_AC_2610000_12_", 2, 1, 14),    # Bonus Week Missions
+    ("MI_AC_2607000_RETURN_01_", 2, 1, 10, "any"),   # Welcome Back (not in order: open a pack, log in, Wonder Pick...)
 ]
 
 
@@ -1786,8 +1805,9 @@ def _claim_login_events(sess, tag: str = "") -> None:
             mission_complete_v2_pb2, mission_is_completed_v1_pb2)
     except Exception:
         return
-    for prefix, digits, last in LOGIN_EVENTS:
-        ids = [f"{prefix}{n:0{digits}d}" for n in range(1, last + 1)]
+    for prefix, digits, first, last, *modo in LOGIN_EVENTS:
+        en_orden = "any" not in modo   # "any": try every mission, a failed one doesn't stop the rest
+        ids = [f"{prefix}{n:0{digits}d}" for n in range(first, last + 1)]
         try:
             q = mission_is_completed_v1_pb2.MissionIsCompletedV1.Types.Request()
             q.mission_ids.extend(ids)
@@ -1812,9 +1832,47 @@ def _claim_login_events(sess, tag: str = "") -> None:
                            mission_complete_v2_pb2.MissionCompleteV2.Types.Response)
                 got.append(mid[len(prefix):])
             except Exception:
-                break   # next day not reached yet
+                if en_orden:
+                    break   # next day not reached yet
+                continue
         if got:
             log(f"[rewards] login event {prefix.rstrip('_')}: claimed day(s) {', '.join(got)}", tag=tag)
+            _claim_milestones(sess, prefix, len(done), len(done) + len(got), tag)
+
+
+# Event milestone rewards ("Missions completed: 1 / 15 / 30" -> 120 hourglasses each), by login-event prefix:
+# (milestone prefix, [missions needed for step 01, 02, ...]).
+# (2026-11-15) Asking again for a milestone already claimed answers OK with "120" but does NOT add them (checked:
+# 192 before + 3 x 120 = 552 in the game), and GetGroupRewardStepStatesV1 says "cleared" either way.
+# So a step is only asked when THIS run's login claims made the counter cross its number.
+MILESTONES = {
+    "MI_AC_2602000_06_": ("MI_GR_RS_2602000_EVENT_04_", [1, 15, 30]),   # 30 Days of Gifts
+    "MI_AC_2607000_RETURN_01_": ("MI_GR_RS_2607000_RETURN_01_", [4]),   # Welcome Back: 4 missions -> 120
+}
+
+
+def _claim_milestones(sess, event_prefix: str, before: int, after: int, tag: str = "") -> None:
+    if event_prefix not in MILESTONES:
+        return
+    try:
+        from engine.takasho.schema.lettuce_server.player_api import mission_complete_group_reward_step_v1_pb2 as gs
+    except Exception:
+        return
+    prefix, needed = MILESTONES[event_prefix]
+    got = []
+    for n, count in enumerate(needed, start=1):
+        if not (before < count <= after):
+            continue
+        req = gs.MissionCompleteGroupRewardStepV1.Types.Request()
+        req.mission_group_reward_step_ids.append(f"{prefix}{n:02d}")
+        try:
+            sess._call("/takasho.schema.lettuce_server.player_api.Mission/CompleteGroupRewardStepV1", req,
+                       gs.MissionCompleteGroupRewardStepV1.Types.Response)
+            got.append(str(count))
+        except Exception:
+            pass
+    if got:
+        log(f"[rewards] milestone {prefix.rstrip('_')}: claimed the {', '.join(got)}-missions reward(s)", tag=tag)
 
 
 def _note_hourglasses(account: dict, tag: str, before: int, after: int, packs: int) -> None:

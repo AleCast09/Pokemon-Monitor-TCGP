@@ -35,10 +35,13 @@ def periodos(desde, hasta):
             aa, mm = aa + 1, 1
 
 
+GRUPOS = 15
+
+
 def candidatos(desde, hasta):
     for p in periodos(desde, hasta):
         for sufijo in ("000", "010"):
-            for g in range(1, 16):
+            for g in range(1, GRUPOS + 1):
                 for n in range(1, 31):
                     yield f"MI_AC_{p}{sufijo}_{g:02d}_{n:02d}"
                     yield f"MI_AC_{p}{sufijo}_{g:02d}_{n:03d}"
@@ -51,10 +54,14 @@ def main():
     ap.add_argument("--desde", type=int, default=2604)
     ap.add_argument("--hasta", type=int, default=2611)
     ap.add_argument("--lote", type=int, default=300)
+    ap.add_argument("--grupos", type=int, default=15)
     ap.add_argument("--salida", default="")
+    ap.add_argument("--raros", action="store_true", help="formatos especiales (RETURN, otros prefijos)")
     ap.add_argument("--conocidos", action="store_true", help="probar con los IDs de eventMission.json (control)")
     a = ap.parse_args()
 
+    global GRUPOS
+    GRUPOS = a.grupos
     usuario, clave = leer_credenciales(a.xml)
     os.chdir(a.engine_dir)
     sys.path.insert(0, a.engine_dir)
@@ -74,7 +81,25 @@ def main():
         except Exception as e:
             return None, str(e)[:160]
 
-    if a.conocidos:
+    if a.raros:
+        todos = []
+        for per in [f"26{m:02d}" for m in range(1, 13)] + ["0002", "2510", "2512"]:
+            for suf in ("000", "010"):
+                for nom in ("RETURN", "RETURNER", "COMEBACK", "WELCOMEBACK", "WB", "RT", "BACK"):
+                    for g in range(1, 6):
+                        for n in range(1, 21):
+                            todos += [f"MI_AC_{per}{suf}_{nom}_{g:02d}_{n:02d}", f"MI_AC_{per}{suf}_{nom}_{g:02d}_{n:03d}"]
+                    for n in range(1, 21):
+                        todos += [f"MI_AC_{per}{suf}_{nom}_{n:02d}", f"MI_AC_{per}{suf}_{nom}_{n:03d}"]
+                for g in range(41, 100):
+                    for n in range(1, 11):
+                        todos += [f"MI_AC_{per}{suf}_{g:02d}_{n:02d}", f"MI_AC_{per}{suf}_{g:02d}_{n:03d}"]
+        for pre in ("MI_RT", "MI_RB", "MI_WB", "MI_RE", "MI_CB", "MI_DL", "MI_EV", "MI_SP", "MI_LG"):
+            for per in [f"26{m:02d}" for m in range(1, 13)] + ["0002"]:
+                for g in range(1, 6):
+                    for n in range(1, 21):
+                        todos += [f"{pre}_{per}000_{g:02d}_{n:02d}", f"{pre}_{per}000_{g:02d}_{n:03d}"]
+    elif a.conocidos:
         todos = [i for g in json.load(open(os.path.join(a.engine_dir, "engine", "config", "eventMission.json"), encoding="utf-8")) for i in g["ids"]]
     else:
         todos = list(candidatos(a.desde, a.hasta))
