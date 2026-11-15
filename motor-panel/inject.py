@@ -1041,7 +1041,9 @@ def _quarantine_account(
         try:
             # (Arcade 2026-11-06) One QUARANTINE folder for every account (the reason, with its
             # classification, is in <name>.reason.txt) instead of one subfolder per classification.
-            dest_root = source_dir / "QUARANTINE"
+            # QUARANTINE goes in the Accounts root (parent of "Saved"), not in Saved/1 (Arcade 2026-11-15)
+            dest_root = next((q.parent for q in (source_dir, *source_dir.parents)
+                              if q.name.lower() == "saved"), source_dir) / "QUARANTINE"
             dest_root.mkdir(parents=True, exist_ok=True)
             # Glob everything in the source dir starting with basename —
             # catches xml, json, .home_battle_menu.json, .state.json, etc.
@@ -1737,7 +1739,16 @@ _hg_lock = threading.Lock()
 
 
 def _claim_rewards(sess, tag: str = "", gifts: bool = True) -> None:
-    """Gifts (present box) + finished missions, like the game's 'Receive all'. Best effort: never fails the run."""
+    """Finished missions + event login days, then gifts (the rewards of both land in the present box), like the game's 'Receive all'. Best effort: never fails the run."""
+    try:
+        from engine.takasho.schema.lettuce_server.player_api import mission_complete_v2_pb2
+        sess._call("/takasho.schema.lettuce_server.player_api.Mission/CompleteV2",
+                   mission_complete_v2_pb2.MissionCompleteV2.Types.Request(),
+                   mission_complete_v2_pb2.MissionCompleteV2.Types.Response)
+        log("[rewards] finished missions claimed", tag=tag)
+    except Exception as exc:
+        log(f"[rewards] missions: nothing to claim ({str(exc)[:80]})", tag=tag)
+    _claim_login_events(sess, tag)
     if gifts:
         try:
             from engine.takasho.schema.lettuce_server.player_api import (
@@ -1757,14 +1768,53 @@ def _claim_rewards(sess, tag: str = "", gifts: bool = True) -> None:
                 log(f"[rewards] gifts received: {got} of {len(ids)}", tag=tag)
         except Exception as exc:
             log(f"[rewards] gifts: skipped ({str(exc)[:120]})", tag=tag)
+
+
+# EVENT_LOGIN_CLAIM_V1 (Ale 2026-11-15, report from Arcade): the empty Mission/CompleteV2 sweep doesn't pay the
+# event "Log in (Day N)" missions; the game needs their exact IDs. Found with scripts/misiones/buscar_ids_evento.py
+# (claim by hand once in the game, then read them back with Mission/IsCompletedV1).
+# (prefix, digits, last day). Add new events here.
+LOGIN_EVENTS = [
+    ("MI_AC_2609000_06_", 2, 60),   # Pika Pika! Pikachu Missions
+]
+
+
+def _claim_login_events(sess, tag: str = "") -> None:
+    """Next unclaimed login days of each event, one by one, until the game says no (day not reached yet)."""
     try:
-        from engine.takasho.schema.lettuce_server.player_api import mission_complete_v2_pb2
-        sess._call("/takasho.schema.lettuce_server.player_api.Mission/CompleteV2",
-                   mission_complete_v2_pb2.MissionCompleteV2.Types.Request(),
-                   mission_complete_v2_pb2.MissionCompleteV2.Types.Response)
-        log("[rewards] finished missions claimed", tag=tag)
-    except Exception as exc:
-        log(f"[rewards] missions: nothing to claim ({str(exc)[:80]})", tag=tag)
+        from engine.takasho.schema.lettuce_server.player_api import (
+            mission_complete_v2_pb2, mission_is_completed_v1_pb2)
+    except Exception:
+        return
+    for prefix, digits, last in LOGIN_EVENTS:
+        ids = [f"{prefix}{n:0{digits}d}" for n in range(1, last + 1)]
+        try:
+            q = mission_is_completed_v1_pb2.MissionIsCompletedV1.Types.Request()
+            q.mission_ids.extend(ids)
+            r = sess._call("/takasho.schema.lettuce_server.player_api.Mission/IsCompletedV1", q,
+                           mission_is_completed_v1_pb2.MissionIsCompletedV1.Types.Response)
+            done = {m.mission_id for m in r.completed_missions}
+        except Exception as exc:
+            log(f"[rewards] login event {prefix}: skipped ({str(exc)[:80]})", tag=tag)
+            continue
+        got = []
+        for mid in ids:
+            if mid in done:
+                continue
+            req = mission_complete_v2_pb2.MissionCompleteV2.Types.Request()
+            req.mission_ids.append(mid)
+            # field 2 (expected_reward_override_ids) like the real client: { mid: "" }
+            key = mid.encode("utf-8")
+            inner = bytes([0x0a, len(key)]) + key
+            req.MergeFromString(bytes([0x12, len(inner)]) + inner)
+            try:
+                sess._call("/takasho.schema.lettuce_server.player_api.Mission/CompleteV2", req,
+                           mission_complete_v2_pb2.MissionCompleteV2.Types.Response)
+                got.append(mid[len(prefix):])
+            except Exception:
+                break   # next day not reached yet
+        if got:
+            log(f"[rewards] login event {prefix.rstrip('_')}: claimed day(s) {', '.join(got)}", tag=tag)
 
 
 def _note_hourglasses(account: dict, tag: str, before: int, after: int, packs: int) -> None:
@@ -2963,6 +3013,14 @@ def inject_one(
         "pack_table_id": "",
         "collector_count": len(friend_codes),
     }
+
+    # SPEND_ALL_HG_COST_V1 (Arcade 2026-11-15): the engine's pack catalog lists newer packs (C1 / BN010 / BN011...)
+    # with hg_cost 0, so "Spend all hourglasses" never ran. In the game every pack costs 12 LARGE per pack when
+    # paid with hourglasses, except the SP (special) packs.
+    if spend_all_hg and run_mode == "packs-only" and hg_cost <= 0 and not dry_run \
+            and not str(pack_id or "").upper().startswith("SP"):
+        hg_cost = 12
+        log(f"[hourglass] spend all: catalog cost is 0 for {pack_id}, using 12 LARGE per paid pack", tag=tag)
 
     # 1. Login
     sess = login_account(account, max_retries=max(1, _proxy_rotations))

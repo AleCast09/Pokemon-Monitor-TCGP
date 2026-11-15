@@ -978,7 +978,7 @@ class GodPackGui(QMainWindow):
         grid_t.addWidget(self._wrap_field("Poll Accept Timeout (0=off)", self.w_accept_timeout), 1, 0)
 
         self.w_cooldown = NoScrollDoubleSpinBox()
-        self.w_cooldown.setRange(0.5, 168.0)
+        self.w_cooldown.setRange(0.0, 168.0)   # (Arcade 2026-11-15) 0 = reopen any time (spend all hourglasses)
         self.w_cooldown.setDecimals(1)
         self.w_cooldown.setValue(24.0)
         self.w_cooldown.setSuffix(" h")

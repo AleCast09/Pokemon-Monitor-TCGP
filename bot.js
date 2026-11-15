@@ -4265,9 +4265,12 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         cantidadTotal = sumaCopiasCarta(mapaCopias, cartaId);
     }
 
+    // (Ale 2026-11-14) Si se llego desde un sobre ("Wisdom of Sea and Sky · Lugia"), su logo y el sobre.
+    const expansionConSobre = String(volver?.expansion || '').includes(sobresExpansion.SEP) ? volver.expansion : null;
+    const sobreElegido = expansionConSobre ? expansionConSobre.split(sobresExpansion.SEP)[1] : null;
     const embed = new EmbedBuilder()
         .setTitle(`🔎 ${nombre}`)
-        .setDescription(`**Expansion:** ${expansionNombre}\n**Name:** ${nombre}\n**Element:** ${elemento}\n**Category:** ${categoria}\n**ID:** \`${cartaId}\``)
+        .setDescription(`**Expansion:** ${expansionNombre}${sobreElegido ? `\n**Pack:** ${sobreElegido}` : ''}\n**Name:** ${nombre}\n**Element:** ${elemento}\n**Category:** ${categoria}\n**ID:** \`${cartaId}\``)
         .setColor(0xE91E63);
 
     if (datosGold && datosGold.cuentas.length) {
@@ -4380,7 +4383,7 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
         // que ya usa s4t.js/el preview de /embed), en vez de una miniatura
         // aparte en la esquina.
         let buffer = fs.readFileSync(imagenPath);
-        const rutaLogo = buscarLogoExpansionBot(expansionNombre);
+        const rutaLogo = buscarLogoExpansionBot(expansionConSobre || expansionNombre);
         if (rutaLogo) buffer = await componerLogoSobreImagenBot(buffer, rutaLogo);
         if (cantidadTotal > 0) buffer = await superponerBadgeCantidadCartaBot(buffer, cantidadTotal);
         embed.setImage('attachment://carta.png');
@@ -10445,7 +10448,9 @@ function construirSlashCommands() {
         new SlashCommandBuilder().setName('farmtickets').setDescription('Farm Shop Tickets by liking Community Showcases'),
         new SlashCommandBuilder().setName('shinedust').setDescription('Shows the saved Shinedust total for every account, sorted highest first'),
         new SlashCommandBuilder().setName('link').setDescription('Link Monitor Link on your PC so the bot works with YOUR cards'),
-        new SlashCommandBuilder().setName('transfers').setDescription('Shows the card transfers you have made: accounts used, cards sent and where')
+        new SlashCommandBuilder().setName('transfers').setDescription('Shows the card transfers you have made: accounts used, cards sent and where'),
+        // (Ale 2026-11-15) All Missions sin depender del panel del canal.
+        new SlashCommandBuilder().setName('missions').setDescription('Themed collections of every expansion: missions, cards and rewards')
     ].map(cmd => cmd.toJSON());
 }
 
@@ -11046,8 +11051,18 @@ function normalizarNombreExpansionBot(texto) {
     return texto.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 let _carpetasExpansionCacheBot = null;
+let _logosSobreBot = null;
 function buscarLogoExpansionBot(nombreExpansion) {
     if (!nombreExpansion) return null;
+    // (Ale 2026-11-14) "Wisdom of Sea and Sky · Lugia": logo de la expansion con el sobre abajo, como en el juego
+    // (assets/packs/combined, scripts/sobres/logos_combinados.py). Sin ese logo, el de la expansion sola.
+    if (String(nombreExpansion).includes(sobresExpansion.SEP)) {
+        if (!_logosSobreBot) { try { _logosSobreBot = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'packs', 'combined.json'), 'utf8')); } catch (e) { _logosSobreBot = {}; } }
+        const archivo = _logosSobreBot[nombreExpansion];
+        const ruta = archivo ? path.join(__dirname, 'assets', 'packs', 'combined', archivo) : null;
+        if (ruta && fs.existsSync(ruta)) return ruta;
+        nombreExpansion = String(nombreExpansion).split(sobresExpansion.SEP)[0];
+    }
     const objetivo = normalizarNombreExpansionBot(nombreExpansion);
     try {
         if (!_carpetasExpansionCacheBot) {
@@ -11848,7 +11863,16 @@ async function manejarInteraccionPrincipal(interaction) {
     if (interaction.isButton() && comunidad.esComunidad(interaction.guildId) && interaction.customId.startsWith('reroll_')) {
         return await manejarBotonReroll(interaction);
     }
-    if (comunidad.esComunidad(interaction.guildId) && !hostComunidad.esActivo()) return;
+    // (Ale 2026-11-14) Los componentes de un mensaje de este bot solo le llegan a este bot: si el turno paso a
+    // otro host en medio de "Get these cards", la lista quedaba muerta ("didn't respond in time").
+    const sigueMiLista = (interaction.isButton() || interaction.isStringSelectMenu()) && /^fast_mis(sel|go)::/.test(interaction.customId);
+    if (sigueMiLista) {
+        // Confirmar ya (Discord da 3 s); el resto edita el mismo mensaje.
+        const t0 = Date.now();
+        await interaction.deferUpdate().catch(e => console.error('DEBUG: Get these cards deferUpdate:', e?.message || e));
+        console.log(`DEBUG: Get these cards ${interaction.customId.split('::')[0]} confirmado en ${Date.now() - t0} ms (edad ${Date.now() - interaction.createdTimestamp} ms)`);
+    }
+    if (comunidad.esComunidad(interaction.guildId) && !hostComunidad.esActivo() && !sigueMiLista) return;
     // Amigo de un miembro (lo anoto el miembro en su Monitor Link): sin Monitor Link propio, el bot le
     // muestra y le deja usar las cuentas del miembro -- todo lo que sigue corre como si fuera el dueño.
     if (comunidad.esComunidad(interaction.guildId) && interaction.user) {
@@ -13144,6 +13168,11 @@ async function manejarInteraccionPrincipal(interaction) {
             console.error('DEBUG: error en la confirmacion de Farm Shop Tickets:', error?.message || error);
             return await interaction.editReply({ content: '❌ Something went wrong. Try again.', embeds: [], components: [] });
         }
+    }
+
+    // /missions (Ale 2026-11-15): lo mismo que "🎯 View Missions" del canal All Missions, privado y en cualquier canal.
+    if (interaction.isChatInputCommand() && interaction.commandName === 'missions') {
+        return await interaction.reply({ content: '🎯 Choose an expansion to see its missions:', components: [menuExpansionesMisiones()], ephemeral: true });
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'transfers') {

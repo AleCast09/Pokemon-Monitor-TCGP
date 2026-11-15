@@ -24,6 +24,17 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-15 (madrugada) — cuenta 1 — Bot: misiones de evento, Spend all, varios (SIN PUBLICAR, probado en el bot de Ale)
+- **Cobro de días de login de eventos** (`motor-panel/inject.py`, `_claim_login_events`, marca `EVENT_LOGIN_CLAIM_V1`): el barrido vacío de Mission/CompleteV2 no cobra "Log in (Day N)". IDs Pika Pika! Pikachu = `MI_AC_2609000_06_01..` (2 dígitos). Probado: cobró Day 1 en Ale_Cast_192_7 (sobre EVP001 al buzón). Ahora cobra misiones antes que el buzón. OJO: el juego solo suma días si la cuenta entra por MuMu/celular, no por el motor.
+- Cómo sacar IDs nuevos: cobrar a mano en el juego una vez y correr `scripts/misiones/buscar_ids_evento.py` (Mission/IsCompletedV1 solo devuelve las ya cobradas). `engine/config/eventMission.json` del motor tiene IDs viejos (hasta 2604). Faltan: **30 Days of Gifts** (cuentas nuevas; Arcade va a prestar una) y **Welcome Back**.
+- Arreglos de Arcade copiados al inject oficial: Spend all usa 12 LARGE por sobre si el catálogo dice 0 (menos SP) (`SPEND_ALL_HG_COST_V1`, marca obligatoria en `reroll-comunidad.js`); QUARANTINE va a `Accounts\QUARANTINE`. Spend all todavía sin probar en vivo.
+- "Get these cards": el menú quedaba sin responder si el turno pasaba a otro host -> deferUpdate inmediato y se atiende en standby (`bot.js`, `fast-transfer.js`).
+- All Cards con sobre elegido: logo expansión + sobre (`assets/packs/combined`, `scripts/sobres/logos_combinados.py`) en la carta y listas; línea "Pack:".
+- También sin publicar de antes: Mew/SECRET en All Missions, Get these cards, elegir sobre, oro de reimpresiones, íconos del God Pack UI, rueda del mouse.
+- `/missions` (nuevo comando, comunidad): abre el selector de All Missions privado en cualquier canal (el canal 🎯-all-missions apareció vacío con el turno en Arcade).
+- Cooldown del God Pack UI: mínimo 0 h (Arcade). Arcade confirmó que Spend all funciona.
+- **Falta**: IDs de 30 Days of Gifts/Welcome Back (cuenta nueva de Arcade); ver por qué el panel de 🎯-all-missions quedó vacío.
+
 ### 2026-11-14 (3) — diegoikrew123 — All Missions: un logo por premio
 - Premios con el mismo nombre (ej. "Mythical Island Mew" tapete/fundas/carpeta) tenían el mismo logo: ahora cada premio trae su campo `logo` (archivo por ruta de Serebii) en themed_collections.json; se quitó rewards_icons.json.
 - Títulos y nombres de premios en 2 líneas (tipo arriba: PLAYMAT, BINDER...); misiones sin cartas dicen "NO CARDS NEEDED".

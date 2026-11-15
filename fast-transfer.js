@@ -1589,7 +1589,7 @@ async function manejarMisionTrade(interaction) {
     const id = interaction.customId;
     const yo = interaction.user.id;
     const miembro = deps.usuarioComunidad?.() || null;
-    if (!miembro) return !!(await interaction.reply({ content: '❌ Only in the community server, with Monitor Link linked.', ephemeral: true }).catch(() => {}));
+    if (!miembro) return !!(await interaction[interaction.deferred ? 'followUp' : 'reply']({ content: '❌ Only in the community server, with Monitor Link linked.', ephemeral: true }).catch(() => {}));
     const rutaMaster = await deps.rutaMaster?.().catch(() => null);
 
     const pantalla = (s) => {
@@ -1634,26 +1634,32 @@ async function manejarMisionTrade(interaction) {
         return true;
     }
 
+    // fast_missel / fast_misgo ya vienen confirmados (deferUpdate en bot.js): se edita el mismo mensaje.
+    const responder = (p) => (interaction.deferred || interaction.replied ? interaction.editReply(p) : interaction.update(p))
+        .catch(e => console.error('DEBUG: Get these cards no pudo responder:', e?.message || e));
     const s = seleccionMision.get(yo);
-    if (!s || id.split('::')[1] !== yo) return !!(await interaction.reply({ content: '⌛ This list expired — open the mission again.', ephemeral: true }).catch(() => {}));
+    if (!s || id.split('::')[1] !== yo) {
+        if (interaction.deferred) return !!(await interaction.followUp({ content: '⌛ This list expired — open the mission again.', ephemeral: true }).catch(() => {}));
+        return !!(await interaction.reply({ content: '⌛ This list expired — open the mission again.', ephemeral: true }).catch(() => {}));
+    }
 
     if (id.startsWith('fast_missel::')) {
         s.elegidas = interaction.values;
-        await interaction.update(pantalla(s)).catch(() => {});
+        await responder(pantalla(s));
         return true;
     }
 
     if (id.startsWith('fast_misgo::')) {
         const destino = await deps.mainDe?.(yo).catch(() => null);
-        if (!destino?.id) return !!(await interaction.reply({ ephemeral: true, content: "❌ You haven't registered your Main yet. Open **Monitor Link**, press **My Main ID**, type your Main's friend ID and save — then try again." }).catch(() => {}));
+        if (!destino?.id) return !!(await interaction[interaction.deferred ? 'followUp' : 'reply']({ ephemeral: true, content: "❌ You haven't registered your Main yet. Open **Monitor Link**, press **My Main ID**, type your Main's friend ID and save — then try again." }).catch(() => {}));
         const fila = await deps.obtenerCanalComando(interaction.guildId, 'cmd_run_instance').catch(() => null);
         const canal = fila?.canal_id ? await interaction.client.channels.fetch(fila.canal_id).catch(() => null) : null;
-        if (!canal) return !!(await interaction.reply({ content: '❌ The Trading channel is not synced.', ephemeral: true }).catch(() => {}));
+        if (!canal) return !!(await interaction[interaction.deferred ? 'followUp' : 'reply']({ content: '❌ The Trading channel is not synced.', ephemeral: true }).catch(() => {}));
         // Agrupar por cuenta: cada cuenta = un Bulk trade (una sola entrada al juego).
         const grupos = new Map();
         for (const x of s.items) if (s.elegidas.includes(x.id) && x.cuenta) (grupos.get(x.cuenta) || grupos.set(x.cuenta, []).get(x.cuenta)).push(x.id);
         seleccionMision.delete(yo);
-        await interaction.update({ content: `▶ Started — follow it in <#${canal.id}> (${grupos.size} account(s), ${s.elegidas.length} card(s) to **${destino.label || 'your Main'}**).`, embeds: [], components: [] }).catch(() => {});
+        await responder({ content: `▶ Started — follow it in <#${canal.id}> (${grupos.size} account(s), ${s.elegidas.length} card(s) to **${destino.label || 'your Main'}**).`, embeds: [], components: [] }).catch(() => {});
         await canal.send({ content: `<@${yo}> ⚡ **${s.mision}** — trading ${s.elegidas.length} card(s) to ${destino.label || 'your Main'}`, allowedMentions: { users: [yo] } }).catch(() => {});
         let n = 0;
         for (const [fileName, cartas] of grupos) {

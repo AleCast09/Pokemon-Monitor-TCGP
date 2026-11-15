@@ -75,7 +75,7 @@ async function rolStaff(guild) {
 // Comandos que existen en el server de comunidad (los de los canales prioritarios + /setup para
 // el staff). Todo lo demas (/embed, /webhook, /run, /feedback, ...) no se registra ahi.
 // Sin /extract (2026-10-24, pedido de Ale: Extract XML esta de mas en la comunidad).
-const COMANDOS_COMUNIDAD = new Set(['setup', 'card', 'wishlist', 'goldcards', 'shinedust', 'farmtickets', 'transfers', 'link']);
+const COMANDOS_COMUNIDAD = new Set(['setup', 'card', 'wishlist', 'goldcards', 'shinedust', 'farmtickets', 'transfers', 'link', 'missions']);
 // Canales de las categorias de siempre que en la comunidad no van (Sync los borra si ya existen).
 const CANALES_FUERA_DE_COMUNIDAD = new Set(['cmd_extract_xlm']);
 // Comandos que SOLO existen en comunidad (en el server propio y en los del release no aparecen).
