@@ -17448,8 +17448,11 @@ async function actualizarPanelHosts(hosts) {
         // (Ale 2026-11-15: "cuando quedo fuera no borra mis embed... crea mucho spam") Solo queda el panel del host
         // con el turno: las tarjetas de hosts que dejaron otros bots (de cuando tenian el turno) se borran.
         const ajenos = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+        // Tambien los duplicados del propio bot (un reinicio que no pudo leer el panel guardado publico otro).
+        const actuales = guardado?.bot === client.user.id ? [guardado.msg, guardado.msg2].filter(Boolean) : [];
         for (const m of ajenos?.values() || []) {
-            if (!m.author?.bot || m.author.id === client.user.id || m.webhookId) continue;
+            if (!m.author?.bot || m.webhookId) continue;
+            if (m.author.id === client.user.id && (!actuales.length || actuales.includes(m.id))) continue;
             const esPanelHosts = m.embeds?.[0]?.title === '🖥️ Community hosts'
                 || [...m.attachments.values()].some(a => /^(hosts|accounts|friends|farm-\d+)\.png$/.test(a.name));
             if (esPanelHosts) await m.delete().catch(() => {});
