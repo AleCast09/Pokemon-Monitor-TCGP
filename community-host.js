@@ -341,9 +341,31 @@ async function primeraVez(clave, segundos) {
     try { return (await redis('SET', clave, '1', 'NX', 'EX', String(segundos))) === 'OK'; } catch (e) { return false; }
 }
 
+// Bloqueados del GP farm (Ale 2026-11-16, "Who's rerolling"): hash zenith:bloqueados, campo = ID del juego
+// (16 digitos) -> JSON { by, name, ts }. Los 3 hosts dejan de mandarle solicitudes (inject.py lee
+// reports/blocked_ids.json que escribe reroll-comunidad.js).
+const CLAVE_BLOQUEADOS = 'zenith:bloqueados';
+async function bloqueados() {
+    if (!configurado()) return new Map();
+    const plano = await redis('HGETALL', CLAVE_BLOQUEADOS).catch(() => []) || [];
+    const m = new Map();
+    for (let i = 0; i < plano.length; i += 2) { let d = {}; try { d = JSON.parse(plano[i + 1]); } catch (e) { /* viejo */ } m.set(String(plano[i]), d); }
+    return m;
+}
+async function bloquear(id, datos = {}) {
+    if (!configurado()) return false;
+    await redis('HSET', CLAVE_BLOQUEADOS, String(id), JSON.stringify({ ...datos, ts: Date.now() }));
+    return true;
+}
+async function desbloquear(id) {
+    if (!configurado()) return false;
+    await redis('HDEL', CLAVE_BLOQUEADOS, String(id));
+    return true;
+}
+
 const anotarMiembros = (registro) => configurado()
     ? redis('SET', 'zenith:miembros', JSON.stringify(registro)).catch(() => {}) : Promise.resolve();
 
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
     tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, baneadasConFecha, guardarWebhookGp, webhookGp, ultimaRelease, estaAlDia,
-    subirGodPacks, godPacksComunidad, versionesGodPacks, hostsConocidos };
+    subirGodPacks, godPacksComunidad, versionesGodPacks, hostsConocidos, bloqueados, bloquear, desbloquear };

@@ -78,7 +78,9 @@ fastTransfer.init({
     // ⚡ Gold trade: cuentas con muchas copias de una carta (mismo umbral que Gold Cards). Las copias
     // son las DISPONIBLES: las del JSON menos las que el bot ya transfirio (registro de /transfers), asi
     // una cuenta que ya mando copias no ofrece de mas aunque su JSON todavia no se haya enterado.
-    cuentasGoldDe: async (userId, cartaId) => {
+    // minimo: copias minimas por cuenta (por defecto el umbral de Gold Cards; 1 = todas, para juntar de varias).
+    umbralGoldDe: (userId) => obtenerUmbralGold(userId),
+    cuentasGoldDe: async (userId, cartaId, minimo = null) => {
         const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(userId);
         if (!mapaCopias) return [];
         const transferidas = comunidad.usuarioActual() ? {} : await transferenciasPorCuenta(cartaId);
@@ -87,7 +89,7 @@ fastTransfer.init({
                 const ya = transferidas[normalizarCuentaTransferencia(r.fileName)] || 0;
                 return { fileName: r.fileName, enJson: r.cantidad, transferidas: ya, cantidad: Math.max(0, r.cantidad - ya) };
             })
-            .filter(r => r.cantidad >= umbral)
+            .filter(r => r.cantidad >= (minimo ?? umbral))
             .sort((a, b) => b.cantidad - a.cantidad);
     },
     cuentasMiembro: (discordId) => monitorLink.cuentasDe(discordId),
@@ -256,6 +258,7 @@ const ETIQUETAS_TIPO_WEBHOOK = {
 // Channels no los toca), ni pisa el nombre que un usuario ya se puso a mano
 // con /webhook (aplicarPersonalizacionWebhookSiExiste siempre manda encima).
 const NOMBRES_DEFAULT_WEBHOOK = {
+    'farm96': 'Farm 96P',
     's4t': 'S4T TCGP',
     's4t-categoria': 'S4T Category TCGP',
     'wishlist': 'Wishlist TCGP',
@@ -1583,7 +1586,7 @@ function construirEmbedGoldCardsInicio(user) {
             `__Select an option below:__\n\n` +
             `1-› TCGP Expansions Panel.\n` +
             `2-› Category of each card by rarity.\n` +
-            `3-› Only cards with 10+ copies in at least one account show up — those are the ones that turn Gold in-game.\n`
+            `3-› Only cards with your **Threshold** of copies show up — in one account, or adding up several accounts.\n`
         )
         .setColor(0xF0A93A)
         .setFooter({ text: "Monitor Pokémon" })
@@ -3744,8 +3747,22 @@ function construirMapaCopiasPorCarta(rutaJsonCuentas) {
     return mapa;
 }
 
+// Cuentas para el Threshold de Gold Cards (= cuantas copias quiere el miembro). Ale 2026-11-16: primero las
+// cuentas que tienen todas; si ninguna llega, se juntan varias (las que mas tienen primero) hasta sumar el
+// Threshold. Si ni sumando todas alcanza, la carta no aparece.
 function cuentasGoldParaCarta(mapaCopias, cartaId, umbral = UMBRAL_GOLD_CARD_DEFAULT) {
-    return (mapaCopias?.[cartaId] || []).filter(r => r.cantidad >= umbral);
+    const todas = (mapaCopias?.[cartaId] || []).filter(r => r.cantidad > 0);
+    const completas = todas.filter(r => r.cantidad >= umbral);
+    if (completas.length) return completas;
+    const orden = [...todas].sort((a, b) => b.cantidad - a.cantidad);
+    const juntas = [];
+    let suma = 0;
+    for (const r of orden) {
+        if (suma >= umbral) break;
+        juntas.push(r);
+        suma += r.cantidad;
+    }
+    return suma >= umbral ? juntas : [];
 }
 
 // Suma total de copias de una carta entre TODAS las cuentas -- no se usa para
@@ -4328,7 +4345,8 @@ async function construirEmbedDetalleCarta(cartaId, nombre, rutaMasterPath, volve
 
     if (datosGold && datosGold.cuentas.length) {
         const listaGold = datosGold.cuentas.map(r => `\`${r.fileName}\` — x${r.cantidad}`).join('\n');
-        embed.addFields({ name: `🏆 Gold Accounts (${datosGold.umbral}+ copies)`, value: listaGold.slice(0, 1024) });
+        const sumadas = datosGold.cuentas.every(r => r.cantidad < datosGold.umbral);
+        embed.addFields({ name: sumadas ? `🏆 Gold Accounts (${datosGold.umbral} copies, adding up ${datosGold.cuentas.length} accounts)` : `🏆 Gold Accounts (${datosGold.umbral}+ copies)`, value: listaGold.slice(0, 1024) });
     }
     if (sinBordeGold) {
         embed.addFields({ name: '✨ Coming soon in HD and golden borders!', value: "We don't have this card's gold border yet — showing the regular artwork for now." });
@@ -7967,6 +7985,7 @@ if (comunidad.hayComunidad()) {
         // Anti doble reroll: aviso en el canal de hosts (lo ve staff), una vez por main aunque lo vean varios hosts.
         hostsFarm: (modo) => hostComunidad.hostsReroll(modo), primeraVez: hostComunidad.primeraVez,
         marcarBaneada: hostComunidad.marcarBaneada, baneadas: hostComunidad.baneadas, webhookGp: hostComunidad.webhookGp,
+        bloqueados: hostComunidad.bloqueados,
         subirGodPacks: hostComunidad.subirGodPacks, godPacksComunidad: hostComunidad.godPacksComunidad,
         versionesGodPacks: hostComunidad.versionesGodPacks, guardarWebhookGp: hostComunidad.guardarWebhookGp,
         nombreMain: (codigo) => comunidad.nombreDeFriendId(codigo),
@@ -10504,7 +10523,9 @@ function construirSlashCommands() {
         new SlashCommandBuilder().setName('link').setDescription('Link Monitor Link on your PC so the bot works with YOUR cards'),
         new SlashCommandBuilder().setName('transfers').setDescription('Shows the card transfers you have made: accounts used, cards sent and where'),
         // (Ale 2026-11-15) All Missions sin depender del panel del canal.
-        new SlashCommandBuilder().setName('missions').setDescription('Themed collections of every expansion: missions, cards and rewards')
+        new SlashCommandBuilder().setName('missions').setDescription('Themed collections of every expansion: missions, cards and rewards'),
+        // (Ale 2026-11-16) Sube tus cuentas prestadas a 96 sobres (solo comunidad).
+        new SlashCommandBuilder().setName('farm').setDescription('Farm 96P: open packs on your lent accounts until they reach 96 (uses their hourglasses)')
     ].map(cmd => cmd.toJSON());
 }
 
@@ -11949,6 +11970,9 @@ async function manejarInteraccionPrincipal(interaction) {
     if (interaction.isStringSelectMenu?.() && comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_menu' || interaction.customId.startsWith('host_pick::'))) {
         return await manejarMenuHosts(interaction);
     }
+    if (comunidad.esComunidad(interaction.guildId) && String(interaction.customId || '').startsWith('host_rr_')) {
+        return await manejarRerollers(interaction);
+    }
     if (comunidad.esComunidad(interaction.guildId) && (interaction.customId === 'host_gpwebhook' || interaction.customId === 'host_gpwebhook_modal')) {
         return await manejarWebhookGp(interaction);
     }
@@ -12507,7 +12531,7 @@ async function manejarInteraccionPrincipal(interaction) {
         try {
             const { cartas, rutaMasterPath, mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);
             const carta = (cartas || []).find(c => c.id === cartaId);
-            if (!carta) return await interaction.editReply({ content: `❌ Card not found (or no account has ${umbral}+ copies of it yet).` });
+            if (!carta) return await interaction.editReply({ content: `❌ Card not found (or your accounts don't have ${umbral} copies of it yet, even adding them up).` });
             const datosGold = { cuentas: cuentasGoldParaCarta(mapaCopias, cartaId, umbral), umbral };
             const payload = await construirEmbedDetalleCarta(carta.id, carta.nombre, rutaMasterPath, null, interaction.guild, datosGold);
             await interaction.editReply(payload);
@@ -13263,6 +13287,12 @@ async function manejarInteraccionPrincipal(interaction) {
             console.error('DEBUG: error en la confirmacion de Farm Shop Tickets:', error?.message || error);
             return await interaction.editReply({ content: '❌ Something went wrong. Try again.', embeds: [], components: [] });
         }
+    }
+
+    // /fill96 (Ale 2026-11-16): cada miembro sube sus cuentas prestadas a 96 sobres (reroll-comunidad.js).
+    if ((interaction.isChatInputCommand() && interaction.commandName === 'farm')
+        || (interaction.isButton() && interaction.customId.startsWith('fill96_'))) {
+        return await manejarFill96(interaction);
     }
 
     // /missions (Ale 2026-11-15): lo mismo que "🎯 View Missions" del canal All Missions, privado y en cualquier canal.
@@ -17149,6 +17179,22 @@ async function sincronizarCanales(interaction) {
                             ].join('\n')
                         };
                     }
+                    if (tipo === 'farm96') {
+                        EMBEDS_BIENVENIDA_POR_TIPO.farm96 = {
+                            title: '📦 Farm 96P',
+                            description: [
+                                'Get your **lent accounts** to **96 packs** so they can farm God Packs.',
+                                '',
+                                '**1.** Type **/farm** here. You see your accounts below 96 (only you).',
+                                '**2.** Press **Start**: the bot checks the **hourglasses** of each account. Nothing is opened.',
+                                '**3.** Press **Start Farm 96P**: it opens packs until each account reaches 96 (or press **Stop**).',
+                                '**4.** When it ends, the result is posted here.',
+                                '',
+                                '⌛ It only spends the hourglasses needed to reach 96 (or all of them, if you choose).',
+                                '🔒 Uses the host proxies. No friend requests, nothing goes to your Main. Keep your PC and Monitor Link on.'
+                            ].join('\n')
+                        };
+                    }
                     const embedBienvenida = EMBEDS_BIENVENIDA_POR_TIPO[tipo];
                     if (embedBienvenida) {
                         const payloadBienvenida = { embeds: [{ color: 0xF0A93A, ...embedBienvenida }] };
@@ -17659,7 +17705,321 @@ function menuHosts() {
         .setPlaceholder('⚙️ Select an option')
         .addOptions(
             { label: 'Take the turn', value: 'take', emoji: '👑', description: 'Make your own host the main one' },
-            { label: 'Hand over the turn', value: 'give', emoji: '🔁', description: 'Pass the turn to another host that is on' }))];
+            { label: 'Hand over the turn', value: 'give', emoji: '🔁', description: 'Pass the turn to another host that is on' },
+            { label: "Who's rerolling", value: 'rerollers', emoji: '👀', description: 'Online players, linked or unknown, and block' }))];
+}
+
+// 👀 Who's rerolling (Ale 2026-11-16): los IDs online de Zenith (worker onlineids, el mismo al que el GP farm
+// manda solicitudes) cruzados con Dragonite (registro de wr98) y Monitor Link (My Main ID + amigos con ID del
+// juego). Los que nadie registro salen como Unknown; staff puede bloquearlos (zenith:bloqueados): ninguna
+// cuenta del GP farm les manda solicitud.
+const fmtFc = (id) => String(id).replace(/(\d{4})(?=\d)/g, '$1-');
+async function idsOnline(lista) {
+    try {
+        const r = await fetch(`https://onlineids.zenithrise.workers.dev/${lista}`, { signal: AbortSignal.timeout(8000) });
+        return [...new Set((await r.text()).match(/\d{16}/g) || [])];
+    } catch (e) { return null; }
+}
+async function registroIdsJuego() {
+    const reg = new Map();   // id del juego -> { nombre, discordId, origen }
+    try {
+        for (const g of await comunidad.gruposConConteo()) {
+            for (const m of await comunidad.miembrosDeGrupo(g.grupo)) {
+                reg.set(m.main_id, { nombre: m.name, discordId: m.discordId, origen: g.grupo.replace(/_/g, ' ') });
+                if (m.sec_id && !reg.has(m.sec_id)) reg.set(m.sec_id, { nombre: `${m.name} (2nd)`, discordId: m.discordId, origen: g.grupo.replace(/_/g, ' ') });
+            }
+        }
+    } catch (e) { /* sin registro de wr98 */ }
+    for (const f of await db.all(`SELECT discord_id, main_id FROM link_main`).catch(() => [])) {
+        const id = String(f.main_id || '').replace(/\D/g, '');
+        if (id && !reg.has(id)) reg.set(id, { nombre: null, discordId: String(f.discord_id), origen: 'Monitor Link' });
+    }
+    for (const f of await db.all(`SELECT amigo_id, juego_id FROM link_amigos WHERE juego_id IS NOT NULL AND juego_id <> ''`).catch(() => [])) {
+        const id = String(f.juego_id || '').replace(/\D/g, '');
+        if (id && !reg.has(id)) reg.set(id, { nombre: null, discordId: String(f.amigo_id), origen: 'Monitor Link friend' });
+    }
+    return reg;
+}
+// Lineas en campos de hasta 1024 caracteres.
+function camposDeLineas(titulo, lineas) {
+    const campos = [];
+    let actual = '';
+    for (const l of lineas) {
+        if ((actual + l + '\n').length > 1000) { campos.push(actual); actual = ''; }
+        actual += l + '\n';
+    }
+    if (actual) campos.push(actual);
+    return campos.slice(0, 4).map((v, i) => ({ name: i ? `${titulo} (cont.)` : titulo, value: v }));
+}
+async function panelRerollers(guild = null) {
+    const [elite, vip, reg, bloq, gps] = await Promise.all([idsOnline('elite'), idsOnline('vip-elite'), registroIdsJuego(),
+        hostComunidad.bloqueados().catch(() => new Map()), comunidad.duenosGodPack().catch(() => new Map())]);
+    const linea = (id) => {
+        const r = reg.get(id);
+        if (!r) return `\`${fmtFc(id)}\` · ❓ unknown${bloq.has(id) ? ' · 🚫' : ''}`;
+        return `\`${fmtFc(id)}\` · ${r.nombre ? `**${r.nombre}** ` : ''}<@${r.discordId}> · ${r.origen}${bloq.has(id) ? ' · 🚫' : ''}`;
+    };
+    const conocidos = (elite || []).filter(id => reg.has(id)), externos = (elite || []).filter(id => !reg.has(id));
+    // vip-elite = cuentas que sacaron un God Pack (posts de gp_votes del bot de wr98, con su dueño).
+    const vipConocidos = (vip || []).filter(id => reg.has(id) || gps.has(id)), vipExternos = (vip || []).filter(id => !reg.has(id) && !gps.has(id));
+    const ESTADO_GP = { alive: '✅ alive', dead: '💀 dead', none: '⏳ not checked' };
+    const lineaVip = (id) => {
+        const g = gps.get(id);
+        if (!g) return linea(id);
+        return `\`${fmtFc(id)}\` · 🌟 GP of ${g.dueno ? `<@${g.dueno}>` : '?'} · ${ESTADO_GP[g.status] || g.status}${g.ts ? ` · <t:${Math.floor(g.ts / 1000)}:R>` : ''}`;
+    };
+    const embed = new EmbedBuilder().setColor(externos.length ? 0xE24B4A : 0x1D9E75).setTitle("👀 Who's rerolling now")
+        .setDescription(elite === null ? '⚠️ Could not read the online list right now. Try 🔄 Refresh.' : [
+            'Online in Zenith Rise (the list our GP farm sends friend requests to), checked against **Dragonite** and **Monitor Link**.',
+            '',
+            `🟢 Online **${elite.length}** · ✅ Linked **${conocidos.length}** · ❓ Unknown **${externos.length}** · 🚫 Blocked **${bloq.size}**`
+        ].join('\n'))
+        .setFooter({ text: '🚫 Blocked players get no friend requests from any host (GP farm).' }).setTimestamp();
+    if (elite) {
+        embed.addFields(...camposDeLineas(`✅ Linked members (${conocidos.length})`, conocidos.length ? conocidos.map(linea) : ['Nobody']));
+        embed.addFields(...camposDeLineas(`❓ Unknown — not in Dragonite or Monitor Link (${externos.length})`, externos.length ? externos.map(linea) : ['Nobody — everyone online is linked 🎉']));
+    }
+    if (vip && vip.length) {
+        embed.addFields(...camposDeLineas(`🌟 God Pack accounts — VIP list (${vip.length} online${vipExternos.length ? ` · ${vipExternos.length} with no owner` : ''})`, [...vipConocidos, ...vipExternos].map(lineaVip)));
+    }
+    // Para bloquear: primero los desconocidos (las cuentas de God Pack no: el GP farm no les manda solicitudes).
+    const candidatos = [...externos, ...vipExternos, ...conocidos].filter((id, i, a) => a.indexOf(id) === i && !bloq.has(id)).slice(0, 25);
+    const filas = [];
+    if (candidatos.length) filas.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('host_rr_block')
+        .setPlaceholder('🚫 Block a player…').addOptions(candidatos.map(id => {
+            const r = reg.get(id);
+            return { label: fmtFc(id), value: id, emoji: r ? '✅' : '❓', description: (r ? `${r.nombre || 'Monitor Link'} · ${r.origen}` : 'Unknown — not linked').slice(0, 100) };
+        }))));
+    const bloqueadosLista = [...bloq.entries()].slice(0, 25);
+    if (bloqueadosLista.length) filas.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('host_rr_unblock')
+        .setPlaceholder('✅ Unblock a player…').addOptions(bloqueadosLista.map(([id, d]) => ({
+            label: fmtFc(id), value: id, emoji: '🚫',
+            description: `${d.name || 'unknown'} · by ${d.byName || 'staff'}${d.ts ? ` · ${new Date(d.ts).toISOString().slice(0, 10)}` : ''}`.slice(0, 100) })))));
+    filas.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('host_rr_buscar').setLabel('Look up a member').setEmoji('🔎').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('host_rr_refresh').setLabel('Refresh').setEmoji('🔄').setStyle(ButtonStyle.Secondary)));
+    const embeds = [embed];
+    if (guild) {
+        const d = await embedDragonite(guild, new Set([...(elite || [])])).catch(e => { console.error('Dragonite panel:', e?.message || e); return null; });
+        if (d) embeds.push(d);
+    }
+    // Discord: 6000 caracteres entre todos los embeds de un mensaje. Se recortan campos del final si hace falta.
+    const largo = () => embeds.reduce((s, e) => s + JSON.stringify(e.toJSON()).length, 0);
+    for (const e of [...embeds].reverse()) while (largo() > 5600 && (e.data.fields || []).length > 1) e.spliceFields(-1, 1);
+    return { embeds, components: filas, allowedMentions: { parse: [] } };
+}
+
+// ======================================================================================================
+// /fill96 (Ale 2026-11-16): revision de relojes -> "Reach 96 only" o "Spend all hourglasses" -> Open Packs Only.
+// Todo privado (ephemeral). El mensaje se va actualizando mientras dura el token (15 min); el resultado final
+// llega tambien por DM.
+const fill96Mod = () => require('./reroll-comunidad.js');
+const FILL96_ERRORES = {
+    no_accounts: 'You have no lent accounts below 96 packs.',
+    nothing_to_open: 'None of your checked accounts has free packs or hourglasses right now.',
+    monitor_link_offline: 'Your **Monitor Link** did not answer. Open it on your PC and try again.',
+    tunnel_down: 'The host engine is not ready right now. Try again in a few minutes.'
+};
+const nf = (n) => Number(n || 0).toLocaleString('en-US');
+const barraFill = (a, b) => { const p = b ? Math.min(1, a / b) : 0; return '▰'.repeat(Math.round(p * 12)) + '▱'.repeat(12 - Math.round(p * 12)); };
+// Nuestros emojis (Ale 2026-11-16): reloj de sobres, nice/bad, dorso de carta, Poke Ball. Sin el emoji, el de respaldo.
+async function emojisFill96(guild) {
+    const m = guild ? await obtenerMapaEmojisGuild(guild).catch(() => ({})) : {};
+    const E = (n, r) => (m && m[n]) ? `<:${n}:${m[n]}>` : r;
+    E.boton = (n, r) => (m && m[n]) ? { id: m[n], name: n } : r;
+    return E;
+}
+async function pantallaFill96(userId, guild = null) {
+    const r = await fill96Mod().fill96Resumen(userId);
+    const E = await emojisFill96(guild);
+    const HG = E('Reloj_de_arena_de_sobres_TCGP', '⌛'), PK = E('Card_Back_TCGP', '📦'), OK = E('nice', '✅'), NO = E('bad', '❌');
+    const t = r.trabajo;
+    const filaParar = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('fill96_stop').setLabel('Stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('fill96_refresh').setLabel('Refresh').setEmoji('🔄').setStyle(ButtonStyle.Secondary));
+    if (t && t.fase === 'cola') {
+        return { embeds: [new EmbedBuilder().setColor(0x888780).setTitle('⏳ In line')
+            .setDescription(`You're **#${t.posicion}** in line. It starts by itself when a spot frees up, and you'll get a DM when it's done.`)], components: [filaParar] };
+    }
+    if (t && (t.fase === 'scan' || t.fase === 'open')) {
+        const min = Math.max(0, Math.round((Date.now() - (t.inicio || Date.now())) / 60000));
+        const e = t.fase === 'scan'
+            ? new EmbedBuilder().setColor(0x378ADD).setTitle('🔎 Checking your accounts…')
+                .setDescription(`Accounts checked: **${t.hechas} / ${t.total}**\n${barraFill(t.hechas, t.total)}\n${HG} Reading hourglasses and free packs of each one. Nothing is opened.\nStarted ${min} min ago`)
+            : new EmbedBuilder().setColor(0xEF9F27).setTitle(t.tipo === 'open96' ? '📦 Reaching 96…' : '📦 Spending all hourglasses…')
+                .setDescription(`Accounts: **${t.hechas} / ${t.total}** · ${PK} Packs opened: **${nf(t.sobres)}**\n${barraFill(t.hechas, t.total)}\n${OK} Reached 96: **${t.llegaron}** · Started ${min} min ago`);
+        return { embeds: [e], components: [filaParar] };
+    }
+    if (!r.cuentas.length) {
+        return { embeds: [new EmbedBuilder().setColor(0x1D9E75).setTitle('✅ Nothing to fill')
+            .setDescription('All your **lent** accounts are God Pack eligible already (96+ packs).\nOnly accounts you lend with Monitor Link count here.')], components: [] };
+    }
+    // (Ale 2026-11-16) Sin revision de relojes (hacia cola y errores): directo a Start Farm 96P.
+    const faltanTotal = r.cuentas.reduce((s, c) => s + c.faltan, 0);
+    return { embeds: [new EmbedBuilder().setColor(0x378ADD).setTitle('📦 Farm 96P')
+        .setDescription([
+            `Lent accounts below 96: **${nf(r.cuentas.length)}**`,
+            `${PK} Packs missing in total: **${nf(faltanTotal)}**`,
+            '',
+            `**Start Farm 96P** opens packs on each account (free packs + ${HG} hourglasses) until it reaches 96, or until you press **Stop**.`,
+            'When it ends, the result is posted in this channel.',
+            '',
+            `${HG} Want to know how many hourglasses each account has? Message <@341916882485510144>.`,
+            '-# Uses the host proxies. No friend requests, nothing goes to your Main. Your PC and Monitor Link must be on.'
+        ].join('\n'))],
+        components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('fill96_open96').setLabel('Start Farm 96P').setEmoji(E.boton('Card_Back_TCGP', '▶️')).setStyle(ButtonStyle.Success))] };
+}
+function embedFinFill96(pub, E = (n, r) => r) {
+    const PK = E('Card_Back_TCGP', '📦'), OK = E('nice', '✅'), BALL = E('item_poke_ball', '✅');
+    const min = Math.max(1, Math.round(((pub.fin || Date.now()) - (pub.inicio || Date.now())) / 60000));
+    if (pub.error && FILL96_ERRORES[pub.error] && !pub.hechas) return new EmbedBuilder().setColor(0xE24B4A).setTitle('⚠️ Farm 96P').setDescription(FILL96_ERRORES[pub.error]);
+    if (pub.tipo === 'scan') return new EmbedBuilder().setColor(0x1D9E75).setTitle('🔎 Check done')
+        .setDescription(`Checked **${pub.hechas}** account(s) in ${min} min.${pub.error && FILL96_ERRORES[pub.error] ? `\n⚠️ ${FILL96_ERRORES[pub.error]}` : ''}\nUse **/farm** and press **Start Farm 96P**.`);
+    return new EmbedBuilder().setColor(0x1D9E75).setTitle(pub.fase === 'stopped' ? '⏹️ Farm 96P stopped' : '✅ Farm 96P done')
+        .setDescription([
+            `${PK} Packs opened: **${nf(pub.sobres)}** on ${pub.hechas} account(s) · ${min} min`,
+            `${OK} Reached 96 now: **${pub.llegaron}** — they go to the GP farm by themselves`,
+            pub.error && FILL96_ERRORES[pub.error] ? `⚠️ ${FILL96_ERRORES[pub.error]}` : '',
+            `${BALL} Your Monitor Link updates each account file with the new packs.`
+        ].filter(Boolean).join('\n'));
+}
+async function canalFarm96(guildId) {
+    const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'farm96'`, [guildId]).catch(() => null);
+    return fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
+}
+async function manejarFill96(interaction) {
+    const userId = interaction.user.id;
+    // /farm se usa en su canal (si ya existe).
+    if (interaction.isChatInputCommand()) {
+        const canal = await canalFarm96(interaction.guildId);
+        if (canal && canal.id !== interaction.channelId) {
+            return await interaction.reply({ ephemeral: true, content: `📦 Use **/farm** in ${canal}.` }).catch(() => {});
+        }
+    }
+    const id = interaction.isButton() ? interaction.customId : '';
+    if (!id) await interaction.deferReply({ ephemeral: true }).catch(() => {});
+    else await interaction.deferUpdate().catch(() => {});
+    if (id === 'fill96_stop') {
+        fill96Mod().fill96Parar(userId);
+        return await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x888780).setTitle('⏹️ Stopping…')
+            .setDescription('It stops after the accounts in progress. You get a DM with what was done.')], components: [] }).catch(() => {});
+    }
+    // Botones viejos (revision / gastar todo) ya no arrancan nada: solo Start Farm 96P.
+    if (id === 'fill96_open96') {
+        const tipo = 'open96';
+        fill96Mod().fill96Iniciar(userId, tipo, async (pub, final) => {
+            if (!final) return await interaction.editReply(await pantallaFill96(userId, interaction.guild)).catch(() => {});
+            const fin = embedFinFill96(pub, await emojisFill96(interaction.guild));
+            // Revision: sigue privada (pasa a "Start Farm 96P"). Farm terminado: el resultado se publica en el canal.
+            if (pub.tipo === 'scan') {
+                const ok = await interaction.editReply(pub.error ? { embeds: [fin], components: [] } : await pantallaFill96(userId, interaction.guild)).catch(() => null);
+                if (!ok) await interaction.user.send({ embeds: [fin] }).catch(() => {});
+                return;
+            }
+            await interaction.editReply({ embeds: [fin], components: [] }).catch(() => {});
+            const canal = await canalFarm96(interaction.guildId) || interaction.channel;
+            const publicado = await canal?.send({ content: `<@${userId}>`, embeds: [fin], allowedMentions: { users: [userId] } }).catch(() => null);
+            if (!publicado) await interaction.user.send({ embeds: [fin] }).catch(() => {});
+        });
+    }
+    return await interaction.editReply(await pantallaFill96(userId, interaction.guild)).catch(e => console.error('fill96:', e?.message || e));
+}
+
+// 📋 Dragonite (registro de wr98, Ale 2026-11-16): cuantos registrados por grupo y cuantos online, y los que
+// pueden ser externos: registrados que ya no estan en el servidor o que no tienen el rol de su grupo.
+const ROL_DE_GRUPO = { Trainer: ['Trainer'], Gym_Leader: ['Gym Leader', 'Gym_Leader'], Elite_Four: ['Elite Four', 'Elite_Four'], Rivals: ['Rivals', 'Rival Duo', 'Rival_Duo'] };
+async function registradosDragonite() {
+    const todos = [];
+    for (const g of await comunidad.gruposConConteo()) for (const m of await comunidad.miembrosDeGrupo(g.grupo)) todos.push({ ...m, grupo: g.grupo });
+    return todos;
+}
+async function miembrosDelServidor(guild, ids) {
+    const mapa = new Map();
+    for (let i = 0; i < ids.length; i += 100) {
+        const lote = await guild.members.fetch({ user: ids.slice(i, i + 100) }).catch(() => null);
+        if (lote) for (const [id, m] of lote) mapa.set(id, m);
+    }
+    return mapa;
+}
+const tieneRolDeGrupo = (miembro, grupo) => !!miembro?.roles?.cache?.some(r => (ROL_DE_GRUPO[grupo] || [grupo]).includes(r.name));
+async function embedDragonite(guild, online) {
+    const todos = await registradosDragonite();
+    if (!todos.length) return null;
+    const servidor = await miembrosDelServidor(guild, [...new Set(todos.map(m => m.discordId))]);
+    const enLinea = (m) => online.has(m.main_id) || (m.sec_id && online.has(m.sec_id));
+    const grupos = [...new Set(todos.map(m => m.grupo))];
+    const resumen = grupos.map(g => {
+        const l = todos.filter(m => m.grupo === g);
+        return `**${g.replace(/_/g, ' ')}** · ${l.length} registered · 🟢 ${l.filter(enLinea).length} online`;
+    });
+    const fuera = todos.filter(m => !servidor.has(m.discordId));
+    const sinRol = todos.filter(m => servidor.has(m.discordId) && !tieneRolDeGrupo(servidor.get(m.discordId), m.grupo));
+    const linea = (m) => `${enLinea(m) ? '🟢' : '⚫'} **${m.name}** <@${m.discordId}> · ${m.grupo.replace(/_/g, ' ')} · \`${fmtFc(m.main_id)}\``;
+    const e = new EmbedBuilder().setColor(fuera.length || sinRol.length ? 0xF0A93A : 0x5865F2)
+        .setTitle(`📋 Dragonite — ${todos.length} registered · 🟢 ${todos.filter(enLinea).length} online`)
+        .setDescription(resumen.join('\n'));
+    e.addFields(...camposDeLineas(`⚠️ Registered but not in this server (${fuera.length})`, fuera.length ? fuera.map(linea) : ['Nobody 🎉']).slice(0, 2));
+    e.addFields(...camposDeLineas(`⚠️ In the server but without their group role (${sinRol.length})`, sinRol.length ? sinRol.map(linea) : ['Nobody 🎉']).slice(0, 2));
+    return e;
+}
+// 🔎 Ficha de un registrado: busca por nombre, ID del juego (Main o secundaria), ID de Discord o @mencion.
+async function fichaDragonite(guild, texto) {
+    const q = String(texto || '').trim().toLowerCase();
+    const digitos = q.replace(/\D/g, '');
+    const todos = await registradosDragonite();
+    const hallados = todos.filter(m => (digitos.length >= 6 && (m.main_id.includes(digitos) || (m.sec_id || '').includes(digitos) || m.discordId === digitos))
+        || (q && !/^[\d\s<@!>-]+$/.test(q) && m.name.toLowerCase().includes(q))).slice(0, 5);
+    if (!hallados.length) return { content: `🔎 Nobody in Dragonite matches **${String(texto).slice(0, 50)}**.`, embeds: [] };
+    const servidor = await miembrosDelServidor(guild, hallados.map(m => m.discordId));
+    const online = new Set([...(await idsOnline('elite') || [])]);
+    const ml = new Map((await db.all(`SELECT discord_id, main_id FROM link_main`).catch(() => [])).map(f => [String(f.discord_id), String(f.main_id)]));
+    const embeds = hallados.map(m => {
+        const s = servidor.get(m.discordId);
+        const enLinea = online.has(m.main_id) || (m.sec_id && online.has(m.sec_id));
+        return new EmbedBuilder().setColor(s ? 0x1D9E75 : 0xE24B4A).setTitle(`📋 ${m.name}`)
+            .setThumbnail(s?.user?.displayAvatarURL?.() || null)
+            .addFields(
+                { name: 'Discord', value: `<@${m.discordId}>\n\`${m.discordId}\``, inline: true },
+                { name: 'Group', value: m.grupo.replace(/_/g, ' '), inline: true },
+                { name: 'Status', value: enLinea ? '🟢 Online (rerolling)' : '⚫ Offline', inline: true },
+                { name: 'Main ID', value: `\`${fmtFc(m.main_id)}\``, inline: true },
+                { name: 'Secondary', value: m.sec_id ? `\`${fmtFc(m.sec_id)}\`` : '—', inline: true },
+                { name: 'Monitor Link', value: ml.has(m.discordId) ? (ml.get(m.discordId) === m.main_id ? '✅ Same Main' : `⚠️ Other Main \`${fmtFc(ml.get(m.discordId))}\``) : '— not linked', inline: true },
+                { name: 'In this server', value: s ? `✅ since <t:${Math.floor((s.joinedTimestamp || 0) / 1000)}:D>${tieneRolDeGrupo(s, m.grupo) ? '' : '\n⚠️ no group role'}` : '❌ Not a member', inline: true },
+                { name: 'Account created', value: s?.user?.createdTimestamp ? `<t:${Math.floor(s.user.createdTimestamp / 1000)}:D>` : '—', inline: true });
+    });
+    return { content: hallados.length === 5 ? '🔎 First 5 matches:' : '', embeds };
+}
+async function manejarRerollers(interaction) {
+    if (!comunidad.esStaff(interaction.user.id, interaction.member)) {
+        const p = { ephemeral: true, content: "🔒 Only staff can see who's rerolling." };
+        return interaction.deferred || interaction.replied ? interaction.followUp(p).catch(() => {}) : interaction.reply(p).catch(() => {});
+    }
+    const id = interaction.customId;
+    if (id === 'host_menu') {   // abre el panel privado (la lista del panel ya se redibujo)
+        return await interaction.followUp({ ephemeral: true, ...(await panelRerollers(interaction.guild)) }).catch(() => {});
+    }
+    if (id === 'host_rr_buscar') {
+        return await interaction.showModal(new ModalBuilder().setCustomId('host_rr_buscar_modal').setTitle('🔎 Look up a Dragonite member')
+            .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('q')
+                .setLabel('Name, game ID, Discord ID or @mention').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(60)
+                .setPlaceholder('cy  ·  6203-9712-…  ·  1315890906003537952')))).catch(() => {});
+    }
+    if (id === 'host_rr_buscar_modal') {
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        const r = await fichaDragonite(interaction.guild, interaction.fields.getTextInputValue('q')).catch(() => ({ content: '⚠️ Could not read Dragonite right now.', embeds: [] }));
+        return await interaction.editReply({ ...r, allowedMentions: { parse: [] } }).catch(() => {});
+    }
+    await interaction.deferUpdate().catch(() => {});
+    if (id === 'host_rr_block' || id === 'host_rr_unblock') {
+        const elegido = String(interaction.values[0] || '').replace(/\D/g, '');
+        if (/^\d{16}$/.test(elegido)) {
+            if (id === 'host_rr_block') {
+                const r = (await registroIdsJuego()).get(elegido);
+                await hostComunidad.bloquear(elegido, { by: interaction.user.id, byName: interaction.user.username, name: r?.nombre || null });
+            } else await hostComunidad.desbloquear(elegido);
+        }
+    }
+    return await interaction.editReply(await panelRerollers(interaction.guild)).catch(() => {});
 }
 
 async function manejarMenuHosts(interaction) {
@@ -17668,6 +18028,7 @@ async function manejarMenuHosts(interaction) {
         if (opcion === 'gpwebhook') return await manejarWebhookGp(interaction);
         // Se vuelve a dibujar la lista (queda sin nada elegido) y se contesta en privado.
         await interaction.update({ components: menuHosts() }).catch(() => {});
+        if (opcion === 'rerollers') return await manejarRerollers(interaction);
         const hosts = (await hostComunidad.hostsConocidos().catch(() => [])).filter(h => h.enLinea);
         const conTurno = hosts.find(h => h.turno)?.nombre || hostComunidad.nombre();
         const mios = hosts.filter(h => (h.duenos || []).includes(interaction.user.id));

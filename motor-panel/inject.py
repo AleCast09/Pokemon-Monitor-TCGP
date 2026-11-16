@@ -1921,6 +1921,23 @@ def _note_hourglasses(account: dict, tag: str, before: int, after: int, packs: i
     log(f"[hourglass] {before} -> {after} LARGE left", tag=tag)
 
 
+_FILL96_SCAN = PROJECT_ROOT / "reports" / "fill96_scan.jsonl"   # FILL96_V1: one line per scanned account
+
+
+def _note_fill96_scan(account: dict, tag: str, hg: int, power: int, full_in: int = -1) -> None:
+    xml = os.path.basename(str(account.get("xml_path", "") or ""))
+    linea = json.dumps({"xml": xml, "name": tag, "hg": int(hg), "power": int(power), "full_in": int(full_in),
+                        "ts": int(time.time())})
+    with _hg_lock:
+        try:
+            _FILL96_SCAN.parent.mkdir(parents=True, exist_ok=True)
+            with open(os.environ.get("FILL96_SCAN_FILE") or _FILL96_SCAN, "a", encoding="utf-8") as f:
+                f.write(linea + "\n")
+        except Exception as exc:
+            log(f"[fill96] could not write the scan: {exc}", tag=tag)
+    log(f"[fill96] scan: {hg} LARGE hourglasses, {power} free pack(s)", tag=tag)
+
+
 _fr_state = threading.local()   # proxy_blocked: the last send failed because the proxy returned a web page
 
 
@@ -2391,6 +2408,11 @@ def get_pack_power(sess, max_retries: int = 3, tag: str = "",
                 debug_parts.append(f"pid='{pid}' stored={stored} effective={effective}")
                 if pid == "PACK_POWER_NORMAL":
                     total_normal += effective
+                    # FILL96_V1: seconds until the next free pack (to say when the account has its 2 packs).
+                    try:
+                        sess._fill96_next_secs = int(_seconds_until_next_recharge(p)) if effective < 2 else 0
+                    except Exception:
+                        pass
                 else:
                     total_special += max(stored, effective)
                     if pid:
@@ -3075,6 +3097,8 @@ def inject_one(
     track_hg: bool = False,              # (Ale 2026-11-12) write the hourglasses left to reports/hourglasses.json
     claim_rewards: bool = False,         # (Ale 2026-11-12) claim gifts (present box) and finished missions
     claim_only: bool = False,            # CLAIM_ONLY_V1 (Ale 2026-11-15): log in, claim everything, no packs
+    scan_only: bool = False,             # FILL96_V1 (Ale 2026-11-16): log in, note hourglasses + free power, no packs
+    pack_target: Optional[int] = None,   # FILL96_V1: open at most this many packs (packs still missing to 96)
 ) -> dict:
     """
     Run the full injection flow for one account.
@@ -3220,8 +3244,17 @@ def inject_one(
             log("[rewards] claim only: done (no packs opened)", tag=tag)
             return result
         hg_before = -1
-        if (track_hg or spend_all_hg) and not dry_run:
+        if (track_hg or spend_all_hg or scan_only) and not dry_run:
             hg_before, _ = gp_resources.pack_power_charger_count(sess, "LARGE")
+        # FILL96_V1 (Ale 2026-11-16, /fill96): scan only - hourglasses + free pack power, nothing opened.
+        if scan_only:
+            _pw = get_pack_power(sess, tag=tag, target_power_id=power_id) if not dry_run else -1
+            # Hours until the 2 free packs: next +1, plus 12 h more when it has none (1 pack every 12 h).
+            _next = int(getattr(sess, "_fill96_next_secs", -1) or 0)
+            _full = 0 if _pw >= 2 else (-1 if _next < 0 else _next + (12 * 3600 if _pw <= 0 else 0))
+            _note_fill96_scan(account, tag, int(hg_before), int(_pw), int(_full))
+            result["scan"] = {"hg": int(hg_before), "power": int(_pw), "full_in": int(_full)}
+            return result
 
         # 1c. Optional: hourglass minimum. When min_hourglass > 0, skip
         # the account if it has fewer LARGE pack-power chargers than
@@ -3258,6 +3291,17 @@ def inject_one(
             # 2026-11-12 (Arcade: 403 on the last Main of every account): the worker list had the same Main
             # twice (2695515994221625); the 2nd request to it got 403. Each Main only once.
             live_codes = list(dict.fromkeys(live_codes))
+            # BLOCKED_IDS_V1 (Ale 2026-11-16): players blocked from Discord ("Who's rerolling" in the hosts
+            # panel) get no friend requests from any host. reports/blocked_ids.json is written by the bot.
+            try:
+                _blocked = set(json.loads((PROJECT_ROOT / "reports" / "blocked_ids.json").read_text("utf-8")).get("ids") or [])
+            except Exception:
+                _blocked = set()
+            if _blocked:
+                _skipped = [c for c in live_codes if "".join(ch for ch in c if ch.isdigit()) in _blocked]
+                if _skipped:
+                    live_codes = [c for c in live_codes if c not in _skipped]
+                    log(f"[blocked] skipping {len(_skipped)} blocked player(s): {', '.join(_skipped)}", tag=tag)
             for code in live_codes:
                 pid = resolve_friend_code(sess, code)
                 if pid:
@@ -3438,6 +3482,10 @@ def inject_one(
             log(f"[hourglass] spend all: {hg_before} LARGE = {hg_before // int(hg_cost)} paid + "
                 f"{free_power_at_start} free -> {_todos} packs", tag=tag)
             packs = _todos
+            # FILL96_V1: "Reach 96 only" - stop at the packs still missing, keep the other hourglasses.
+            if pack_target is not None and packs > int(pack_target):
+                log(f"[fill96] {packs} possible, opening only {int(pack_target)} (to reach 96)", tag=tag)
+                packs = int(pack_target)
             if packs <= 0:
                 result["error"] = "no_power_no_hourglasses"
                 return result
@@ -4541,6 +4589,17 @@ def run_injection(args) -> int:
     if not args.dry_run:
         sweep_fr_ledger("startup (leftovers from previous run)")
 
+    # FILL96_V1: --pack-targets {"file.xml": packs still missing to 96}; the scan ignores the cooldown.
+    _fill96_targets = {}
+    if getattr(args, "pack_targets", ""):
+        try:
+            _fill96_targets = {str(k).lower(): max(0, int(v)) for k, v in
+                               json.loads(Path(args.pack_targets).read_text("utf-8")).items()}
+        except Exception as exc:
+            log(f"[fill96] could not read {args.pack_targets}: {exc}")
+    if getattr(args, "scan_only", False):
+        args.cooldown_hours = 0.0
+        log("[fill96] scan only: logging into the accounts to read hourglasses and free packs - nothing is opened")
     if getattr(args, "claim_only", False):
         # Claim only: every account, even the ones resting (the cooldown is only for opening packs).
         args.cooldown_hours = 0.0
@@ -4662,8 +4721,10 @@ def run_injection(args) -> int:
             track_hg=bool(getattr(args, "track_hourglasses", False)),
             claim_rewards=bool(getattr(args, "claim_rewards", False)),
             claim_only=bool(getattr(args, "claim_only", False)),
+            scan_only=bool(getattr(args, "scan_only", False)),
+            pack_target=_fill96_targets.get(os.path.basename(str(acct.get("xml_path", "") or "")).lower()),
         )
-        if getattr(args, "claim_only", False):
+        if getattr(args, "claim_only", False) or getattr(args, "scan_only", False):
             return r   # nothing opened: no history, no pack count, no cooldown change
         # Record state (touch mtime only on successful attempt)
         _record_kwargs = dict(
@@ -4959,6 +5020,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Claim gifts (present box) and finished missions on each account.")
     p.add_argument("--claim-only", action="store_true",
                    help="Only claim gifts, missions and event days on every own account (ignores the cooldown, opens no packs).")
+    p.add_argument("--scan-only", action="store_true",
+                   help="FILL96: log in, write hourglasses + free packs to reports/fill96_scan.jsonl, open nothing.")
+    p.add_argument("--pack-targets", default="",
+                   help="FILL96: JSON file {account.xml: max packs} - with --spend-all-hourglasses, stop there.")
     p.add_argument("--pack-rotation", default="",
                    help="Several packs, one per account in turn: 'pack_id:product_id:packs,pack_id:product_id:packs'. "
                         "Account 1 opens the 1st, account 2 the 2nd, ... (overrides --pack-id/--product-id/--packs).")

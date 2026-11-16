@@ -56,7 +56,9 @@ function iniciar(d) {
         // (2026-11-12, Arcade) Un Main que siempre da 403 ya no hace retirar las demas solicitudes: la cuenta sigue.
         // (2026-11-12) --pack-rotation: varios sobres en Open Packs Only (el panel nuevo lo usa).
         // (2026-11-12) Relojes de arena (gastar todos, lista) y recompensas: solo cuentas propias, desde el panel.
-        'RELOGIN_EVERY_2_V1');
+        // (2026-11-16) Bloqueados desde "Who's rerolling" (reports/blocked_ids.json): sin solicitudes.
+        // (2026-11-16) /fill96: --scan-only y --pack-targets.
+        'FILL96_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',
@@ -115,6 +117,17 @@ async function escribirTopePpm() {
     fs.mkdirSync(path.join(motor, 'reports'), { recursive: true });
     fs.writeFileSync(path.join(motor, 'reports', 'ppm_cap.json'),
         JSON.stringify({ cap: Math.floor(total / n), total, hosts: n, ts: Date.now() }));
+    await escribirBloqueados(motor).catch(() => {});
+}
+
+// Bloqueados (Ale 2026-11-16, "Who's rerolling" del panel de hosts): IDs del juego a los que ninguna cuenta
+// del GP farm manda solicitud. Upstash se lee cada 2 min (cuota); inject.py lee reports/blocked_ids.json.
+let _bloqueadosTs = 0;
+async function escribirBloqueados(motor) {
+    if (!deps.bloqueados || Date.now() - _bloqueadosTs < 2 * 60 * 1000) return;
+    _bloqueadosTs = Date.now();
+    const ids = [...(await deps.bloqueados()).keys()].filter(id => /^\d{16}$/.test(id));
+    fs.writeFileSync(path.join(motor, 'reports', 'blocked_ids.json'), JSON.stringify({ ids, ts: Date.now() }));
 }
 
 // Anti doble reroll (2026-11-01, plan de Ale): inject.py anota en reports/collectors_full.jsonl cada main
@@ -299,6 +312,10 @@ async function renovarFotosGp(reportes) {
 // Cuadro "ACCOUNTS LEFT · OPENED" del God Pack UI (Ale 2026-11-06): las prestadas de ESTE host que quedan
 // para abrir en el modo del panel y las que abrio desde el ultimo Start. Va a reports/community_farm_status.json.
 let inicioOn = Date.now();
+// (Ale 2026-11-16) Miembros cuyo Monitor Link no contesto (PC apagada): sus cuentas no cuentan en el panel
+// hasta que vuelva a contestar (confundia: "1,061 restantes" que nadie podia abrir).
+const mlSinRespuesta = new Map();   // discord_id -> ms del ultimo fallo
+const mlApagado = (id) => Date.now() - (mlSinRespuesta.get(String(id)) || 0) < 30 * 60 * 1000;
 async function escribirEstadoPanel() {
     const motor = deps?.fastTransfer.rutaMotor();
     if (!motor || !panelEncendido(motor)) return;
@@ -308,10 +325,11 @@ async function escribirEstadoPanel() {
     const s = ajustesPanel(motor), estado = leerEstado(motor), abiertas = leerAbiertas(motor), ahora = Date.now();
     let disponibles = 0, abiertasDesdeStart = 0;
     for (const m of await deps.ml.cuentasReroll()) {
+        const apagado = mlApagado(m.discord_id);
         for (const c of m.cuentas) {
             const clave = `${m.discord_id}|${c.f}`;
             if ((abiertas[clave] || 0) >= inicioOn) abiertasDesdeStart++;
-            if (miCuenta(m.discord_id, c.f, parte) && cuentaDelModo(c, s)
+            if (!apagado && miCuenta(m.discord_id, c.f, parte) && cuentaDelModo(c, s)
                 && ahora - Math.max(msDeLean(c.l), estado[clave] || 0) >= cooldown) disponibles++;
         }
     }
@@ -742,7 +760,8 @@ function borrarTemporalesViejas() {
     } catch (e) { /* nada */ }
 }
 
-function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = false) {
+// op (Ale 2026-11-16, /fill96): { modo, gastar (usa los relojes: sin --hg-cost 0), extra: [args], env: {}, stopFile, onLine(linea) }.
+function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = false, op = {}) {
     return new Promise(resolve => {
         const python = deps.fastTransfer.pythonMotor();
         const args = [path.join(motor, 'scripts', 'god_pack', 'inject.py'),
@@ -758,17 +777,17 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = fal
             '--wait-accept', String(s.wait_accept ?? 10),
             '--pack-delay', String(s.pack_delay ?? 2),
             '--account-delay', String(s.account_delay ?? 2),
-            '--parallel', String(s.parallel || 3),
+            '--parallel', String(op.parallel || s.parallel || 3),
             '--limit', String(cantidad),
-            '--mode', s.run_mode || 'godpack',
+            '--mode', op.modo || s.run_mode || 'godpack',
             '--farming-mode', s.farming_mode || 'only_gp',
             '--pack-power-min', s.pack_power_min || '1/5',
-            '--hg-cost', '0',                      // nunca gastar relojes del miembro
+            ...(op.gastar ? [] : ['--hg-cost', '0']),   // nunca gastar relojes del miembro (salvo /fill96, que lo elige el)
             '--no-quarantine-locked',              // las XML son temporales: no hay nada que mover
             '--verify-power', ...(motorConoce(motor, '--full-power-only') ? ['--full-power-only'] : []), '--shuffle-proxies',
             '--stop-after-fails', String(s.stop_after_fails || 5),
             // Stop del panel GP: corta la tanda despues de la cuenta en curso (con su limpieza)
-            '--stop-file', path.join(motor, 'reports', 'community_farm.stop')];
+            '--stop-file', op.stopFile || path.join(motor, 'reports', 'community_farm.stop'), ...(op.extra || [])];
         if (soloLimpiar) args.push('--cleanup-only');   // solo borra amistades que quedaron (no abre sobres)
         if (s.packs_per_min > 0) args.push('--packs-per-min', String(s.packs_per_min));
         const producto = productoDeSobre(motor, sobresDelPanel(s)[0]);
@@ -794,7 +813,7 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = fal
         const hijo = spawn(python, ['-X', 'utf8', ...args], {
             cwd: motor, windowsHide: true,
             // ZENITH_ACCOUNT_OWNER: el aviso de God Pack en Zenith menciona al dueño de la cuenta prestada.
-            env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8', ZENITH_ACCOUNT_OWNER: String(duenoId || '') }
+            env: { ...process.env, UTLS_PROXY: '1', PYTHONIOENCODING: 'utf-8', ZENITH_ACCOUNT_OWNER: String(duenoId || ''), ...(op.env || {}) }
         });
         // God Packs de la tanda (2026-11-06, Arcade: "another one found, no ping to discord"): se leen de la
         // salida del motor y el bot avisa el mismo, aunque el webhook del panel este vacio o falle.
@@ -805,6 +824,7 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = fal
             const lineas = (resto + d.toString('utf8')).split(/\r?\n/);
             resto = lineas.pop();
             for (const l of lineas) {
+                if (op.onLine) { try { op.onLine(l); } catch (e) { /* nada */ } }
                 const m = /\[([^\]]+)\] pack opened .*<-- GOD PACK (\S+) \(WONDER-PICKABLE\)/.exec(l);
                 if (m) gps.push({ cuenta: m[1], nivel: m[2], cartas: '' });
                 const c = /\[([^\]]+)\]\s+cards: (.+)$/.exec(l);
@@ -1025,8 +1045,10 @@ async function ciclo() {
                 }
             } catch (e) {   // PC del miembro apagada, o Monitor Link viejo y el host del turno no contesta
                 log(`${m.discord_id}: could not get the ${listas.length} account file(s) from their Monitor Link: ${e?.message || e}`);
+                mlSinRespuesta.set(String(m.discord_id), Date.now());
                 return null;
             }
+            mlSinRespuesta.delete(String(m.discord_id));
             const nombres = Object.keys(xmls || {});
             if (!nombres.length) { log(`${m.discord_id}: asked for ${listas.length} account file(s), got none back`); return null; }
             const dir = path.join(os.tmpdir(), `ml_reroll_${crypto.randomBytes(6).toString('hex')}`);
@@ -1143,4 +1165,209 @@ async function resumenPrestadas() {
     return resumen;
 }
 
-module.exports = { iniciar, ciclo, resumenPrestadas, infoFarm };
+// ======================================================================================================
+// /fill96 (Ale 2026-11-16): cada miembro sube SUS cuentas prestadas que no llegan a 96 sobres (o estan en pausa
+// de 30 dias), sin que el host tenga que hacer nada. Corre en el host del turno con los proxies del host.
+//   1. Revision: entra a cada cuenta (inject.py --scan-only) y guarda relojes LARGE + sobres gratis. No abre nada.
+//   2. El miembro elige: "Reach 96 only" (gasta solo lo justo, guarda el resto) o "Spend all hourglasses".
+//   3. Open Packs Only con --spend-all-hourglasses (+ --pack-targets en "Reach 96 only").
+// Hasta FILL96_MAX miembros a la vez; el resto en cola. Las cuentas en curso quedan marcadas en el estado del
+// GP farm (cooldown) para que el farm no las abra al mismo tiempo. Las XML se piden al Monitor Link y se borran.
+const FILL96_MAX = num(process.env.FILL96_MAX, 3);
+const FILL96_LOTE = 50;
+const fill96Trabajos = new Map();   // discordId -> trabajo
+const fill96Cola = [];              // discordId en espera
+const rutaFill96 = (motor) => path.join(motor, 'reports', 'fill96_scans.json');
+function leerRevisiones(motor) { try { return JSON.parse(fs.readFileSync(rutaFill96(motor), 'utf8')); } catch (e) { return {}; } }
+function guardarRevisiones(motor, datos) {
+    fs.mkdirSync(path.dirname(rutaFill96(motor)), { recursive: true });
+    fs.writeFileSync(rutaFill96(motor), JSON.stringify(datos));
+}
+const claveXml = (f) => path.basename(String(f || '')).toLowerCase().replace(/\.xml$/i, '') + '.xml';
+
+// Cuentas prestadas del miembro que todavia no son elegibles: [{ f, p, faltan }].
+async function fill96Cuentas(discordId) {
+    if (!deps) return [];
+    const m = (await deps.ml.cuentasReroll()).find(x => x.discord_id === String(discordId));
+    const baneadasSet = await (deps.baneadas?.() || Promise.resolve(new Set())).catch(() => new Set());
+    return (m?.cuentas || []).filter(c => Number(c.e) > 0 && !baneadasSet.has(`${discordId}|${c.f}`))
+        .map(c => ({ f: c.f, p: Number(c.p) || 0, faltan: Number(c.e) }));
+}
+
+// Resumen para Discord: cuentas + ultima revision guardada (relojes y sobres gratis de cada una).
+async function fill96Resumen(discordId) {
+    const motor = deps?.fastTransfer.rutaMotor();
+    const cuentas = await fill96Cuentas(discordId);
+    const rev = motor ? (leerRevisiones(motor)[String(discordId)] || null) : null;
+    const filas = cuentas.map(c => {
+        const r = rev?.cuentas?.[claveXml(c.f)];
+        if (!r || r.hg < 0) return { ...c, revisada: false };
+        const posibles = Math.max(0, r.power) + Math.floor(r.hg / 12);
+        const abrir96 = Math.min(c.faltan, posibles);
+        // lleno = cuando tiene sus 2 sobres gratis (ms); la energia sigue cargando despues de la revision.
+        const llenoEn = r.lleno ? Math.max(0, r.lleno - Date.now()) : -1;
+        return { ...c, revisada: true, hg: r.hg, power: Math.max(0, r.power), posibles, llenoEn,
+            llega: posibles >= c.faltan, abrir96, hg96: Math.max(0, abrir96 - Math.max(0, r.power)) * 12 };
+    });
+    return { cuentas: filas, revisadaTs: rev?.ts || 0, trabajo: fill96Estado(discordId) };
+}
+
+function fill96Estado(discordId) {
+    const t = fill96Trabajos.get(String(discordId));
+    if (t) return { ...t.publico, posicion: 0 };
+    const i = fill96Cola.indexOf(String(discordId));
+    return i >= 0 ? { fase: 'cola', posicion: i + 1 } : null;
+}
+
+// tipo: 'scan' | 'open96' | 'openall'. avisar(estadoPublico, final) se llama al avanzar y al terminar.
+function fill96Iniciar(discordId, tipo, avisar) {
+    const id = String(discordId);
+    if (fill96Trabajos.has(id) || fill96Cola.includes(id)) return fill96Estado(id);
+    const t = { id, tipo, avisar, parar: false, publico: { fase: tipo === 'scan' ? 'scan' : 'open', tipo, total: 0, hechas: 0, sobres: 0, llegaron: 0, inicio: 0, error: null } };
+    fill96Trabajos.set(id, t);
+    if ([...fill96Trabajos.values()].filter(x => x.publico.inicio).length >= FILL96_MAX) {
+        fill96Trabajos.delete(id);
+        fill96Cola.push(id);
+        t.publico.fase = 'cola';
+        fill96Pendientes.set(id, t);
+        return fill96Estado(id);
+    }
+    correrFill96(t);
+    return fill96Estado(id);
+}
+const fill96Pendientes = new Map();   // los de la cola, con su trabajo armado
+function fill96Siguiente() {
+    while (fill96Cola.length && [...fill96Trabajos.values()].filter(x => x.publico.inicio).length < FILL96_MAX) {
+        const id = fill96Cola.shift();
+        const t = fill96Pendientes.get(id);
+        fill96Pendientes.delete(id);
+        if (!t) continue;
+        t.publico.fase = t.tipo === 'scan' ? 'scan' : 'open';
+        fill96Trabajos.set(id, t);
+        correrFill96(t);
+    }
+}
+function fill96Parar(discordId) {
+    const id = String(discordId);
+    const i = fill96Cola.indexOf(id);
+    if (i >= 0) { fill96Cola.splice(i, 1); fill96Pendientes.delete(id); return true; }
+    const t = fill96Trabajos.get(id);
+    if (!t) return false;
+    t.parar = true;
+    try { fs.writeFileSync(t.stopFile, 'stop'); } catch (e) { /* aun no arranco el motor */ }
+    return true;
+}
+
+async function correrFill96(t) {
+    const motor = deps?.fastTransfer.rutaMotor();
+    const pub = t.publico;
+    pub.inicio = Date.now();
+    let ultimoAviso = 0;
+    const avisar = (final = false) => {
+        if (!final && Date.now() - ultimoAviso < 8000) return;
+        ultimoAviso = Date.now();
+        try { t.avisar?.({ ...pub }, final); } catch (e) { /* nada */ }
+    };
+    try {
+        if (!motor) throw new Error('this host has no engine');
+        const s = { ...ajustesPanel(motor), run_mode: 'packs-only' };
+        const cuentas = await fill96Cuentas(t.id);
+        let lista = cuentas;
+        let objetivos = null;
+        // (Ale 2026-11-16) Sin revision previa: Start Farm 96P abre directo todas las que faltan; cada una
+        // gasta sus sobres gratis + relojes hasta llegar (el motor para en lo que le falta a cada una).
+        if (t.tipo !== 'scan') objetivos = Object.fromEntries(lista.map(c => [claveXml(c.f), c.faltan]));
+        pub.total = lista.length;
+        if (!lista.length) { pub.error = t.tipo === 'scan' ? 'no_accounts' : 'nothing_to_open'; return; }
+        // Que el GP farm no las abra mientras tanto (su cooldown cuenta desde ahora).
+        const estado = leerEstado(motor);
+        for (const c of lista) estado[`${t.id}|${c.f}`] = Date.now();
+        guardarEstado(motor, estado);
+        t.stopFile = path.join(motor, 'reports', `fill96_${t.id}.stop`);
+        try { fs.unlinkSync(t.stopFile); } catch (e) { /* no habia */ }
+        const archivoScan = path.join(motor, 'reports', `fill96_scan_${t.id}.jsonl`);
+        if (t.tipo === 'scan') { try { fs.unlinkSync(archivoScan); } catch (e) { /* no habia */ } }
+        const set = await codigoSet(sobresDelPanel(s)[0] || 'CN001_0010_00_000');
+        for (let i = 0; i < lista.length && !t.parar; i += FILL96_LOTE) {
+            const lote = lista.slice(i, i + FILL96_LOTE);
+            let xmls;
+            try {
+                try { xmls = await deps.ml.pedirXmlReroll(t.id, lote.map(c => c.f)); }
+                catch (e) { if (deps.activo()) throw e; xmls = await deps.ml.xmlRerollPorHostActivo(t.id, lote.map(c => c.f)); }
+            } catch (e) { pub.error = 'monitor_link_offline'; break; }
+            const nombres = Object.keys(xmls || {});
+            if (!nombres.length) { pub.error = 'monitor_link_offline'; break; }
+            if (!await deps.fastTransfer.asegurarTunel()) { pub.error = 'tunnel_down'; break; }
+            const dir = path.join(os.tmpdir(), `ml_reroll_${crypto.randomBytes(6).toString('hex')}`);
+            fs.mkdirSync(dir, { recursive: true });
+            try {
+                for (const nombre of nombres) {
+                    const base = path.basename(nombre).replace(/\.xml$/i, '');
+                    fs.writeFileSync(path.join(dir, `${base}.xml`), xmls[nombre]);
+                    fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify({ metadata: {}, pulls: [], registeredCards: [] }));
+                }
+                const extra = t.tipo === 'scan' ? ['--scan-only'] : ['--spend-all-hourglasses'];
+                if (objetivos) {
+                    const archivo = path.join(dir, '_targets.json');
+                    fs.writeFileSync(archivo, JSON.stringify(objetivos));
+                    extra.push('--pack-targets', archivo);
+                }
+                log(`fill96 ${t.tipo}: ${nombres.length} account(s) of ${t.id}`);
+                await correrInject(motor, dir, s, nombres.length, t.id, false, {
+                    modo: 'packs-only', gastar: t.tipo !== 'scan', extra, parallel: 3, stopFile: t.stopFile,
+                    env: { FILL96_SCAN_FILE: archivoScan },
+                    onLine: (l) => {
+                        if (/\[fill96\] scan:/.test(l) || /-- ACCOUNT SUMMARY:/.test(l)) { pub.hechas++; avisar(); }
+                        else if (/\] pack opened cards=/.test(l)) { pub.sobres++; avisar(); }
+                    }
+                });
+                if (t.tipo !== 'scan') {
+                    const porArchivo = Object.fromEntries(lote.map(c => [claveXml(c.f), c]));
+                    for (const nombre of nombres) {
+                        const base = path.basename(nombre).replace(/\.xml$/i, '');
+                        let pulls = [];
+                        try { pulls = JSON.parse(fs.readFileSync(path.join(dir, `${base}.json`), 'utf8')).pulls || []; } catch (e) { /* nada */ }
+                        if (!pulls.length) continue;
+                        for (const p of pulls) { p.pack = set; p.aviso = avisoS4t(motor, p.cards); }
+                        await deps.ml.anotarSobresReroll(t.id, nombre, pulls, leanDeMs(Date.now()));
+                        const c = porArchivo[claveXml(nombre)];
+                        if (c && pulls.length >= c.faltan) pub.llegaron++;
+                    }
+                    entregarEnFondo();
+                }
+            } finally {
+                fs.rmSync(dir, { recursive: true, force: true });   // las XML no quedan en el host
+            }
+        }
+        if (t.tipo === 'scan') {
+            const cuentasRev = {};
+            let lineas = [];
+            try { lineas = fs.readFileSync(archivoScan, 'utf8').split('\n'); } catch (e) { /* nada */ }
+            for (const l of lineas) {
+                try { const d = JSON.parse(l); if (d.xml) cuentasRev[claveXml(d.xml)] = { hg: Number(d.hg), power: Number(d.power), lleno: Number(d.full_in) >= 0 ? Number(d.ts) * 1000 + Number(d.full_in) * 1000 : 0 }; } catch (e) { /* linea rota */ }
+            }
+            try { fs.unlinkSync(archivoScan); } catch (e) { /* nada */ }
+            const todas = leerRevisiones(motor);
+            todas[t.id] = { ts: Date.now(), cuentas: { ...(todas[t.id]?.cuentas || {}), ...cuentasRev } };
+            guardarRevisiones(motor, todas);
+            pub.hechas = Object.keys(cuentasRev).length;
+        } else {
+            // Despues de abrir, la revision vieja ya no vale (gasto relojes): se borra la de este miembro.
+            const todas = leerRevisiones(motor);
+            delete todas[t.id];
+            guardarRevisiones(motor, todas);
+        }
+    } catch (e) {
+        pub.error = String(e?.message || e);
+        log(`fill96 failed for ${t.id}:`, pub.error);
+    } finally {
+        pub.fase = t.parar ? 'stopped' : 'done';
+        pub.fin = Date.now();
+        try { if (t.stopFile) fs.unlinkSync(t.stopFile); } catch (e) { /* nada */ }
+        fill96Trabajos.delete(t.id);
+        avisar(true);
+        fill96Siguiente();
+    }
+}
+
+module.exports = { iniciar, ciclo, resumenPrestadas, infoFarm, fill96Resumen, fill96Iniciar, fill96Estado, fill96Parar };

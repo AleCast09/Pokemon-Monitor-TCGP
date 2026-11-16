@@ -131,6 +131,9 @@ async function asegurarTunel() {
     return false;
 }
 
+// Emoji del servidor por nombre (o el de respaldo si no esta subido).
+const emo = (mapa, nombre, respaldo) => (mapa && mapa[nombre]) ? `<:${nombre}:${mapa[nombre]}>` : respaldo;
+
 function icono(estado, mapa) {
     if (estado === 'ok') return mapa.nice ? `<:nice:${mapa.nice}>` : '✅';
     if (estado === 'error') return mapa.bad ? `<:bad:${mapa.bad}>` : '❌';
@@ -1234,24 +1237,88 @@ async function manejarBulk(interaction) {
         return true;
     }
 
-    // ⚡ Gold trade (desde una carta de Gold Cards): la MISMA carta varias veces, desde una cuenta que
-    // tiene muchas copias. 1) cuenta  2) cuantas copias  3) destino (el mismo paso 4 de Bulk trade).
+    // ⚡ Gold trade (desde una carta de Gold Cards), Ale 2026-11-16: el miembro dice CUANTAS copias le faltan.
+    // 1) cuantas  2) plan: una cuenta que tenga todas; si ninguna llega, se juntan de varias (las que mas
+    // tienen primero) hasta completar  3) destino  4) un Bulk trade por cuenta, uno detras del otro.
     if (interaction.isButton() && id.startsWith('fast_gold::')) {
         const cartaId = id.slice('fast_gold::'.length);
         await interaction.deferReply({ ephemeral: true });
-        const cuentas = (await deps.cuentasGoldDe(interaction.user.id, cartaId)) || [];
-        if (!cuentas.length) {
-            await interaction.editReply({ content: '❌ No account has enough copies of this card.' });
+        const mapa = (await deps.obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))) || {};
+        const cuentas = (await deps.cuentasGoldDe(interaction.user.id, cartaId, 1)) || [];
+        const total = cuentas.reduce((t, c) => t + c.cantidad, 0);
+        if (!total) {
+            await interaction.editReply({ content: `${emo(mapa, 'bad', '❌')} No account has copies of this card available.` });
             return true;
         }
-        const menu = new StringSelectMenuBuilder().setCustomId(`fast_gold_cuenta::${cartaId}`.slice(0, 100)).setPlaceholder('From which account?')
-            .addOptions(cuentas.slice(0, 25).map(c => ({ label: c.fileName.slice(0, 100),
-                description: (`x${c.cantidad} available` + (c.transferidas ? ` (${c.transferidas} already traded)` : '')).slice(0, 100),
-                value: `${c.fileName}::${c.cantidad}`.slice(0, 100) })));
-        await interaction.editReply({ content: `⚡ **Gold trade** — ${deps.infoCartaBulk(cartaId, rutaMaster).nombre}: pick the account:`, components: [new ActionRowBuilder().addComponents(menu),
+        // Sin preguntar cuantas (Ale 2026-11-16): son las del Threshold de Gold Cards.
+        const umbral = Math.max(1, parseInt(await deps.umbralGoldDe?.(interaction.user.id).catch(() => 0), 10) || 5);
+        const plan = planGold(cuentas, Math.min(umbral, 25));
+        const destinos = (await deps.destinosTrade(interaction)) || [];
+        if (!destinos.length) {
+            await interaction.editReply({ content: interaction._sinDestinosMsg || `${emo(mapa, 'bad', '❌')} No destination found (register your Main first).` });
+            return true;
+        }
+        const clave = `${interaction.user.id}:${Date.now().toString(36)}`;
+        bulkPendientes.set(clave, { userId: interaction.user.id, cartaId, planGold: plan, cartas: [], ts: Date.now() });
+        const ficha = emo(mapa, 'Ficha_de_intercambio_TCGP', '📦');
+        const n = plan.reduce((t, x) => t + x.n, 0);
+        const menu = new StringSelectMenuBuilder().setCustomId(`fast_gold_dest::${clave}`).setPlaceholder('Trade them to…')
+            .addOptions(destinos.slice(0, 25).map(d => ({ label: `${d.label || d.id}`.slice(0, 100), description: String(d.id).slice(0, 100), value: String(d.id) })));
+        await interaction.editReply({ content: [`${ficha} **Gold trade** — **${n}** ${n === 1 ? 'copy' : 'copies'} of **${deps.infoCartaBulk(cartaId, rutaMaster).nombre}**`
+            + (plan.length > 1 ? ` (adding up ${plan.length} accounts):` : ':'),
+            ...plan.map(x => `${emo(mapa, 'nice', '✅')} **${x.fileName}** — x${x.n}`), '', 'Who receives them?'].join('\n'),
+            components: [new ActionRowBuilder().addComponents(menu),
             new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sub_volver').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary))] });
         return true;
     }
+
+    if (interaction.isStringSelectMenu() && id.startsWith('fast_gold_n::')) {
+        const clave = id.split('::')[1];
+        const p = bulkPendientes.get(clave);
+        if (!p) { await interaction.update({ content: '⏱️ This expired — start again.', components: [] }); return true; }
+        const mapa = (await deps.obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))) || {};
+        p.planGold = planGold(p.cuentasGold, parseInt(interaction.values[0], 10) || 1);
+        const destinos = (await deps.destinosTrade(interaction)) || [];
+        if (!destinos.length) {
+            await interaction.update({ content: interaction._sinDestinosMsg || `${emo(mapa, 'bad', '❌')} No destination found (register your Main first).`, components: [] });
+            return true;
+        }
+        const ficha = emo(mapa, 'Ficha_de_intercambio_TCGP', '📦');
+        const n = p.planGold.reduce((t, x) => t + x.n, 0);
+        const lineas = p.planGold.map(x => `${ficha} **${x.fileName}** — x${x.n}`);
+        const menu = new StringSelectMenuBuilder().setCustomId(`fast_gold_dest::${clave}`).setPlaceholder('Trade them to…')
+            .addOptions(destinos.slice(0, 25).map(d => ({ label: `${d.label || d.id}`.slice(0, 100), description: String(d.id).slice(0, 100), value: String(d.id) })));
+        await interaction.update({ content: [`${emo(mapa, 'nice', '✅')} **${n}** ${n === 1 ? 'copy' : 'copies'} of **${deps.infoCartaBulk(p.cartaId, rutaMaster).nombre}**`
+            + (p.planGold.length > 1 ? ` (no single account has them all — taken from ${p.planGold.length}):` : ':'), ...lineas, '', 'Who receives them?'].join('\n'),
+            components: [new ActionRowBuilder().addComponents(menu),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sub_volver').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary))] });
+        return true;
+    }
+
+    if (interaction.isStringSelectMenu() && id.startsWith('fast_gold_dest::')) {
+        const clave = id.split('::')[1];
+        const p = bulkPendientes.get(clave);
+        bulkPendientes.delete(clave);
+        if (!p?.planGold?.length) { await interaction.update({ content: '⏱️ This expired — start again.', components: [] }); return true; }
+        const friendId = interaction.values[0];
+        await interaction.update({ content: '▶️ Starting the Gold trade…', components: [] });
+        // La primera cuenta usa este mensaje; las demas, un mensaje nuevo cada una (solo lo ve el miembro).
+        // Cada una entra a la fila de ⚡ en orden (ejecutarBulk las encadena).
+        for (let i = 0; i < p.planGold.length; i++) {
+            const x = p.planGold[i];
+            let destino = interaction;
+            if (i > 0) {
+                const msg = await interaction.followUp({ ephemeral: true, content: '…' }).catch(() => null);
+                if (!msg) continue;
+                destino = { id: `${interaction.id}_${i}`, guild: interaction.guild, guildId: interaction.guildId, user: interaction.user,
+                    editReply: (q) => interaction.webhook.editMessage(msg, q) };
+            }
+            ejecutarBulk(destino, { fileName: x.fileName, cartas: Array(x.n).fill(p.cartaId), friendId, miembro, rutaMaster });
+        }
+        return true;
+    }
+
+    // (viejo) cuenta -> copias: quedan para los mensajes de antes del 2026-11-16.
 
     if (interaction.isStringSelectMenu() && id.startsWith('fast_gold_cuenta::')) {
         const cartaId = id.slice('fast_gold_cuenta::'.length);
@@ -1298,6 +1365,22 @@ async function manejarBulk(interaction) {
     return false;
 }
 
+// Plan de Gold trade para n copias: [{ fileName, n }]. Una sola cuenta si alguna tiene todas (la que mas
+// tiene); si no, se juntan de las que mas tienen hasta completar (o todas las que haya, si no alcanza).
+function planGold(cuentas, n) {
+    const orden = [...(cuentas || [])].filter(c => c.cantidad > 0).sort((a, b) => b.cantidad - a.cantidad);
+    if (orden[0]?.cantidad >= n) return [{ fileName: orden[0].fileName, n }];
+    const plan = [];
+    let falta = n;
+    for (const c of orden) {
+        if (falta <= 0) break;
+        const toma = Math.min(c.cantidad, falta);
+        plan.push({ fileName: c.fileName, n: toma });
+        falta -= toma;
+    }
+    return plan;
+}
+
 async function ejecutarBulk(interaction, { fileName, cartas, friendId, miembro, rutaMaster }) {
     const runId = `${interaction.id}`;
     const mapa = (await deps.obtenerMapaEmojisGuild(interaction.guild).catch(() => ({}))) || {};
@@ -1306,24 +1389,32 @@ async function ejecutarBulk(interaction, { fileName, cartas, friendId, miembro, 
     corridas.set(runId, { hijo: null, detenido: false, stopFile });
     corridas.get(runId).dueno = interaction.user?.id;   // solo quien lo inicio puede cancelarlo (puede ir en un canal publico)
     const nombre = (id) => deps.infoCartaBulk(id, rutaMaster).nombre;
-    const estados = cartas.map(c => ({ carta: c, icono: '⏳', msg: '' }));
+    const reloj = emo(mapa, 'Reloj_arena_intercambio_TCGP', '⏳');
+    const enCurso = emo(mapa, 'Energia_de_intercambio_TCGP', '🔄');
+    const estados = cartas.map(c => ({ carta: c, icono: reloj, msg: '' }));
     let indice = -1;
     let paso = 'Logging in…';
     let final = null;
     const filaCancel = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`fast_stop::${runId}`).setLabel('✖️ Cancel').setStyle(ButtonStyle.Danger));
     const pintar = () => {
-        const lineas = estados.map((e, i) => `${e.icono} **${nombre(e.carta)}**${cartas.length > 1 && new Set(cartas).size < cartas.length ? ` #${i + 1}` : ''}${e.msg ? ` — ${e.msg}` : ''}`);
+        // La misma carta varias veces (Gold trade): una sola linea con el total, no #1 #2 #3... (Ale 2026-11-16).
+        const misma = cartas.length > 1 && new Set(cartas).size === 1;
+        const hechas = estados.filter(e => e.icono === icono('ok', mapa)).length;
+        const fallas = estados.filter(e => e.icono === icono('error', mapa));
+        const lineas = misma
+            ? [`${final ? icono(hechas ? 'ok' : 'error', mapa) : enCurso} **${nombre(cartas[0])}** — **${hechas}/${cartas.length}**${fallas.length && fallas[fallas.length - 1].msg ? ` — ${fallas[fallas.length - 1].msg}` : ''}`]
+            : estados.map(e => `${e.icono} **${nombre(e.carta)}**${e.msg ? ` — ${e.msg}` : ''}`);
         const ok = estados.filter(e => e.icono === icono('ok', mapa)).length;
-        const embed = new EmbedBuilder().setTitle(`📦 Bulk trade — ${fileName}`).setColor(final ? (ok ? 0x2ECC71 : 0xE74C3C) : 0xF0A93A)
-            .setDescription([...lineas, '', final || `👉 ${paso}`].join('\n').slice(0, 4000));
+        const embed = new EmbedBuilder().setTitle(`Bulk trade — ${fileName}`).setColor(final ? (ok ? 0x2ECC71 : 0xE74C3C) : 0xF0A93A)
+            .setDescription([`${emo(mapa, 'Ficha_de_intercambio_TCGP', '📦')} **${cartas.length}** card(s)`, '', ...lineas, '', final || `${enCurso} ${paso}`].join('\n').slice(0, 4000));
         return interaction.editReply({ content: '', embeds: [embed], components: final ? [] : [filaCancel] }).catch(() => {});
     };
     enCola++;
-    if (enCola > 1) { paso = `🕒 Queued — position #${enCola - 1}`; await pintar(); }
+    if (enCola > 1) { paso = `Queued — position #${enCola - 1}`; await pintar(); }
     const limpiezas = [];
     const turno = cola.then(async () => {
-        if (corridas.get(runId).detenido) { final = '🚫 Cancelled'; return; }
+        if (corridas.get(runId).detenido) { final = `${icono('error', mapa)} Cancelled`; return; }
         paso = miembro ? 'Getting the account from your Monitor Link…' : 'Logging in…';
         await pintar();
         const xmls = await prepararXmls(miembro, [fileName], runId);
@@ -1337,7 +1428,7 @@ async function ejecutarBulk(interaction, { fileName, cartas, friendId, miembro, 
         let edicion = Promise.resolve();
         const { resultado } = await correrMotor(runId, args, ev => {
             if (ev.step === 'card') {
-                if (ev.state === 'start') { indice++; if (estados[indice]) estados[indice].icono = '🔄'; }
+                if (ev.state === 'start') { indice++; if (estados[indice]) estados[indice].icono = enCurso; }
                 else if (estados[indice]) estados[indice].icono = icono(ev.state === 'ok' ? 'ok' : 'error', mapa);
             } else if (ev.state === 'error') {
                 if (estados[indice]) estados[indice].msg = ev.msg || 'failed';
@@ -1357,7 +1448,8 @@ async function ejecutarBulk(interaction, { fileName, cartas, friendId, miembro, 
         }
         const ok = (resultado?.results || []).filter(r => r.ok).length;
         if (cartas.length === 1 && estados[0]) estados[0].icono = icono(resultado?.success ? 'ok' : 'error', mapa);
-        final = corridas.get(runId)?.detenido ? `🚫 Cancelled — ${ok} traded` : `🎉 Done — **${ok}/${cartas.length}** traded`;
+        final = corridas.get(runId)?.detenido ? `${icono('error', mapa)} Cancelled — ${ok} traded`
+            : `${emo(mapa, 'item_poke_ball', '🎉')} Done — **${ok}/${cartas.length}** traded`;
     }).catch(e => {
         console.error('DEBUG: Bulk trade error:', e);
         final = `${icono('error', mapa)} Something went wrong`;

@@ -75,11 +75,11 @@ async function rolStaff(guild) {
 // Comandos que existen en el server de comunidad (los de los canales prioritarios + /setup para
 // el staff). Todo lo demas (/embed, /webhook, /run, /feedback, ...) no se registra ahi.
 // Sin /extract (2026-10-24, pedido de Ale: Extract XML esta de mas en la comunidad).
-const COMANDOS_COMUNIDAD = new Set(['setup', 'card', 'wishlist', 'goldcards', 'shinedust', 'farmtickets', 'transfers', 'link', 'missions']);
+const COMANDOS_COMUNIDAD = new Set(['setup', 'card', 'wishlist', 'goldcards', 'shinedust', 'farmtickets', 'transfers', 'link', 'missions', 'farm']);
 // Canales de las categorias de siempre que en la comunidad no van (Sync los borra si ya existen).
 const CANALES_FUERA_DE_COMUNIDAD = new Set(['cmd_extract_xlm']);
 // Comandos que SOLO existen en comunidad (en el server propio y en los del release no aparecen).
-const SOLO_COMUNIDAD = new Set(['link']);
+const SOLO_COMUNIDAD = new Set(['link', 'farm']);
 // Comandos que cualquier miembro puede usar aunque el server este en prueba (solo staff).
 const ABIERTOS_A_TODOS = new Set(['link']);
 
@@ -98,6 +98,8 @@ function gruposSync(guildId, grupos) {
     return [
         // Bienvenida: la ve todo el server; ahi se usa /link (al vincular llega el rol Monitor).
         { categoria: '👋 START 👋', tipoCategoria: 'start_categoria', acceso: 'todos', canales: [{ tipo: 'start_here', name: '🔗-start-here' }] },
+        // Farm 96P (Ale 2026-11-16): /farm sube las cuentas prestadas a 96 sobres; el resultado se publica aca.
+        { categoria: '📦 FARM 96P 📦', tipoCategoria: 'farm96_categoria', acceso: 'monitor', canales: [{ tipo: 'farm96', name: '📦-farm-96p' }] },
         ...grupos.filter(g => CATEGORIAS_COMUNIDAD.has(g.tipoCategoria))
             .map(g => ({ ...g, acceso: 'monitor', canales: g.canales.filter(c => !CANALES_FUERA_DE_COMUNIDAD.has(c.tipo)) })),
         {
@@ -315,6 +317,35 @@ async function nombreDeFriendId(friendId) {
     return null;
 }
 
+// Cuentas de God Pack (lista vip-elite del worker, Ale 2026-11-16): son las cuentas de reroll que sacaron un GP;
+// el bot de wr98 guarda cada post en gp_votes:<grupo> (hash) con owner_discord_id, friend_id y status.
+// Devuelve Map friendId -> { dueno, status, ts }. Cache 5 min (cada hash tiene cientos de posts).
+let cacheGp = { ts: 0, mapa: new Map() };
+async function duenosGodPack() {
+    if (Date.now() - cacheGp.ts < 5 * 60 * 1000) return cacheGp.mapa;
+    const mapa = new Map();
+    let cursor = '0';
+    const claves = [];
+    do {
+        const [siguiente, ks] = await redis('SCAN', cursor, 'MATCH', 'gp_votes:*', 'COUNT', '200');
+        claves.push(...ks);
+        cursor = siguiente;
+    } while (cursor !== '0');
+    for (const clave of claves) {
+        const plano = await redis('HGETALL', clave).catch(() => []) || [];
+        for (let i = 1; i < plano.length; i += 2) {
+            try {
+                const d = JSON.parse(plano[i]);
+                const id = String(d.friend_id || '').replace(/\D/g, '');
+                const ts = (Number(d.created_at) || 0) * 1000;
+                if (id && (!mapa.has(id) || mapa.get(id).ts < ts)) mapa.set(id, { dueno: String(d.owner_discord_id || ''), status: d.status || 'none', ts });
+            } catch (e) { /* post ilegible */ }
+        }
+    }
+    cacheGp = { ts: Date.now(), mapa };
+    return mapa;
+}
+
 // ---- Escribir en Dragonite (Ale 2026-11-10, con OK y clave de escritura de wr98) ----
 // Igual que su bot (index.js): el grupo sale del rol de Discord (active_roles:<id> si lo eligio, si no
 // Rivals > Elite_Four > Gym_Leader > Trainer); el registro es users:<grupo> <discordId> -> JSON
@@ -429,4 +460,4 @@ function quitarComponentes(guildId, payload, prefijos) {
     return payload;
 }
 
-module.exports = { rolMonitor, permisosCategoria, CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual, registrarMainDragonite, onlineDragonite, estadoDragonite, mainDragonite };
+module.exports = { rolMonitor, permisosCategoria, CANALES_FUERA_DE_COMUNIDAD, soloComunidad, hayComunidad, esComunidad, esStaff, comandosPara, gruposSync, permisosPrivados, permisosPublicos, bloquearSiHaceFalta, quitarComponentes, registroDe, destinosDe, miembrosDeGrupo, gruposConConteo, nombreDeFriendId, contexto, usuarioActual, registrarMainDragonite, onlineDragonite, estadoDragonite, mainDragonite, duenosGodPack };
