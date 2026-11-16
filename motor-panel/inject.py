@@ -3100,10 +3100,12 @@ def inject_one(
     # SPEND_ALL_HG_COST_V1 (Arcade 2026-11-15): the engine's pack catalog lists newer packs (C1 / BN010 / BN011...)
     # with hg_cost 0, so "Spend all hourglasses" never ran. In the game every pack costs 12 LARGE per pack when
     # paid with hourglasses, except the SP (special) packs.
-    if spend_all_hg and run_mode == "packs-only" and hg_cost <= 0 and not dry_run \
-            and not str(pack_id or "").upper().startswith("SP"):
-        hg_cost = 12
-        log(f"[hourglass] spend all: catalog cost is 0 for {pack_id}, using 12 LARGE per paid pack", tag=tag)
+    # SPEND_ALL_HG_V2 (Arcade 2026-11-16): the game REFUSES those packs paid with hourglasses (PurchaseV2
+    # PERMISSION_DENIED with an HTML page on the first paid pack, after the free ones). So no forced 12:
+    # packs with catalog cost 0 only open the free pack power; spend all works on packs with a real cost.
+    if spend_all_hg and run_mode == "packs-only" and hg_cost <= 0 and not dry_run:
+        log(f"[hourglass] spend all: {pack_id} can't be paid with hourglasses - opening the free packs only "
+            f"(pick an older pack to spend hourglasses)", tag=tag)
 
     # 1. Login
     sess = login_account(account, max_retries=max(1, _proxy_rotations))
