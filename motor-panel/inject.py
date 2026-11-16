@@ -3100,12 +3100,12 @@ def inject_one(
     # SPEND_ALL_HG_COST_V1 (Arcade 2026-11-15): the engine's pack catalog lists newer packs (C1 / BN010 / BN011...)
     # with hg_cost 0, so "Spend all hourglasses" never ran. In the game every pack costs 12 LARGE per pack when
     # paid with hourglasses, except the SP (special) packs.
-    # SPEND_ALL_HG_V2 (Arcade 2026-11-16): the game REFUSES those packs paid with hourglasses (PurchaseV2
-    # PERMISSION_DENIED with an HTML page on the first paid pack, after the free ones). So no forced 12:
-    # packs with catalog cost 0 only open the free pack power; spend all works on packs with a real cost.
-    if spend_all_hg and run_mode == "packs-only" and hg_cost <= 0 and not dry_run:
-        log(f"[hourglass] spend all: {pack_id} can't be paid with hourglasses - opening the free packs only "
-            f"(pick an older pack to spend hourglasses)", tag=tag)
+    # (2026-11-16) The PERMISSION_DENIED on the 3rd pack was NOT Dual Fusion: the game refuses the 3rd purchase
+    # of any login (see RELOGIN_EVERY_2_V1). Back to 12 LARGE per paid pack for catalog-cost-0 packs.
+    if spend_all_hg and run_mode == "packs-only" and hg_cost <= 0 and not dry_run \
+            and not str(pack_id or "").upper().startswith("SP"):
+        hg_cost = 12
+        log(f"[hourglass] spend all: catalog cost is 0 for {pack_id}, using 12 LARGE per paid pack", tag=tag)
 
     # 1. Login
     sess = login_account(account, max_retries=max(1, _proxy_rotations))
@@ -3701,6 +3701,24 @@ def inject_one(
                     f"{remaining} free left after this)", tag=tag)
             outcome = open_pack(sess, pack_id, product_id, tag=tag,
                                 hg_cost=per_pack_hg, power_id=power_id)
+            # RELOGIN_EVERY_2_V1 (Ale/Arcade 2026-11-16): the game refuses the 3rd PurchaseV2 of the same login
+            # (PERMISSION_DENIED with an HTML page) - Eevee Grove and Dual Fusion alike, hourglasses untouched.
+            # A fresh login opens 2 more, so log in again and retry this pack.
+            if outcome is None and run_mode == "packs-only" and result["packs_opened"] > 0 \
+                    and not getattr(sess, "_gp_no_power", False) and not _stop_event.is_set():
+                log(f"[relogin] pack {i+1}/{packs} refused after {result['packs_opened']} opened - "
+                    f"logging in again to keep going", tag=tag)
+                _nueva = login_account(account, max_retries=2)
+                if _nueva is not None:
+                    try:
+                        sess.close()
+                    except Exception:
+                        pass
+                    sess = _nueva
+                    outcome = open_pack(sess, pack_id, product_id, tag=tag,
+                                        hg_cost=per_pack_hg, power_id=power_id)
+                else:
+                    account.pop("_login_failure", None)   # a failed re-login says nothing about a ban
             if outcome is None:
                 log(f"pack {i+1}/{packs} did NOT open - breaking out of loop", tag=tag)
                 break
