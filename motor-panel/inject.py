@@ -3062,6 +3062,7 @@ def inject_one(
     pack_delay: float = 2.0,             # base seconds between packs (±20% jitter)
     account_delay: float = 2.0,          # base seconds between accounts (used by caller)
     accept_timeout: float = 0.0,         # 0 = disabled, use fixed wait_accept
+    accept_wait_max: float = 45.0,       # ACCEPT_WAIT_V1: after wait_accept, wait up to N s for every Main
     send_likes: bool = False,            # after packs, send Collection/LikeV1 per like target
     like_codes_file: str = "",           # text file of like targets (separate from GP collectors)
     like_codes: Optional[list[str]] = None,
@@ -3639,6 +3640,38 @@ def inject_one(
                         if remaining <= 0:
                             break
                         time.sleep(min(0.5, remaining))
+
+                    # ACCEPT_WAIT_V1 (Ale 2026-11-15: "the GP account doesn't show up as a friend sometimes").
+                    # A Main only sees the packs opened AFTER it accepted. Before, packs opened after a fixed
+                    # 6 s whether the Mains had accepted or not, so a slow Main missed the God Pack. Now the
+                    # friend list is checked every 2 s until every Main accepted (or accept_wait_max runs out);
+                    # then the packs open anyway with the Mains that accepted.
+                    if accept_wait_max > 0 and run_mode == "godpack" and target_pids:
+                        hasta = time.time() + float(accept_wait_max)
+                        inicio_espera = time.time()
+                        faltan = list(target_pids)
+                        while True:
+                            if _stop_event.is_set():
+                                log(f"[stop-signal] detected while waiting for accepts - cleaning up FRs", tag=tag)
+                                if _cleanup_links(sess, account, target_pids, tag):
+                                    result["friend_status"] = "unfriended (stop signal)"
+                                    result["error"] = "stopped_by_user"
+                                else:
+                                    result["friend_status"] = "unfriend_failed (stop signal)"
+                                    result["error"] = "stopped_by_user_cleanup_failed"
+                                return result
+                            current = _current_friend_pids(sess, tag=tag)
+                            faltan = [p for p in target_pids if p not in current]
+                            if not faltan or time.time() >= hasta:
+                                break
+                            time.sleep(2.0)
+                        _seg = time.time() - inicio_espera
+                        if faltan:
+                            log(f"[fr] {len(target_pids) - len(faltan)}/{len(target_pids)} Mains accepted in "
+                                f"{_seg:.0f}s - opening anyway; NOT accepted (they won't see these packs): "
+                                f"{', '.join(pid_to_friend_code.get(p, p) for p in faltan)}", tag=tag)
+                        else:
+                            log(f"[fr] all {len(target_pids)} Mains accepted ({_seg:.0f}s) - opening packs", tag=tag)
 
         # 5. Open packs
         # any_match already initialized at top of try (needed by except handler)
@@ -4596,6 +4629,7 @@ def run_injection(args) -> int:
             pack_delay=getattr(args, "pack_delay", 2.0),
             account_delay=getattr(args, "account_delay", 2.0),
             accept_timeout=getattr(args, "accept_timeout", 0.0),
+            accept_wait_max=float(getattr(args, "accept_wait_max", 45.0) or 0.0),
             send_likes=send_likes,
             like_codes_file=getattr(args, "like_codes_file", ""),
             like_codes=like_codes,
@@ -4982,6 +5016,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "restart hits IPs in a different sequence. Workers within "
                         "the run still share the same shuffled order, so accounts "
                         "stay in sync on which proxy comes next.")
+    p.add_argument("--accept-wait-max", type=float, default=45.0,
+                   help="God Pack mode: after --wait-accept, keep checking the friend list (every 2 s) up to "
+                        "N seconds until every Main accepted, then open the packs anyway. 0 = off.")
     p.add_argument("--accept-timeout", type=float, default=0.0,
                    help="Max seconds to poll the friend list for accepted FRs "
                         "after sending. 0 (default) = disabled, fall back to the "

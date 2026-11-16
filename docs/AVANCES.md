@@ -24,6 +24,13 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-15 (noche) — cuenta 1 — GP farm espera a que los Mains acepten (sin publicar aún)
+- Problema (alerieva, cy, Ale): a veces la cuenta del God Pack no le aparece al Main. Causa: el farm mandaba la solicitud, esperaba 6 s fijos y abría sin mirar si aceptaron; un Main solo ve los sobres abiertos DESPUÉS de aceptar.
+- Arreglo `ACCEPT_WAIT_V1` en `motor-panel/inject.py`: en God Pack, tras los 6 s revisa la lista de amigos cada 2 s hasta 45 s (`--accept-wait-max`); abre igual con los que aceptaron y anota en el log quiénes NO aceptaron. Marca en `reroll-comunidad.js` cambiada a `ACCEPT_WAIT_V1`.
+- Emojis: 14 íconos de WikiDex (cupones de evento, energías, reloj de eventos, rareza arcoíris) en `assets/element`, solo como emojis de la APLICACIÓN (`EMOJIS_EXTRA_APP` en `guild-emojis.js`), no ocupan lugares del server.
+- Íconos HD originales del juego: repo GitHub `alevalls99-maker/ptcgp-assets` (Git LFS: bajar por `media.githubusercontent.com/media/.../main/<ruta>`), carpeta `Texture Dump/UI/Textures` (Mission, Home, Common). Son blancos (el juego los colorea). Misiones = `cmn_pict_mission` / `mission_pict_mission`. Bulbapedia bloquea descargas automáticas.
+- Pendiente: elegir emoji de misiones y armar los embeds de "Get these cards" en Trading (vista previa aprobada: foto de la misión arriba, cada cuenta con fotos de sus cartas, resumen al final editando el primer mensaje).
+
 ### 2026-11-15 (mediodía) — cuenta 1 — Bot: PUBLICADO todo lo del 14-15/11
 - Eventos que cobra "Claim gifts & finished missions": Pikachu, 30 Days of Gifts (+barra 1/15/30), 1★★ (login `_07_01..14` + Collect cards `_07_15..`), Bonus Week, Welcome Back (`MI_AC_2607000_RETURN_01_NN`, "any": prueba cada una; barra a las 4 `MI_GR_RS_2607000_RETURN_01_01`). Barra de 1★★ (12/20/24) no encontrada. Scripts: `scripts/misiones/buscar_ids_evento.py` (--raros, --grupos) y `buscar_premios_barra.py` (GetGroupRewardStepStatesV1 solo devuelve IDs que existen).
 - God Pack UI: botón ES/EN (traduce todo, `tools/god_pack_gui/lang.txt`), cooldown mín. 0 h.
