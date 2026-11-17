@@ -1191,7 +1191,7 @@ async function fill96Cuentas(discordId) {
     const m = (await deps.ml.cuentasReroll()).find(x => x.discord_id === String(discordId));
     const baneadasSet = await (deps.baneadas?.() || Promise.resolve(new Set())).catch(() => new Set());
     return (m?.cuentas || []).filter(c => Number(c.e) > 0 && !baneadasSet.has(`${discordId}|${c.f}`))
-        .map(c => ({ f: c.f, p: Number(c.p) || 0, faltan: Number(c.e) }));
+        .map(c => ({ f: c.f, p: Number(c.p) || 0, faltan: Number(c.e), l: c.l }));
 }
 
 // Resumen para Discord: cuentas + ultima revision guardada (relojes y sobres gratis de cada una).
@@ -1274,15 +1274,18 @@ async function correrFill96(t) {
         const cuentas = await fill96Cuentas(t.id);
         let lista = cuentas;
         let objetivos = null;
-        // (Ale 2026-11-16) Sin revision previa: Start Farm 96P abre directo todas las que faltan; cada una
-        // gasta sus sobres gratis + relojes hasta llegar (el motor para en lo que le falta a cada una).
-        if (t.tipo !== 'scan') objetivos = Object.fromEntries(lista.map(c => [claveXml(c.f), c.faltan]));
+        // (Ale 2026-11-16) Dos opciones, sin revision previa:
+        //   open2  = solo los 2 sobres gratis, en las cuentas con 24 h desde su ultimo sobre (sin relojes).
+        //   open96 = sobres gratis + relojes hasta llegar a 96 (el motor para en lo que le falta a cada una).
+        const cooldown = num(process.env.REROLL_COOLDOWN_HORAS, 24) * 3600 * 1000;
+        if (t.tipo === 'open2') {
+            const estado0 = leerEstado(motor), ahora = Date.now();
+            lista = lista.filter(c => ahora - Math.max(msDeLean(c.l), estado0[`${t.id}|${c.f}`] || 0) >= cooldown);
+        }
+        if (t.tipo === 'open96') objetivos = Object.fromEntries(lista.map(c => [claveXml(c.f), c.faltan]));
         pub.total = lista.length;
-        if (!lista.length) { pub.error = t.tipo === 'scan' ? 'no_accounts' : 'nothing_to_open'; return; }
-        // Que el GP farm no las abra mientras tanto (su cooldown cuenta desde ahora).
-        const estado = leerEstado(motor);
-        for (const c of lista) estado[`${t.id}|${c.f}`] = Date.now();
-        guardarEstado(motor, estado);
+        pub.noLlegaron = [];   // open96: [nombre, sobres desde la pausa] de las que no llegaron
+        if (!lista.length) { pub.error = t.tipo === 'open2' ? 'none_ready' : 'no_accounts'; return; }
         t.stopFile = path.join(motor, 'reports', `fill96_${t.id}.stop`);
         try { fs.unlinkSync(t.stopFile); } catch (e) { /* no habia */ }
         const archivoScan = path.join(motor, 'reports', `fill96_scan_${t.id}.jsonl`);
@@ -1298,6 +1301,10 @@ async function correrFill96(t) {
             const nombres = Object.keys(xmls || {});
             if (!nombres.length) { pub.error = 'monitor_link_offline'; break; }
             if (!await deps.fastTransfer.asegurarTunel()) { pub.error = 'tunnel_down'; break; }
+            // Que el GP farm no las abra mientras tanto (su cooldown cuenta desde ahora): solo las de esta tanda.
+            const estado = leerEstado(motor);
+            for (const c of lote) estado[`${t.id}|${c.f}`] = Date.now();
+            guardarEstado(motor, estado);
             const dir = path.join(os.tmpdir(), `ml_reroll_${crypto.randomBytes(6).toString('hex')}`);
             fs.mkdirSync(dir, { recursive: true });
             try {
@@ -1306,7 +1313,7 @@ async function correrFill96(t) {
                     fs.writeFileSync(path.join(dir, `${base}.xml`), xmls[nombre]);
                     fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify({ metadata: {}, pulls: [], registeredCards: [] }));
                 }
-                const extra = t.tipo === 'scan' ? ['--scan-only'] : ['--spend-all-hourglasses'];
+                const extra = t.tipo === 'scan' ? ['--scan-only'] : t.tipo === 'open96' ? ['--spend-all-hourglasses'] : [];
                 if (objetivos) {
                     const archivo = path.join(dir, '_targets.json');
                     fs.writeFileSync(archivo, JSON.stringify(objetivos));
@@ -1314,7 +1321,7 @@ async function correrFill96(t) {
                 }
                 log(`fill96 ${t.tipo}: ${nombres.length} account(s) of ${t.id}`);
                 await correrInject(motor, dir, s, nombres.length, t.id, false, {
-                    modo: 'packs-only', gastar: t.tipo !== 'scan', extra, parallel: 3, stopFile: t.stopFile,
+                    modo: 'packs-only', gastar: t.tipo === 'open96', extra, parallel: 3, stopFile: t.stopFile,
                     env: { FILL96_SCAN_FILE: archivoScan },
                     onLine: (l) => {
                         if (/\[fill96\] scan:/.test(l) || /-- ACCOUNT SUMMARY:/.test(l)) { pub.hechas++; avisar(); }
@@ -1327,11 +1334,14 @@ async function correrFill96(t) {
                         const base = path.basename(nombre).replace(/\.xml$/i, '');
                         let pulls = [];
                         try { pulls = JSON.parse(fs.readFileSync(path.join(dir, `${base}.json`), 'utf8')).pulls || []; } catch (e) { /* nada */ }
-                        if (!pulls.length) continue;
-                        for (const p of pulls) { p.pack = set; p.aviso = avisoS4t(motor, p.cards); }
-                        await deps.ml.anotarSobresReroll(t.id, nombre, pulls, leanDeMs(Date.now()));
                         const c = porArchivo[claveXml(nombre)];
-                        if (c && pulls.length >= c.faltan) pub.llegaron++;
+                        if (pulls.length) {
+                            for (const p of pulls) { p.pack = set; p.aviso = avisoS4t(motor, p.cards); }
+                            await deps.ml.anotarSobresReroll(t.id, nombre, pulls, leanDeMs(Date.now()));
+                        }
+                        if (!c) continue;
+                        if (pulls.length >= c.faltan) pub.llegaron++;
+                        else if (t.tipo === 'open96') pub.noLlegaron.push([String(c.f).replace(/\.xml$/i, ''), 96 - c.faltan + pulls.length]);
                     }
                     entregarEnFondo();
                 }

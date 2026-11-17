@@ -17815,7 +17815,8 @@ async function panelRerollers(guild = null) {
 // llega tambien por DM.
 const fill96Mod = () => require('./reroll-comunidad.js');
 const FILL96_ERRORES = {
-    no_accounts: 'You have no lent accounts below 96 packs.',
+    no_accounts: 'You have no lent accounts that are not GP-eligible yet.',
+    none_ready: 'None of your accounts is ready: they need **24 h** since their last pack.',
     nothing_to_open: 'None of your checked accounts has free packs or hourglasses right now.',
     monitor_link_offline: 'Your **Monitor Link** did not answer. Open it on your PC and try again.',
     tunnel_down: 'The host engine is not ready right now. Try again in a few minutes.'
@@ -17845,7 +17846,7 @@ async function pantallaFill96(userId, guild = null) {
         const e = t.fase === 'scan'
             ? new EmbedBuilder().setColor(0x378ADD).setTitle('🔎 Checking your accounts…')
                 .setDescription(`Accounts checked: **${t.hechas} / ${t.total}**\n${barraFill(t.hechas, t.total)}\n${HG} Reading hourglasses and free packs of each one. Nothing is opened.\nStarted ${min} min ago`)
-            : new EmbedBuilder().setColor(0xEF9F27).setTitle(t.tipo === 'open96' ? '📦 Reaching 96…' : '📦 Spending all hourglasses…')
+            : new EmbedBuilder().setColor(0xEF9F27).setTitle(t.tipo === 'open96' ? '📦 Reaching 96…' : '📦 Opening 2 packs…')
                 .setDescription(`Accounts: **${t.hechas} / ${t.total}** · ${PK} Packs opened: **${nf(t.sobres)}**\n${barraFill(t.hechas, t.total)}\n${OK} Reached 96: **${t.llegaron}** · Started ${min} min ago`);
         return { embeds: [e], components: [filaParar] };
     }
@@ -17853,20 +17854,31 @@ async function pantallaFill96(userId, guild = null) {
         return { embeds: [new EmbedBuilder().setColor(0x1D9E75).setTitle('✅ Nothing to fill')
             .setDescription('All your **lent** accounts are God Pack eligible already (96+ packs).\nOnly accounts you lend with Monitor Link count here.')], components: [] };
     }
-    // (Ale 2026-11-16) Sin revision de relojes (hacia cola y errores): directo a Start Farm 96P.
+    // (Ale 2026-11-16) Sin revision de relojes (hacia cola y errores). El miembro elige:
+    //   Open 2 packs = solo los 2 sobres gratis, en las cuentas con 24 h desde su ultimo sobre.
+    //   Farm 96P     = sobres gratis + todos los relojes que hagan falta hasta llegar a 96.
     const faltanTotal = r.cuentas.reduce((s, c) => s + c.faltan, 0);
+    const listas2 = r.cuentas.filter(c => Date.now() - lean2ms(c.l) >= 24 * 3600 * 1000).length;
     return { embeds: [new EmbedBuilder().setColor(0x378ADD).setTitle('📦 Farm 96P')
         .setDescription([
-            `Lent accounts below 96: **${nf(r.cuentas.length)}**`,
+            `Lent accounts not GP-eligible yet: **${nf(r.cuentas.length)}**`,
             `${PK} Packs missing in total: **${nf(faltanTotal)}**`,
             '',
-            `**Start Farm 96P** opens packs on each account (free packs + ${HG} hourglasses) until it reaches 96, or until you press **Stop**.`,
-            'When it ends, the result is posted in this channel.',
+            `${PK} **Open 2 packs** — only the 2 free packs, on every account with **24 h** since its last pack (**${nf(listas2)}** ready now). No hourglasses.`,
+            `${HG} **Farm 96P** — free packs + all the hourglasses needed until each account reaches **96**; then it turns GP-eligible by itself. At the end you see which accounts made it and where the others stopped.`,
             '',
-            `${HG} Want to know how many hourglasses each account has? Message <@341916882485510144>.`,
+            'Stop anytime. The result is posted in this channel.',
             '-# Uses the host proxies. No friend requests, nothing goes to your Main. Your PC and Monitor Link must be on.'
         ].join('\n'))],
-        components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('fill96_open96').setLabel('Start Farm 96P').setEmoji(E.boton('Card_Back_TCGP', '▶️')).setStyle(ButtonStyle.Success))] };
+        components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('fill96_open2').setLabel(`Open 2 packs (${nf(listas2)})`).setEmoji(E.boton('Card_Back_TCGP', '📦')).setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('fill96_open96').setLabel('Farm 96P').setEmoji(E.boton('Reloj_de_arena_de_sobres_TCGP', '⌛')).setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('fill96_relojes').setLabel('Hourglasses per account?').setEmoji('🔎').setStyle(ButtonStyle.Secondary))] };
+}
+// lastPackPulled de Monitor Link ("20261116083249", hora local de su PC) a ms; sin dato = muy viejo.
+function lean2ms(l) {
+    const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/.exec(String(l || ''));
+    return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : 0;
 }
 function embedFinFill96(pub, E = (n, r) => r) {
     const PK = E('Card_Back_TCGP', '📦'), OK = E('nice', '✅'), BALL = E('item_poke_ball', '✅');
@@ -17874,13 +17886,24 @@ function embedFinFill96(pub, E = (n, r) => r) {
     if (pub.error && FILL96_ERRORES[pub.error] && !pub.hechas) return new EmbedBuilder().setColor(0xE24B4A).setTitle('⚠️ Farm 96P').setDescription(FILL96_ERRORES[pub.error]);
     if (pub.tipo === 'scan') return new EmbedBuilder().setColor(0x1D9E75).setTitle('🔎 Check done')
         .setDescription(`Checked **${pub.hechas}** account(s) in ${min} min.${pub.error && FILL96_ERRORES[pub.error] ? `\n⚠️ ${FILL96_ERRORES[pub.error]}` : ''}\nUse **/farm** and press **Start Farm 96P**.`);
-    return new EmbedBuilder().setColor(0x1D9E75).setTitle(pub.fase === 'stopped' ? '⏹️ Farm 96P stopped' : '✅ Farm 96P done')
+    const NO = E('bad', '❌'), HG = E('Reloj_de_arena_de_sobres_TCGP', '⌛');
+    const titulo = pub.tipo === 'open2' ? 'Open 2 packs' : 'Farm 96P';
+    const no = pub.noLlegaron || [];
+    const e = new EmbedBuilder().setColor(no.length ? 0xEF9F27 : 0x1D9E75)
+        .setTitle(pub.fase === 'stopped' ? `⏹️ ${titulo} stopped` : `✅ ${titulo} done`)
         .setDescription([
-            `${PK} Packs opened: **${nf(pub.sobres)}** on ${pub.hechas} account(s) · ${min} min`,
-            `${OK} Reached 96 now: **${pub.llegaron}** — they go to the GP farm by themselves`,
+            `${PK} Packs opened: **${nf(pub.sobres)}** on ${nf(pub.hechas)} account(s) · ${min} min`,
+            pub.tipo === 'open96' ? `${OK} Reached 96: **${nf(pub.llegaron)}** — they turn GP-eligible by themselves` : '',
+            pub.tipo === 'open96' && no.length ? `${NO} Not enough hourglasses: **${nf(no.length)}** account(s)` : '',
             pub.error && FILL96_ERRORES[pub.error] ? `⚠️ ${FILL96_ERRORES[pub.error]}` : '',
             `${BALL} Your Monitor Link updates each account file with the new packs.`
         ].filter(Boolean).join('\n'));
+    if (no.length) {
+        const lineas = [...no].sort((x, y) => y[1] - x[1]).slice(0, 25).map(([n, p]) => `${NO} \`${n}\` · ${HG} stopped at **${p}/96**`);
+        if (no.length > 25) lineas.push(`… and ${nf(no.length - 25)} more`);
+        e.addFields({ name: 'Did not reach 96', value: lineas.join('\n').slice(0, 1024) });
+    }
+    return e;
 }
 async function canalFarm96(guildId) {
     const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'farm96'`, [guildId]).catch(() => null);
@@ -17903,9 +17926,13 @@ async function manejarFill96(interaction) {
         return await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x888780).setTitle('⏹️ Stopping…')
             .setDescription('It stops after the accounts in progress. You get a DM with what was done.')], components: [] }).catch(() => {});
     }
-    // Botones viejos (revision / gastar todo) ya no arrancan nada: solo Start Farm 96P.
-    if (id === 'fill96_open96') {
-        const tipo = 'open96';
+    if (id === 'fill96_relojes') {
+        const E = await emojisFill96(interaction.guild);
+        return await interaction.followUp({ ephemeral: true, content: `${E('Reloj_de_arena_de_sobres_TCGP', '⌛')} Want to know how many hourglasses each account has? Message <@341916882485510144> (Ale Cast).` }).catch(() => {});
+    }
+    // Botones viejos (revision / gastar todo) ya no arrancan nada.
+    if (id === 'fill96_open96' || id === 'fill96_open2') {
+        const tipo = id.slice('fill96_'.length);
         fill96Mod().fill96Iniciar(userId, tipo, async (pub, final) => {
             if (!final) return await interaction.editReply(await pantallaFill96(userId, interaction.guild)).catch(() => {});
             const fin = embedFinFill96(pub, await emojisFill96(interaction.guild));
