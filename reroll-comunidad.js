@@ -58,7 +58,9 @@ function iniciar(d) {
         // (2026-11-12) Relojes de arena (gastar todos, lista) y recompensas: solo cuentas propias, desde el panel.
         // (2026-11-16) Bloqueados desde "Who's rerolling" (reports/blocked_ids.json): sin solicitudes.
         // (2026-11-16) /fill96: --scan-only y --pack-targets.
-        'FILL96_V1');
+        // (2026-11-17, Zeka) Recompensas 1/15/30 de "30 Days of Gifts" aunque los dias ya estuvieran reclamados.
+        // (2026-11-17) Relojes: 15 s entre sobres pagados (mas rapido el juego rechaza el 3.o).
+        'HG_PACE_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',
@@ -1210,7 +1212,9 @@ async function fill96Resumen(discordId) {
         return { ...c, revisada: true, hg: r.hg, power: Math.max(0, r.power), posibles, llenoEn,
             llega: posibles >= c.faltan, abrir96, hg96: Math.max(0, abrir96 - Math.max(0, r.power)) * 12 };
     });
-    return { cuentas: filas, revisadaTs: rev?.ts || 0, trabajo: fill96Estado(discordId) };
+    // prestadas = todas las que comparte (Zeka 2026-11-16: no compartia ninguna y el bot decia "ya son elegibles").
+    const prestadas = cuentas.length ? cuentas.length : (await fill96Cuentas(discordId, true)).length;
+    return { cuentas: filas, prestadas, revisadaTs: rev?.ts || 0, trabajo: fill96Estado(discordId) };
 }
 
 function fill96Estado(discordId) {
@@ -1348,7 +1352,7 @@ async function correrFill96(t) {
                     fs.writeFileSync(path.join(dir, `${base}.xml`), xmls[nombre]);
                     fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify({ metadata: {}, pulls: [], registeredCards: [] }));
                 }
-                const extra = t.tipo === 'scan' ? ['--scan-only'] : t.tipo === 'open96' ? ['--spend-all-hourglasses'] : t.tipo === 'claim' ? ['--claim-only'] : [];
+                const extra = t.tipo === 'scan' ? ['--scan-only'] : t.tipo === 'open96' ? ['--spend-all-hourglasses', '--claim-rewards'] : t.tipo === 'claim' ? ['--claim-only'] : [];
                 if (objetivos) {
                     const archivo = path.join(dir, '_targets.json');
                     fs.writeFileSync(archivo, JSON.stringify(objetivos));

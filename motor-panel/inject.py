@@ -1860,7 +1860,10 @@ def _claim_login_events(sess, tag: str = "") -> None:
                 continue
         if got:
             log(f"[rewards] login event {prefix.rstrip('_')}: claimed day(s) {', '.join(got)}", tag=tag)
-            _claim_milestones(sess, prefix, len(done), len(done) + len(got), tag)
+        # MILESTONES_ALWAYS_V1 (Zeka 2026-11-17): days already claimed before (in the game or an older run) left
+        # the 1/15/30 rewards (3 x 120 hourglasses) unclaimed forever. Ask every step already reached; asking one
+        # already claimed adds nothing (checked 2026-11-15).
+        _claim_milestones(sess, prefix, 0, len(set(done) | set(prefix + g for g in got)), tag)
 
 
 # Event milestone rewards ("Missions completed: 1 / 15 / 30" -> 120 hourglasses each), by login-event prefix:
@@ -3882,7 +3885,12 @@ def inject_one(
                 # Bumped from the old hardcoded uniform(1.5, 3.0) so users can
                 # slow the loop down when the server starts rate-limiting.
                 pd = max(0.1, float(pack_delay))
-                time.sleep(random.uniform(pd * 0.8, pd * 1.2))
+                # HG_PACE_V1 (Ale/Arcade 2026-11-17): paying with hourglasses every 2-3 s -> the game refuses the
+                # 3rd pack with an HTML 403 (PERMISSION_DENIED) and even a new login is refused. Tested on
+                # Ale_Cast_101 with 15 s between packs: 2 free + 4 paid, no refusal. So >= 15 s when paying.
+                if (spend_all_hg or int(hg_cost or 0) > 0) and not dry_run:
+                    pd = max(pd, 15.0)
+                time.sleep(random.uniform(pd * 0.9, pd * 1.2))
 
         # Offline-cooldown bookkeeping: packs spent, or server refused for
         # no power -> this account must not be touched again for cooldown_hours.

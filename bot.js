@@ -17851,6 +17851,20 @@ async function pantallaFill96(userId, guild = null) {
                 .setDescription(`Accounts: **${t.hechas} / ${t.total}** · ${PK} Packs opened: **${nf(t.sobres)}**\n${barraFill(t.hechas, t.total)}\n${OK} Reached 96: **${t.llegaron}** · Started ${min} min ago`);
         return { embeds: [e], components: [filaParar] };
     }
+    if (!r.cuentas.length && !r.prestadas) {
+        return { embeds: [new EmbedBuilder().setColor(0xEF9F27).setTitle('📦 No lent accounts yet')
+            .setDescription([
+                "You're not lending any accounts yet. **/farm** only works with the accounts you lend.",
+                '',
+                '**How to lend them:**',
+                '1. Open **Monitor Link** and press **Share accounts for reroll**.',
+                '2. **Tick** the accounts (or **Tick all**). Accounts under 96 packs show as *Locked*: tick those too.',
+                '3. Press **Save and share** and wait about 1 minute.',
+                '4. Use **/farm** again.',
+                '',
+                '-# Your PC and Monitor Link must stay on while farming.'
+            ].join('\n'))], components: [] };
+    }
     if (!r.cuentas.length) {
         return { embeds: [new EmbedBuilder().setColor(0x1D9E75).setTitle('✅ Nothing to fill')
             .setDescription('All your **lent** accounts are God Pack eligible already (96+ packs).\nOnly accounts you lend with Monitor Link count here.')], components: [] };
