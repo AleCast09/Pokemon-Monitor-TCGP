@@ -816,6 +816,8 @@ async function entregarSobresReroll(discordId) {
                 await db.run(`DELETE FROM link_reroll_pendiente WHERE clave = ?`, [f.clave]);
                 if (r.ok) hechas++;
             }
+            // (2026-11-17) Antes se perdian sin aviso: queda en el log del bot.
+            if (!r.ok) console.log(`[reroll] ${discordId}: Monitor Link could not write ${f.archivo} (${r.error || 'unknown'})${r.error === 'account file not found' ? ' - dropped' : ''}`);
         } catch (e) {
             break; // offline / timeout: el resto queda para la proxima
         }

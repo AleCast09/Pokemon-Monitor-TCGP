@@ -24,6 +24,21 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-17 (mañana) — cuenta 1 — Relojes arreglados, 360 de Zeka (PUBLICADO host-2026.11.17-0849)
+- **Relojes**: el juego rechazaba el 3.er sobre (HTML 403) por abrir cada 2-3 s. Probado en Ale_Cast_101 con 15 s: 2 gratis + 4 pagados (612→564). `inject.py` `HG_PACE_V1`: ≥15 s entre sobres cuando paga con relojes.
+- **Claim** pide siempre las recompensas 1/15/30 de 30 Days of Gifts (`MILESTONES_ALWAYS_V1`); Farm 96P reclama regalos antes de gastar.
+- /farm sin cuentas prestadas: explica cómo prestarlas (Share accounts for reroll → Save and share).
+- La PC de Ale se reinició 2026-11-16 23:33 → ArcaWindows tomó el turno y los /farm corrieron en su host (Arcade vio "gift pack opened"). Turno devuelto a AleCast.
+- Pendiente: que todos los hosts salten 24 h las cuentas que abrió Farm 96P (hoy la espera se guarda solo en el host que abrió). Idea de Ale: botón "Go offline" de Monitor Link = dejar de compartir cuentas (esperando cómo lo hacen en Zenith).
+
+### 2026-11-16 (noche) — cuenta 1 — /farm con varios sobres, especial y regalos (PUBLICADO host-2026.11.16-2050)
+- /farm sin revisión de relojes. Botones: **Open 2 packs** (solo gratis, cuentas con 24 h), **Farm 96P** (relojes hasta 96; al final lista las que no llegaron y en qué P quedaron), **Hourglasses per account?** (escribirle a Ale).
+- Menú para elegir **uno o varios sobres** (las cuentas se turnan, `--pack-rotation`). Fuera del menú: Team Rocket, Deluxe (bloqueados) y Genetic Apex Mewtwo (para que entre en 25). Lista `FILL96_SIN` en `reroll-comunidad.js`.
+- Botones aparte: **✨ First Partners** y **🎁 Claim gifts & missions**: corren en TODAS las cuentas prestadas y no marcan la espera de 24 h del GP farm.
+- Panel God Pack UI: miembros con Monitor Link apagado (sin respuesta en 30 min) no cuentan en "Cuentas restantes".
+- Pendiente: los sobres pagados después de los 2 gratis los rechaza el juego (PERMISSION_DENIED). Idea: abrir primero los pagados. Probar cuando haya energía.
+- Para escalar /farm: más proxies (hoy hasta 9 cuentas a la vez desde la IP del host del turno).
+
 ### 2026-11-16 (tarde) — cuenta 1 — Farm 96P, Who's rerolling, bloqueos (PUBLICADO)
 - **Farm 96P** (canal 📦-farm-96p con Sync, comando `/farm`): el miembro abre sus cuentas PRESTADAS que todavía no son elegibles (`e > 0`, 96 desde la última pausa) con sus sobres gratis + relojes, hasta llegar o hasta Stop. Máx 3 a la vez (cola), proxies del host, sin solicitudes. Resultado público en el canal. Ale pidió QUITAR la revisión de relojes (hacía cola masiva): `/farm` muestra solo **Start Farm 96P**; quien quiera saber relojes por cuenta le escribe a Ale. `inject.py` marca `FILL96_V1` (`--scan-only`, `--pack-targets`).
 - Relojes: Dual Fusion SÍ acepta relojes si la cuenta empieza sin sobres gratis (probado Ale_Cast_101: 660→636). Si la cuenta tiene sus 2 gratis, abre esos 2 y el juego rechaza el 3.º pagado AUNQUE se vuelva a loguear (400 relogins, 0 cuentas pasaron de 2). **Pendiente**: probar abrir primero los pagados y después los gratis (cuando haya cuentas con energía).
