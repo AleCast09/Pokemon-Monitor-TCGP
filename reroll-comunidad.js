@@ -1186,11 +1186,12 @@ function guardarRevisiones(motor, datos) {
 const claveXml = (f) => path.basename(String(f || '')).toLowerCase().replace(/\.xml$/i, '') + '.xml';
 
 // Cuentas prestadas del miembro que todavia no son elegibles: [{ f, p, faltan }].
-async function fill96Cuentas(discordId) {
+// todas = true: tambien las elegibles (sobre especial y reclamar regalos van en TODAS sus cuentas, Ale 2026-11-16).
+async function fill96Cuentas(discordId, todas = false) {
     if (!deps) return [];
     const m = (await deps.ml.cuentasReroll()).find(x => x.discord_id === String(discordId));
     const baneadasSet = await (deps.baneadas?.() || Promise.resolve(new Set())).catch(() => new Set());
-    return (m?.cuentas || []).filter(c => Number(c.e) > 0 && !baneadasSet.has(`${discordId}|${c.f}`))
+    return (m?.cuentas || []).filter(c => (todas || Number(c.e) > 0) && !baneadasSet.has(`${discordId}|${c.f}`))
         .map(c => ({ f: c.f, p: Number(c.p) || 0, faltan: Number(c.e), l: c.l }));
 }
 
@@ -1220,10 +1221,30 @@ function fill96Estado(discordId) {
 }
 
 // tipo: 'scan' | 'open96' | 'openall'. avisar(estadoPublico, final) se llama al avanzar y al terminar.
-function fill96Iniciar(discordId, tipo, avisar) {
+// (Ale 2026-11-16) Sobres que el miembro puede elegir en /farm (catalogo del motor, el mas nuevo primero).
+// Fuera: los especiales (SP, otra energia), Lugia (su product_id es adivinado y el juego lo rechaza) y
+// Team Rocket's Ambition (no acepta relojes) y Deluxe Mega (bloqueado, no abre) — Ale 2026-11-16.
+const FILL96_SIN = new Set(['AN001_0010_00_000', 'AN009_0020_00_000','BN010_0010_00_000', 'BN011_0010_00_000']);
+function fill96Sobres() {
+    const motor = deps?.fastTransfer.rutaMotor();
+    let catalogo = '';
+    try { catalogo = fs.readFileSync(path.join(motor, 'scripts', 'flow', 'pack_catalog.py'), 'utf8'); } catch (e) { return { sobres: [], defecto: '' }; }
+    const sobres = [];
+    let especial = null;   // sobre especial (First Partners): va aparte, 1 por semana con su propia energia
+    for (const m of catalogo.matchAll(/\{"name":\s*"([^"]+)"[^}]*?"pack_id":\s*"([A-Z0-9_]+)"/g)) {
+        if (/^SP/i.test(m[2]) && !especial) especial = { name: m[1].replace(/^Special Pack:\s*/i, ''), pack_id: m[2] };
+        if (/^SP/i.test(m[2]) || FILL96_SIN.has(m[2]) || sobres.some(x => x.pack_id === m[2])) continue;
+        sobres.push({ name: m[1], pack_id: m[2] });
+    }
+    sobres.reverse();
+    const panel = sobresDelPanel(ajustesPanel(motor))[0];
+    return { sobres, especial, defecto: sobres.some(x => x.pack_id === panel) ? panel : (sobres[0]?.pack_id || '') };
+}
+
+function fill96Iniciar(discordId, tipo, avisar, packId = '') {
     const id = String(discordId);
     if (fill96Trabajos.has(id) || fill96Cola.includes(id)) return fill96Estado(id);
-    const t = { id, tipo, avisar, parar: false, publico: { fase: tipo === 'scan' ? 'scan' : 'open', tipo, total: 0, hechas: 0, sobres: 0, llegaron: 0, inicio: 0, error: null } };
+    const t = { id, tipo, avisar, packId, parar: false, publico: { fase: tipo === 'scan' ? 'scan' : 'open', tipo, packId, total: 0, hechas: 0, sobres: 0, llegaron: 0, inicio: 0, error: null } };
     fill96Trabajos.set(id, t);
     if ([...fill96Trabajos.values()].filter(x => x.publico.inicio).length >= FILL96_MAX) {
         fill96Trabajos.delete(id);
@@ -1271,7 +1292,18 @@ async function correrFill96(t) {
     try {
         if (!motor) throw new Error('this host has no engine');
         const s = { ...ajustesPanel(motor), run_mode: 'packs-only' };
-        const cuentas = await fill96Cuentas(t.id);
+        // El sobre que eligio el miembro en /farm (si no, el del panel).
+        // (Ale 2026-11-16) Puede elegir varios: las cuentas se turnan (--pack-rotation, una por sobre).
+        const _validos = fill96Sobres().sobres.map(x => x.pack_id);
+        const _elegidos = [].concat(t.packId || []).map(String).filter(p => _validos.includes(p));
+        if (_elegidos.length) { s.pack_id = _elegidos[0]; s.pack_ids = _elegidos; pub.packId = t.tipo === 'claim' ? '' : _elegidos; }
+        // special = el sobre especial semanal (1 por cuenta, su propia energia); claim = solo regalos y misiones.
+        if (t.tipo === 'special') {
+            const sp = fill96Sobres().especial;
+            if (!sp) { pub.error = 'no_special'; return; }
+            s.pack_id = sp.pack_id; s.pack_ids = [sp.pack_id]; pub.packId = sp.pack_id;
+        }
+        const cuentas = await fill96Cuentas(t.id, t.tipo === 'special' || t.tipo === 'claim');
         let lista = cuentas;
         let objetivos = null;
         // (Ale 2026-11-16) Dos opciones, sin revision previa:
@@ -1302,9 +1334,12 @@ async function correrFill96(t) {
             if (!nombres.length) { pub.error = 'monitor_link_offline'; break; }
             if (!await deps.fastTransfer.asegurarTunel()) { pub.error = 'tunnel_down'; break; }
             // Que el GP farm no las abra mientras tanto (su cooldown cuenta desde ahora): solo las de esta tanda.
-            const estado = leerEstado(motor);
-            for (const c of lote) estado[`${t.id}|${c.f}`] = Date.now();
-            guardarEstado(motor, estado);
+            // (Especial y reclamar no: no gastan la energia normal, el GP farm las puede abrir igual.)
+            if (t.tipo === 'open2' || t.tipo === 'open96') {
+                const estado = leerEstado(motor);
+                for (const c of lote) estado[`${t.id}|${c.f}`] = Date.now();
+                guardarEstado(motor, estado);
+            }
             const dir = path.join(os.tmpdir(), `ml_reroll_${crypto.randomBytes(6).toString('hex')}`);
             fs.mkdirSync(dir, { recursive: true });
             try {
@@ -1313,7 +1348,7 @@ async function correrFill96(t) {
                     fs.writeFileSync(path.join(dir, `${base}.xml`), xmls[nombre]);
                     fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify({ metadata: {}, pulls: [], registeredCards: [] }));
                 }
-                const extra = t.tipo === 'scan' ? ['--scan-only'] : t.tipo === 'open96' ? ['--spend-all-hourglasses'] : [];
+                const extra = t.tipo === 'scan' ? ['--scan-only'] : t.tipo === 'open96' ? ['--spend-all-hourglasses'] : t.tipo === 'claim' ? ['--claim-only'] : [];
                 if (objetivos) {
                     const archivo = path.join(dir, '_targets.json');
                     fs.writeFileSync(archivo, JSON.stringify(objetivos));
@@ -1324,7 +1359,7 @@ async function correrFill96(t) {
                     modo: 'packs-only', gastar: t.tipo === 'open96', extra, parallel: 3, stopFile: t.stopFile,
                     env: { FILL96_SCAN_FILE: archivoScan },
                     onLine: (l) => {
-                        if (/\[fill96\] scan:/.test(l) || /-- ACCOUNT SUMMARY:/.test(l)) { pub.hechas++; avisar(); }
+                        if (/\[fill96\] scan:/.test(l) || /-- ACCOUNT SUMMARY:/.test(l) || /claim only: done/.test(l)) { pub.hechas++; avisar(); }
                         else if (/\] pack opened cards=/.test(l)) { pub.sobres++; avisar(); }
                     }
                 });
@@ -1380,4 +1415,4 @@ async function correrFill96(t) {
     }
 }
 
-module.exports = { iniciar, ciclo, resumenPrestadas, infoFarm, fill96Resumen, fill96Iniciar, fill96Estado, fill96Parar };
+module.exports = { iniciar, ciclo, resumenPrestadas, infoFarm, fill96Resumen, fill96Iniciar, fill96Estado, fill96Parar, fill96Sobres };

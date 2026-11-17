@@ -13291,7 +13291,7 @@ async function manejarInteraccionPrincipal(interaction) {
 
     // /fill96 (Ale 2026-11-16): cada miembro sube sus cuentas prestadas a 96 sobres (reroll-comunidad.js).
     if ((interaction.isChatInputCommand() && interaction.commandName === 'farm')
-        || (interaction.isButton() && interaction.customId.startsWith('fill96_'))) {
+        || ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith('fill96_'))) {
         return await manejarFill96(interaction);
     }
 
@@ -17817,6 +17817,7 @@ const fill96Mod = () => require('./reroll-comunidad.js');
 const FILL96_ERRORES = {
     no_accounts: 'You have no lent accounts that are not GP-eligible yet.',
     none_ready: 'None of your accounts is ready: they need **24 h** since their last pack.',
+    no_special: 'There is no special pack in the engine right now.',
     nothing_to_open: 'None of your checked accounts has free packs or hourglasses right now.',
     monitor_link_offline: 'Your **Monitor Link** did not answer. Open it on your PC and try again.',
     tunnel_down: 'The host engine is not ready right now. Try again in a few minutes.'
@@ -17846,7 +17847,7 @@ async function pantallaFill96(userId, guild = null) {
         const e = t.fase === 'scan'
             ? new EmbedBuilder().setColor(0x378ADD).setTitle('🔎 Checking your accounts…')
                 .setDescription(`Accounts checked: **${t.hechas} / ${t.total}**\n${barraFill(t.hechas, t.total)}\n${HG} Reading hourglasses and free packs of each one. Nothing is opened.\nStarted ${min} min ago`)
-            : new EmbedBuilder().setColor(0xEF9F27).setTitle(t.tipo === 'open96' ? '📦 Reaching 96…' : '📦 Opening 2 packs…')
+            : new EmbedBuilder().setColor(0xEF9F27).setTitle({ open96: '📦 Reaching 96…', open2: '📦 Opening 2 packs…', special: '✨ Opening the special pack…', claim: '🎁 Claiming gifts and missions…' }[t.tipo] || '📦 Farm 96P…')
                 .setDescription(`Accounts: **${t.hechas} / ${t.total}** · ${PK} Packs opened: **${nf(t.sobres)}**\n${barraFill(t.hechas, t.total)}\n${OK} Reached 96: **${t.llegaron}** · Started ${min} min ago`);
         return { embeds: [e], components: [filaParar] };
     }
@@ -17859,21 +17860,45 @@ async function pantallaFill96(userId, guild = null) {
     //   Farm 96P     = sobres gratis + todos los relojes que hagan falta hasta llegar a 96.
     const faltanTotal = r.cuentas.reduce((s, c) => s + c.faltan, 0);
     const listas2 = r.cuentas.filter(c => Date.now() - lean2ms(c.l) >= 24 * 3600 * 1000).length;
+    // (Ale 2026-11-16) El miembro elige que sobre abrir (si no elige, el del panel del host).
+    const { sobres, defecto, especial } = fill96Mod().fill96Sobres();
+    // (Ale 2026-11-16) Varios sobres a la vez: las cuentas se turnan entre los elegidos.
+    const elegidos = fill96Elegidos(userId, sobres, defecto);
+    const nombreSobre = elegidos.map(p => sobres.find(x => x.pack_id === p)?.name || p).join(', ');
+    const menus = [];
+    for (let i = 0; i < sobres.length && menus.length < 2; i += 25) {
+        const parte = sobres.slice(i, i + 25);
+        menus.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`fill96_pack_${i}`)
+            .setPlaceholder(i ? 'Older packs…' : 'Choose the packs to open (one or more)')
+            .setMinValues(i ? 0 : 1).setMaxValues(parte.length)
+            .addOptions(parte.map(x => ({ label: x.name.slice(0, 100), value: x.pack_id, default: elegidos.includes(x.pack_id) })))));
+    }
     return { embeds: [new EmbedBuilder().setColor(0x378ADD).setTitle('📦 Farm 96P')
         .setDescription([
             `Lent accounts not GP-eligible yet: **${nf(r.cuentas.length)}**`,
             `${PK} Packs missing in total: **${nf(faltanTotal)}**`,
+            `${PK} ${elegidos.length > 1 ? 'Packs' : 'Pack'}: **${nombreSobre}** (choose below — pick several and the accounts take turns)`,
             '',
             `${PK} **Open 2 packs** — only the 2 free packs, on every account with **24 h** since its last pack (**${nf(listas2)}** ready now). No hourglasses.`,
             `${HG} **Farm 96P** — free packs + all the hourglasses needed until each account reaches **96**; then it turns GP-eligible by itself. At the end you see which accounts made it and where the others stopped.`,
+            especial ? `✨ **${especial.name}** — the free special pack of the week (1 per account, its own energy).` : '',
+            '🎁 **Claim** — gifts, missions and event days on every account (gifts often bring hourglasses). No packs.',
             '',
             'Stop anytime. The result is posted in this channel.',
             '-# Uses the host proxies. No friend requests, nothing goes to your Main. Your PC and Monitor Link must be on.'
-        ].join('\n'))],
-        components: [new ActionRowBuilder().addComponents(
+        ].filter(x => x !== null).join('\n').replace(/\n{3,}/g, '\n\n'))],
+        components: [...menus, new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('fill96_open2').setLabel(`Open 2 packs (${nf(listas2)})`).setEmoji(E.boton('Card_Back_TCGP', '📦')).setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId('fill96_open96').setLabel('Farm 96P').setEmoji(E.boton('Reloj_de_arena_de_sobres_TCGP', '⌛')).setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('fill96_open96').setLabel('Farm 96P').setEmoji(E.boton('Reloj_de_arena_de_sobres_TCGP', '⌛')).setStyle(ButtonStyle.Success)),
+            new ActionRowBuilder().addComponents(
+            ...(especial ? [new ButtonBuilder().setCustomId('fill96_special').setLabel(especial.name.slice(0, 70)).setEmoji('✨').setStyle(ButtonStyle.Primary)] : []),
+            new ButtonBuilder().setCustomId('fill96_claim').setLabel('Claim gifts & missions').setEmoji('🎁').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('fill96_relojes').setLabel('Hourglasses per account?').setEmoji('🔎').setStyle(ButtonStyle.Secondary))] };
+}
+const fill96Sobre = new Map();   // discord_id -> [pack_id] elegidos en /farm
+function fill96Elegidos(userId, sobres, defecto) {
+    const v = (fill96Sobre.get(userId) || []).filter(p => sobres.some(x => x.pack_id === p));
+    return v.length ? v : (defecto ? [defecto] : []);
 }
 // lastPackPulled de Monitor Link ("20261116083249", hora local de su PC) a ms; sin dato = muy viejo.
 function lean2ms(l) {
@@ -17887,12 +17912,13 @@ function embedFinFill96(pub, E = (n, r) => r) {
     if (pub.tipo === 'scan') return new EmbedBuilder().setColor(0x1D9E75).setTitle('🔎 Check done')
         .setDescription(`Checked **${pub.hechas}** account(s) in ${min} min.${pub.error && FILL96_ERRORES[pub.error] ? `\n⚠️ ${FILL96_ERRORES[pub.error]}` : ''}\nUse **/farm** and press **Start Farm 96P**.`);
     const NO = E('bad', '❌'), HG = E('Reloj_de_arena_de_sobres_TCGP', '⌛');
-    const titulo = pub.tipo === 'open2' ? 'Open 2 packs' : 'Farm 96P';
+    const titulo = { open2: 'Open 2 packs', special: 'Special pack', claim: 'Claim gifts & missions' }[pub.tipo] || 'Farm 96P';
     const no = pub.noLlegaron || [];
     const e = new EmbedBuilder().setColor(no.length ? 0xEF9F27 : 0x1D9E75)
         .setTitle(pub.fase === 'stopped' ? `⏹️ ${titulo} stopped` : `✅ ${titulo} done`)
         .setDescription([
             `${PK} Packs opened: **${nf(pub.sobres)}** on ${nf(pub.hechas)} account(s) · ${min} min`,
+            [].concat(pub.packId || []).length ? `${PK} ${[].concat(pub.packId).length > 1 ? 'Packs' : 'Pack'}: **${[].concat(pub.packId).map(p => (fill96Mod().fill96Sobres().sobres.find(x => x.pack_id === p)?.name) || (fill96Mod().fill96Sobres().especial?.pack_id === p ? fill96Mod().fill96Sobres().especial.name : p)).join(', ')}**` : '',
             pub.tipo === 'open96' ? `${OK} Reached 96: **${nf(pub.llegaron)}** — they turn GP-eligible by themselves` : '',
             pub.tipo === 'open96' && no.length ? `${NO} Not enough hourglasses: **${nf(no.length)}** account(s)` : '',
             pub.error && FILL96_ERRORES[pub.error] ? `⚠️ ${FILL96_ERRORES[pub.error]}` : '',
@@ -17918,7 +17944,7 @@ async function manejarFill96(interaction) {
             return await interaction.reply({ ephemeral: true, content: `📦 Use **/farm** in ${canal}.` }).catch(() => {});
         }
     }
-    const id = interaction.isButton() ? interaction.customId : '';
+    const id = interaction.isChatInputCommand() ? '' : interaction.customId;
     if (!id) await interaction.deferReply({ ephemeral: true }).catch(() => {});
     else await interaction.deferUpdate().catch(() => {});
     if (id === 'fill96_stop') {
@@ -17926,13 +17952,24 @@ async function manejarFill96(interaction) {
         return await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x888780).setTitle('⏹️ Stopping…')
             .setDescription('It stops after the accounts in progress. You get a DM with what was done.')], components: [] }).catch(() => {});
     }
+    if (id.startsWith('fill96_pack_') && interaction.isStringSelectMenu()) {
+        // Cada menu cambia solo sus propios sobres (con 2 menus no se pisan).
+        const enEste = (interaction.component?.options || []).map(o => o.value);
+        const { sobres: _s1, defecto: _d1 } = fill96Mod().fill96Sobres();
+        const antes = fill96Elegidos(userId, _s1, _d1).filter(p => !enEste.includes(p));
+        const nuevos = [...antes, ...interaction.values];
+        fill96Sobre.set(userId, nuevos.length ? nuevos : interaction.values);
+        return await interaction.editReply(await pantallaFill96(userId, interaction.guild)).catch(() => {});
+    }
     if (id === 'fill96_relojes') {
         const E = await emojisFill96(interaction.guild);
         return await interaction.followUp({ ephemeral: true, content: `${E('Reloj_de_arena_de_sobres_TCGP', '⌛')} Want to know how many hourglasses each account has? Message <@341916882485510144> (Ale Cast).` }).catch(() => {});
     }
     // Botones viejos (revision / gastar todo) ya no arrancan nada.
-    if (id === 'fill96_open96' || id === 'fill96_open2') {
+    if (['fill96_open96', 'fill96_open2', 'fill96_special', 'fill96_claim'].includes(id)) {
         const tipo = id.slice('fill96_'.length);
+        const { sobres: _s, defecto: _d } = fill96Mod().fill96Sobres();
+        const packId = fill96Elegidos(userId, _s, _d);
         fill96Mod().fill96Iniciar(userId, tipo, async (pub, final) => {
             if (!final) return await interaction.editReply(await pantallaFill96(userId, interaction.guild)).catch(() => {});
             const fin = embedFinFill96(pub, await emojisFill96(interaction.guild));
@@ -17946,7 +17983,7 @@ async function manejarFill96(interaction) {
             const canal = await canalFarm96(interaction.guildId) || interaction.channel;
             const publicado = await canal?.send({ content: `<@${userId}>`, embeds: [fin], allowedMentions: { users: [userId] } }).catch(() => null);
             if (!publicado) await interaction.user.send({ embeds: [fin] }).catch(() => {});
-        });
+        }, packId);
     }
     return await interaction.editReply(await pantallaFill96(userId, interaction.guild)).catch(e => console.error('fill96:', e?.message || e));
 }
