@@ -1780,9 +1780,9 @@ def _claim_rewards(sess, tag: str = "", gifts: bool = True) -> None:
                         if not cartas:
                             continue
                         info = gp_cards.classify_pack(cartas, next((t for t in tablas if t), ""))
-                        marca = (f" <-- GOD PACK {info['label']} (WONDER-PICKABLE)" if info.get("is_god_pickable")
-                                 else f" <-- [!!] god pack drawn but UNPICKABLE ({info['label']})" if info.get("is_god_unpickable")
-                                 else " <-- RARE PACK (2xSR - GP&Double eligible)" if info.get("is_rare_2sr") else "")
+                        # GIFT_NOT_GP_V1 (wR98/Ale 2026-11-17) Gift packs are not shared to Wonder Pick: never call them GOD PACK.
+                        marca = (f" <-- gift with god cards ({info['label']}), not Wonder-Pickable"
+                                 if info.get("is_god_pickable") or info.get("is_god_unpickable") else "")
                         log(f"gift pack opened cards={len(cartas)} table={','.join(t for t in tablas if t) or '?'}{marca}", tag=tag)
                         log(f"  cards: {gp_cards.summarize_cards(cartas)}", tag=tag)
                     except Exception as exc:

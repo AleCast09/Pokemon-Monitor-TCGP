@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.34"
+global VERSION := "ahk-1.9.35"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -162,8 +162,10 @@ CrearVentana() {
     Gui, Font, s9 Bold cBlack, Segoe UI
     Gui, Add, Button, x556 y198 w180 h32 gSyncRerollZenith, Sync reroll for Zenith Rise
     Gui, Font, s10 Bold cBlack, Segoe UI
-    Gui, Add, Button, x556 y235 w88 h28 gSincronizar, Sync now
-    Gui, Add, Button, x648 y235 w88 h28 gOcultar, Hide
+    ; (Zeka 2026-11-18) Exit here too: the tray icon is easy to miss and the X only hides the window.
+    Gui, Add, Button, x556 y235 w62 h28 gSincronizar, Sync now
+    Gui, Add, Button, x622 y235 w54 h28 gOcultar, Hide
+    Gui, Add, Button, x680 y235 w56 h28 gSalir, Exit
     ; (Ale 2026-11-10) Dragonite online/offline: a small light in the button (green online, red offline).
     Gui, Add, Button, x556 y266 w180 h28 vBtnOnline hwndHBtnOnline gCambiarOnline, Go online
     Gui, Font, s9 Norm cDCDDDE, Segoe UI
@@ -2558,7 +2560,9 @@ CarpetaPadre(ruta) {
 Http(metodo, url, body := "", tipo := "", bearer := "", segundos := 30) {
     req := ComObjCreate("WinHttp.WinHttpRequest.5.1")
     req.SetTimeouts(5000, 10000, 30000, segundos * 1000)
-    req.Open(metodo, url, false)
+    ; (Zeka 2026-11-18) Asynchronous + short waits: a synchronous Send froze the whole program (tray menu,
+    ; Exit, buttons) while it talked to the hosts, and with many accounts that is most of the time.
+    req.Open(metodo, url, true)
     if (tipo != "")
         req.SetRequestHeader("Content-Type", tipo)
     if (bearer != "")
@@ -2567,6 +2571,12 @@ Http(metodo, url, body := "", tipo := "", bearer := "", segundos := 30) {
         req.Send(body)
     else
         req.Send()
+    limite := A_TickCount + (segundos + 50) * 1000
+    while !req.WaitForResponse(0) {
+        if (A_TickCount > limite)
+            throw Exception("timeout")
+        Sleep, 20
+    }
     return {status: req.Status, text: req.ResponseText}
 }
 

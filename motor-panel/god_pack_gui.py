@@ -2647,7 +2647,9 @@ class GodPackGui(QMainWindow):
                 changed = True
                 # SOLO registrar en el panel inferior si es un GOD PACK real
                 # (Ignora <-- RARE PACK y <-- rare de 1 o 2 estrellas normales)
-                if "GOD PACK" in ln:
+                # GIFT_NOT_GP_V1 (wR98/Ale 2026-11-17): a gift-box pack is not shared to Wonder Pick and is never
+                # posted, so it doesn't count in GOD PACK HITS.
+                if "GOD PACK" in ln and "gift pack opened" not in ln:
                     self._pending_hit_header[tag] = ln
 
             elif "cards: " in ln and tag in self._pending_hit_header:
