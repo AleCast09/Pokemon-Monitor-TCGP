@@ -24,6 +24,11 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-19 (tarde) — cuenta 1 — Tarjeta fija de 📦-farm-96p, ventana /farm (PUBLICADO host-2026.11.19-0645)
+- **Tarjeta fija** (`tarjeta-farm96.js` + `actualizarTableroFarm` en bot.js): siempre el último mensaje de 📦-farm-96p; vuelve abajo 4 s después de cualquier otro mensaje; se edita cada 30 s si cambió. Muestra los /farm en curso (nombre de Discord, sobres en abanico +N, tarea, cuentas, elegibles/no elegibles, PPM de /farm). Sin nadie: "READY" con Mega Mewtwo X, First Partners y Pikachu. Confirmado en el canal.
+- God Pack UI: botón **📦 /farm** → ventana aparte con los /farm de los miembros y su propio PPM; /farm escribe en `reports/farm96.log` (ya no suma al PPM del host). Sobres de regalo no cuentan como sobres.
+- Pendiente: lo de Isaac (PTCGPB reescribe el .json y borra los sobres del farm): opciones 1) Monitor Link guarda copia y los repone, 2) contar aparte, 3) formato de PTCGPB. Ale todavía no eligió.
+
 ### 2026-11-19 — cuenta 1 — /farm todas elegibles, host principal
 - /farm: si todas las cuentas prestadas son elegibles, igual ofrece ✨ especial y 🎁 Claim (ragezzail). PUBLICADO.
 - **HOST_PRINCIPAL=1** en el `.env` de Ale (`community-host.js`): al arrancar, si otro host tiene el turno, AleCast lo recupera UNA vez a los 3 min. Si después se lo quitan (vigilante / Hand over) no insiste. Activo en el bot de Ale (no hace falta publicar; los otros hosts no tienen la variable).
