@@ -1944,6 +1944,32 @@ def _note_fill96_scan(account: dict, tag: str, hg: int, power: int, full_in: int
 _fr_state = threading.local()   # proxy_blocked: the last send failed because the proxy returned a web page
 
 
+def _send_late_gp_requests(sess, account: dict, friend_codes: list, tag: str = "") -> None:
+    """GP_LATE_FR_V1: God Pack opened in Open Packs Only -> friend requests to the online Mains now, kept
+    (never withdrawn), so they can still Wonder Pick it. Same Main list / blocked IDs as God Pack mode."""
+    try:
+        codes = fetch_live_worker_codes(friend_codes or [])
+        codes = list(dict.fromkeys(_limit_collectors(codes, friend_codes or [])))
+        try:
+            _blocked = set(json.loads((PROJECT_ROOT / "reports" / "blocked_ids.json").read_text("utf-8")).get("ids") or [])
+        except Exception:
+            _blocked = set()
+        codes = [c for c in codes if "".join(ch for ch in c if ch.isdigit()) not in _blocked]
+        pids = [p for p in (resolve_friend_code(sess, c) for c in codes) if p]
+        if not pids:
+            log("[gp-late] God Pack in Open Packs Only, but no Main online to send requests to", tag=tag)
+            return
+        ok = send_friend_requests(sess, pids, tag=tag)
+        try:
+            fr_cleanup.ledger_close(account["account_key"])   # never unfriend a real God Pack
+        except Exception:
+            pass
+        log(f"[gp-late] GOD PACK in Open Packs Only: friend requests {'sent' if ok else 'FAILED'} to "
+            f"{len(pids)} Main(s), friendship kept so they can Wonder Pick it", tag=tag)
+    except Exception as exc:
+        log(f"[gp-late] could not send the friend requests: {str(exc)[:120]}", tag=tag)
+
+
 def send_friend_requests(sess, target_pids: list[str], tag: str = "") -> bool:
     """
     Send friend request to one or more player_ids using batched helper.
@@ -3216,6 +3242,7 @@ def inject_one(
         pid_to_friend_code: dict[str, str] = {}  # Maps UUID -> 16-digit friend code for send_like()
         fr_was_sent = False          # flipped True after send_friend_requests OK
         any_match = False            # any pack matched the wishlist (keep-friend trigger)
+        _gp_late = False             # GP_LATE_FR_V1: a God Pack in Open Packs Only -> friend requests after
         # Free pack power the account had BEFORE we started opening. Used
         # by the smart-mix loop below so packs 1..N (N = free power) go
         # out with empty healItems (cost 0 LARGE), and packs N+1..M carry
@@ -3816,6 +3843,11 @@ def inject_one(
                     f"first_card_ids={_cids_head} "
                     f"total_cards={len(_cids)} pack_id={pack_id}", tag=tag)
 
+            # GP_LATE_FR_V1 (Ale/Arcade 2026-11-19): Open Packs Only sends no friend requests, so a God Pack
+            # there was lost. Packs are shared (do_share) anyway: friends added AFTER can still Wonder Pick it.
+            if (run_mode == "packs-only" and info.get("is_god_pickable")
+                    and gp_cards.matches_wishlist(info, farming_mode, pack_power_min)):
+                _gp_late = True
             # Wishlist match — only meaningful in godpack mode.
             if run_mode == "godpack":
                 matched = gp_cards.matches_wishlist(info, farming_mode, pack_power_min)
@@ -3925,6 +3957,8 @@ def inject_one(
             outcome_str = (f"opened {result['packs_opened']}/{packs} packs, "
                            f"no match ({','.join(pack_labels) or '-'})")
         log(f"-- ACCOUNT SUMMARY: {outcome_str}", tag=tag)
+        if _gp_late and not dry_run and os.environ.get("GP_LATE_FR", "1") != "0":
+            _send_late_gp_requests(sess, account, friend_codes, tag)
         # (Ale 2026-11-12) Missions finished by opening packs, then the hourglasses left -> list.
         if claim_rewards and run_mode != "godpack" and not dry_run and result["packs_opened"]:
             _claim_rewards(sess, tag, gifts=False)
