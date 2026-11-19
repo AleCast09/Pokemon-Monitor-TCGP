@@ -803,13 +803,16 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = fal
         }
         // Lo que dice el motor queda en reports/reroll_comunidad.log (2026-11-01: todas las cuentas daban
         // 0 sobres y no se veia por que). Pasado de 20 MB se rota a .log.1.
-        const rutaLog = path.join(motor, 'reports', 'reroll_comunidad.log');
+        // (Arcade 2026-11-19) /farm va a su propio log: en reroll_comunidad.log lo leia el God Pack UI del host
+        // y sumaba esos sobres (y los de regalo) a su PPM y contadores (212 PPM).
+        const rutaLog = path.join(motor, 'reports', op.logFile || 'reroll_comunidad.log');
         let salida = null;
         try {
             fs.mkdirSync(path.dirname(rutaLog), { recursive: true });
             if (fs.existsSync(rutaLog) && fs.statSync(rutaLog).size > 20 * 1024 * 1024) fs.renameSync(rutaLog, `${rutaLog}.1`);
             salida = fs.createWriteStream(rutaLog, { flags: 'a' });
-            salida.write(`\n===== ${new Date().toISOString()} owner=${duenoId} accounts=${cantidad} python=${python} =====\n`);
+            const nombre = String(op.nombre || '').replace(/[\r\n=]/g, ' ').trim();
+            salida.write(`\n===== ${new Date().toISOString()} owner=${duenoId} accounts=${cantidad}${op.etiqueta ? ` job=${op.etiqueta}` : ''} python=${python}${nombre ? ` name=${nombre}` : ''} =====\n`);
         } catch (e) { salida = null; }
         const escribir = d => { try { salida?.write(d); } catch (e) { /* sin log */ } };
         const cerrar = () => { try { salida?.end(); } catch (e) { /* sin log */ } };
@@ -1361,7 +1364,7 @@ async function correrFill96(t) {
                 }
                 log(`fill96 ${t.tipo}: ${nombres.length} account(s) of ${t.id}`);
                 await correrInject(motor, dir, s, nombres.length, t.id, false, {
-                    modo: 'packs-only', gastar: t.tipo === 'open96', extra, parallel: 3, stopFile: t.stopFile,
+                    modo: 'packs-only', gastar: t.tipo === 'open96', extra, parallel: 3, stopFile: t.stopFile, logFile: 'farm96.log', etiqueta: t.tipo, nombre: await nombreMiembro(t.id).catch(() => ''),
                     env: { FILL96_SCAN_FILE: archivoScan },
                     onLine: (l) => {
                         if (/\[fill96\] scan:/.test(l) || /-- ACCOUNT SUMMARY:/.test(l) || /claim only: done/.test(l)) { pub.hechas++; avisar(); }

@@ -855,6 +855,14 @@ class GodPackGui(QMainWindow):
         )
         self.btn_cleanup.clicked.connect(self._start_cleanup_only)
         sub_btns.addWidget(self.btn_cleanup, 1)
+        # FARM96_WINDOW_V1 (Ale/Arcade 2026-11-19): members' /farm runs, in their own window.
+        self.btn_farm96 = QPushButton("📦 /farm")
+        self.btn_farm96.setFixedHeight(28)
+        self.btn_farm96.setCursor(Qt.PointingHandCursor)
+        self.btn_farm96.setToolTip("What members are opening on their lent accounts with /farm on this host\n"
+                                   "(only when this host has the community turn). It doesn't count in your PPM.")
+        self.btn_farm96.clicked.connect(self._show_farm96)
+        sub_btns.addWidget(self.btn_farm96, 1)
         dock_layout.addLayout(sub_btns)
 
         self.status_label = QLabel("Idle. Ready to start.")
@@ -2015,6 +2023,108 @@ class GodPackGui(QMainWindow):
         reloj.start(5000)
         dlg.show()
 
+    # FARM96_WINDOW_V1: members' /farm (Monitor Pokemon writes it to reports/farm96.log, apart from the GP farm).
+    FARM96_LOG = ROOT / "reports" / "farm96.log"
+    FARM96_JOBS = {"open96": "Farm 96P", "open2": "Open 2 packs", "special": "Special pack", "claim": "Claim gifts"}
+
+    def _farm96_read(self) -> tuple[str, list[str]]:
+        """(summary html, last log lines) from the end of farm96.log."""
+        try:
+            with open(self.FARM96_LOG, "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - 3 * 1024 * 1024))
+                lineas = f.read().decode("utf-8", errors="replace").splitlines()
+            # Readable and safe: no request headers, proxy passwords masked.
+            lineas = [re.sub(r"//[^/@\s]+@", "//***@", l) for l in lineas
+                      if l.strip() and "x-takasho" not in l and "DIAG-META" not in l and "x-grpc" not in l and "x-user-agent" not in l]
+        except Exception:
+            return ("<p>No member has used /farm on this host yet.</p>", [])
+        runs = {}   # owner -> {job, start, accounts, done, packs, gifts}
+        for ln in lineas:
+            m = re.match(r"===== (\S+) owner=(\d+) accounts=(\d+)(?: job=(\w+))?(?:.*? name=(.+?))? =====", ln)
+            if m:
+                r = runs.setdefault(m.group(2), {"job": "", "start": m.group(1), "accounts": 0, "done": 0, "packs": 0, "gifts": 0, "last": m.group(1), "name": ""})
+                r["job"] = m.group(4) or r["job"]
+                r["name"] = (m.group(5) or "").strip() or r["name"]
+                r["accounts"] += int(m.group(3))
+                r["last"] = m.group(1)
+                cur = r
+                continue
+            if not runs:
+                continue
+            if "gift pack opened" in ln:
+                cur["gifts"] += 1
+            elif "pack opened cards=" in ln:
+                cur["packs"] += 1
+            elif "-- ACCOUNT SUMMARY:" in ln or "claim only: done" in ln:
+                cur["done"] += 1
+        if not runs:
+            return ("<p>No member has used /farm on this host yet.</p>", lineas[-400:])
+        # /farm speed on its own (Ale 2026-11-19: "separa los ppm"): packs in the last 10 min of the log / 10.
+        horas = []
+        for ln in lineas:
+            if "pack opened cards=" in ln and "gift pack opened" not in ln:
+                mh = re.match(r"\[(\d\d):(\d\d):(\d\d)\]", ln)
+                if mh:
+                    horas.append(int(mh.group(1)) * 3600 + int(mh.group(2)) * 60 + int(mh.group(3)))
+        ppm_farm = 0.0
+        if horas:
+            fin = horas[-1]
+            ventana = [h for h in horas if 0 <= (fin - h) % 86400 <= 600]
+            ppm_farm = len(ventana) / 10.0
+        cab_ppm = (f"<p style='margin:2px 0 6px 0'><b>/farm speed: {ppm_farm:.1f} PPM</b> (last 10 min of /farm) — "
+                   f"separate from your GP farm PPM, never sent to Zenith.</p>")
+        filas = "".join(
+            f"<tr><td><b>{_html.escape(r.get('name') or dueno)}</b></td><td>{self.FARM96_JOBS.get(r['job'], r['job'] or '?')}</td>"
+            f"<td align='right'>{r['done']:,} / {r['accounts']:,}</td><td align='right'><b>{r['packs']:,}</b></td>"
+            f"<td align='right'>{r['gifts']:,}</td><td>{_html.escape(r['last'][11:16])} UTC</td></tr>"
+            for dueno, r in sorted(runs.items(), key=lambda kv: kv[1]["last"], reverse=True)[:15])
+        cab = (cab_ppm + "<table cellspacing='0' cellpadding='4' width='100%'><tr><th align='left'>Member</th>"
+               "<th align='left'>Job</th><th align='right'>Accounts</th><th align='right'>Packs</th>"
+               "<th align='right'>Gift packs</th><th align='left'>Last batch</th></tr>" + filas + "</table>")
+        return (cab, lineas[-400:])
+
+    def _show_farm96(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Members' /farm on this host")
+        dlg.resize(900, 640)
+        v = QVBoxLayout(dlg)
+        nota = QLabel("Members opening their lent accounts with /farm (only while this host has the community turn). "
+                      "Not part of your GP farm or your PPM.")
+        nota.setWordWrap(True)
+        nota.setStyleSheet(f"color: {D['TEXT2']}; font-size: 11px;")
+        v.addWidget(nota)
+        resumen = QTextEdit()
+        resumen.setReadOnly(True)
+        resumen.setFixedHeight(150)
+        resumen.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        resumen.setStyleSheet(f"background: {D['INPUT']}; color: {D['TEXT']}; border: 1px solid {D['BORDER']};")
+        v.addWidget(resumen)
+        log = QTextEdit()
+        log.setReadOnly(True)
+        log.setStyleSheet(f"background: {D['INPUT']}; color: {D['TEXT']}; border: 1px solid {D['BORDER']}; "
+                          "font-family: Consolas, monospace; font-size: 11px;")
+        v.addWidget(log, 1)
+        estado = {"n": -1}
+
+        def refrescar():
+            cab, lineas = self._farm96_read()
+            resumen.setHtml(cab)
+            if len(lineas) != estado["n"] or (lineas and lineas[-1] != estado.get("u")):
+                barra = log.verticalScrollBar()
+                abajo = barra.value() >= barra.maximum() - 4
+                log.setPlainText("\n".join(lineas))
+                if abajo:
+                    barra.setValue(barra.maximum())
+                estado["n"], estado["u"] = len(lineas), (lineas[-1] if lineas else None)
+
+        refrescar()
+        log.verticalScrollBar().setValue(log.verticalScrollBar().maximum())
+        reloj = QTimer(dlg)
+        reloj.timeout.connect(refrescar)
+        reloj.start(2000)
+        dlg.show()
+
     def _update_community_hint(self, *_):
         try:
             self.w_community_hint.setText(
@@ -2641,7 +2751,8 @@ class GodPackGui(QMainWindow):
             tag = self._extract_tag(ln)
 
             # 1. KPI Counters & Strict God Pack Detection
-            if "pack opened cards=" in ln:
+            # (Arcade 2026-11-19) Gift-box packs are not opened packs of the farm: they don't count (PPM 212).
+            if "pack opened cards=" in ln and "gift pack opened" not in ln:
                 self._live["packs"] += 1
                 self._last_pack_line[tag] = ln
                 changed = True
