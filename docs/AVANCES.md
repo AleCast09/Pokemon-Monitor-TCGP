@@ -24,6 +24,11 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-19 — cuenta 1 — /farm todas elegibles, host principal
+- /farm: si todas las cuentas prestadas son elegibles, igual ofrece ✨ especial y 🎁 Claim (ragezzail). PUBLICADO.
+- **HOST_PRINCIPAL=1** en el `.env` de Ale (`community-host.js`): al arrancar, si otro host tiene el turno, AleCast lo recupera UNA vez a los 3 min. Si después se lo quitan (vigilante / Hand over) no insiste. Activo en el bot de Ale (no hace falta publicar; los otros hosts no tienen la variable).
+- Isaac: su .json quedó distinto al .bak; Monitor Link escribe bien, parece que PTCGPB lo reescribió después. Esperando fechas de sus archivos.
+
 ### 2026-11-18 — cuenta 1 — Monitor Link 1.9.35, sobres de regalo (PUBLICADO host-2026.11.18-1349)
 - Monitor Link 1.9.35: `Http()` asíncrono (antes congelaba todo mientras enviaba: Exit del ícono no respondía, caso Zeka) + botón **Exit** en la ventana.
 - Sobres de regalo (Claim) ya no cuentan en GOD PACK HITS ni dicen "GOD PACK" (`GIFT_NOT_GP_V1`). Los 8 "hits" de wR98 eran regalos; su único GP real (Isaac-141) sí lo publicó KyuremBot.

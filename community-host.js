@@ -29,6 +29,7 @@ let iniciado = false;
 let alTomar = async () => {};
 let alSoltar = async () => {};
 let vueltas = 0;
+let arranque = 0, yaTuveTurno = false, recuperado = false;   // HOST_PRINCIPAL
 let estadoPropio = async () => ({});
 let alPanel = async () => {};
 let alControl = async () => {};
@@ -99,7 +100,21 @@ async function ciclo() {
         // Comandos que quedaron de antes (se apago sin soltarlos): fuera, asi no aparecen repetidos.
         await alSoltar().catch(() => {});
     }
+    if (!iniciado) arranque = Date.now();
     iniciado = true;
+    if (activo) yaTuveTurno = true;
+    // HOST_PRINCIPAL (Ale 2026-11-19): la PC de Ale se reinicio / PM2 se cayo 2 veces y el turno quedo en otro
+    // host todo el dia (los /farm corrian en su PC). El host principal lo recupera UNA vez por arranque, a los
+    // 3 min (ya estable). Si despues se lo quitan (vigilante del enlace o "Hand over"), no insiste.
+    if (!activo && !yaTuveTurno && !recuperado && /^(1|true|si|yes)$/i.test(String(process.env.HOST_PRINCIPAL || ''))
+        && Date.now() - arranque >= 3 * 60 * 1000) {
+        recuperado = true;
+        try {
+            await redis('SET', CLAVE, YO, 'PX', String(VIDA_MS));
+            console.log(`👑 ${YO} is the main host — taking the community turn back.`);
+            setTimeout(() => ciclo().catch(() => {}), 2000);
+        } catch (e) { console.error('⚠️ Could not take the turn back:', e?.message || e); }
+    }
     // Estado cada 3 min y panel cada 4 min (la cuota gratis de Upstash es de 500k consultas al mes).
     vueltas++;
     if (vueltas % 3 !== 1) return;
