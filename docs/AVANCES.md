@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-18 — cuenta 1 — Monitor Link 1.9.35, sobres de regalo (PUBLICADO host-2026.11.18-1349)
+- Monitor Link 1.9.35: `Http()` asíncrono (antes congelaba todo mientras enviaba: Exit del ícono no respondía, caso Zeka) + botón **Exit** en la ventana.
+- Sobres de regalo (Claim) ya no cuentan en GOD PACK HITS ni dicen "GOD PACK" (`GIFT_NOT_GP_V1`). Los 8 "hits" de wR98 eran regalos; su único GP real (Isaac-141) sí lo publicó KyuremBot.
+- El turno se pierde cada vez que PM2 arranca de nuevo sin `.reiniciando` (PC reiniciada o PM2 caído: 2026-11-17 10:45 → ZenithBot, 2026-11-18 05:41 → ArcaWindows). Con el turno, los `/farm` de los miembros corren en ese host. Ale: "déjalo como está" (no recuperar el turno solo por ahora).
+- Log nuevo: `[reroll] <id>: Monitor Link could not write ...` cuando no encuentra el .json de una cuenta.
+
 ### 2026-11-17 (mañana) — cuenta 1 — Relojes arreglados, 360 de Zeka (PUBLICADO host-2026.11.17-0849)
 - **Relojes**: el juego rechazaba el 3.er sobre (HTML 403) por abrir cada 2-3 s. Probado en Ale_Cast_101 con 15 s: 2 gratis + 4 pagados (612→564). `inject.py` `HG_PACE_V1`: ≥15 s entre sobres cuando paga con relojes.
 - **Claim** pide siempre las recompensas 1/15/30 de 30 Days of Gifts (`MILESTONES_ALWAYS_V1`); Farm 96P reclama regalos antes de gastar.

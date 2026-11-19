@@ -17865,9 +17865,19 @@ async function pantallaFill96(userId, guild = null) {
                 '-# Your PC and Monitor Link must stay on while farming.'
             ].join('\n'))], components: [] };
     }
+    // (ragezzail 2026-11-19) Todas elegibles: el sobre especial y Claim corren en TODAS las cuentas, se ofrecen igual.
     if (!r.cuentas.length) {
-        return { embeds: [new EmbedBuilder().setColor(0x1D9E75).setTitle('✅ Nothing to fill')
-            .setDescription('All your **lent** accounts are God Pack eligible already (96+ packs).\nOnly accounts you lend with Monitor Link count here.')], components: [] };
+        const sp = fill96Mod().fill96Sobres().especial;
+        return { embeds: [new EmbedBuilder().setColor(0x1D9E75).setTitle('✅ All your accounts are GP-eligible')
+            .setDescription([
+                `All your **${nf(r.prestadas)}** lent accounts have 96+ packs, so there's nothing to fill.`,
+                '',
+                sp ? `✨ **${sp.name}** — the free special pack of the week on every account.` : '',
+                '🎁 **Claim** — gifts, missions and event days on every account. No packs.'
+            ].join('\n').replace(/\n{3,}/g, '\n\n'))],
+            components: [new ActionRowBuilder().addComponents(
+                ...(sp ? [new ButtonBuilder().setCustomId('fill96_special').setLabel(sp.name.slice(0, 70)).setEmoji('✨').setStyle(ButtonStyle.Primary)] : []),
+                new ButtonBuilder().setCustomId('fill96_claim').setLabel('Claim gifts & missions').setEmoji('🎁').setStyle(ButtonStyle.Secondary))] };
     }
     // (Ale 2026-11-16) Sin revision de relojes (hacia cola y errores). El miembro elige:
     //   Open 2 packs = solo los 2 sobres gratis, en las cuentas con 24 h desde su ultimo sobre.
