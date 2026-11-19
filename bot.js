@@ -17955,6 +17955,89 @@ function embedFinFill96(pub, E = (n, r) => r) {
     }
     return e;
 }
+// ---- Tarjeta fija del canal 📦-farm-96p (Ale 2026-11-19) -------------------------------------------------
+// Siempre es el ULTIMO mensaje del canal (lo primero que se ve al entrar): si llega otro mensaje, se borra y se
+// vuelve a mandar abajo. Muestra los /farm en curso (nombre de Discord, sobres, tarea, cuentas, PPM) o "READY".
+const TABLERO_FARM = 'farm-board.png';
+const tableroFarm = new Map();   // guildId -> { id, firma, ocupado, otraVez, timer }
+async function datosTableroFarm(guild) {
+    const mod = fill96Mod();
+    const { sobres, especial } = mod.fill96Sobres();
+    const nombreDe = (p) => sobres.find(x => x.pack_id === p)?.name || (especial?.pack_id === p ? `Special Pack: ${especial.name}` : '');
+    const activos = mod.fill96Activos ? mod.fill96Activos() : [];
+    const miembros = [];
+    for (const a of activos) {
+        const mb = await guild.members.fetch(a.id).catch(() => null);
+        miembros.push({ nombre: mb?.displayName || a.id, tarea: a.tipo, cuentas: a.total || 0, elegibles: a.elegibles || 0,
+            hechas: a.hechas || 0, sobres: a.sobres || 0, sobre: a.tipo === 'claim' ? [] : [].concat(a.packId || []).map(nombreDe).filter(Boolean) });
+    }
+    const desde = Math.min(...activos.map(a => a.inicio || Date.now()), Date.now());
+    const ppm = activos.length ? miembros.reduce((s, m) => s + m.sobres, 0) / Math.max(1, (Date.now() - desde) / 60000) : 0;
+    // Sin nadie farmeando, los sobres actuales (Ale 2026-11-19): Mega Mewtwo X, First Partners y Pikachu.
+    const decoracion = [nombreDe('CN001_0010_00_000') || sobres[0]?.name, especial ? `Special Pack: ${especial.name}` : null,
+        nombreDe('CN001_0020_00_000') || sobres[1]?.name].filter(Boolean);
+    return { host: hostComunidad.nombre(), miembros, ppm, decoracion, cola: activos[0]?.cola || 0 };
+}
+async function actualizarTableroFarm(guild, { mover = false } = {}) {
+    const est = tableroFarm.get(guild.id) || {};
+    tableroFarm.set(guild.id, est);
+    if (est.ocupado) { est.otraVez = est.otraVez || mover || 'editar'; return; }
+    est.ocupado = true;
+    try {
+        if (!comunidad.esComunidad(guild.id) || !hostComunidad.esActivo()) return;
+        const canal = await canalFarm96(guild.id);
+        if (!canal) return;
+        const datos = await datosTableroFarm(guild);
+        const firma = JSON.stringify([datos.miembros.map(m => [m.nombre, m.tarea, m.cuentas, m.hechas, Math.floor(m.sobres / 10)]), Math.round(datos.ppm), datos.cola]);
+        // Primera vez: buscar la tarjeta que ya este en el canal (de este bot o del host anterior).
+        if (!est.id) {
+            const ultimos = await canal.messages.fetch({ limit: 30 }).catch(() => null);
+            const viejas = [...(ultimos?.values() || [])].filter(m => m.attachments.some(a => a.name === TABLERO_FARM));
+            const mia = viejas.find(m => m.author.id === client.user.id && m.id === canal.lastMessageId);
+            for (const m of viejas) if (m !== mia) await m.delete().catch(() => {});
+            if (mia) est.id = mia.id;
+            else mover = true;
+        }
+        if (!mover && est.id && est.firma === firma) return;
+        const { armarTarjetaFarm } = require('./tarjeta-farm96.js');
+        const archivo = new AttachmentBuilder(await armarTarjetaFarm(datos), { name: TABLERO_FARM });
+        const cuerpo = { content: '', files: [archivo], allowedMentions: { parse: [] } };
+        let msg = est.id && !mover ? await canal.messages.fetch(est.id).catch(() => null) : null;
+        if (msg) await msg.edit({ ...cuerpo, attachments: [] }).catch(() => { msg = null; });
+        if (!msg) {
+            if (est.id) await canal.messages.delete(est.id).catch(() => {});
+            const nuevo = await canal.send(cuerpo).catch(e => { console.error('farm board:', e?.message || e); return null; });
+            est.id = nuevo?.id || null;
+        }
+        est.firma = firma;
+    } catch (e) {
+        console.error('farm board:', e?.message || e);
+    } finally {
+        est.ocupado = false;
+        if (est.otraVez) { const m = est.otraVez === true; est.otraVez = null; setTimeout(() => actualizarTableroFarm(guild, { mover: m }), 1500); }
+    }
+}
+// Otro mensaje en el canal (resultado de un /farm, staff...): la tarjeta vuelve abajo a los pocos segundos.
+client.on('messageCreate', async (message) => {
+    try {
+        if (!message.guild || !comunidad.esComunidad(message.guild.id) || !hostComunidad.esActivo()) return;
+        const est = tableroFarm.get(message.guild.id);
+        if (est?.id && message.id === est.id) return;
+        const canal = await canalFarm96(message.guild.id);
+        if (!canal || canal.id !== message.channelId) return;
+        if (message.author?.id === client.user.id && message.attachments.some(a => a.name === TABLERO_FARM)) return;
+        const e = tableroFarm.get(message.guild.id) || {};
+        tableroFarm.set(message.guild.id, e);
+        clearTimeout(e.timer);
+        e.timer = setTimeout(() => actualizarTableroFarm(message.guild, { mover: true }), 4000);
+    } catch (e) { /* nada */ }
+});
+// Cada 30 s mientras el bot tiene el turno: se edita solo si algo cambio.
+setInterval(() => {
+    if (!client.isReady?.() || !hostComunidad.esActivo()) return;
+    for (const guild of client.guilds.cache.values()) if (comunidad.esComunidad(guild.id)) actualizarTableroFarm(guild);
+}, 30 * 1000);
+
 async function canalFarm96(guildId) {
     const fila = await db.get(`SELECT canal_id FROM configs_canales WHERE discord_id = ? AND tipo = 'farm96'`, [guildId]).catch(() => null);
     return fila?.canal_id ? await client.channels.fetch(fila.canal_id).catch(() => null) : null;
@@ -17995,6 +18078,8 @@ async function manejarFill96(interaction) {
         const { sobres: _s, defecto: _d } = fill96Mod().fill96Sobres();
         const packId = fill96Elegidos(userId, _s, _d);
         fill96Mod().fill96Iniciar(userId, tipo, async (pub, final) => {
+            // Tarjeta fija del canal: al empezar y al terminar se actualiza enseguida (el resto, cada 30 s).
+            if (final || !pub.hechas) actualizarTableroFarm(interaction.guild).catch(() => {});
             if (!final) return await interaction.editReply(await pantallaFill96(userId, interaction.guild)).catch(() => {});
             const fin = embedFinFill96(pub, await emojisFill96(interaction.guild));
             // Revision: sigue privada (pasa a "Start Farm 96P"). Farm terminado: el resultado se publica en el canal.

@@ -1324,6 +1324,7 @@ async function correrFill96(t) {
         }
         if (t.tipo === 'open96') objetivos = Object.fromEntries(lista.map(c => [claveXml(c.f), c.faltan]));
         pub.total = lista.length;
+        pub.elegibles = lista.filter(c => !(Number(c.faltan) > 0)).length;   // tarjeta del canal 96P
         pub.noLlegaron = [];   // open96: [nombre, sobres desde la pausa] de las que no llegaron
         if (!lista.length) { pub.error = t.tipo === 'open2' ? 'none_ready' : 'no_accounts'; return; }
         t.stopFile = path.join(motor, 'reports', `fill96_${t.id}.stop`);
@@ -1423,4 +1424,10 @@ async function correrFill96(t) {
     }
 }
 
-module.exports = { iniciar, ciclo, resumenPrestadas, infoFarm, fill96Resumen, fill96Iniciar, fill96Estado, fill96Parar, fill96Sobres };
+// /farm que estan corriendo ahora (tarjeta fija del canal 96P, Ale 2026-11-19).
+function fill96Activos() {
+    return [...fill96Trabajos.values()].filter(t => t.publico.inicio && t.publico.fase !== 'cola')
+        .map(t => ({ id: t.id, ...t.publico, cola: fill96Cola.length }));
+}
+
+module.exports = { iniciar, ciclo, resumenPrestadas, infoFarm, fill96Resumen, fill96Iniciar, fill96Estado, fill96Parar, fill96Sobres, fill96Activos };
