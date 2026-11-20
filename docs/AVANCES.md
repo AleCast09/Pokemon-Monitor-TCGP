@@ -24,7 +24,16 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
-### 2026-11-20 (tarde 3) — cuenta 2 — God Packs muertos con solicitudes a los Mains (SIN PUBLICAR)
+### 2026-11-20 (tarde 5) — cuenta 2 — Excepción "cerca de 96" (SIN PUBLICAR)
+- Regla de Ale: en Open Packs Only y en /farm **Open 2**, una cuenta a **6 sobres o menos de 96** (90+) corre en **modo God Pack**: solicitudes a los Mains antes de abrir, espera que acepten, abre, si no hay God Pack borra las amistades; si sale, se publica (KyuremBot) como cualquier otro. **Farm 96P no** (abre demasiados), ni Claim/especial/scan.
+- Motor (`inject.py`, NEAR96_GP_V1): `--near96 archivo.json {cuenta.xml: faltan}` (prestadas, lo arma el host con `e`/`faltan` de Monitor Link); propias: `_gp_packs_missing` de su .json. `NEAR96_MAX_MISSING = 6`. El tope de 40 PPM (ppm_cap.json) también aplica a esas cuentas.
+- Host (`reroll-comunidad.js`): ciclo en Only Pack y fill96 `open2` pasan `near96`; el archivo va a la carpeta temporal y se borra al terminar.
+
+### 2026-11-20 (tarde 4) — cuenta 2 — Regla de Ale: Open Packs Only NUNCA manda solicitudes (SIN PUBLICAR)
+- Regla: God Pack = cuentas elegibles → solicitudes → abrir. Open Packs Only = abrir y cambiar de cuenta, NUNCA solicitudes (ni por un God Pack, ni si la cuenta llega a 96 durante la corrida: 95 → 97 tampoco).
+- `inject.py`: se quitó GP_LATE_FR del todo (`_gp_eligible_before`, `_send_late_gp_requests`, `_gp_late`); queda la nota ONLY_PACKS_NO_FR_V1 (marca obligatoria en `reroll-comunidad.js`). Todos los `send_friend_requests` están dentro de `if run_mode == "godpack"`. La limpieza `all_friends` (DEAD_GP_CLEANUP_V1) sigue.
+
+### 2026-11-20 (tarde 3) — cuenta 2 — God Packs muertos con solicitudes a los Mains (PUBLICADO host-2026.11.20-0707)
 - ERROR MÍO (GP_LATE_FR_V1, 2026-11-19): en Open Packs Only el motor SOLO abre cuentas no elegibles (<96 o con pausa de 30 días), así que todo God Pack ahí está MUERTO; igual mandaba solicitudes a ~8 Mains y las dejaba. 13 casos (8 en AleCast: Makenna, Damon, grumpig de Qing; dubwool, sprigatito, ZEROonix, ZEROkrcktune de ZERO; iChstr-212 de 520672…; 5 en ArcaWindows).
 - Arreglo `inject.py`: GP_LATE_FR_V2 = solo si la cuenta YA era elegible antes de abrir (`_gp_eligible_before`: packCount ≥ 96 y sin pausa; las prestadas vienen sin historial → no). Barrido `all_friends` (DEAD_GP_CLEANUP_V1): borra todos los amigos de esas cuentas.
 - `reroll-comunidad.js` `anotarGpMuertos` (una vez por host, marca `reports/dead_gp_cleanup_v1.done`): anota en `reports/fr_pending/` los God Packs packs-only de su `gp_hits.jsonl` desde 2026-11-19 06:50; se limpian en la próxima ronda del GP farm (Start), las prestadas pidiendo la XML a su Monitor Link.

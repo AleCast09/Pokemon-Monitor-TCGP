@@ -1944,41 +1944,21 @@ def _note_fill96_scan(account: dict, tag: str, hg: int, power: int, full_in: int
 _fr_state = threading.local()   # proxy_blocked: the last send failed because the proxy returned a web page
 
 
-def _gp_eligible_before(account: dict) -> bool:
-    """GP_LATE_FR_V2: GP-eligible BEFORE opening (96+ packs and 96 since the last 30-day pause). Lent accounts come
-    with an empty card file (no history): not eligible."""
+NEAR96_MAX_MISSING = 6   # NEAR96_GP_V1: "close to 96" = 90+ packs (Ale 2026-11-20)
+
+
+def _near96_missing(account: dict, near96: dict) -> Optional[int]:
+    """Packs still missing to be God Pack eligible: from the host's list (lent accounts, Monitor Link) or from the
+    account's own card file (host accounts). None = unknown (a lent account not in the list: no exception)."""
+    clave = os.path.basename(str(account.get("xml_path", "") or "")).lower()
+    if clave in near96:
+        return near96[clave]
     try:
         jd = json.loads(Path(account.get("json_path") or "").read_text("utf-8"))
-        pc = int((jd.get("metadata") or {}).get("packCount"))
+        int((jd.get("metadata") or {}).get("packCount"))   # without real history (lent accounts): unknown
     except Exception:
-        return False
-    return pc >= 96 and _gp_packs_missing(jd) == 0
-
-
-def _send_late_gp_requests(sess, account: dict, friend_codes: list, tag: str = "") -> None:
-    """GP_LATE_FR_V1: God Pack opened in Open Packs Only -> friend requests to the online Mains now, kept
-    (never withdrawn), so they can still Wonder Pick it. Same Main list / blocked IDs as God Pack mode."""
-    try:
-        codes = fetch_live_worker_codes(friend_codes or [])
-        codes = list(dict.fromkeys(_limit_collectors(codes, friend_codes or [])))
-        try:
-            _blocked = set(json.loads((PROJECT_ROOT / "reports" / "blocked_ids.json").read_text("utf-8")).get("ids") or [])
-        except Exception:
-            _blocked = set()
-        codes = [c for c in codes if "".join(ch for ch in c if ch.isdigit()) not in _blocked]
-        pids = [p for p in (resolve_friend_code(sess, c) for c in codes) if p]
-        if not pids:
-            log("[gp-late] God Pack in Open Packs Only, but no Main online to send requests to", tag=tag)
-            return
-        ok = send_friend_requests(sess, pids, tag=tag)
-        try:
-            fr_cleanup.ledger_close(account["account_key"])   # never unfriend a real God Pack
-        except Exception:
-            pass
-        log(f"[gp-late] GOD PACK in Open Packs Only: friend requests {'sent' if ok else 'FAILED'} to "
-            f"{len(pids)} Main(s), friendship kept so they can Wonder Pick it", tag=tag)
-    except Exception as exc:
-        log(f"[gp-late] could not send the friend requests: {str(exc)[:120]}", tag=tag)
+        return None
+    return _gp_packs_missing(jd)
 
 
 def send_friend_requests(sess, target_pids: list[str], tag: str = "") -> bool:
@@ -3260,11 +3240,6 @@ def inject_one(
         pid_to_friend_code: dict[str, str] = {}  # Maps UUID -> 16-digit friend code for send_like()
         fr_was_sent = False          # flipped True after send_friend_requests OK
         any_match = False            # any pack matched the wishlist (keep-friend trigger)
-        _gp_late = False             # GP_LATE_FR_V1: a God Pack in Open Packs Only -> friend requests after
-        # GP_LATE_FR_V2 (Ale 2026-11-20): only if the account was ALREADY GP-eligible before this run. Open Packs
-        # Only opens accounts that are not eligible yet (<96 packs): their God Packs are dead and the requests
-        # only filled the Mains' friend lists (13 dead God Packs on 2026-11-19/20).
-        _gp_eligible_start = _gp_eligible_before(account)
         # Free pack power the account had BEFORE we started opening. Used
         # by the smart-mix loop below so packs 1..N (N = free power) go
         # out with empty healItems (cost 0 LARGE), and packs N+1..M carry
@@ -3865,11 +3840,9 @@ def inject_one(
                     f"first_card_ids={_cids_head} "
                     f"total_cards={len(_cids)} pack_id={pack_id}", tag=tag)
 
-            # GP_LATE_FR_V1 (Ale/Arcade 2026-11-19): Open Packs Only sends no friend requests, so a God Pack
-            # there was lost. Packs are shared (do_share) anyway: friends added AFTER can still Wonder Pick it.
-            if (run_mode == "packs-only" and _gp_eligible_start and info.get("is_god_pickable")
-                    and gp_cards.matches_wishlist(info, farming_mode, pack_power_min)):
-                _gp_late = True
+            # ONLY_PACKS_NO_FR_V1 (Ale 2026-11-20): Open Packs Only NEVER sends friend requests, not even for a
+            # God Pack or an account that reaches 96 during the run (95 -> 97). Only God Pack mode sends them; the
+            # one exception is NEAR96_GP_V1 (90+ packs), and those accounts run in God Pack mode from the start.
             # Wishlist match — only meaningful in godpack mode.
             if run_mode == "godpack":
                 matched = gp_cards.matches_wishlist(info, farming_mode, pack_power_min)
@@ -3979,8 +3952,6 @@ def inject_one(
             outcome_str = (f"opened {result['packs_opened']}/{packs} packs, "
                            f"no match ({','.join(pack_labels) or '-'})")
         log(f"-- ACCOUNT SUMMARY: {outcome_str}", tag=tag)
-        if _gp_late and not dry_run and os.environ.get("GP_LATE_FR", "1") != "0":
-            _send_late_gp_requests(sess, account, friend_codes, tag)
         # (Ale 2026-11-12) Missions finished by opening packs, then the hourglasses left -> list.
         if claim_rewards and run_mode != "godpack" and not dry_run and result["packs_opened"]:
             _claim_rewards(sess, tag, gifts=False)
@@ -4489,7 +4460,8 @@ def run_injection(args) -> int:
     run_mode = getattr(args, "mode", "godpack")
 
     # SI ESTÁ VACÍO EN EL GUI, USAR AUTOMÁTICAMENTE EL WORKER
-    if not friend_codes_list and run_mode == "godpack":
+    # (NEAR96_GP_V1: tambien en Open Packs Only, para las cuentas cerca de 96 que van en modo God Pack)
+    if not friend_codes_list and run_mode in ("godpack", "packs-only"):
         friend_codes_list = ["https://onlineids.zenithrise.workers.dev/elite"]
 
     if not friend_codes_list and run_mode == "godpack":
@@ -4661,6 +4633,14 @@ def run_injection(args) -> int:
                                json.loads(Path(args.pack_targets).read_text("utf-8")).items()}
         except Exception as exc:
             log(f"[fill96] could not read {args.pack_targets}: {exc}")
+    # NEAR96_GP_V1 (Ale 2026-11-20): --near96 {"file.xml": packs missing to 96} (lent accounts, from Monitor Link).
+    _near96 = {}
+    if getattr(args, "near96", ""):
+        try:
+            _near96 = {str(k).lower(): max(0, int(v)) for k, v in
+                       json.loads(Path(args.near96).read_text("utf-8")).items()}
+        except Exception as exc:
+            log(f"[near96] could not read {args.near96}: {exc}")
     if getattr(args, "scan_only", False):
         args.cooldown_hours = 0.0
         log("[fill96] scan only: logging into the accounts to read hourglasses and free packs - nothing is opened")
@@ -4757,6 +4737,17 @@ def run_injection(args) -> int:
             return None
         with _rot_lock:
             _sobre = _rotacion[next(_rot_turno) % len(_rotacion)]
+        _modo = getattr(args, "mode", "godpack")
+        # NEAR96_GP_V1 (Ale 2026-11-20): in Open Packs Only an account that is 6 or fewer packs from 96 runs in God
+        # Pack mode (friend requests first, Main friendships removed after if no God Pack, a God Pack is posted
+        # like any other). Not in Farm 96P (spend all hourglasses), Claim or the scan. Everything else: no requests.
+        if (_modo == "packs-only" and not getattr(args, "spend_all_hourglasses", False)
+                and not getattr(args, "claim_only", False) and not getattr(args, "scan_only", False)):
+            _faltan = _near96_missing(acct, _near96)
+            if _faltan is not None and _faltan <= NEAR96_MAX_MISSING:
+                _modo = "godpack"
+                log(f"[near96] {_faltan} pack(s) to 96 - this account runs in God Pack mode (friend requests)",
+                    tag=acct.get("nickname") or acct.get("account_key", ""))
         r = inject_one(
             acct,
             friend_codes=friend_codes_list,
@@ -4766,7 +4757,7 @@ def run_injection(args) -> int:
             wait_accept=args.wait_accept,
             dry_run=args.dry_run,
             verify_power=getattr(args, "verify_power", False),
-            run_mode=getattr(args, "mode", "godpack"),
+            run_mode=_modo,
             farming_mode=getattr(args, "farming_mode", "only_gp"),
             pack_power_min=getattr(args, "pack_power_min", "1/5"),
             pack_delay=getattr(args, "pack_delay", 2.0),
@@ -5086,6 +5077,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Only claim gifts, missions and event days on every own account (ignores the cooldown, opens no packs).")
     p.add_argument("--scan-only", action="store_true",
                    help="FILL96: log in, write hourglasses + free packs to reports/fill96_scan.jsonl, open nothing.")
+    p.add_argument("--near96", default="",
+                   help="NEAR96_GP_V1: JSON file {account.xml: packs missing to 96} of lent accounts. In Open Packs "
+                        "Only, accounts with 6 or fewer missing run in God Pack mode (friend requests).")
     p.add_argument("--pack-targets", default="",
                    help="FILL96: JSON file {account.xml: max packs} - with --spend-all-hourglasses, stop there.")
     p.add_argument("--pack-rotation", default="",

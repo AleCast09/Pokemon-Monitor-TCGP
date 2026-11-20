@@ -65,7 +65,9 @@ function iniciar(d) {
         // (2026-11-19, Arcade) God Pack en Open Packs Only: manda solicitudes a los Mains al terminar y las deja.
         // (2026-11-20) Solo cuentas YA elegibles mandan solicitudes por un God Pack de Open Packs Only (V2), y
         // barrido que borra todos los amigos de las cuentas de God Packs muertos (DEAD_GP_CLEANUP_V1).
-        'DEAD_GP_CLEANUP_V1');
+        // (2026-11-20, Ale) Open Packs Only NUNCA manda solicitudes (se quito GP_LATE_FR del todo).
+        // (2026-11-20, Ale) Excepcion: cuentas a 6 sobres o menos de 96 en Open Packs Only / Open 2 van en modo God Pack.
+        'NEAR96_GP_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',
@@ -840,6 +842,15 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = fal
             '--stop-file', op.stopFile || path.join(motor, 'reports', 'community_farm.stop'), ...(op.extra || [])];
         if (soloLimpiar) args.push('--cleanup-only');   // solo borra amistades que quedaron (no abre sobres)
         if (s.packs_per_min > 0) args.push('--packs-per-min', String(s.packs_per_min));
+        // NEAR96_GP_V1 (Ale 2026-11-20): prestadas a 6 sobres o menos de 96 (Open Packs Only y /farm Open 2): el motor
+        // las corre en modo God Pack (solicitudes a los Mains; si sale un God Pack, se publica como cualquier otro).
+        let archivoNear96 = null;
+        if (op.near96 && Object.keys(op.near96).length && motorConoce(motor, '--near96')) {
+            archivoNear96 = path.join(os.tmpdir(), `near96_${crypto.randomBytes(6).toString('hex')}.json`);
+            try { fs.writeFileSync(archivoNear96, JSON.stringify(op.near96)); args.push('--near96', archivoNear96); }
+            catch (e) { archivoNear96 = null; }
+        }
+        const borrarNear96 = () => { if (archivoNear96) { try { fs.unlinkSync(archivoNear96); } catch (e) { /* nada */ } } };
         const producto = productoDeSobre(motor, sobresDelPanel(s)[0]);
         if (producto) args.push('--product-id', producto);
         // (2026-11-12, Ale/Arcade) Open Packs Only con varios sobres marcados: las cuentas se turnan.
@@ -887,8 +898,8 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = fal
         };
         hijo.stdout.on('data', leer);
         hijo.stderr.on('data', escribir);
-        hijo.on('error', e => { escribir(`[spawn error] ${e?.message || e}\n`); cerrar(); resolve(gps); });
-        hijo.on('close', code => { escribir(`[exit ${code}]\n`); cerrar(); resolve(gps); });
+        hijo.on('error', e => { escribir(`[spawn error] ${e?.message || e}\n`); cerrar(); borrarNear96(); resolve(gps); });
+        hijo.on('close', code => { escribir(`[exit ${code}]\n`); cerrar(); borrarNear96(); resolve(gps); });
     });
 }
 
@@ -1120,7 +1131,11 @@ async function ciclo() {
                 fs.writeFileSync(path.join(dir, `${base}.xml`), xmls[nombre]);
                 fs.writeFileSync(path.join(dir, `${base}.json`), JSON.stringify({ metadata: {}, pulls: [], registeredCards: [] }));
             }
-            return { m, nombres, dir };
+            // NEAR96_GP_V1: en Open Packs Only, las que estan a 6 sobres o menos de 96 van en modo God Pack.
+            const near96 = soloSobres(s)
+                ? Object.fromEntries(listas.filter(c => Number(c.e) > 0 && Number(c.e) <= 6).map(c => [claveXml(c.f), Number(c.e)]))
+                : null;
+            return { m, nombres, dir, near96 };
         };
         const prepararSiguiente = async () => {
             while (idx < miembros.length && panelEncendido(motor)) {
@@ -1149,7 +1164,7 @@ async function ciclo() {
                 log(`opening ${nombres.length} account(s) lent by ${m.discord_id}`);
                 trabajo = true;
                 const inicioTanda = Date.now();
-                const gps = await correrInject(motor, dir, s, nombres.length, m.discord_id);
+                const gps = await correrInject(motor, dir, s, nombres.length, m.discord_id, false, { near96: t.near96 });
                 // El aviso en Discord lo hace el webhook de God Pack del panel (publicacion de foro con collage,
                 // discord_notifier.py); aca solo queda en el log del bot.
                 for (const gp of gps || []) log(`GOD PACK ${gp.nivel} on ${gp.cuenta} (lent by ${m.discord_id})`);
@@ -1461,7 +1476,11 @@ async function correrFill96(t) {
                 }
                 log(`fill96 ${t.tipo}: ${nombres.length} account(s) of ${t.id}`);
                 await correrInject(motor, dir, s, nombres.length, t.id, false, {
-                    modo: 'packs-only', gastar: t.tipo === 'open96', extra, parallel: 3, stopFile: t.stopFile, logFile: 'farm96.log', etiqueta: t.tipo, nombre: await nombreMiembro(t.id).catch(() => ''),
+                    modo: 'packs-only', gastar: t.tipo === 'open96', extra, parallel: 3, stopFile: t.stopFile, logFile: 'farm96.log',
+                    // NEAR96_GP_V1: solo Open 2 (Farm 96P abre demasiados, Ale 2026-11-20)
+                    near96: t.tipo === 'open2'
+                        ? Object.fromEntries(lote.filter(c => Number(c.faltan) > 0 && Number(c.faltan) <= 6).map(c => [claveXml(c.f), Number(c.faltan)]))
+                        : null, etiqueta: t.tipo, nombre: await nombreMiembro(t.id).catch(() => ''),
                     env: { FILL96_SCAN_FILE: archivoScan },
                     onLine: (l) => {
                         if (/\[fill96\] scan:/.test(l) || /-- ACCOUNT SUMMARY:/.test(l) || /claim only: done/.test(l)) { pub.hechas++; avisar(); }
