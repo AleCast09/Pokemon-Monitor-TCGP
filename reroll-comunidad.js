@@ -848,21 +848,29 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = fal
 
 // Cartas que quedaron sin entregar: el host del turno se las manda a cada Monitor Link; otro host se las
 // pasa al del turno.
+// (Ale 2026-11-20) Miembros con un /farm corriendo: sus sobres se entregan al TERMINAR. Por cada cuenta que recibe,
+// Monitor Link vuelve a leer TODAS sus cuentas (Qing: 4.958 archivos) y mientras tanto no atiende: el pedido de la
+// tanda siguiente fallaba ("Your Monitor Link did not answer") y el /farm se cortaba. Pasaba solo con los de muchas cuentas.
+const farmEnCurso = new Set();
 async function entregarPendientes(idMiembro) {
     // Directo al Monitor Link de cada miembro (1.9.14+ escucha a todos los hosts). Lo que no se pudo
     // entregar (Monitor Link viejo o apagado) y este host no tiene el turno, se pasa al host del turno.
-    const ids = idMiembro ? [idMiembro] : await deps.ml.miembrosConSobresPendientes();
+    const ids = (idMiembro ? [idMiembro] : await deps.ml.miembrosConSobresPendientes()).filter(id => !farmEnCurso.has(String(id)));
     for (const id of ids) await deps.ml.entregarSobresReroll(id).catch(() => {});
     if (!deps.activo()) await deps.ml.pasarSobresAlHostActivo().catch(() => {});
 }
 
 // Entregas pendientes en segundo plano (2026-11-06, Ale: "no abre nada, se quedo asi"): con cientos
 // pendientes (una por una, hasta 30 s cada una) el ciclo no llegaba a abrir sobres. Ahora corren aparte.
-let entregando = false;
+let entregando = false, entregarOtraVez = false;
 function entregarEnFondo() {
-    if (entregando) return;
+    // (2026-11-20) Si ya hay una vuelta en curso, se hace otra al terminar (antes se perdia hasta el proximo llamado).
+    if (entregando) { entregarOtraVez = true; return; }
     entregando = true;
-    entregarPendientes().catch(() => {}).finally(() => { entregando = false; });
+    entregarPendientes().catch(() => {}).finally(() => {
+        entregando = false;
+        if (entregarOtraVez) { entregarOtraVez = false; setTimeout(entregarEnFondo, 5000); }
+    });
 }
 
 // Despues de cada tanda: las cuentas que el motor anoto como probablemente baneadas (reports/banned_accounts.jsonl,
@@ -1321,6 +1329,7 @@ async function correrFill96(t) {
     const motor = deps?.fastTransfer.rutaMotor();
     const pub = t.publico;
     pub.inicio = Date.now();
+    farmEnCurso.add(String(t.id));   // sus sobres se entregan al terminar (ver entregarPendientes)
     let ultimoAviso = 0;
     const avisar = (final = false) => {
         if (!final && Date.now() - ultimoAviso < 8000) return;
@@ -1364,11 +1373,22 @@ async function correrFill96(t) {
         const set = await codigoSet(sobresDelPanel(s)[0] || 'CN001_0010_00_000');
         for (let i = 0; i < lista.length && !t.parar; i += FILL96_LOTE) {
             const lote = lista.slice(i, i + FILL96_LOTE);
-            let xmls;
-            try {
-                try { xmls = await deps.ml.pedirXmlReroll(t.id, lote.map(c => c.f)); }
-                catch (e) { if (deps.activo()) throw e; xmls = await deps.ml.xmlRerollPorHostActivo(t.id, lote.map(c => c.f)); }
-            } catch (e) { pub.error = 'monitor_link_offline'; break; }
+            let xmls, fallo = null;
+            // (Ale 2026-11-20) Monitor Link ocupado (leyendo miles de cuentas) no contesta un rato: hasta 3 intentos,
+            // 1 min entre cada uno, antes de dar el /farm por cortado.
+            for (let intento = 1; intento <= 3 && !t.parar; intento++) {
+                try {
+                    try { xmls = await deps.ml.pedirXmlReroll(t.id, lote.map(c => c.f)); }
+                    catch (e) { if (deps.activo()) throw e; xmls = await deps.ml.xmlRerollPorHostActivo(t.id, lote.map(c => c.f)); }
+                    fallo = null;
+                    break;
+                } catch (e) {
+                    fallo = e;
+                    log(`fill96: ${t.id} Monitor Link did not answer (try ${intento}/3): ${e?.message || e}`);
+                    if (intento < 3) await new Promise(r => setTimeout(r, 60 * 1000));
+                }
+            }
+            if (fallo || !xmls) { pub.error = 'monitor_link_offline'; break; }
             const nombres = Object.keys(xmls || {});
             if (!nombres.length) { pub.error = 'monitor_link_offline'; break; }
             if (!await deps.fastTransfer.asegurarTunel()) { pub.error = 'tunnel_down'; break; }
@@ -1449,6 +1469,8 @@ async function correrFill96(t) {
         pub.fin = Date.now();
         try { if (t.stopFile) fs.unlinkSync(t.stopFile); } catch (e) { /* nada */ }
         fill96Trabajos.delete(t.id);
+        farmEnCurso.delete(String(t.id));
+        entregarEnFondo();   // ahora si: todos los sobres del /farm a su Monitor Link
         guardarFill96();
         avisar(true);
         fill96Siguiente();

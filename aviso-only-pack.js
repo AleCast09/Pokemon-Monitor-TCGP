@@ -16,6 +16,20 @@ function nombreSobre(motor, packId) {
     return packId;
 }
 
+// (Ale 2026-11-20) Cada expansion tiene el LOGO (ancho) en su carpeta y el SOBRE (alto) en Serie A/B/C, con el
+// mismo nombre: para Ruler of the Skies salia el logo. Solo cuentan las imagenes con forma de sobre (alto >= 1.3 x
+// ancho), leyendo el tamaño de la cabecera del PNG (bytes 16-23).
+function esFormaDeSobre(ruta) {
+    try {
+        const fd = fs.openSync(ruta, 'r');
+        const b = Buffer.alloc(24);
+        fs.readSync(fd, b, 0, 24, 0);
+        fs.closeSync(fd);
+        const ancho = b.readUInt32BE(16), alto = b.readUInt32BE(20);
+        return ancho > 0 && alto / ancho >= 1.3;
+    } catch (e) { return false; }
+}
+
 // Imagen del sobre exacto (assets/expansions/**.png), comparando nombres sin signos ni la palabra "Pack".
 function imagenSobre(nombre) {
     const buscado = normalizar(nombre);
@@ -24,7 +38,7 @@ function imagenSobre(nombre) {
         for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
             const ruta = path.join(dir, e.name);
             if (e.isDirectory()) recorrer(ruta);
-            else if (/\.png$/i.test(e.name) && e.name !== 'symbol.png') pngs.push(ruta);
+            else if (/\.png$/i.test(e.name) && e.name !== 'symbol.png' && esFormaDeSobre(ruta)) pngs.push(ruta);
         }
     };
     try { recorrer(CARPETA_SOBRES); } catch (e) { return null; }

@@ -24,7 +24,14 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
-### 2026-11-20 (tarde) — cuenta 2 — /card con solo el rol Monitor (SIN PUBLICAR)
+### 2026-11-20 (tarde 2) — cuenta 2 — "Monitor Link did not answer" en /farm + imagen de sobres (SIN PUBLICAR)
+- Causa: por CADA cuenta que recibe sobres (add_pulls), Monitor Link rearma el resumen leyendo TODAS sus cuentas (`SubirResumen` en `AgregarSobres`); con miles (Qing 4.958, ZERO 3.426) queda ocupado y el pedido de XML de la tanda siguiente fallaba → /farm cortado. Pasaba casi solo a los de muchas cuentas.
+- Arreglo en el host (`reroll-comunidad.js`): `farmEnCurso` = a quien tiene un /farm corriendo no se le entregan sobres hasta que termina; 3 intentos (1 min) al pedir las XML de cada tanda; `entregarEnFondo` repite si ya había una vuelta en curso.
+- Pendiente (Monitor Link 1.9.36): resumen incremental (releer solo los .json que cambiaron) para que no se trabe con miles de cuentas.
+- Imagen de sobres (`aviso-only-pack.js` `imagenSobre`): cada expansión tiene LOGO (ancho) en su carpeta y SOBRE (alto) en Serie A/B/C con el mismo nombre; ahora solo cuenta forma de sobre (alto ≥ 1,3 × ancho). Los 30 sobres del catálogo OK.
+- Versiones de Monitor Link: 14 confirmados en 1.9.35 (Arcade, ZERO, Qing, jasonshied, Isaac, wR98, Nickka, ragezzail, Ale, alerieva, DevTNT...). Sin confirmar (no mandaron resumen desde el arreglo): MrYellow, noot, cy, OMO, iChesterftw, Lordchaosz, creeeder91, Pabuls, HT, Zeka, Ronnie, papikeer, Em be cu don, Luke. Inactivos 10+ días: Nat012, Olivel GD, luizmont, tana, ganiebles, Rainy.
+
+### 2026-11-20 (tarde) — cuenta 2 — /card con solo el rol Monitor (PUBLICADO host-2026.11.20-0635)
 - Quien tiene el rol Monitor pero no Monitor Link ni es amigo guardado ya puede abrir /card (antes: "Link your PC first").
 - Sin Main registrada (ni My Main ID ni Dragonite): en Share/Trade/Gold sale **✏️ Type my game ID** → ventanita (16 dígitos) → se guarda como su Main (`guardarMainManual`, tabla `link_main`, solo en el host que lo atendió) y sigue como si lo eligiera del menú; sin la carta en sus cuentas → 🙋 Ask for help (el que ayuda presta sus cuentas y la carta va a ese ID).
 - El handler del modal va ANTES del bloque genérico `if (interaction.isModalSubmit())` (que manda todo lo demás a configScript).
