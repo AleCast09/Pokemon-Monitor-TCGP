@@ -1159,6 +1159,17 @@ async function resumenDe(discordId) {
     } catch (e) { return null; }
 }
 
+// (Ale 2026-11-20) Quien tiene el rol Monitor pero no Monitor Link ni es amigo guardado escribe su ID del juego
+// en /card (para pedir ayuda): se guarda como su Main, igual que "My Main ID" de Monitor Link.
+async function guardarMainManual(discordId, mainId) {
+    const main = String(mainId || '').replace(/\D/g, '');
+    if (main.length !== 16) return false;
+    await asegurarTablas();
+    await db.run(`INSERT OR REPLACE INTO link_main (discord_id, main_id, ts) VALUES (?, ?, ?)`, [String(discordId), main, Date.now()]);
+    mainsPropias.set(String(discordId), main);
+    return true;
+}
+
 async function estadoAgente(discordId) {
     await asegurarTablas();
     const fila = await db.get(`SELECT ultimo FROM link_agentes WHERE discord_id = ?`, [String(discordId)]);
@@ -1169,5 +1180,5 @@ async function estadoAgente(discordId) {
 // Ultimo Monitor Link publicado ({ version, url }) para el mensaje de bienvenida.
 const ultimoMonitorLink = () => ultimoAhk();
 
-module.exports = { estadoCuentasComunidad, duenoDe, juegoDeAmigo, amigosDe, mainDe, direccionPublicada, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
+module.exports = { estadoCuentasComunidad, duenoDe, juegoDeAmigo, amigosDe, mainDe, guardarMainManual, direccionPublicada, ultimoMonitorLink, anotarHost, registrar, crearCodigo, armarClave, publicarDireccion, resumenDe, estadoAgente, vinculados, pedirCarpeta, estadoCarpeta, pedirXml, pedirAccion, anotarAjusteMiembro, cartasCrudasMiembro, cartasDeCuentaMiembro, cuentasDe, wishlistDe, resumenTs, precargar, mapaCopiasDe, cuentasPorCartaDe, shinedustDe, proxiesCompartidas, normalizarProxy, cuentasReroll, pedirXmlReroll, anotarSobresReroll, entregarSobresReroll, miembrosConSobresPendientes,
     usarParteReroll, escribirProxiesMotor, xmlRerollPorHostActivo, pasarSobresAlHostActivo };

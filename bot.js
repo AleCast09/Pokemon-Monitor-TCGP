@@ -5133,6 +5133,19 @@ function leerIniInject(rutaIni = RUTA_INJECT_INI_DEFAULT) {
 // propio registro, si tiene), despues los del miembro -- asi ve su ID y el del dueño.
 // Sin Main registrada (ni en Monitor Link ni en el panel de wr98): donde registrarla (Ale 2026-11-07).
 const MSG_SIN_MAIN = '❌ You haven\'t registered your Main yet. Open **Monitor Link**, press **My Main ID**, type your Main\'s friend ID (16 digits) and save — then try again.';
+// (Ale 2026-11-20) Sin Main (ni en Monitor Link ni en Dragonite): en vez de solo avisar, puede escribir su ID del
+// juego (se guarda como su Main) y seguir: elegir cuenta o, si no tiene la carta, 🙋 Ask for help.
+async function respuestaSinDestinos(interaction, origen, modo, cartaId) {
+    const msg = interaction._sinDestinosMsg;
+    const id = `mainid_abrir::${origen}::${modo}::${cartaId}`;
+    if (msg === MSG_SIN_MAIN && comunidad.esComunidad(interaction.guildId) && id.length <= 100) {
+        return await interaction.editReply({ content: '❌ You haven\'t registered your Main yet.\n'
+            + 'Press **✏️ Type my game ID** and write your Main\'s friend ID (16 digits). It\'s saved for next time.\n'
+            + '-# With Monitor Link you can also set it in **My Main ID**.', embeds: [],
+            components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(id).setLabel('✏️ Type my game ID').setStyle(ButtonStyle.Primary))] });
+    }
+    return await interaction.editReply({ content: msg, components: [] });
+}
 
 // (Ale 2026-11-08) Share/Trade/Farm Tickets: cada uno ve SOLO sus propios IDs (el dueño no ve los de sus
 // amigos y el amigo no ve los del dueño). conAmigos = true (Friend Trade): se suman los de la otra parte.
@@ -5295,7 +5308,7 @@ async function actualizarConSeleccionFriendId(interaction, cartaId, origen, modo
     const { rutaIni } = await obtenerRutasInject(interaction.guildId);
     // Friend Trade: tambien los IDs de los amigos / del dueño (Ale 2026-11-08).
     const friends = await amigosParaInteraccion(interaction, rutaIni, modo === 'friend');  // comunidad: registro de wr98
-    if (!friends.length) { if (interaction._sinDestinosMsg) return await interaction.editReply({ content: interaction._sinDestinosMsg, components: [] });
+    if (!friends.length) { if (interaction._sinDestinosMsg) return await respuestaSinDestinos(interaction, origen, modo, cartaId);
         return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.', components: [] });
     }
 
@@ -12060,7 +12073,14 @@ async function manejarInteraccionPrincipal(interaction) {
                 interaction.deferReply = (opts = {}) => deferOriginal({ ...opts, ephemeral: true });
                 interaction.reply = (opts = {}) => replyOriginal(typeof opts === 'string' ? { content: opts, ephemeral: true } : { ...opts, ephemeral: true });
             }
-            if (!vinculado && ['card', 'goldcards', 'shinedust', 'wishlist'].includes(cmd)) {
+            // (Ale 2026-11-20) Con el rol Monitor (aunque no tenga Monitor Link ni sea amigo guardado de nadie) puede
+            // abrir /card: escribe su ID del juego y pide ayuda (🙋 Ask for help) para que otro miembro le mande la carta.
+            let soloRol = false;
+            if (!vinculado && cmd === 'card' && interaction.member) {
+                const rolM = comunidad.esStaff(interaction.user.id, interaction.member) ? null : await comunidad.rolMonitor(interaction.guild).catch(() => null);
+                soloRol = comunidad.esStaff(interaction.user.id, interaction.member) || !!(rolM && interaction.member.roles.cache.has(rolM.id));
+            }
+            if (!vinculado && !soloRol && ['card', 'goldcards', 'shinedust', 'wishlist'].includes(cmd)) {
                 return await interaction.reply({ content: '🔗 Link your PC first: type **/link** and paste the key in **Monitor Link** — then the bot shows **your** cards.', ephemeral: true });
             }
         }
@@ -13616,6 +13636,27 @@ async function manejarInteraccionPrincipal(interaction) {
         return await interaction.showModal(modal);
     }
 
+    // (Ale 2026-11-20) ✏️ Type my game ID: quien no tiene Main registrada escribe su ID del juego (16 digitos). Se
+    // guarda como su Main (como "My Main ID" de Monitor Link) y sigue igual que si lo eligiera en el menu de destino.
+    if (interaction.isButton() && interaction.customId.startsWith('mainid_abrir::')) {
+        const resto = interaction.customId.slice('mainid_abrir::'.length);
+        return await interaction.showModal(new ModalBuilder().setCustomId(`mainid_modal::${resto}`.slice(0, 100)).setTitle('Your Main account')
+            .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('input_mainid')
+                .setLabel('Friend ID of your Main (16 digits)').setPlaceholder('1234-5678-9012-3456')
+                .setStyle(TextInputStyle.Short).setMinLength(16).setMaxLength(19).setRequired(true))));
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('mainid_modal::')) {
+        const [, origenM, modoM, ...restoM] = interaction.customId.split('::');
+        const main = interaction.fields.getTextInputValue('input_mainid').replace(/\D/g, '');
+        if (main.length !== 16) {
+            return await interaction.reply({ content: '❌ A friend ID has **16 digits** (in the game: Social → your Friend ID). Press **✏️ Type my game ID** again.', ephemeral: true });
+        }
+        await monitorLink.guardarMainManual(interaction.user.id, main).catch(() => false);
+        interaction.customId = `card_trade_friendid::${origenM}::${modoM}::${restoM.join('::')}`;
+        interaction.values = [main];
+        interaction.isStringSelectMenu = () => true;
+        interaction.isModalSubmit = () => false;
+    }
     if (interaction.isModalSubmit()) {
         if (interaction.customId.startsWith('modal_feedback_responder::')) {
             const destinoId = interaction.customId.split('::')[1];
@@ -16106,7 +16147,7 @@ async function manejarInteraccionPrincipal(interaction) {
             // Main, sin preguntar Main o amigo (antes habia "Share to Main" / "Share to Friend").
             const { rutaIni } = await obtenerRutasInject(interaction.guildId);
             const friends = await amigosParaInteraccion(interaction, rutaIni);  // comunidad: registro de wr98
-            if (!friends.length) { if (interaction._sinDestinosMsg) return await interaction.editReply({ content: interaction._sinDestinosMsg, components: [] });
+            if (!friends.length) { if (interaction._sinDestinosMsg) return await respuestaSinDestinos(interaction, 'normal', 'sharemain', cartaId);
                 return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add your Main account first from **🆔 Add Friend** in /setup.' });
             }
             const menuShare = new StringSelectMenuBuilder()
@@ -16251,7 +16292,7 @@ async function manejarInteraccionPrincipal(interaction) {
             await interaction.deferReply({ ephemeral: true }); // obtenerCartasGoldCacheadas + armar la carta pueden tardar más de 3s
             const { rutaIni } = await obtenerRutasInject(interaction.guildId);
             const friends = await amigosParaInteraccion(interaction, rutaIni);  // comunidad: registro de wr98
-            if (!friends.length) { if (interaction._sinDestinosMsg) return await interaction.editReply({ content: interaction._sinDestinosMsg, components: [] });
+            if (!friends.length) { if (interaction._sinDestinosMsg) return await respuestaSinDestinos(interaction, 'gold', 'goldmain', cartaId);
                 return await interaction.editReply({ content: '❌ You don\'t have any saved friends yet. Add one first from **🆔 Add Friend** in /setup.' });
             }
             const { mapaCopias, umbral } = await obtenerCartasGoldCacheadas(interaction.user.id);

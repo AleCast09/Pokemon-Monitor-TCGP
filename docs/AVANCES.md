@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-20 (tarde) — cuenta 2 — /card con solo el rol Monitor (SIN PUBLICAR)
+- Quien tiene el rol Monitor pero no Monitor Link ni es amigo guardado ya puede abrir /card (antes: "Link your PC first").
+- Sin Main registrada (ni My Main ID ni Dragonite): en Share/Trade/Gold sale **✏️ Type my game ID** → ventanita (16 dígitos) → se guarda como su Main (`guardarMainManual`, tabla `link_main`, solo en el host que lo atendió) y sigue como si lo eligiera del menú; sin la carta en sus cuentas → 🙋 Ask for help (el que ayuda presta sus cuentas y la carta va a ese ID).
+- El handler del modal va ANTES del bloque genérico `if (interaction.isModalSubmit())` (que manda todo lo demás a configScript).
+- Recomendación de Ale/Claude: lo normal es tener Monitor Link o ser amigo guardado; esto cubre el caso raro (rol sin vínculo).
+
 ### 2026-11-20 — cuenta 2 — Bot trabado a las 05:47 + vigilante de salud (PUBLICADO junto con lo de abajo)
 - Síntoma: comandos en "thinking" para siempre y la tarjeta de 96P sin actualizar, con el bot vivo (dashboard respondía) y red OK. Causa probable: los 4 hilos de trabajo de Node llenos (DNS/archivos colgados) → todo lo que usa archivos/imágenes en fila.
 - Arreglo: `UV_THREADPOOL_SIZE=16` (bot.js, entry.js, host.js, primera línea); `salud.js`: prueba los hilos cada minuto (2 fallos de 45 s → reinicio solo vía pm2 lanzado por WMI, con `.reiniciando` = no suelta el turno), avisa si el bot se congela, anota comandos de +60 s con lo que estaba esperando (`🩺 Health:` en el log). La tarjeta de 96P ya no queda "ocupada" para siempre (2 min).
