@@ -24,7 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
-### 2026-11-20 (tarde 2) — cuenta 2 — "Monitor Link did not answer" en /farm + imagen de sobres (SIN PUBLICAR)
+### 2026-11-20 (tarde 3) — cuenta 2 — God Packs muertos con solicitudes a los Mains (SIN PUBLICAR)
+- ERROR MÍO (GP_LATE_FR_V1, 2026-11-19): en Open Packs Only el motor SOLO abre cuentas no elegibles (<96 o con pausa de 30 días), así que todo God Pack ahí está MUERTO; igual mandaba solicitudes a ~8 Mains y las dejaba. 13 casos (8 en AleCast: Makenna, Damon, grumpig de Qing; dubwool, sprigatito, ZEROonix, ZEROkrcktune de ZERO; iChstr-212 de 520672…; 5 en ArcaWindows).
+- Arreglo `inject.py`: GP_LATE_FR_V2 = solo si la cuenta YA era elegible antes de abrir (`_gp_eligible_before`: packCount ≥ 96 y sin pausa; las prestadas vienen sin historial → no). Barrido `all_friends` (DEAD_GP_CLEANUP_V1): borra todos los amigos de esas cuentas.
+- `reroll-comunidad.js` `anotarGpMuertos` (una vez por host, marca `reports/dead_gp_cleanup_v1.done`): anota en `reports/fr_pending/` los God Packs packs-only de su `gp_hits.jsonl` desde 2026-11-19 06:50; se limpian en la próxima ronda del GP farm (Start), las prestadas pidiendo la XML a su Monitor Link.
+
+### 2026-11-20 (tarde 2) — cuenta 2 — "Monitor Link did not answer" en /farm + imagen de sobres (PUBLICADO host-2026.11.20-0652)
 - Causa: por CADA cuenta que recibe sobres (add_pulls), Monitor Link rearma el resumen leyendo TODAS sus cuentas (`SubirResumen` en `AgregarSobres`); con miles (Qing 4.958, ZERO 3.426) queda ocupado y el pedido de XML de la tanda siguiente fallaba → /farm cortado. Pasaba casi solo a los de muchas cuentas.
 - Arreglo en el host (`reroll-comunidad.js`): `farmEnCurso` = a quien tiene un /farm corriendo no se le entregan sobres hasta que termina; 3 intentos (1 min) al pedir las XML de cada tanda; `entregarEnFondo` repite si ya había una vuelta en curso.
 - Pendiente (Monitor Link 1.9.36): resumen incremental (releer solo los .json que cambiaron) para que no se trabe con miles de cuentas.

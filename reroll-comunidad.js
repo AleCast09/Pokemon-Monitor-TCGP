@@ -43,6 +43,7 @@ function iniciar(d) {
     aplicarAjustesRecomendados(deps.fastTransfer.rutaMotor());
     borrarTemporalesViejas();
     setInterval(borrarTemporalesViejas, 60 * 60 * 1000);
+    setTimeout(() => anotarGpMuertos(deps.fastTransfer.rutaMotor()).catch(e => log('dead God Pack cleanup:', e?.message || e)), 90 * 1000);
     // Cada 5 min (cuota de Upstash: 3 hosts cada 1 min eran ~130k pedidos al mes solo para esto).
     setInterval(() => sincronizarGodPacks().catch(e => log('God Pack list sync failed:', e?.message || e)), 5 * 60 * 1000);
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'inject.py', ['scripts', 'god_pack', 'inject.py'],
@@ -62,7 +63,9 @@ function iniciar(d) {
         // (2026-11-17) Relojes: 15 s entre sobres pagados (mas rapido el juego rechaza el 3.o).
         // (2026-11-17, wR98) Sobres de regalo con cartas de GP ya no dicen "GOD PACK" (no van a Wonder Pick).
         // (2026-11-19, Arcade) God Pack en Open Packs Only: manda solicitudes a los Mains al terminar y las deja.
-        'GP_LATE_FR_V1');
+        // (2026-11-20) Solo cuentas YA elegibles mandan solicitudes por un God Pack de Open Packs Only (V2), y
+        // barrido que borra todos los amigos de las cuentas de God Packs muertos (DEAD_GP_CLEANUP_V1).
+        'DEAD_GP_CLEANUP_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',
@@ -751,6 +754,49 @@ async function limpiarPrestadasPendientes(motor) {
             fs.rmSync(tmp, { recursive: true, force: true });   // las XML no quedan en el host
         }
     }
+}
+
+// (Ale 2026-11-20) God Packs MUERTOS de Open Packs Only (cuentas de menos de 96 sobres): GP_LATE_FR_V1 les mando
+// solicitudes a los Mains y las DEJO (13 entre el 19/11 06:54 y el 20/11). Se anotan en reports/fr_pending con
+// all_friends: el barrido de siempre entra a cada una y borra todos sus amigos (las prestadas, pidiendo la XML a
+// su Monitor Link, como cualquier limpieza). Cada host anota solo los suyos (su gp_hits.jsonl). Una sola vez.
+async function anotarGpMuertos(motor) {
+    if (!motor) return;
+    const marca = path.join(motor, 'reports', 'dead_gp_cleanup_v1.done');
+    if (fs.existsSync(marca)) return;
+    let hits = [];
+    try {
+        hits = fs.readFileSync(path.join(motor, 'reports', 'gp_hits.jsonl'), 'utf8').split(/\r?\n/)
+            .map(l => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+    } catch (e) { /* este host no tuvo God Packs */ }
+    const desde = Date.UTC(2026, 10, 19, 11, 50);   // 2026-11-19 06:50 (UTC-5): se publico GP_LATE_FR_V1
+    const muertos = hits.filter(h => h.mode === 'packs-only' && Number(h.ts) >= desde && h.xml);
+    const s = ajustesPanel(motor);
+    const prestadas = muertos.some(h => h.lent) ? await deps.ml.cuentasReroll().catch(() => null) : [];
+    if (prestadas === null) return;   // sin la lista de cuentas prestadas: se intenta en el proximo arranque
+    const dir = path.join(motor, 'reports', 'fr_pending');
+    fs.mkdirSync(dir, { recursive: true });
+    let n = 0;
+    for (const h of muertos) {
+        const base = path.basename(String(h.xml)).replace(/\.xml$/i, '');
+        let owner = '';
+        if (h.lent) {
+            const m = prestadas.find(x => (x.cuentas || []).some(c => claveXml(c.f) === claveXml(h.xml)));
+            if (!m) { log(`dead God Pack ${h.name}: lent account not found in any Monitor Link - skipped`); continue; }
+            owner = String(m.discord_id);
+        }
+        const entrada = {
+            account_key: base, nickname: h.name || base, account_id: '', target_pids: [], all_friends: true,
+            owner, xml_file: `${base}.xml`,
+            xml_path: owner ? '' : path.join(s.xml_dir || '', `${base}.xml`),
+            json_path: owner ? '' : path.join(s.json_dir || '', `${base}.json`),
+            run: 'deadgp', ts: Date.now() / 1000,
+        };
+        fs.writeFileSync(path.join(dir, `deadgp_${owner || 'own'}__${base.replace(/[^A-Za-z0-9_.()-]/g, '_')}.json`), JSON.stringify(entrada));
+        n++;
+    }
+    fs.writeFileSync(marca, new Date().toISOString());
+    if (n) log(`dead God Packs: ${n} account(s) noted to remove their Main friendships (next GP farm round)`);
 }
 
 // Carpetas temporales de tandas cortadas a la fuerza (reinicio del bot): sus XML no deben quedar en el host.

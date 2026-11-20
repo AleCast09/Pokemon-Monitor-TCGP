@@ -1944,6 +1944,17 @@ def _note_fill96_scan(account: dict, tag: str, hg: int, power: int, full_in: int
 _fr_state = threading.local()   # proxy_blocked: the last send failed because the proxy returned a web page
 
 
+def _gp_eligible_before(account: dict) -> bool:
+    """GP_LATE_FR_V2: GP-eligible BEFORE opening (96+ packs and 96 since the last 30-day pause). Lent accounts come
+    with an empty card file (no history): not eligible."""
+    try:
+        jd = json.loads(Path(account.get("json_path") or "").read_text("utf-8"))
+        pc = int((jd.get("metadata") or {}).get("packCount"))
+    except Exception:
+        return False
+    return pc >= 96 and _gp_packs_missing(jd) == 0
+
+
 def _send_late_gp_requests(sess, account: dict, friend_codes: list, tag: str = "") -> None:
     """GP_LATE_FR_V1: God Pack opened in Open Packs Only -> friend requests to the online Mains now, kept
     (never withdrawn), so they can still Wonder Pick it. Same Main list / blocked IDs as God Pack mode."""
@@ -3080,7 +3091,14 @@ def sweep_fr_ledger(reason: str, scope: str = "stale") -> tuple[int, int]:
             dirty += 1
             continue
         try:
-            if _cleanup_links(sess, acct, e.get("target_pids", []), tag):
+            objetivos = e.get("target_pids", [])
+            # DEAD_GP_CLEANUP_V1 (Ale 2026-11-20): a dead God Pack account (Open Packs Only, <96 packs) kept the
+            # Mains as friends: remove ALL its friends and pending requests (a farm account has no other friends).
+            if e.get("all_friends"):
+                amigos, pendientes = fr_cleanup._friend_state(sess, lambda m, t=tag: log(str(m), tag=t))
+                objetivos = sorted((amigos or set()) | (pendientes or set()))
+                log(f"[fr-sweep] dead God Pack account: removing its {len(objetivos)} friend(s)/request(s)", tag=tag)
+            if _cleanup_links(sess, acct, objetivos, tag):
                 cleaned += 1
                 try:
                     Path(e["_file"]).unlink()   # entry of another (dead) run: close it by its own file
@@ -3243,6 +3261,10 @@ def inject_one(
         fr_was_sent = False          # flipped True after send_friend_requests OK
         any_match = False            # any pack matched the wishlist (keep-friend trigger)
         _gp_late = False             # GP_LATE_FR_V1: a God Pack in Open Packs Only -> friend requests after
+        # GP_LATE_FR_V2 (Ale 2026-11-20): only if the account was ALREADY GP-eligible before this run. Open Packs
+        # Only opens accounts that are not eligible yet (<96 packs): their God Packs are dead and the requests
+        # only filled the Mains' friend lists (13 dead God Packs on 2026-11-19/20).
+        _gp_eligible_start = _gp_eligible_before(account)
         # Free pack power the account had BEFORE we started opening. Used
         # by the smart-mix loop below so packs 1..N (N = free power) go
         # out with empty healItems (cost 0 LARGE), and packs N+1..M carry
@@ -3845,7 +3867,7 @@ def inject_one(
 
             # GP_LATE_FR_V1 (Ale/Arcade 2026-11-19): Open Packs Only sends no friend requests, so a God Pack
             # there was lost. Packs are shared (do_share) anyway: friends added AFTER can still Wonder Pick it.
-            if (run_mode == "packs-only" and info.get("is_god_pickable")
+            if (run_mode == "packs-only" and _gp_eligible_start and info.get("is_god_pickable")
                     and gp_cards.matches_wishlist(info, farming_mode, pack_power_min)):
                 _gp_late = True
             # Wishlist match — only meaningful in godpack mode.
