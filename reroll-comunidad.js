@@ -1319,10 +1319,10 @@ function fill96Sobres() {
     return { sobres, especial, defecto: sobres.some(x => x.pack_id === panel) ? panel : (sobres[0]?.pack_id || '') };
 }
 
-function fill96Iniciar(discordId, tipo, avisar, packId = '') {
+function fill96Iniciar(discordId, tipo, avisar, packId = '', opciones = {}) {
     const id = String(discordId);
     if (fill96Trabajos.has(id) || fill96Cola.includes(id)) return fill96Estado(id);
-    const t = { id, tipo, avisar, packId, parar: false, publico: { fase: tipo === 'scan' ? 'scan' : 'open', tipo, packId, total: 0, hechas: 0, sobres: 0, llegaron: 0, inicio: 0, error: null } };
+    const t = { id, tipo, avisar, packId, parar: false, reanudado: !!opciones.reanudado, publico: { fase: tipo === 'scan' ? 'scan' : 'open', tipo, packId, total: 0, hechas: 0, sobres: 0, llegaron: 0, inicio: 0, error: null } };
     fill96Trabajos.set(id, t);
     // (Zeka 2026-11-19) Si ya hay fila, va al final: antes uno nuevo se colaba cuando se liberaba un lugar.
     if (fill96Cola.length || [...fill96Trabajos.values()].filter(x => x.publico.inicio).length >= FILL96_MAX) {
@@ -1356,7 +1356,7 @@ function fill96Reanudar(crearAvisar) {
     let n = 0;
     for (const x of lista) {
         if (!x?.id || fill96Trabajos.has(x.id) || fill96Cola.includes(x.id)) continue;
-        fill96Iniciar(x.id, x.tipo, crearAvisar(x.id), x.packId || '');
+        fill96Iniciar(x.id, x.tipo, crearAvisar(x.id), x.packId || '', { reanudado: true });
         n++;
     }
     if (n) log(`fill96: resumed ${n} /farm job(s) after a restart`);
@@ -1422,6 +1422,14 @@ async function correrFill96(t) {
             const estado0 = leerEstado(motor), ahora = Date.now();
             lista = lista.filter(c => ahora - Math.max(msDeLean(c.l), estado0[`${t.id}|${c.f}`] || 0) >= cooldown);
         }
+        // (Ale 2026-11-20) Farm 96P retomado tras un reinicio: saltar las cuentas que este host ya proceso (marcadas al
+        // empezar cada tanda) en las ultimas 12 h. Sus sobres se entregan al terminar, asi que Monitor Link aun no las
+        // ve en 96 y sin esto volvia a abrirlas todas.
+        if (t.tipo === 'open96' && t.reanudado) {
+            const estado0 = leerEstado(motor), ahora = Date.now(), antes = lista.length;
+            lista = lista.filter(c => ahora - (estado0[`${t.id}|${c.f}`] || 0) >= 12 * 3600 * 1000);
+            if (antes !== lista.length) log(`fill96: ${t.id} Farm 96P resumed - ${antes - lista.length} account(s) already done, ${lista.length} left`);
+        }
         if (t.tipo === 'open96') objetivos = Object.fromEntries(lista.map(c => [claveXml(c.f), c.faltan]));
         pub.total = lista.length;
         pub.elegibles = lista.filter(c => !(Number(c.faltan) > 0)).length;   // tarjeta del canal 96P
@@ -1476,7 +1484,7 @@ async function correrFill96(t) {
                 }
                 log(`fill96 ${t.tipo}: ${nombres.length} account(s) of ${t.id}`);
                 await correrInject(motor, dir, s, nombres.length, t.id, false, {
-                    modo: 'packs-only', gastar: t.tipo === 'open96', extra, parallel: 3, stopFile: t.stopFile, logFile: 'farm96.log',
+                    modo: 'packs-only', gastar: t.tipo === 'open96', extra, parallel: t.tipo === 'open96' ? 10 : 3, stopFile: t.stopFile, logFile: 'farm96.log',
                     // NEAR96_GP_V1: solo Open 2 (Farm 96P abre demasiados, Ale 2026-11-20)
                     near96: t.tipo === 'open2'
                         ? Object.fromEntries(lote.filter(c => Number(c.faltan) > 0 && Number(c.faltan) <= 6).map(c => [claveXml(c.f), Number(c.faltan)]))

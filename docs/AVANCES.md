@@ -24,7 +24,17 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
-### 2026-11-20 (tarde 5) — cuenta 2 — Excepción "cerca de 96" (SIN PUBLICAR)
+### 2026-11-20 (noche) — cuenta 2 — /farm compartido entre hosts (A MEDIAS, SIN PUBLICAR)
+- Pedido de Ale: si un host se cae / pierde internet / pierde el turno, sus /farm los sigue el host del turno DESDE DONDE QUEDARON (hoy se mueren y empiezan de 0).
+- HECHO y probado contra Upstash (`community-host.js`, sin usar todavía): `farmAnotar(id, datos, hechas[], host=YO)` (EVAL: HSET `zenith:farm_jobs` + SADD `zenith:farm_done:<id>` 2 días; host '' = libre), `farmTrabajos()`, `farmHechas(id)`, `farmDueno(id)`, `farmTerminar(id)` (solo borra si sigue siendo de este host).
+- FALTA (`reroll-comunidad.js` + `bot.js`):
+  1. deps de reroll-comunidad en bot.js: `farm: { anotar, trabajos, hechas, dueno, terminar, yo: () => hostComunidad.nombre() }`.
+  2. `correrFill96`: al empezar, filtrar `lista` con `farmHechas` (claveXml) y arrancar contadores desde `t.previo`; anotar al empezar; en `onLine`, por cada `-- ACCOUNT SUMMARY` / `claim only: done` guardar el tag (= nombre del xml) y mandarlo con `farmAnotar` cada 2 min (latido) y al fin de cada tanda; en el latido, si `farmDueno` ≠ yo → `t.traspasado`, parar sin avisar. En finally: traspasado por perder el turno → `farmAnotar(..., '')` (libre) y NO avisar; normal → `farmTerminar`.
+  3. Cada 30 s: si este host NO tiene el turno y corre /farm → stop file + `t.soltar` (se libera al terminar la cuenta en curso); la fila también se libera.
+  4. Host del turno, cada 2-3 min: `farmTrabajos()`; los libres o de otro host sin latido hace 5+ min → reclamar (`farmAnotar` con host=yo) y `fill96Iniciar(id, tipo, avisar, packId, { previo })`; el resultado al canal con mención (como `reanudarFarms` en bot.js).
+  5. `fill96Iniciar`: 5º parámetro opciones → `t.previo`.
+
+### 2026-11-20 (tarde 5) — cuenta 2 — Excepción "cerca de 96" (PUBLICADO host-2026.11.20-0723)
 - Regla de Ale: en Open Packs Only y en /farm **Open 2**, una cuenta a **6 sobres o menos de 96** (90+) corre en **modo God Pack**: solicitudes a los Mains antes de abrir, espera que acepten, abre, si no hay God Pack borra las amistades; si sale, se publica (KyuremBot) como cualquier otro. **Farm 96P no** (abre demasiados), ni Claim/especial/scan.
 - Motor (`inject.py`, NEAR96_GP_V1): `--near96 archivo.json {cuenta.xml: faltan}` (prestadas, lo arma el host con `e`/`faltan` de Monitor Link); propias: `_gp_packs_missing` de su .json. `NEAR96_MAX_MISSING = 6`. El tope de 40 PPM (ppm_cap.json) también aplica a esas cuentas.
 - Host (`reroll-comunidad.js`): ciclo en Only Pack y fill96 `open2` pasan `near96`; el archivo va a la carpeta temporal y se borra al terminar.

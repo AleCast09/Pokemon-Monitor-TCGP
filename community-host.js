@@ -381,6 +381,49 @@ async function desbloquear(id) {
 const anotarMiembros = (registro) => configurado()
     ? redis('SET', 'zenith:miembros', JSON.stringify(registro)).catch(() => {}) : Promise.resolve();
 
+// ---- /farm compartido entre hosts (Ale 2026-11-20: "cuando mi bot muere, mata los procesos de los demas") ---------
+// Cada /farm en curso queda en zenith:farm_jobs (hash: discordId -> {host, ts, tipo, packId, hechas, sobres, ...}) y
+// sus cuentas ya terminadas en zenith:farm_done:<id> (set, 2 dias). Si el host se cae, pierde internet o el turno, el
+// host del turno lo retoma y sigue desde donde quedo. host '' = libre (lo toma el del turno enseguida).
+const CLAVE_FARM = 'zenith:farm_jobs';
+const claveFarmHechas = (id) => `zenith:farm_done:${id}`;
+const SCRIPT_FARM_ANOTAR = `redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+if #ARGV > 2 then redis.call('SADD', KEYS[2], unpack(ARGV, 3)) end
+redis.call('EXPIRE', KEYS[2], 172800)
+return 1`;
+// Borra el /farm solo si sigue siendo de este host (si otro lo retomo, no se toca).
+const SCRIPT_FARM_BORRAR = `local v = redis.call('HGET', KEYS[1], ARGV[1])
+if v and string.find(v, ARGV[2], 1, true) then redis.call('HDEL', KEYS[1], ARGV[1]) redis.call('DEL', KEYS[2]) return 1 end
+return 0`;
+async function farmAnotar(id, datos, hechas = [], host = YO) {
+    if (!configurado()) return;
+    const { id: _id, host: _h, ts: _t, ...resto } = datos || {};
+    await redisDirecto('EVAL', SCRIPT_FARM_ANOTAR, '2', CLAVE_FARM, claveFarmHechas(id), String(id),
+        JSON.stringify({ ...resto, host, ts: host ? Date.now() : 0 }), ...hechas.map(String));
+}
+async function farmTrabajos() {
+    if (!configurado()) return [];
+    const plano = await redisDirecto('HGETALL', CLAVE_FARM) || [];
+    const out = [];
+    for (let i = 0; i + 1 < plano.length; i += 2) {
+        try { out.push({ ...JSON.parse(plano[i + 1]), id: String(plano[i]) }); } catch (e) { /* entrada rota */ }
+    }
+    return out;
+}
+async function farmHechas(id) {
+    if (!configurado()) return [];
+    return await redisDirecto('SMEMBERS', claveFarmHechas(id)) || [];
+}
+async function farmDueno(id) {
+    if (!configurado()) return null;
+    try { return JSON.parse(await redisDirecto('HGET', CLAVE_FARM, String(id)) || 'null')?.host ?? null; } catch (e) { return null; }
+}
+async function farmTerminar(id) {
+    if (!configurado()) return;
+    await redisDirecto('EVAL', SCRIPT_FARM_BORRAR, '2', CLAVE_FARM, claveFarmHechas(id), String(id), `"host":${JSON.stringify(YO)}`);
+}
+
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
+    farmAnotar, farmTrabajos, farmHechas, farmDueno, farmTerminar,
     tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, baneadasConFecha, guardarWebhookGp, webhookGp, ultimaRelease, estaAlDia,
     subirGodPacks, godPacksComunidad, versionesGodPacks, hostsConocidos, bloqueados, bloquear, desbloquear };
