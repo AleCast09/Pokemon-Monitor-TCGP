@@ -6,6 +6,8 @@
 // Se arranca desde la carpeta del host (la que tiene su .env y su base), por ejemplo con PM2:
 //   pm2 start "<repo>\host.js" --name zenith --cwd "<carpeta del host>"
 'use strict';
+// (2026-11-20) 16 hilos de trabajo (ver bot.js): tiene que ir antes de cualquier archivo/DNS asincrono.
+if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = '16';
 require('dotenv').config();
 process.env.MONITOR_HOST_MODE = 'community';
 

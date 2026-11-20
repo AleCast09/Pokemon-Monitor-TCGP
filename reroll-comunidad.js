@@ -1255,15 +1255,43 @@ function fill96Iniciar(discordId, tipo, avisar, packId = '') {
     if (fill96Trabajos.has(id) || fill96Cola.includes(id)) return fill96Estado(id);
     const t = { id, tipo, avisar, packId, parar: false, publico: { fase: tipo === 'scan' ? 'scan' : 'open', tipo, packId, total: 0, hechas: 0, sobres: 0, llegaron: 0, inicio: 0, error: null } };
     fill96Trabajos.set(id, t);
-    if ([...fill96Trabajos.values()].filter(x => x.publico.inicio).length >= FILL96_MAX) {
+    // (Zeka 2026-11-19) Si ya hay fila, va al final: antes uno nuevo se colaba cuando se liberaba un lugar.
+    if (fill96Cola.length || [...fill96Trabajos.values()].filter(x => x.publico.inicio).length >= FILL96_MAX) {
         fill96Trabajos.delete(id);
         fill96Cola.push(id);
         t.publico.fase = 'cola';
         fill96Pendientes.set(id, t);
+        guardarFill96();
         return fill96Estado(id);
     }
     correrFill96(t);
+    guardarFill96();
     return fill96Estado(id);
+}
+// (Zeka 2026-11-19) Un reinicio del bot borraba los /farm en curso y la fila sin avisar ("#1 in line" para
+// siempre). Se guardan en un archivo y al volver se retoman (fill96Reanudar, lo llama bot.js).
+const rutaFill96Pend = () => path.join(__dirname, 'reports', 'fill96_pendientes.json');
+function guardarFill96() {
+    try {
+        const lista = [...[...fill96Trabajos.values()].map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId })),
+            ...fill96Cola.map(id => fill96Pendientes.get(id)).filter(Boolean).map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId }))]
+            .filter(x => x.tipo !== 'scan');
+        fs.mkdirSync(path.dirname(rutaFill96Pend()), { recursive: true });
+        fs.writeFileSync(rutaFill96Pend(), JSON.stringify(lista));
+    } catch (e) { /* no critico */ }
+}
+// crearAvisar(id) -> avisar(pub, final) para cada trabajo retomado (sin la interaccion original).
+function fill96Reanudar(crearAvisar) {
+    let lista = [];
+    try { lista = JSON.parse(fs.readFileSync(rutaFill96Pend(), 'utf8')); } catch (e) { return 0; }
+    let n = 0;
+    for (const x of lista) {
+        if (!x?.id || fill96Trabajos.has(x.id) || fill96Cola.includes(x.id)) continue;
+        fill96Iniciar(x.id, x.tipo, crearAvisar(x.id), x.packId || '');
+        n++;
+    }
+    if (n) log(`fill96: resumed ${n} /farm job(s) after a restart`);
+    return n;
 }
 const fill96Pendientes = new Map();   // los de la cola, con su trabajo armado
 function fill96Siguiente() {
@@ -1276,11 +1304,12 @@ function fill96Siguiente() {
         fill96Trabajos.set(id, t);
         correrFill96(t);
     }
+    guardarFill96();
 }
 function fill96Parar(discordId) {
     const id = String(discordId);
     const i = fill96Cola.indexOf(id);
-    if (i >= 0) { fill96Cola.splice(i, 1); fill96Pendientes.delete(id); return true; }
+    if (i >= 0) { fill96Cola.splice(i, 1); fill96Pendientes.delete(id); guardarFill96(); return true; }
     const t = fill96Trabajos.get(id);
     if (!t) return false;
     t.parar = true;
@@ -1420,6 +1449,7 @@ async function correrFill96(t) {
         pub.fin = Date.now();
         try { if (t.stopFile) fs.unlinkSync(t.stopFile); } catch (e) { /* nada */ }
         fill96Trabajos.delete(t.id);
+        guardarFill96();
         avisar(true);
         fill96Siguiente();
     }
@@ -1431,4 +1461,4 @@ function fill96Activos() {
         .map(t => ({ id: t.id, ...t.publico, cola: fill96Cola.length }));
 }
 
-module.exports = { iniciar, ciclo, resumenPrestadas, infoFarm, fill96Resumen, fill96Iniciar, fill96Estado, fill96Parar, fill96Sobres, fill96Activos };
+module.exports = { iniciar, ciclo, resumenPrestadas, infoFarm, fill96Resumen, fill96Iniciar, fill96Estado, fill96Parar, fill96Sobres, fill96Activos, fill96Reanudar };

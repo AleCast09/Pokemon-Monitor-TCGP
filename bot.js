@@ -1,3 +1,6 @@
+// (Ale 2026-11-20) 16 hilos de trabajo en vez de 4: archivos, imagenes y DNS comparten esos hilos; con 4, unas
+// pocas tareas colgadas (DNS tras un corte de red) frenaban TODOS los comandos. Tiene que ir antes que nada.
+if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = '16';
 // Ver entry.js para el detalle -- se repite aca porque quien corre bot.js
 // directo (PM2 en un dev PC) no pasa por entry.js.
 require('dns').setDefaultResultOrder('ipv4first');
@@ -11960,9 +11963,13 @@ client.on('messageCreate', async (message) => {
 });
 
 // Cada interaccion corre con su usuario en comunidad.contexto (ver community.js / monitor-link-server.js).
+const salud = require('./salud.js');   // vigilante: avisa (y reinicia) si el bot se traba (2026-11-20)
 client.on('interactionCreate', (interaction) => comunidad.contexto.run(
     { guildId: interaction.guildId, userId: interaction.user?.id },
-    () => manejarInteraccionPrincipal(interaction).catch(e => console.error('DEBUG: error en interaccion:', e))
+    () => {
+        const fin = salud.vigilar(interaction);
+        return manejarInteraccionPrincipal(interaction).catch(e => console.error('DEBUG: error en interaccion:', e)).finally(fin);
+    }
 ));
 async function manejarInteraccionPrincipal(interaction) {
     if (comunidad.soloComunidad() && !comunidad.esComunidad(interaction.guildId)) return;
@@ -14315,6 +14322,15 @@ async function manejarInteraccionPrincipal(interaction) {
             return await interaction.editReply({ content: '❌ Could not find the configured **JSON Accounts Path** folder.', components: [] });
         }
         if (!resultados.length) {
+            // (creeeder91 2026-11-19) Quien empieza de cero no tiene la carta en ninguna cuenta: antes solo veia
+            // "No account has this card" y no podia pedir ayuda. El mismo boton que con la PC apagada.
+            if (comunidad.esComunidad(interaction.guildId) && origen !== 'gold') {
+                return await interaction.editReply({ content: '', embeds: [new EmbedBuilder().setColor(0xE67E22)
+                    .setTitle('🙋 None of your accounts has this card')
+                    .setDescription('Press **🙋 Ask for help**: the members with Monitor Link **online** that have this card get a mention, and one of them can send it to you.')],
+                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder()
+                        .setCustomId(`fast_help::${cartaId}::${friendId}::${modo}`.slice(0, 100)).setLabel('🙋 Ask for help').setStyle(ButtonStyle.Primary))] });
+            }
             return await interaction.editReply({ content: '❌ No account has this card.', components: [] });
         }
 
@@ -17981,8 +17997,11 @@ async function datosTableroFarm(guild) {
 async function actualizarTableroFarm(guild, { mover = false } = {}) {
     const est = tableroFarm.get(guild.id) || {};
     tableroFarm.set(guild.id, est);
-    if (est.ocupado) { est.otraVez = est.otraVez || mover || 'editar'; return; }
+    // (2026-11-20) Una vuelta colgada dejaba la tarjeta "ocupada" para siempre: a los 2 min se da por perdida.
+    if (est.ocupado && Date.now() - (est.desde || 0) < 2 * 60 * 1000) { est.otraVez = est.otraVez || mover || 'editar'; return; }
+    if (est.ocupado) console.error(`🩺 Health: farm board update stuck for 2+ min, starting a new one. Waiting on: ${salud.recursos()}`);
     est.ocupado = true;
+    est.desde = Date.now();
     try {
         if (!comunidad.esComunidad(guild.id) || !hostComunidad.esActivo()) return;
         const canal = await canalFarm96(guild.id);
@@ -18032,9 +18051,25 @@ client.on('messageCreate', async (message) => {
         e.timer = setTimeout(() => actualizarTableroFarm(message.guild, { mover: true }), 4000);
     } catch (e) { /* nada */ }
 });
+// (Zeka 2026-11-19) /farm que quedaron a medias o en fila por un reinicio: se retoman solos cuando este bot
+// tiene el turno; el resultado va al canal con mencion (la ventana privada original ya no existe).
+let farmReanudado = false;
+function reanudarFarms(guild) {
+    if (farmReanudado) return;
+    farmReanudado = true;
+    fill96Mod().fill96Reanudar?.((id) => async (pub, final) => {
+        if (!final) return;
+        actualizarTableroFarm(guild).catch(() => {});
+        const fin = embedFinFill96(pub, await emojisFill96(guild));
+        const canal = await canalFarm96(guild.id);
+        const ok = await canal?.send({ content: `<@${id}> your /farm was resumed after a bot restart:`, embeds: [fin], allowedMentions: { users: [id] } }).catch(() => null);
+        if (!ok) await (await client.users.fetch(id).catch(() => null))?.send({ embeds: [fin] }).catch(() => {});
+    });
+}
 // Cada 30 s mientras el bot tiene el turno: se edita solo si algo cambio.
 setInterval(() => {
     if (!client.isReady?.() || !hostComunidad.esActivo()) return;
+    for (const guild of client.guilds.cache.values()) if (comunidad.esComunidad(guild.id)) reanudarFarms(guild);
     for (const guild of client.guilds.cache.values()) if (comunidad.esComunidad(guild.id)) actualizarTableroFarm(guild);
 }, 30 * 1000);
 

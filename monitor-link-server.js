@@ -478,6 +478,10 @@ function registrar(app, dependencias) {
                     carpeta = excluded.carpeta, wishlist = excluded.wishlist, ajustes = COALESCE(excluded.ajustes, link_resumen.ajustes)`,
                 [agente.discord_id, agente.guild_id, limpiasTexto, nLimpias, Date.now(), String(datos.folder || "").slice(0, 300) || null, wishlist,
                     ajustes ? JSON.stringify(ajustes) : null]);
+            // (2026-11-19) La version solo se guardaba al vincular: anotar la que tiene AHORA (cada resumen la trae).
+            if (/^ahk-[\d.]+$/.test(String(datos.version || ''))) {
+                await db.run(`UPDATE link_agentes SET version = ? WHERE discord_id = ?`, [String(datos.version), agente.discord_id]).catch(() => {});
+            }
             // Respuesta al 📁 Set My Folder: si ya se esta usando la carpeta pedida, o si en esa PC no
             // existe (folderError), el pedido se cierra.
             const pedido = await db.get(`SELECT carpeta_pedida FROM link_agentes WHERE discord_id = ?`, [agente.discord_id]);

@@ -5,6 +5,8 @@
 // generico ("Received one or more errors") en cualquier pedido HTTPS -- entre
 // ellos, el de "Check for Updates". Forzar IPv4 primero evita la carrera.
 require('dns').setDefaultResultOrder('ipv4first');
+// (2026-11-20) 16 hilos de trabajo (ver bot.js): tiene que ir antes de cualquier archivo/DNS asincrono.
+if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = '16';
 // El fix de arriba solo cambia el orden de intento, pero Node igual sigue
 // corriendo IPv4 e IPv6 en paralelo ("Happy Eyeballs") -- si el intento que
 // queda de segundo tambien falla (o tarda), el AggregateError vuelve a

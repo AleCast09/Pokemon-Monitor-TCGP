@@ -24,6 +24,18 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-20 — cuenta 2 — Bot trabado a las 05:47 + vigilante de salud (PUBLICADO junto con lo de abajo)
+- Síntoma: comandos en "thinking" para siempre y la tarjeta de 96P sin actualizar, con el bot vivo (dashboard respondía) y red OK. Causa probable: los 4 hilos de trabajo de Node llenos (DNS/archivos colgados) → todo lo que usa archivos/imágenes en fila.
+- Arreglo: `UV_THREADPOOL_SIZE=16` (bot.js, entry.js, host.js, primera línea); `salud.js`: prueba los hilos cada minuto (2 fallos de 45 s → reinicio solo vía pm2 lanzado por WMI, con `.reiniciando` = no suelta el turno), avisa si el bot se congela, anota comandos de +60 s con lo que estaba esperando (`🩺 Health:` en el log). La tarjeta de 96P ya no queda "ocupada" para siempre (2 min).
+- HOST_PRINCIPAL funcionó: AleCast recuperó el turno solo después de que la PC se reinició.
+- Si vuelve a pasar: buscar `🩺 Health` en `C:\Users\Ale TCG\.pm2\logs\bot-error.log` (dice qué estaba esperando: GetAddrInfoReqWrap = DNS, FSReqCallback = archivos).
+
+### 2026-11-19 (noche) — cuenta 1 — fila /farm, versión ML, Ask for help (PUBLICADO 2026-11-20)
+- Fila de /farm: nadie se salta al #1; los /farm en curso/en fila se guardan en `reports/fill96_pendientes.json` y se retoman tras un reinicio (`fill96Reanudar`, resultado al canal). Caso Zeka.
+- `monitor-link-server.js`: guarda la versión ACTUAL de Monitor Link en cada resumen (antes solo al vincular).
+- /card sin la carta en ninguna cuenta (comunidad): ahora muestra "🙋 Ask for help" (caso creeeder91).
+- Pendiente con OK de Ale: Monitor Link guarda copia propia de los sobres del farm y la repone si PTCGPB 10.3 la borra (Isaac); botón Restore from .bak.
+
 ### 2026-11-19 (tarde) — cuenta 1 — Tarjeta fija de 📦-farm-96p, ventana /farm (PUBLICADO host-2026.11.19-0645)
 - **Tarjeta fija** (`tarjeta-farm96.js` + `actualizarTableroFarm` en bot.js): siempre el último mensaje de 📦-farm-96p; vuelve abajo 4 s después de cualquier otro mensaje; se edita cada 30 s si cambió. Muestra los /farm en curso (nombre de Discord, sobres en abanico +N, tarea, cuentas, elegibles/no elegibles, PPM de /farm). Sin nadie: "READY" con Mega Mewtwo X, First Partners y Pikachu. Confirmado en el canal.
 - God Pack UI: botón **📦 /farm** → ventana aparte con los /farm de los miembros y su propio PPM; /farm escribe en `reports/farm96.log` (ya no suma al PPM del host). Sobres de regalo no cuentan como sobres.

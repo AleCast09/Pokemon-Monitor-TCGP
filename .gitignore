@@ -98,3 +98,6 @@ host-key.txt
 # Paquete de host para wr98 (se regenera con git archive)
 dist-host/
 .reiniciando
+
+# /farm pendientes (reroll-comunidad.js), solo de esta PC
+/reports/
