@@ -1,0 +1,7 @@
+All Missions - actualizar datos (cuando sale una expansion nueva)
+
+1. Bajar la pagina: curl -A "Mozilla/5.0" https://www.serebii.net/tcgpocket/themedcollections.shtml -o serebii_tc.html
+2. python parse_serebii.py serebii_tc.html themed.json
+3. python mapear_sets.py themed.json        (usa C:\POKEMON\PTCGPB-ALE\Helper: cardmap/cardmaster/en_US) -> themed_ids.json
+4. python bajar_logos.py themed_ids.json    (baja los logos nuevos a assets\missions; achicarlos a 128 px)
+5. Convertir themed_ids.json a assets\missions\themed_collections.json (ver docs/AVANCES.md 2026-11-14) y publicar.
