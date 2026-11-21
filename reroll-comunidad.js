@@ -1508,7 +1508,8 @@ async function correrFill96(t) {
                 }
                 log(`fill96 ${t.tipo}: ${nombres.length} account(s) of ${t.id}`);
                 await correrInject(motor, dir, s, nombres.length, t.id, false, {
-                    modo: 'packs-only', gastar: t.tipo === 'open96', extra, parallel: t.tipo === 'open96' ? 10 : 3, stopFile: t.stopFile, logFile: 'farm96.log',
+                    modo: 'packs-only', gastar: t.tipo === 'open96', extra, parallel: t.tipo === 'open96' && /^(1|true|si|yes)$/i.test(String(process.env.HOST_PRINCIPAL || '')) ? 10 : 3,   // Farm 96P de a 10: por ahora solo el host de Ale (2026-11-20)
+                    stopFile: t.stopFile, logFile: 'farm96.log',
                     // NEAR96_GP_V1: solo Open 2 (Farm 96P abre demasiados, Ale 2026-11-20)
                     near96: t.tipo === 'open2'
                         ? Object.fromEntries(lote.filter(c => Number(c.faltan) > 0 && Number(c.faltan) <= 6).map(c => [claveXml(c.f), Number(c.faltan)]))
