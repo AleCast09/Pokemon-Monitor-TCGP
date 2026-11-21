@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-21 — cuenta 2 — Dialga, entregas lentas a Monitor Link, solo battles (SIN COMMIT NI PUBLICAR)
+- **Dialga (cy: Open 2 = 0 sobres en 2.786 cuentas)**: `pack_catalog.py` traía un product_id adivinado (`PC_PS_2503000_01_01_01` → PurchaseV2 INTERNAL). El bueno es `PC_PS_2409010_01_01_01` (patrón de Palkia), **probado** abriendo 1 sobre en la cuenta de prueba a88d421336ddeee1. Ya corregido en el motor de Ale; `reroll-comunidad.js` `corregirProductos()` lo corrige en cada host al arrancar (deja `.bak-productos`).
+- **Entregas a Monitor Link (Nat012: 9.192 sobres sin llegar; ~24.000 cuentas pendientes en `link_reroll_pendiente`, algunas desde 11-19)**: Monitor Link por CADA cuenta leía todos sus JSON para encontrarla y después subía el resumen (otra lectura completa). **Monitor Link 1.9.36**: índice fileName→archivo leído una vez (`JsonDeCuenta`) y resumen una sola vez 20 s después del último (`ResumenTrasSobres`). `monitor-link-server.js` `entregarSobresReroll`: a Monitor Link 1.9.36+ se le mandan de a 25 juntas (viejos: igual que antes, de a una). Falta: publicar (Monitor Link se autoactualiza) y reiniciar el bot de Ale.
+- **Nat012**: el /farm se cortó porque la PC de Ale se reinició 11-20 23:37 y no volvió hasta 11-21 15:24 (turno pasó a ArcaWindows). Su trabajo sigue en `reports/fill96_pendientes.json`.
+- **Solo battles** (`sweep_solo_battles_v2.py` del motor): ganan BEGINNER_01-25 (~15 s c/u) y desde la 26 el juego da HTML 403 a esa cuenta solo para batallas (login y farm bien, no es la IP). Propuesto: ritmo humano (2-4 min por batalla, ~10/hora). Ale todavía no contestó. Después: batallas al crear cuentas.
+
 ### 2026-11-20 (noche) — cuenta 2 — /farm compartido entre hosts (A MEDIAS, SIN PUBLICAR)
 - Pedido de Ale: si un host se cae / pierde internet / pierde el turno, sus /farm los sigue el host del turno DESDE DONDE QUEDARON (hoy se mueren y empiezan de 0).
 - HECHO y probado contra Upstash (`community-host.js`, sin usar todavía): `farmAnotar(id, datos, hechas[], host=YO)` (EVAL: HSET `zenith:farm_jobs` + SADD `zenith:farm_done:<id>` 2 días; host '' = libre), `farmTrabajos()`, `farmHechas(id)`, `farmDueno(id)`, `farmTerminar(id)` (solo borra si sigue siendo de este host).

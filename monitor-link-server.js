@@ -809,10 +809,39 @@ async function anotarSobresReroll(discordId, archivo, sobres, ultimo) {
 
 // Manda al Monitor Link del miembro las cartas pendientes. Devuelve cuantas entregas quedaron hechas.
 // Si su PC esta apagada quedan para la proxima (cada entrega lleva su clave: nunca se escribe dos veces).
+// "ahk-1.9.36" -> 10936 (para comparar). Sin version: 0.
+function versionAhk(v) {
+    const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(v || ''));
+    return m ? (+m[1]) * 10000 + (+m[2]) * 100 + (+m[3]) : 0;
+}
+
 async function entregarSobresReroll(discordId) {
     await asegurarTablas();
     const filas = await db.all(`SELECT clave, archivo, datos FROM link_reroll_pendiente WHERE discord_id = ? ORDER BY ts`, [String(discordId)]) || [];
     let hechas = 0;
+    // (2026-11-21, Nat012: 9.192 sobres sin llegar; ~24.000 cuentas pendientes) Monitor Link 1.9.36+ busca la
+    // cuenta en un indice y sube el resumen una sola vez al final: se le mandan de a 25 juntas.
+    const agente = await db.get(`SELECT version FROM link_agentes WHERE discord_id = ?`, [String(discordId)]).catch(() => null);
+    if (versionAhk(agente?.version) >= versionAhk('ahk-1.9.36')) {
+        for (let i = 0; i < filas.length; i += 25) {
+            const grupo = filas.slice(i, i + 25);
+            const res = await Promise.allSettled(grupo.map(f => pedirAccion(discordId,
+                { action: 'add_pulls', file: f.archivo, content: Buffer.from(f.datos).toString('base64') }, i ? 120000 : 300000)));
+            let fallo = false;
+            for (let k = 0; k < grupo.length; k++) {
+                const f = grupo[k], r = res[k].status === 'fulfilled' ? res[k].value : null;
+                if (!r) { fallo = true; continue; }
+                if (r.ok || r.error === 'account file not found') {
+                    await db.run(`DELETE FROM link_reroll_pendiente WHERE clave = ?`, [f.clave]);
+                    if (r.ok) hechas++;
+                }
+                if (!r.ok) console.log(`[reroll] ${discordId}: Monitor Link could not write ${f.archivo} (${r.error || 'unknown'})${r.error === 'account file not found' ? ' - dropped' : ''}`);
+            }
+            if (fallo) break;   // offline / timeout: el resto queda para la proxima (lo ya aplicado no se repite: reroll_applied.txt)
+        }
+        if (hechas) console.log(`[reroll] ${discordId}: ${hechas} account(s) of packs delivered to Monitor Link`);
+        return hechas;
+    }
     for (const f of filas) {
         try {
             const r = await pedirAccion(discordId, { action: 'add_pulls', file: f.archivo, content: Buffer.from(f.datos).toString('base64') }, 30000);

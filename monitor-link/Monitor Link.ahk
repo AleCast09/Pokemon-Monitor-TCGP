@@ -19,13 +19,14 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.35"
+global VERSION := "ahk-1.9.36"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
 global ServerUrl := "", Token := "", UserName := "", LibUrl := "", LibToken := "", Ruta := "", CarpetaJson := ""
 global UltimaHuella := "", UltimoEnvio := "", CuentasEnviadas := 0, EnLinea := false, UltimoError := ""
 global JobsReq := "", JobsReintento := 0, IndiceXml := "", IndiceDe := "", IndiceSinPrefijo := {}, IndiceCuentas := ""
+global IndiceJson := "", IndiceJsonTs := 0, IndiceJsonDe := ""   ; 1.9.36: fileName -> card file (JsonDeCuenta)
 ; The other community hosts (the ping lists them): they get the same summary, so whichever takes over
 ; already has your accounts -- even if this PC is off by then.
 global Espejos := [], UltimoEspejo := 0
@@ -960,14 +961,17 @@ AgregarSobres(id, archivo, base64) {
     if InStr(ya, mk1)
         return ResponderAccion("{""id"":""" . id . """,""ok"":true,""already"":true}")
     buscado := RegExReplace(archivo, "i)\.xml$", "")
-    destino := ""
-    Loop, Files, %CarpetaJson%\*.json
-    {
-        FileRead, t, %A_LoopFileFullPath%
-        if (RegExMatch(t, """fileName""\s*:\s*""([^""]*)""", mf) && RegExReplace(mf1, "i)\.xml$", "") = buscado) {
-            destino := A_LoopFileFullPath
-            break
-        }
+    ; 1.9.36: card file looked up in an index read ONCE (before: every account read all the files again --
+    ; members with thousands of accounts took minutes per account and the host gave up).
+    destino := JsonDeCuenta(buscado)
+    t := ""
+    if (destino != "")
+        FileRead, t, %destino%
+    if (destino != "" && !(RegExMatch(t, """fileName""\s*:\s*""([^""]*)""", mf) && RegExReplace(mf1, "i)\.xml$", "") = buscado)) {
+        IndiceJsonTs := 0, IndiceJson := ""   ; out of date (renamed file): read the folder again
+        destino := JsonDeCuenta(buscado)
+        if (destino != "")
+            FileRead, t, %destino%
     }
     if (destino = "")
         return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""account file not found""}")
@@ -1010,7 +1014,32 @@ AgregarSobres(id, archivo, base64) {
     FileAppend, % ahora . "  " . n . " pack(s) opened by the host added to " . archivo . "`n", %CFG_REROLL_LOG%, UTF-8
     ResponderAccion("{""id"":""" . id . """,""ok"":true}")
     AvisarS4T(archivo, contenido, mpc1 + n)
+    ; 1.9.36: the summary goes up ONCE, 20 s after the last account received (before: after every account,
+    ; re-reading all of them while the host waited).
+    SetTimer, ResumenTrasSobres, -20000
+}
+
+ResumenTrasSobres() {
     SubirResumen(false)
+}
+
+; fileName (without .xml) -> card file. Read once; again only if a name is missing and the index is 2+ min old.
+JsonDeCuenta(buscado) {
+    if (IsObject(IndiceJson) && IndiceJsonDe = CarpetaJson && IndiceJson.HasKey(buscado) && FileExist(IndiceJson[buscado]))
+        return IndiceJson[buscado]
+    if (IsObject(IndiceJson) && IndiceJsonDe = CarpetaJson && A_TickCount - IndiceJsonTs < 120000)
+        return ""
+    IndiceJson := {}, IndiceJsonDe := CarpetaJson
+    Loop, Files, %CarpetaJson%\*.json
+    {
+        if (Mod(A_Index, 20) = 0)
+            Sleep, -1
+        FileRead, t, %A_LoopFileFullPath%
+        if RegExMatch(t, """fileName""\s*:\s*""([^""]*)""", mf)
+            IndiceJson[RegExReplace(mf1, "i)\.xml$", "")] := A_LoopFileFullPath
+    }
+    IndiceJsonTs := A_TickCount
+    return IndiceJson.HasKey(buscado) ? IndiceJson[buscado] : ""
 }
 
 ; The same notice your PTCGPB sends to its S4T for every pack with valuable cards (your personal

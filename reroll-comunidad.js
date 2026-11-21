@@ -601,6 +601,30 @@ function agregarSobresExtra(motor) {
         fs.writeFileSync(ruta, texto);
         log(`pack_catalog.py: added ${faltan.length} pack(s) (Special Pack: First Partners)`);
     } catch (e) { /* sin catalogo en este motor */ }
+    corregirProductos(motor);
+}
+
+// Tickets de compra equivocados en el catalogo de Miguel (2026-11-21, cy: Open 2 de Dialga abrio 0 sobres en
+// 2.786 cuentas). Dialga traia uno adivinado (PC_PS_2503000_01_01_01 -> PurchaseV2 INTERNAL); el bueno sigue
+// el patron de Palkia (verificado) y se probo abriendo 1 sobre en la cuenta de prueba de Ale.
+const PRODUCTOS_CORREGIDOS = [
+    { pack_id: 'AN003_0010_00_000', malo: 'PC_PS_2503000_01_01_01', bueno: 'PC_PS_2409010_01_01_01' },
+];
+function corregirProductos(motor) {
+    try {
+        const ruta = path.join(motor, 'scripts', 'flow', 'pack_catalog.py');
+        let texto = fs.readFileSync(ruta, 'utf8'), cambios = 0;
+        texto = texto.split(/\r?\n/).map(linea => {
+            for (const p of PRODUCTOS_CORREGIDOS) {
+                if (linea.includes(`"${p.pack_id}"`) && linea.includes(`"${p.malo}"`)) { cambios++; return linea.replace(`"${p.malo}"`, `"${p.bueno}"`); }
+            }
+            return linea;
+        }).join(texto.includes('\r\n') ? '\r\n' : '\n');
+        if (!cambios) return;
+        fs.copyFileSync(ruta, `${ruta}.bak-productos`);
+        fs.writeFileSync(ruta, texto);
+        log(`pack_catalog.py: fixed ${cambios} wrong product id(s) (Dialga)`);
+    } catch (e) { /* sin catalogo en este motor */ }
 }
 
 // Ajustes recomendados del God Pack UI (2026-11-07, Naja + Arcade: mismo motor, sin soft bans): tope de 35
