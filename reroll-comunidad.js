@@ -632,7 +632,26 @@ function corregirProductos(motor) {
 // los dos sobres igual y no da el segundo si el primero es God Pack). Se aplican UNA vez por host (despues cada
 // uno puede cambiarlos); el panel los toma al abrirse. El tope de la comunidad (ppm_cap.json) sigue mandando.
 const AJUSTES_RECOMENDADOS = { packs_per_min: 35, wait_accept: 6, account_delay: 2, pack_delay: 1 };
+const PARALLEL_GP_MIN = 14;
 function aplicarAjustesRecomendados(motor) {
+    // (Ale 2026-11-21) Parallel 14 en God Pack (ver correrInject): tambien en el panel, para las cuentas propias.
+    try {
+        const marca3 = path.join(motor, 'reports', 'ajustes_recomendados_v3.done');
+        const ruta = path.join(motor, 'tools', 'god_pack_gui', 'settings.json');
+        if (!fs.existsSync(marca3) && fs.existsSync(ruta)) {
+            const s = JSON.parse(fs.readFileSync(ruta, 'utf8'));
+            let cambio = false;
+            if ((s.run_mode || 'godpack') === 'godpack' && Number(s.parallel) < PARALLEL_GP_MIN) { s.parallel = PARALLEL_GP_MIN; cambio = true; }
+            if (s.mode_timing?.godpack && Number(s.mode_timing.godpack.parallel) < PARALLEL_GP_MIN) { s.mode_timing.godpack.parallel = PARALLEL_GP_MIN; cambio = true; }
+            if (cambio) {
+                fs.copyFileSync(ruta, `${ruta}.bak-parallel`);
+                fs.writeFileSync(ruta, JSON.stringify(s, null, 2));
+                log(`God Pack UI: ${PARALLEL_GP_MIN} accounts at a time in God Pack mode (was too slow to reach the PPM cap) - reopen the God Pack UI to load it`);
+            }
+            fs.mkdirSync(path.dirname(marca3), { recursive: true });
+            fs.writeFileSync(marca3, new Date().toISOString());
+        }
+    } catch (e) { /* sin panel en este motor */ }
     // (2026-11-07, Arcade) 20 s de espera bajaba el PPM de 17 a 12 y con 6 s no se perdia ninguna solicitud:
     // a quien todavia tiene los 20 s que puso la v1, se le baja a 6 (si lo cambio a mano, no se toca).
     try {
@@ -853,7 +872,9 @@ function correrInject(motor, dirCuentas, s, cantidad, duenoId, soloLimpiar = fal
             '--wait-accept', String(s.wait_accept ?? 10),
             '--pack-delay', String(s.pack_delay ?? 2),
             '--account-delay', String(s.account_delay ?? 2),
-            '--parallel', String(op.parallel || s.parallel || 3),
+            // (Ale 2026-11-21) God Pack: cada cuenta tarda ~74 s y con 7 a la vez un host no pasaba de ~11 PPM aunque su
+            // tope fuera 13-20 (la comunidad sacaba ~17 de 40). Minimo 14: el tope de PPM (ppm_cap.json) sigue mandando.
+            '--parallel', String(op.parallel || ((op.modo || s.run_mode || 'godpack') === 'godpack' ? Math.max(Number(s.parallel) || 3, PARALLEL_GP_MIN) : (s.parallel || 3))),
             '--limit', String(cantidad),
             '--mode', op.modo || s.run_mode || 'godpack',
             '--farming-mode', s.farming_mode || 'only_gp',
