@@ -116,13 +116,14 @@ async function escribirSetsSobres() {
 // Cada cuenta en GP farm manda solicitud a todos los Mains, asi que el PPM total de los hosts = solicitudes
 // por minuto que recibe cada Main. Se reparte PPM_COMUNIDAD (36) entre los hosts en modo God Pack con Start;
 // uno solo se lleva todo. inject.py lo lee de reports/ppm_cap.json (si tiene mas de 5 min, no lo usa).
-// Pausa del reset diario (Ale 2026-11-22, como el farm de Melody): el juego reinicia a las 21:00 UTC (06:00 de
-// Japon). De 20:30 a 21:15 UTC el GP farm no manda solicitudes, asi los miembros se desconectan y revisan su Wonder
-// Pick. Devuelve el ms en que termina la pausa, o 0 fuera de ella. Igual en todos los hosts (va por la hora).
+// Pausa del reset diario (Ale 2026-11-22, como el farm de Melody): el juego reinicia a las 06:00 UTC (1:00 AM de Ale,
+// que lo ve a la 1:05; Melody pausa 12:30-1:15 AM). De 05:30 a 06:15 UTC el GP farm no manda solicitudes, asi los
+// miembros se desconectan y revisan su Wonder Pick. Devuelve el ms en que termina la pausa, o 0 fuera de ella.
+// Igual en todos los hosts (va por la hora). (La primera version usaba 21:00 UTC por error.)
 function pausaReset(ms = Date.now()) {
     const d = new Date(ms), min = d.getUTCHours() * 60 + d.getUTCMinutes();
-    if (min < 20 * 60 + 30 || min >= 21 * 60 + 15) return 0;
-    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 21, 15);
+    if (min < 5 * 60 + 30 || min >= 6 * 60 + 15) return 0;
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 6, 15);
 }
 
 async function escribirTopePpm() {
