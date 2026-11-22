@@ -63,18 +63,58 @@ function miniLogo(set, sobre) {
 // ---------- imagen en arco (diseño B elegido por Ale) ----------
 const CW = 367, CH = 512, GAP = 34, M = 90, RADIO = 18, BAJADA = [0, 75, 150, 75, 0];
 
+let _imagenes = null;   // id -> archivo de la imagen (statics/cards.json del motor)
+const _rarezas = new Map();   // id -> rareza (C, U, R, RR, AR, SR, SAR, IM, S, SSR, UR)
+function nombreImagen(id) {
+    if (!_imagenes) {
+        _imagenes = new Map();
+        try {
+            for (const c of JSON.parse(fs.readFileSync(path.join(deps.motor(), 'statics', 'cards.json'), 'utf8'))) {
+                const m = /^c([A-Z]{2}_\d+_\d+_\d+)_/.exec(String(c.image || ''));
+                if (m) { _imagenes.set(m[1], c.image); _rarezas.set(m[1], String(c.rarity || '')); }
+            }
+        } catch (e) { /* sin base */ }
+    }
+    return _imagenes.get(id) || null;
+}
+
 async function imagenCarta(sharp, id) {
     const cache = path.join(deps.motor(), '.card_image_cache');
     const local = path.join(cache, `${id}.webp`);
     if (!fs.existsSync(local)) {
         // Misma fuente que el motor (discord_notifier.py) si la carta no esta en el cache.
-        const r = await fetch(`https://assets.pokemon-zone.com/game-assets/CardPreviews/c${id}.webp`,
-            { headers: { Referer: 'https://www.pokemon-zone.com/' }, signal: AbortSignal.timeout(15000) }).catch(() => null);
+        // El archivo lleva el nombre interno de la carta (ej. cPK_20_022020_02_HOGATORex_UR.webp): sale de statics/cards.json.
+        const completo = nombreImagen(id);
+        let r = null;
+        for (const f of [completo, `c${id}.webp`].filter(Boolean)) {
+            r = await fetch(`https://assets.pokemon-zone.com/game-assets/CardPreviews/${f}`,
+                { headers: { Referer: 'https://www.pokemon-zone.com/' }, signal: AbortSignal.timeout(15000) }).catch(() => null);
+            if (r?.ok) break;
+        }
         if (!r?.ok) return null;
         fs.mkdirSync(cache, { recursive: true });
         fs.writeFileSync(local, Buffer.from(await r.arrayBuffer()));
     }
     return sharp(local).resize(CW, CH).png().toBuffer();
+}
+
+// Iconos de rareza del bot (assets/rarezas, los emojis rareza_*): cuantos y cual va debajo de cada carta.
+const ICONO_RAREZA = {
+    C: ['diamante', 1], U: ['diamante', 2], R: ['diamante', 3], RR: ['diamante', 4],
+    AR: ['estrella', 1], SR: ['estrella', 2], SAR: ['estrella', 2], IM: ['estrella', 3],
+    S: ['brillante', 1], SSR: ['brillante', 2], UR: ['corona', 1],
+};
+async function filaRareza(sharp, id) {
+    nombreImagen(id);
+    const [icono, n] = ICONO_RAREZA[_rarezas.get(id)] || [];
+    if (!icono) return null;
+    const T = 72, SEP = 8;
+    const img = await sharp(path.join(__dirname, 'assets', 'rarezas', `${icono}.png`)).resize(T, T, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer().catch(() => null);
+    if (!img) return null;
+    const ancho = n * T + (n - 1) * SEP;
+    const png = await sharp({ create: { width: ancho, height: T, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+        .composite(Array.from({ length: n }, (_, i) => ({ input: img, left: i * (T + SEP), top: 0 }))).png().toBuffer();
+    return { png, ancho, alto: T };
 }
 
 async function colorBrillo(sharp, buf) {
@@ -124,6 +164,9 @@ async function imagenArco(ids, logo, mini) {
         const brillo = Buffer.from(`<svg width="${CW + P * 2}" height="${CH + P * 2}"><rect x="${P - 6}" y="${P - 6}" width="${CW + 12}" height="${CH + 12}" rx="${RADIO + 6}" fill="rgb(${r},${g},${b})" fill-opacity="0.6"/></svg>`);
         capas.push({ input: await sharp(brillo).blur(26).png().toBuffer(), left: x - P, top: y - P });
         capas.push({ input: carta, left: x, top: y });
+        // (Ale 2026-11-22) Debajo de cada carta, su icono de rareza (estrellas, corona, diamantes o shiny).
+        const fila = await filaRareza(sharp, ids[i]).catch(() => null);
+        if (fila) capas.push({ input: fila.png, left: x + Math.round((CW - fila.ancho) / 2), top: y + CH + 18 });
     }
     if (!capas.length) return null;
     if (blq) capas.push({ input: blq.png, left: Math.round((W - blq.ancho) / 2), top: y0 + 150 - 30 - blq.alto });
@@ -163,29 +206,22 @@ function motivoMuerte(h, e) {
 }
 
 // ---------- aviso de cada God Pack ----------
+// (Ale 2026-11-22) Sin embed: una sola foto con todo (tarjeta-gp.js, estilo del tablero de 📦-farm-96p).
 async function publicarGp(canal, h) {
     const e = etiquetas(h), info = e.packId ? infoSobre(e.packId) : null;
     const dueno = await nombreDe(canal.guild, await duenoDe(h));
     const ok = vivo(h);
-    const embed = new EmbedBuilder()
-        .setColor(ok ? 0x23d160 : 0xf23f43)
-        .setTitle(ok ? 'God Pack — ALIVE' : 'God Pack — DEAD')
-        .setDescription(ok ? 'Sent to the online Mains' : 'Not usable · no Mains were added')
-        .addFields(
-            { name: 'Owner', value: dueno, inline: true },
-            { name: 'Host', value: String(h.host || '—'), inline: true },
-            { name: 'Rarity', value: e.rareza ? `[${e.rareza}/5]` : '—', inline: true },
-            ok ? { name: 'Packs', value: e.sobres ? `${e.sobres}P` : '—', inline: true } : { name: 'Why dead', value: motivoMuerte(h, e), inline: true },
-            { name: 'Mode', value: ok ? 'GP farm' : 'Open Packs Only', inline: true },
-            { name: 'Pack', value: info?.nombre || '—', inline: true })
-        .setFooter({ text: 'All God Packs (alive and dead) from the community hosts' })
-        .setTimestamp(new Date(Number(h.ts)));
-    const files = [];
-    const img = Array.isArray(h.cards) && h.cards.length
+    const arco = Array.isArray(h.cards) && h.cards.length
         ? await imagenArco(h.cards, info && logoExpansion(info.expansion), info && miniLogo(info.set, info.sobre)).catch(err => { log('image:', err?.message || err); return null; })
         : null;
-    if (img) { files.push(new AttachmentBuilder(img, { name: 'god-pack.png' })); embed.setImage('attachment://god-pack.png'); }
-    await canal.send({ embeds: [embed], files, allowedMentions: { parse: [] } });
+    const png = await require('./tarjeta-gp.js').tarjetaGp({
+        vivo: ok, dueno, host: h.host || '—', rareza: e.rareza, sobres: e.sobres, sobre: info?.nombre || '',
+        // (Ale 2026-11-22) "unpickable": God Pack con Crown/Shiny/Immersive (UNPICKABLE_LIST_V1 en inject.py).
+        modo: ok ? 'GP farm' : String(h.mode) === 'unpickable' ? 'Unpickable' : 'Packs Only',
+        motivo: ok ? '' : String(h.mode) === 'unpickable' ? 'Unpickable — Crown / Shiny / Immersive card (no Wonder Pick)'
+            : (e.sobres && e.sobres < 96 ? `Not eligible — ${e.sobres}P of 96P (Open Packs Only, no Mains added)` : 'Open Packs Only — no Mains were added'),
+    }, arco);
+    await canal.send({ files: [new AttachmentBuilder(png, { name: ok ? 'god-pack-alive.png' : 'god-pack-dead.png' })], allowedMentions: { parse: [] } });
 }
 
 // ---------- resumen del dia ----------
@@ -237,38 +273,28 @@ async function imagenResumen(hits) {
 }
 
 async function publicarResumen(canal, dia, hits) {
-    const vivos = hits.filter(vivo), muertos = hits.filter(h => !vivo(h));
-    const mejor = Math.max(0, ...hits.map(h => etiquetas(h).rareza || 0));
-    const cuenta = (lista, f) => { const m = new Map(); for (const x of lista) { const k = f(x); if (k) m.set(k, (m.get(k) || 0) + 1); } return [...m].sort((a, b) => b[1] - a[1]); };
+    // (Ale 2026-11-22) Una sola foto (tarjeta-gp.js): totales, sobres del dia y una fila por dueño.
     const nombres = new Map();
-    for (const h of hits) { const id = await duenoDe(h); if (id && !nombres.has(id)) nombres.set(id, await nombreDe(canal.guild, id)); }
-    const dueno = async h => nombres.get(await duenoDe(h)) || 'Unknown';
-    const duenos = [];
-    for (const h of hits) duenos.push(await dueno(h));
-    const porDueno = cuenta(duenos, x => x);
-    const lineaVivos = [];
-    for (const h of vivos.slice(0, 10)) lineaVivos.push(`[${etiquetas(h).rareza || '?'}/5] ${await dueno(h)} · ${h.host || '—'}`);
-    const noEleg = muertos.filter(h => { const e = etiquetas(h); return e.sobres && e.sobres < 96; }).length;
+    const filas = new Map();
+    for (const h of hits) {
+        const id = await duenoDe(h) || '?';
+        if (!nombres.has(id)) nombres.set(id, id === '?' ? 'Unknown' : await nombreDe(canal.guild, id));
+        const f = filas.get(id) || { nombre: nombres.get(id), hosts: [], vivos: 0, muertos: 0 };
+        vivo(h) ? f.vivos++ : f.muertos++;
+        if (h.host && !f.hosts.includes(h.host)) f.hosts.push(h.host);
+        filas.set(id, f);
+    }
+    const porSobre = new Map();
+    for (const h of hits) { const nom = infoSobre(etiquetas(h).packId)?.nombre; if (nom) porSobre.set(nom, (porSobre.get(nom) || 0) + 1); }
     const [y, mo, d] = dia.split('-').map(Number);
-    const titulo = new Date(y, mo - 1, d).toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
-    const embed = new EmbedBuilder()
-        .setColor(0x7c83ff)
-        .setTitle(`Daily God Pack recap — ${titulo}`)
-        .setDescription('All community hosts · GP farm and /farm')
-        .addFields(
-            { name: '✨ God Packs', value: `**${hits.length}**`, inline: true },
-            { name: '🟢 Alive', value: `**${vivos.length}**`, inline: true },
-            { name: '🔴 Dead', value: `**${muertos.length}**`, inline: true },
-            { name: '🏆 Best rarity', value: mejor ? `**[${mejor}/5]**` : '—', inline: true },
-            { name: 'By host', value: cuenta(hits, h => h.host).map(([k, v]) => `${k} ${v}`).join(' · ') || '—', inline: true },
-            { name: 'Why dead', value: muertos.length ? [noEleg ? `not eligible ${noEleg}` : '', muertos.length - noEleg ? `Open Packs Only ${muertos.length - noEleg}` : ''].filter(Boolean).join(' · ') : '—', inline: true },
-            { name: 'Owners with a God Pack', value: porDueno.slice(0, 8).map(([k, v]) => `${k} ${v}`).join(' · ') + (porDueno.length > 8 ? ` · +${porDueno.length - 8}` : '') || '—' },
-            { name: 'Alive today', value: lineaVivos.join('\n') || 'None today' })
-        .setFooter({ text: 'Sent once a day at 11:59 PM · names only, nobody is mentioned' });
-    const files = [];
-    const img = await imagenResumen(hits).catch(err => { log('recap image:', err?.message || err); return null; });
-    if (img) { files.push(new AttachmentBuilder(img, { name: 'recap.png' })); embed.setImage('attachment://recap.png'); }
-    await canal.send({ embeds: [embed], files, allowedMentions: { parse: [] } });
+    const png = await require('./tarjeta-gp.js').tarjetaResumen({
+        dia: new Date(y, mo - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        total: hits.length, vivos: hits.filter(vivo).length, muertos: hits.filter(h => !vivo(h)).length,
+        mejor: Math.max(0, ...hits.map(h => etiquetas(h).rareza || 0)),
+        sobres: [...porSobre].sort((a, b) => b[1] - a[1]).map(([k]) => k),
+        filas: [...filas.values()],
+    });
+    await canal.send({ files: [new AttachmentBuilder(png, { name: 'god-packs-recap.png' })], allowedMentions: { parse: [] } });
 }
 
 // ---------- ciclo (cada 30 s desde bot.js, solo el host del turno) ----------
@@ -290,6 +316,12 @@ async function ciclo(guild) {
     }
     corriendo = true;
     try {
+        // (Ale 2026-11-22) KyuremBot (wR98) publica el canal: deja su señal de vida en zenith:allgp_kyurem (ms) cada
+        // minuto. Con la señal al dia (< 5 min) el nuestro no publica; si KyuremBot se apaga, publica el nuestro.
+        // Los dos usan la misma marca zenith:allgp_ts, asi no hay repetidos ni saltos. zenith:allgp_off = 1 lo apaga del todo.
+        if (String(await deps.host.marcaAllGp('off').catch(() => '')) === '1') return;
+        const kyurem = Number(await deps.host.marcaAllGp('kyurem').catch(() => 0)) || 0;
+        if (Date.now() - kyurem < 5 * 60 * 1000) return;
         const lista = (await deps.host.godPacksComunidad(false).catch(() => null) || []).filter(h => h && Number(h.ts));
         let marca = Number(await deps.host.marcaAllGp('ts').catch(() => null));
         if (!marca) {   // primera vez: se empieza desde ahora (sin publicar los de antes)

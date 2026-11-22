@@ -3904,8 +3904,28 @@ def inject_one(
                                 account=account, card_ids=outcome["cards"], pack_label=info.get("label", "?"),
                                 packs_count=packs, pack_id=pack_id, sess=sess, mode="packs-only",
                                 log_fn=lambda m: log(str(m), tag=tag))
+                            info["_listed"] = True
                 except Exception as exc:
                     log(f"[gp-list] couldn't check the pack: {exc}", tag=tag)
+
+            # UNPICKABLE_LIST_V1 (Ale 2026-11-22): a God Pack with a Crown/Shiny/Immersive card can't be Wonder
+            # Picked, so it is never posted - but it is listed (mode "unpickable") and shows up as DEAD in the
+            # 📚all_god_packs channel, like the other dead God Packs.
+            if info.get("is_god_unpickable") and not info.get("_listed") and not dry_run:
+                try:
+                    log(f"GOD PACK but UNPICKABLE (Crown/Shiny/Immersive): {info.get('label', '?')} - listed as dead",
+                        tag=tag)
+                    _notifier = _gp_notifier()
+                    if _notifier is not None:
+                        import importlib
+                        importlib.reload(_notifier)
+                    if _notifier is not None and hasattr(_notifier, "record_god_pack_async"):
+                        _notifier.record_god_pack_async(
+                            account=account, card_ids=outcome["cards"], pack_label=info.get("label", "?"),
+                            packs_count=packs, pack_id=pack_id, sess=sess, mode="unpickable",
+                            log_fn=lambda m: log(str(m), tag=tag))
+                except Exception as exc:
+                    log(f"[gp-list] couldn't list the unpickable God Pack: {exc}", tag=tag)
 
             if i < packs - 1:
                 # Adjustable pack-open delay: base value ±20% jitter.
