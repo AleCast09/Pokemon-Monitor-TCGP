@@ -1385,6 +1385,7 @@ function fill96Iniciar(discordId, tipo, avisar, packId = '', opciones = {}) {
 // (Zeka 2026-11-19) Un reinicio del bot borraba los /farm en curso y la fila sin avisar ("#1 in line" para
 // siempre). Se guardan en un archivo y al volver se retoman (fill96Reanudar, lo llama bot.js).
 const rutaFill96Pend = () => path.join(__dirname, 'reports', 'fill96_pendientes.json');
+let fill96Cargado = false;   // true cuando fill96Reanudar ya leyo la lista guardada
 setInterval(() => { if (fill96Trabajos.size || fill96Cola.length) guardarFill96(); }, 60 * 1000).unref?.();
 function guardarFill96() {
     try {
@@ -1393,6 +1394,14 @@ function guardarFill96() {
         const lista = [...[...fill96Trabajos.values()].map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId, ts })),
             ...fill96Cola.map(id => fill96Pendientes.get(id)).filter(Boolean).map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId, ts }))]
             .filter(x => x.tipo !== 'scan');
+        // (2026-11-21) Antes de retomar los guardados (fill96Reanudar), un /farm nuevo pisaba la lista y se perdian:
+        // hasta entonces se conservan los del archivo que todavia no se cargaron.
+        if (!fill96Cargado) {
+            try {
+                const ids = new Set(lista.map(x => x.id));
+                for (const x of JSON.parse(fs.readFileSync(rutaFill96Pend(), 'utf8'))) if (x?.id && !ids.has(x.id)) lista.push(x);
+            } catch (e) { /* sin archivo */ }
+        }
         fs.mkdirSync(path.dirname(rutaFill96Pend()), { recursive: true });
         fs.writeFileSync(rutaFill96Pend(), JSON.stringify(lista));
     } catch (e) { /* no critico */ }
@@ -1404,7 +1413,8 @@ function guardarFill96() {
 const FILL96_REANUDAR_MAX_MS = 30 * 60 * 1000;
 async function fill96Reanudar(crearAvisar) {
     let lista = [];
-    try { lista = JSON.parse(fs.readFileSync(rutaFill96Pend(), 'utf8')); } catch (e) { return 0; }
+    try { lista = JSON.parse(fs.readFileSync(rutaFill96Pend(), 'utf8')); } catch (e) { fill96Cargado = true; return 0; }
+    fill96Cargado = true;
     let n = 0, viejos = 0, apagados = 0;
     let mtime = 0;   // archivos de antes del latido (sin ts): cuenta cuando se guardo por ultima vez
     try { mtime = fs.statSync(rutaFill96Pend()).mtimeMs; } catch (e) { /* nada */ }
