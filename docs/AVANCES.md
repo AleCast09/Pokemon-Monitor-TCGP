@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-22 — cuenta 2 — Canal 📚-all-god-packs, defensas DDoS, /farm offline
+- **📚-all-god-packs** (`all-god-packs.js`, categoría ✨ GOD PACKS ✨ en `community.js`): el host del turno publica cada God Pack de `zenith:gp_hits` (vivo = modo godpack, muerto = packs-only) con 6 campos (Owner, Host, Rarity, Why dead/Packs, Mode, Pack) e imagen en arco (diseño B elegido por Ale: arco invertido, logo de expansión + mini logo del sobre arriba al centro, brillo del color de cada carta, 367×512 sin agrandar). Resumen diario 23:59-00:10 (Upstash `zenith:allgp_recap`); lo publicado se marca en `zenith:allgp_ts` (la primera vez arranca desde ese momento). `discord_notifier.py` guarda `owner` y `pack_id` (GP_OWNER_V1); los viejos buscan el dueño por XML en las cuentas compartidas. **Falta: Sync Channels en ⚙-settings para crear el canal.**
+- **Defensas** (`monitor-link-server.js`): sin Bearer → 401 antes de leer el envío; claves falsas recordadas 5 min (sin Upstash); 240 pedidos/min por IP (5 min bloqueada, log 🛡️). Probado en vivo.
+- **/farm**: Monitor Link "offline" solo corta si no se lo vio hace 3+ min (antes reinicios/actualizaciones cortaron los /farm de cy, Isaac, Zeka, tana, jasonshied).
+- Amigos vinculados sin Inject/shinedust MuMu/wishlist_add; instancia "Main" protegida (Monitor Link 1.9.37). PPM comunidad 45.
+
 ### 2026-11-21 (noche) — cuenta 2 — /farm, amigos, Main protegido, creación x5
 - **/farm**: Monitor Link apagado → el /farm se corta al instante y pasa el siguiente; tras reinicio solo se retoma si el corte fue < 30 min (latido `ts` en `fill96_pendientes.json`) y su Monitor Link está encendido; un /farm nuevo antes de retomar ya no pisa la lista (`fill96Cargado`). Publicado.
 - **Amigos vinculados** (usan las cuentas del dueño sin Monitor Link propio): ya no pueden Inject, chequeo shinedust en MuMu ni wishlist_add (bot.js, `interaction._usuarioMonitor`). Publicado. Causa: un amigo inyectó Ale_Cast_123 en la instancia **Main** de Ale (21:30) → Ale tiene que recuperar su Main con su cuenta Nintendo.

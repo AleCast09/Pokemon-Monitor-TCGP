@@ -100,8 +100,6 @@ function gruposSync(guildId, grupos) {
         { categoria: '👋 START 👋', tipoCategoria: 'start_categoria', acceso: 'todos', canales: [{ tipo: 'start_here', name: '🔗-start-here' }] },
         // Farm 96P (Ale 2026-11-16): /farm sube las cuentas prestadas a 96 sobres; el resultado se publica aca.
         { categoria: '📦 FARM 96P 📦', tipoCategoria: 'farm96_categoria', acceso: 'monitor', canales: [{ tipo: 'farm96', name: '📦-farm-96p' }] },
-        // All God Packs (Ale 2026-11-22): cada God Pack de los hosts, vivo o muerto, y el resumen del dia (all-god-packs.js).
-        { categoria: '✨ GOD PACKS ✨', tipoCategoria: 'allgp_categoria', acceso: 'monitor', canales: [{ tipo: 'all_gp', name: '📚-all-god-packs' }] },
         ...grupos.filter(g => CATEGORIAS_COMUNIDAD.has(g.tipoCategoria))
             .map(g => ({ ...g, acceso: 'monitor', canales: g.canales.filter(c => !CANALES_FUERA_DE_COMUNIDAD.has(c.tipo)) })),
         {

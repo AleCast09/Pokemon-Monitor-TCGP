@@ -6,7 +6,10 @@ const fs = require('fs');
 const path = require('path');
 const { EmbedBuilder, AttachmentBuilder } = require('discord.js');
 
-const CANAL = '📚-all-god-packs';
+// (Ale 2026-11-22) Va dentro de la categoria Elite_Reroll, junto a godpack_gallery y heartbeat_elite_four.
+const CANAL = '📚all_god_packs';
+const CATEGORIA = /elite[\s_-]*reroll/i;
+const esCanal = c => /all[\s_-]*god[\s_-]*packs?/i.test(c.name) && c.isTextBased?.();
 const DIR_EXP = path.join(__dirname, 'assets', 'expansions');
 const DIR_PACKS = path.join(__dirname, 'assets', 'packs');
 // Mismo mapa que motor-panel/discord_notifier.py (PACK_TAG_MAP): God Packs viejos sin pack_id.
@@ -269,11 +272,22 @@ async function publicarResumen(canal, dia, hits) {
 }
 
 // ---------- ciclo (cada 30 s desde bot.js, solo el host del turno) ----------
-let corriendo = false;
+let corriendo = false, creando = false;
 async function ciclo(guild) {
     if (!deps || corriendo) return;
-    const canal = guild.channels.cache.find(c => c.name === CANAL && c.isTextBased?.());
-    if (!canal) return;
+    // Solo el de Elite_Reroll (si quedo uno de prueba en otra categoria, no se usa).
+    let canal = guild.channels.cache.find(c => esCanal(c) && CATEGORIA.test(c.parent?.name || ''));
+    if (!canal) {
+        // Se crea una sola vez dentro de Elite_Reroll, con los permisos de la categoria.
+        const cat = guild.channels.cache.find(c => c.type === 4 && CATEGORIA.test(c.name));
+        if (!cat || creando) return;
+        creando = true;
+        canal = await guild.channels.create({ name: CANAL, type: 0, parent: cat.id, topic: 'Every God Pack from the community hosts (alive and dead) and a daily recap at 11:59 PM' })
+            .then(async c => { await c.lockPermissions().catch(() => {}); log(`channel ${CANAL} created in ${cat.name}`); return c; })
+            .catch(e => { log('could not create the channel:', e?.message || e); return null; })
+            .finally(() => { creando = false; });
+        if (!canal) return;
+    }
     corriendo = true;
     try {
         const lista = (await deps.host.godPacksComunidad(false).catch(() => null) || []).filter(h => h && Number(h.ts));
