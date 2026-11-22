@@ -4540,6 +4540,8 @@ function rutaMuMuManager() {
     return (_rutaMuMuManagerCacheada = mejorCandidato);
 }
 
+// (Ale 2026-11-21: un amigo inyecto una cuenta en su Main) La instancia "Main" nunca se ofrece para Inject ni chequeos.
+const esInstanciaMain = (i) => /^\s*main\s*$/i.test(String(i?.name || ''));
 function obtenerInstanciasMuMu() {
     const managerPath = rutaMuMuManager();
     if (!managerPath) return null;
@@ -13414,7 +13416,7 @@ async function manejarInteraccionPrincipal(interaction) {
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shinedust_track_cuenta::')) {
         const archivoJson = interaction.values[0];
-        const instancias = obtenerInstanciasMuMu();
+        const instancias = obtenerInstanciasMuMu()?.filter(i => !esInstanciaMain(i)) ?? null;
         if (instancias === null) {
             return await interaction.update({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
         }
@@ -14522,7 +14524,7 @@ async function manejarInteraccionPrincipal(interaction) {
         const [, cartaId] = interaction.customId.split('::');
         const fileName = interaction.values[0];
 
-        const instancias = obtenerInstanciasMuMu();
+        const instancias = obtenerInstanciasMuMu()?.filter(i => !esInstanciaMain(i)) ?? null;
         if (instancias === null) {
             return await interaction.update({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
         }
@@ -14553,8 +14555,9 @@ async function manejarInteraccionPrincipal(interaction) {
                 ? '🔗 Your **Monitor Link** is not running — open it on your PC and try again.'
                 : '⏱️ Your **Monitor Link** didn\'t answer — it may be an old version. Close it and open it again (it updates by itself).' });
         }
+        if (r.ok && Array.isArray(r.instances)) r.instances = r.instances.filter(i => !esInstanciaMain(i));
         if (!r.ok || !r.instances?.length) {
-            return await interaction.editReply({ content: `❌ ${r.error || 'No MuMuPlayer instances found on your PC.'}` });
+            return await interaction.editReply({ content: `❌ ${r.error || 'No MuMuPlayer instances found on your PC (the Main instance is never used).'}` });
         }
         const menu = new StringSelectMenuBuilder()
             .setCustomId(`inject_ml::${cartaId}::${fileName}`.slice(0, 100))
@@ -14602,7 +14605,7 @@ async function manejarInteraccionPrincipal(interaction) {
         const [, cartaId] = interaction.customId.split('::');
         const fileName = interaction.values[0];
 
-        const instancias = obtenerInstanciasMuMu();
+        const instancias = obtenerInstanciasMuMu()?.filter(i => !esInstanciaMain(i)) ?? null;
         if (instancias === null) {
             return await interaction.update({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
         }
@@ -14931,7 +14934,7 @@ async function manejarInteraccionPrincipal(interaction) {
 
     if (interaction.isButton() && interaction.customId.startsWith('info_accounts_extra_si::')) {
         const fileName = interaction.customId.replace('info_accounts_extra_si::', '');
-        const instancias = obtenerInstanciasMuMu();
+        const instancias = obtenerInstanciasMuMu()?.filter(i => !esInstanciaMain(i)) ?? null;
         if (instancias === null) {
             return await interaction.update({ content: '❌ MuMuManager.exe not found. Check that MuMuPlayer is installed.', components: [] });
         }

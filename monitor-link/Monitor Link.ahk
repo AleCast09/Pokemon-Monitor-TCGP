@@ -19,7 +19,7 @@ SetBatchLines, -1
 FileEncoding, UTF-8
 SetWorkingDir, %A_ScriptDir%
 
-global VERSION := "ahk-1.9.36"
+global VERSION := "ahk-1.9.37"
 global LibUltima := ""   ; last time the bot's address was looked up in the address book (Upstash)
 global CFG_DIR := A_AppData . "\MonitorLink"
 global CFG := CFG_DIR . "\monitor-link-ahk.ini"
@@ -2396,18 +2396,26 @@ ListarMuMu(id) {
         return ResponderAccion("{""id"":""" . id . """,""ok"":false,""error"":""MuMuPlayer was not found on this PC""}")
     items := ""
     for _, i in InstanciasMuMu(InfoMuMu(manager))
-        if (i.name != "NO TOCAR")
+        if (i.name != "NO TOCAR" && !RegExMatch(i.name, "i)^\s*main\s*$"))   ; 1.9.37: the Main instance is never offered
             items .= (items = "" ? "" : ",") . "{""index"":""" . i.index . """,""name"":""" . i.name . """,""on"":" . (i.on ? "true" : "false") . "}"
     ResponderAccion("{""id"":""" . id . """,""ok"":true,""instances"":[" . items . "]}")
 }
 
 InyectarEnMuMu(id, archivo, index, nombre) {
     error := ""
+    ; 1.9.37: also by index (the bot could send an old menu): the instance with that index named Main is protected.
+    managerMain := RutaMuMuManager()
+    if (managerMain != "")
+        for _, i in InstanciasMuMu(InfoMuMu(managerMain))
+            if (i.index = index && RegExMatch(i.name, "i)^\s*main\s*$"))
+                nombre := "Main"
     xml := RutaDeXml(archivo)
     cuentasDir := CarpetaPadre(CarpetaPadre(CarpetaJson))
     script := cuentasDir . "\_InjectAccount.ahk"
     manager := RutaMuMuManager()
-    if (xml = "")
+    if RegExMatch(nombre, "i)^\s*main\s*$")   ; 1.9.37 (Ale): nothing is ever injected into the Main instance
+        error := "the Main instance is protected - choose another instance"
+    else if (xml = "")
         error := archivo . " was not found in your Saved folder"
     else if !FileExist(script)
         error := "_InjectAccount.ahk was not found in " . cuentasDir
