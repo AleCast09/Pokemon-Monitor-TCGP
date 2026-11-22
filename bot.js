@@ -12028,6 +12028,12 @@ async function manejarInteraccionPrincipal(interaction) {
         interaction.isStringSelectMenu = () => false;
         interaction.isAnySelectMenu = () => false;
     }
+    // (Ale 2026-11-21) Un amigo vinculado usa las cuentas del dueño, pero NO su PC: "💉 Inject" (y el chequeo de
+    // shinedust en MuMu) abrian MuMu e inyectaban la cuenta en la PC del dueño.
+    if (interaction._usuarioMonitor && /^(card_inject|goldcards_inject|inject_ml|card_shinedust|shinedust_instancia|card_wishlist_add)/.test(String(interaction.customId || ''))) {
+        const aviso = { ephemeral: true, content: `🔒 Only <@${interaction._usuarioMonitor}> can open these accounts in MuMu or change their wishlist (it runs on their PC). You can still use ⚡ Fast Share/Trade and Ask for help.` };
+        return await (interaction.deferred || interaction.replied ? interaction.followUp(aviso) : interaction.reply(aviso)).catch(() => {});
+    }
     // Modo comunidad: fuera del staff, nadie usa el bot ahi todavia (nunca ve datos de esta PC).
     if (await comunidad.bloquearSiHaceFalta(interaction)) return;
     // Comunidad: los botones y menus de un mensaje que abrio otra persona (su wishlist, su carta, su
