@@ -11981,6 +11981,21 @@ client.on('messageCreate', async (message) => {
 
 // Cada interaccion corre con su usuario en comunidad.contexto (ver community.js / monitor-link-server.js).
 const salud = require('./salud.js');   // vigilante: avisa (y reinicia) si el bot se traba (2026-11-20)
+// Logs de PM2 (Ale 2026-11-22: el de trading llego a 33 GB). pm2-logrotate no se instala con un espacio en la
+// carpeta del usuario ("Ale TCG"), asi que cada 30 min: un log de mas de 500 MB se vacia con "pm2 flush <proceso>".
+setInterval(() => {
+    try {
+        const dir = path.join(require('os').homedir(), '.pm2', 'logs');
+        const grandes = new Set();
+        for (const f of fs.readdirSync(dir)) {
+            const m = /^(.+)-(out|error)\.log$/.exec(f);
+            if (m && fs.statSync(path.join(dir, f)).size > 500 * 1024 * 1024) grandes.add(m[1]);
+        }
+        for (const proc of grandes) {
+            exec(`pm2 flush ${proc}`, { windowsHide: true, timeout: 60000 }, (e) => console.log(e ? `DEBUG: pm2 flush ${proc} failed: ${e.message}` : `🧹 PM2 log of "${proc}" was over 500 MB - emptied`));
+        }
+    } catch (e) { /* sin carpeta de logs */ }
+}, 30 * 60 * 1000).unref?.();
 client.on('interactionCreate', (interaction) => comunidad.contexto.run(
     { guildId: interaction.guildId, userId: interaction.user?.id },
     () => {
