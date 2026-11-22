@@ -4295,6 +4295,28 @@ def _refund_pack_budget(tag: str = "") -> None:
         pass
 
 SPACING_V1 = True
+RESET_PAUSE_V1 = True   # 2026-11-22 (Ale): God Pack friend requests wait during the daily-reset pause
+
+
+def _wait_reset_pause(tag: str = "") -> None:
+    """2026-11-22 (Ale, like Melody's farm): before the game's daily reset the community GP farm pauses so the
+    members can go offline and check their Wonder Pick. The Monitor bot writes reports/ppm_cap.json
+    {pause_until: ms}; while it is in the future, no friend requests are sent (own accounts included)."""
+    logged = False
+    while not _stop_event.is_set():
+        try:
+            data = json.loads((PROJECT_ROOT / "reports" / "ppm_cap.json").read_text("utf-8")) or {}
+            until = float(data.get("pause_until", 0)) / 1000.0
+        except Exception:
+            until = 0
+        now = time.time()
+        if until <= now or until - now > 3 * 3600:
+            return
+        if not logged:
+            log(f"{tag} [reset-pause] daily reset pause - God Pack farm resumes at "
+                f"{time.strftime('%H:%M', time.localtime(until))}")
+            logged = True
+        time.sleep(min(30, max(1, until - now)))
 FR_RETRY_ONLY_UNSENT_V1 = True
 MAIN_BLAME_V1 = True
 NO_MAIN_PAUSE_V1 = True
@@ -4311,6 +4333,7 @@ def _throttle_pack_budget(n_packs: int, target_pids: list = None, tag: str = "")
     No-op when the budget is disabled (max_per_min <= 0), when the caller
     isn't going to open any packs (n_packs <= 0), or when no target pids
     are provided (packs-only mode)."""
+    _wait_reset_pause(tag)
     community_cap = _community_ppm_cap()
     if (_pack_budget_max_per_min <= 0 and community_cap is None) or n_packs <= 0:
         return

@@ -67,7 +67,8 @@ function iniciar(d) {
         // barrido que borra todos los amigos de las cuentas de God Packs muertos (DEAD_GP_CLEANUP_V1).
         // (2026-11-20, Ale) Open Packs Only NUNCA manda solicitudes (se quito GP_LATE_FR del todo).
         // (2026-11-20, Ale) Excepcion: cuentas a 6 sobres o menos de 96 en Open Packs Only / Open 2 van en modo God Pack.
-        'NEAR96_GP_V1');
+        // (2026-11-22, Ale) RESET_PAUSE_V1: las solicitudes del GP farm esperan durante la pausa del reset diario.
+        'RESET_PAUSE_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',
@@ -114,6 +115,15 @@ async function escribirSetsSobres() {
 // Cada cuenta en GP farm manda solicitud a todos los Mains, asi que el PPM total de los hosts = solicitudes
 // por minuto que recibe cada Main. Se reparte PPM_COMUNIDAD (36) entre los hosts en modo God Pack con Start;
 // uno solo se lleva todo. inject.py lo lee de reports/ppm_cap.json (si tiene mas de 5 min, no lo usa).
+// Pausa del reset diario (Ale 2026-11-22, como el farm de Melody): el juego reinicia a las 21:00 UTC (06:00 de
+// Japon). De 20:30 a 21:15 UTC el GP farm no manda solicitudes, asi los miembros se desconectan y revisan su Wonder
+// Pick. Devuelve el ms en que termina la pausa, o 0 fuera de ella. Igual en todos los hosts (va por la hora).
+function pausaReset(ms = Date.now()) {
+    const d = new Date(ms), min = d.getUTCHours() * 60 + d.getUTCMinutes();
+    if (min < 20 * 60 + 30 || min >= 21 * 60 + 15) return 0;
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 21, 15);
+}
+
 async function escribirTopePpm() {
     const motor = deps?.fastTransfer.rutaMotor();
     if (!motor) return;
@@ -125,7 +135,7 @@ async function escribirTopePpm() {
     const n = Math.max(1, hosts.length + (parte ? 0 : 1));
     fs.mkdirSync(path.join(motor, 'reports'), { recursive: true });
     fs.writeFileSync(path.join(motor, 'reports', 'ppm_cap.json'),
-        JSON.stringify({ cap: Math.floor(total / n), total, hosts: n, ts: Date.now() }));
+        JSON.stringify({ cap: Math.floor(total / n), total, hosts: n, ts: Date.now(), pause_until: pausaReset() }));
     await escribirBloqueados(motor).catch(() => {});
 }
 
@@ -1103,6 +1113,7 @@ async function escribirVersion() {
         JSON.stringify({ version, latest: release?.version || null, upToDate: alDia, ts: Date.now() }));
 }
 
+let avisoPausa = false;   // log de la pausa del reset, una vez por pausa
 let esperarPropias = false;   // las propias del host siguen abriendose: se reintenta en 1 min
 async function ciclo() {
     if (corriendo || !deps) return;
@@ -1118,6 +1129,12 @@ async function ciclo() {
     try {
         entregarEnFondo();
         if (!parte || !panelEncendido(motor)) return;   // Offline: el panel GP no esta en Start
+        // Pausa del reset diario: en modo God Pack no se abren prestadas (Open Packs Only sigue: no manda solicitudes).
+        if (modoPanel(motor) === 'godpack' && pausaReset()) {
+            if (!avisoPausa) { avisoPausa = true; log(`daily reset pause - GP farm resumes at ${new Date(pausaReset()).toLocaleTimeString()}`); }
+            return;
+        }
+        avisoPausa = false;
         if (panelOcupado(motor)) {   // primero las cuentas propias del host; las prestadas despues
             log('own accounts still opening - the lent ones start when they finish');
             esperarPropias = true;
@@ -1630,4 +1647,4 @@ function fill96Activos() {
         .map(t => ({ id: t.id, ...t.publico, cola: fill96Cola.length }));
 }
 
-module.exports = { iniciar, ciclo, resumenPrestadas, infoFarm, fill96Resumen, fill96Iniciar, fill96Estado, fill96Parar, fill96Sobres, fill96Activos, fill96Reanudar };
+module.exports = { pausaReset, iniciar, ciclo, resumenPrestadas, infoFarm, fill96Resumen, fill96Iniciar, fill96Estado, fill96Parar, fill96Sobres, fill96Activos, fill96Reanudar };
