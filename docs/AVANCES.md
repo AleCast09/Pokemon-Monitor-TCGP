@@ -24,6 +24,13 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-21 (noche) — cuenta 2 — /farm, amigos, Main protegido, creación x5
+- **/farm**: Monitor Link apagado → el /farm se corta al instante y pasa el siguiente; tras reinicio solo se retoma si el corte fue < 30 min (latido `ts` en `fill96_pendientes.json`) y su Monitor Link está encendido; un /farm nuevo antes de retomar ya no pisa la lista (`fill96Cargado`). Publicado.
+- **Amigos vinculados** (usan las cuentas del dueño sin Monitor Link propio): ya no pueden Inject, chequeo shinedust en MuMu ni wishlist_add (bot.js, `interaction._usuarioMonitor`). Publicado. Causa: un amigo inyectó Ale_Cast_123 en la instancia **Main** de Ale (21:30) → Ale tiene que recuperar su Main con su cuenta Nintendo.
+- **Instancia "Main" protegida**: bot (`esInstanciaMain`, menús Inject/shinedust) + **Monitor Link 1.9.37** (rechaza por nombre e índice). Publicado host-2026.11.21-2159; bot de Ale reiniciado.
+- **Creación 96P x5** (motor, `logs\prueba_96p_x5.log`): BLU_04 terminó 98P (`Done\BLU\BLU_04_98P`). Tope del juego ≈150 batallas/cuenta/día (después 403 en ADVANCED). Arreglos en `scripts\flow\stages\ninety_six_p.py`: ADVANCED extra solo si INTERMEDIATE_01 ganada (`_intermediate_done`); el corte del bucle extra no funcionaba (`'b_exc' in locals()` siempre falso en Python 3 → `_corte_extra`). Las cuentas trabadas quemaban 100-200 proxies cada una. Prueba cerrada a las 22:00. Mañana: prueba nueva con todo arreglado y proxies descansados; después `--slim-flow`.
+- Info de Vortex/Naja/Anchovy (capturas de Ale): techo 60 sobres/min = 30 solicitudes/min por Main (error 007/7812 = cooldown 5-30 min, no baneo); Vortex corrió 48 h a 54 PPM; crea en etapas (tutorial fleet + 96P loop), miles de proxies con cuarentena, ~4.200 cuentas/h; 96P choca límite por IP tras 4-5 h; 13P ~2 min sin límite.
+
 ### 2026-11-21 (tarde) — cuenta 2 — GP farm a 14 cuentas a la vez; plan PPM 45
 - Medido (reroll_comunidad.log de Ale): cada cuenta en God Pack tarda ~74 s; con parallel 7 un host no pasaba de ~11 PPM aunque su tope fuera 13-20. Comunidad: ~12.500 cuentas/24 h (Arcade 7.611, wr98 4.890, Ale 0) ≈ 17 PPM de 40. Naja: 44,5 PPM en 1 PC.
 - `reroll-comunidad.js`: God Pack con parallel mínimo 14 (`PARALLEL_GP_MIN`) + el panel lo recibe una vez (marca `ajustes_recomendados_v3.done`, copia `settings.json.bak-parallel`). Publicado host-2026.11.21-1639; bot de Ale reiniciado.
