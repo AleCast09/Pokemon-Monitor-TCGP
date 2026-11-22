@@ -1524,7 +1524,9 @@ async function correrFill96(t) {
                     fallo = e;
                     log(`fill96: ${t.id} Monitor Link did not answer (try ${intento}/3): ${e?.message || e}`);
                     // (Ale 2026-11-21) Apagado (PC apagada / Monitor Link cerrado): fuera ya, el lugar pasa al siguiente.
-                    if (String(e?.message || e) === 'offline') break;
+                    // (2026-11-22) Pero solo si no se lo ve hace 3+ min: justo despues de reiniciar el bot o de
+                    // actualizarse Monitor Link, tardan en reconectar y se cortaban /farm de miembros conectados.
+                    if (String(e?.message || e) === 'offline' && !(await deps.ml.estadoAgente(t.id).catch(() => null))?.enLinea) break;
                     if (intento < 3) await new Promise(r => setTimeout(r, 60 * 1000));
                 }
             }

@@ -274,9 +274,14 @@ function demasiadosIntentos(ip) {
     return r.n > 20;
 }
 
+// (Ale 2026-11-21, aviso de DDoS) Claves que no existen: se recuerdan 5 min y no se consulta Upstash otra vez
+// (cada clave inventada gastaba una consulta de la cuota mensual).
+const clavesFalsas = new Map();   // hash -> hasta (ms)
+setInterval(() => { const a = Date.now(); for (const [k, v] of clavesFalsas) if (v < a) clavesFalsas.delete(k); }, 60 * 1000).unref?.();
 async function agenteDe(req) {
     const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || '');
     if (!m) return null;
+    if ((clavesFalsas.get(hash(m[1])) || 0) > Date.now()) return null;
     let fila = await db.get(`SELECT discord_id, guild_id FROM link_agentes WHERE token_hash = ?`, [hash(m[1])]);
     if (!fila && hayLibreta()) {
         // Vinculado en otro host mientras este ya estaba corriendo.
@@ -288,7 +293,10 @@ async function agenteDe(req) {
             fila = { discord_id: String(a.d), guild_id: String(a.g || '') };
         }
     }
-    if (!fila) return null;
+    if (!fila) {
+        if (clavesFalsas.size < 50000) clavesFalsas.set(hash(m[1]), Date.now() + 5 * 60 * 1000);
+        return null;
+    }
     await db.run(`UPDATE link_agentes SET ultimo = ? WHERE token_hash = ?`, [Date.now(), hash(m[1])]);
     return fila;
 }
@@ -301,6 +309,29 @@ function registrar(app, dependencias) {
     // Host en espera (community-host.js): no atiende a ningun Monitor Link; al recibir 503 cada uno
     // busca en la libreta la direccion del host que tiene el turno.
     const activo = dependencias.activo || (() => true);
+    // (Ale 2026-11-21, aviso de DDoS) Antes de leer cualquier envio: tope de pedidos por minuto por IP (5 min
+    // bloqueado si se pasa) y sin clave (Bearer) se corta enseguida -- antes /summary leia hasta 300 MB sin clave.
+    const PEDIDOS_POR_MIN = 240, BLOQUEO_MS = 5 * 60 * 1000;
+    const porIp = new Map();   // ip -> { n, desde, hasta }
+    setInterval(() => { const a = Date.now(); for (const [k, v] of porIp) if (a - v.desde > 120000 && a > (v.hasta || 0)) porIp.delete(k); }, 60 * 1000).unref?.();
+    app.use('/link', (req, res, next) => {
+        const ip = String(req.headers['cf-connecting-ip'] || req.socket?.remoteAddress || '?');
+        if (!/^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(ip)) {
+            const a = Date.now();
+            let e = porIp.get(ip);
+            if (e?.hasta > a) return res.status(429).json({ error: 'too_many_requests' });
+            if (!e || a - e.desde > 60 * 1000) { e = { n: 0, desde: a }; porIp.set(ip, e); }
+            if (++e.n > PEDIDOS_POR_MIN) {
+                e.hasta = a + BLOQUEO_MS;
+                console.log(`🛡️ Monitor Link server: ${ip} blocked for 5 min (${e.n} requests in a minute)`);
+                return res.status(429).json({ error: 'too_many_requests' });
+            }
+        }
+        if (req.path === '/claim' || req.path.startsWith('/host/')) return next();   // codigo de vinculo / clave de host
+        const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || '');
+        if (!m || (clavesFalsas.get(hash(m[1])) || 0) > Date.now()) return res.status(401).json({ error: 'not_linked' });
+        next();
+    });
     // Excepcion: el resumen y las proxies se reciben igual en espera (ver anotarHost / espejos).
     // (2026-11-06, Ale) Tambien en espera: GET /jobs y POST /xml, asi cualquier host (no solo el del turno)
     // le pide a Monitor Link 1.9.14+ las cuentas prestadas directo y el GP farm no depende del host del turno.
