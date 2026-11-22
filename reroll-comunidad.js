@@ -1385,26 +1385,40 @@ function fill96Iniciar(discordId, tipo, avisar, packId = '', opciones = {}) {
 // (Zeka 2026-11-19) Un reinicio del bot borraba los /farm en curso y la fila sin avisar ("#1 in line" para
 // siempre). Se guardan en un archivo y al volver se retoman (fill96Reanudar, lo llama bot.js).
 const rutaFill96Pend = () => path.join(__dirname, 'reports', 'fill96_pendientes.json');
+setInterval(() => { if (fill96Trabajos.size || fill96Cola.length) guardarFill96(); }, 60 * 1000).unref?.();
 function guardarFill96() {
     try {
-        const lista = [...[...fill96Trabajos.values()].map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId })),
-            ...fill96Cola.map(id => fill96Pendientes.get(id)).filter(Boolean).map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId }))]
+        // ts (Ale 2026-11-21): latido; al reiniciar solo se retoma lo guardado hace poco (ver fill96Reanudar).
+        const ts = Date.now();
+        const lista = [...[...fill96Trabajos.values()].map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId, ts })),
+            ...fill96Cola.map(id => fill96Pendientes.get(id)).filter(Boolean).map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId, ts }))]
             .filter(x => x.tipo !== 'scan');
         fs.mkdirSync(path.dirname(rutaFill96Pend()), { recursive: true });
         fs.writeFileSync(rutaFill96Pend(), JSON.stringify(lista));
     } catch (e) { /* no critico */ }
 }
 // crearAvisar(id) -> avisar(pub, final) para cada trabajo retomado (sin la interaccion original).
-function fill96Reanudar(crearAvisar) {
+// (Ale 2026-11-21: "yo no ejecute /farm y sigue": su /farm de la noche anterior volvio solo al otro dia y le quitaba
+// el lugar a los miembros) Solo se retoma si el corte fue corto (< 30 min) y el Monitor Link del miembro esta
+// encendido; si no, ese /farm se da por terminado y el lugar queda libre.
+const FILL96_REANUDAR_MAX_MS = 30 * 60 * 1000;
+async function fill96Reanudar(crearAvisar) {
     let lista = [];
     try { lista = JSON.parse(fs.readFileSync(rutaFill96Pend(), 'utf8')); } catch (e) { return 0; }
-    let n = 0;
+    let n = 0, viejos = 0, apagados = 0;
+    let mtime = 0;   // archivos de antes del latido (sin ts): cuenta cuando se guardo por ultima vez
+    try { mtime = fs.statSync(rutaFill96Pend()).mtimeMs; } catch (e) { /* nada */ }
     for (const x of lista) {
         if (!x?.id || fill96Trabajos.has(x.id) || fill96Cola.includes(x.id)) continue;
+        if (Date.now() - (x.ts || mtime) > FILL96_REANUDAR_MAX_MS) { viejos++; continue; }
+        const st = await deps?.ml?.estadoAgente?.(x.id).catch(() => null);
+        if (!st?.enLinea) { apagados++; continue; }
         fill96Iniciar(x.id, x.tipo, crearAvisar(x.id), x.packId || '', { reanudado: true });
         n++;
     }
     if (n) log(`fill96: resumed ${n} /farm job(s) after a restart`);
+    if (viejos || apagados) log(`fill96: not resumed - ${viejos} stopped too long ago, ${apagados} with Monitor Link off`);
+    guardarFill96();
     return n;
 }
 const fill96Pendientes = new Map();   // los de la cola, con su trabajo armado
@@ -1499,6 +1513,8 @@ async function correrFill96(t) {
                 } catch (e) {
                     fallo = e;
                     log(`fill96: ${t.id} Monitor Link did not answer (try ${intento}/3): ${e?.message || e}`);
+                    // (Ale 2026-11-21) Apagado (PC apagada / Monitor Link cerrado): fuera ya, el lugar pasa al siguiente.
+                    if (String(e?.message || e) === 'offline') break;
                     if (intento < 3) await new Promise(r => setTimeout(r, 60 * 1000));
                 }
             }
