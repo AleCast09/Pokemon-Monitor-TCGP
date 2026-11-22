@@ -336,6 +336,16 @@ async function godPacksComunidad(viejos = false) {
     return plano.map(t => { try { return JSON.parse(t); } catch (e) { return null; } }).filter(Boolean);
 }
 
+// Canal "all god packs" (all-god-packs.js): hasta donde se publico ('ts') y el ultimo resumen diario ('recap'),
+// compartido por los hosts asi un cambio de turno no repite avisos. Sin valor: lee; con valor: guarda.
+async function marcaAllGp(clave, valor) {
+    if (!configurado()) return null;
+    const k = `zenith:allgp_${String(clave).replace(/[^a-z]/g, '')}`;
+    if (valor === undefined) return await redis('GET', k);
+    await redis('SET', k, String(valor));
+    return valor;
+}
+
 // Ultima version publicada para los hosts ({ version, commit, ... } de zenith:release), cacheada 60 s.
 let _release = { ts: 0, valor: null };
 async function ultimaRelease() {
@@ -426,4 +436,4 @@ async function farmTerminar(id) {
 module.exports = { iniciar, esActivo, nombre: () => YO, panelGuardado, guardarPanel, anotarPanel, panelesDeOtros, olvidarPanel,
     farmAnotar, farmTrabajos, farmHechas, farmDueno, farmTerminar,
     tomarTurnoYa, cederTurnoA, controlGuardado, guardarControl, refrescarControl, marcarReroll, hostsReroll, parteReroll, anotarMiembros, primeraVez, marcarBaneada, baneadas, baneadasConFecha, guardarWebhookGp, webhookGp, ultimaRelease, estaAlDia,
-    subirGodPacks, godPacksComunidad, versionesGodPacks, hostsConocidos, bloqueados, bloquear, desbloquear };
+    subirGodPacks, godPacksComunidad, versionesGodPacks, marcaAllGp, hostsConocidos, bloqueados, bloquear, desbloquear };

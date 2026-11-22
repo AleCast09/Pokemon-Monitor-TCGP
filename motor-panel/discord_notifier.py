@@ -387,7 +387,7 @@ HITS_FILE = PROJECT_ROOT / "reports" / "gp_hits.jsonl"
 
 
 def _record_hit(nickname: str, friend_id: str, xml_filename: str, tags: str, img_path: Path,
-                card_ids: List[str], mode: str) -> None:
+                card_ids: List[str], mode: str, pack_id: str = "") -> None:
     """2026-11-09 (Ale): every God Pack (own or lent account) is also written here, so clicking
     "GOD PACK HITS" in the God Pack UI can list them: name, ID, XML, cards and collage. Monitor Pokemon
     uploads them so every host sees the God Packs of all hosts. mode: "godpack" = friend requests were
@@ -399,6 +399,8 @@ def _record_hit(nickname: str, friend_id: str, xml_filename: str, tags: str, img
                 "ts": int(time.time() * 1000), "name": nickname, "id": friend_id, "xml": xml_filename,
                 "tags": tags, "image": str(img_path), "cards": list(card_ids or []), "mode": mode,
                 "lent": os.environ.get("ZENITH_ACCOUNT_OWNER", "").strip().isdigit(),
+                # GP_OWNER_V1 (Ale 2026-11-22): canal "all god packs" -- dueno de la cuenta prestada y el sobre exacto.
+                "owner": os.environ.get("ZENITH_ACCOUNT_OWNER", "").strip(), "pack_id": str(pack_id or ""),
             }, ensure_ascii=False) + "\n")
     except Exception:
         pass
@@ -427,7 +429,7 @@ def record_god_pack_async(account: dict, card_ids: List[str], pack_label: str, p
         try:
             tags = f"[{tier_1_to_5}][{packs_count}P][{PACK_TAG_MAP.get(pack_id, pack_id)}]"
             img = _build_pack_collage(card_ids, f"gp_{Path(xml_filename).stem}_{int(threading.get_ident())}.png")
-            _record_hit(nickname, user_16_id, xml_filename, tags, img, card_ids, mode)
+            _record_hit(nickname, user_16_id, xml_filename, tags, img, card_ids, mode, pack_id)
             if log_fn:
                 log_fn("[gp-list] God Pack saved to the list (Open Packs Only: not posted, no Mains added)")
         except Exception as e:
@@ -460,7 +462,7 @@ def notify_god_pack_async(
 
             render_name = f"gp_{Path(xml_filename).stem}_{int(threading.get_ident())}.png"
             img_path = _build_pack_collage(card_ids, render_name)
-            _record_hit(nickname, user_16_id, xml_filename, header_tags, img_path, card_ids, "godpack")
+            _record_hit(nickname, user_16_id, xml_filename, header_tags, img_path, card_ids, "godpack", pack_id)
 
             webhook, mencion = _config_discord()
             if not webhook:

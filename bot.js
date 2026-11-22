@@ -35,6 +35,7 @@ iniciarAutoSyncCardTypes();
 // Fast Share/Trade sin MuMu (2026-10-23): todo en fast-transfer.js, apagado salvo que el .env
 // tenga FAST_TRANSFER_ENGINE_DIR y sea el servidor propio.
 const fastTransfer = require('./fast-transfer.js');
+const allGodPacks = require('./all-god-packs.js');
 const infoCartaBulkCache = { ruta: null, ts: 0, cm: null, en: null };
 // Modo comunidad (community.js): solo para los servers de COMMUNITY_GUILD_IDS del .env.
 const comunidad = require('./community.js');
@@ -18121,6 +18122,8 @@ setInterval(() => {
     if (!client.isReady?.() || !hostComunidad.esActivo()) return;
     for (const guild of client.guilds.cache.values()) if (comunidad.esComunidad(guild.id)) reanudarFarms(guild);
     for (const guild of client.guilds.cache.values()) if (comunidad.esComunidad(guild.id)) actualizarTableroFarm(guild);
+    // 📚-all-god-packs: cada God Pack de los hosts (vivo o muerto) y el resumen del dia (all-god-packs.js).
+    for (const guild of client.guilds.cache.values()) if (comunidad.esComunidad(guild.id)) allGodPacks.ciclo(guild).catch(e => console.log('DEBUG: all god packs:', e?.message || e));
 }, 30 * 1000);
 
 async function canalFarm96(guildId) {
@@ -18575,6 +18578,7 @@ async function limpiarPanelesDeOtrosBots(guild) {
 }
 
 client.once('ready', async () => {
+    allGodPacks.iniciar({ client, host: hostComunidad, ml: monitorLink, motor: () => fastTransfer.rutaMotor(), log: (...x) => console.log(...x) });
     try {
         // Hosts de la comunidad: datos de cartas al dia (sets nuevos), ver card-data-sync.js.
         if (comunidad.hayComunidad()) {
