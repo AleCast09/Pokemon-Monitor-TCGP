@@ -619,8 +619,22 @@ function agregarSobresExtra(motor) {
 // Tickets de compra equivocados en el catalogo de Miguel (2026-11-21, cy: Open 2 de Dialga abrio 0 sobres en
 // 2.786 cuentas). Dialga traia uno adivinado (PC_PS_2503000_01_01_01 -> PurchaseV2 INTERNAL); el bueno sigue
 // el patron de Palkia (verificado) y se probo abriendo 1 sobre en la cuenta de prueba de Ale.
+// (Arcade 2026-11-23: Crimson Blaze no abria) Muchos otros tambien eran adivinados. Los buenos salen de
+// engine/config/pack.json del motor (coincide con todos los verificados); Crimson Blaze y Triumphant Light se
+// probaron abriendo 1 sobre en la cuenta de prueba. Se corrige cualquier codigo distinto en la linea del sobre.
 const PRODUCTOS_CORREGIDOS = [
-    { pack_id: 'AN003_0010_00_000', malo: 'PC_PS_2503000_01_01_01', bueno: 'PC_PS_2409010_01_01_01' },
+    { pack_id: 'AN001_0010_00_000', bueno: 'PC_PS_0002010_01_01_01' },   // Genetic Apex: Mewtwo
+    { pack_id: 'AN001_0020_00_000', bueno: 'PC_PS_0002010_01_02_01' },   // Genetic Apex: Charizard
+    { pack_id: 'AN001_0030_00_000', bueno: 'PC_PS_0002010_01_03_01' },   // Genetic Apex: Pikachu
+    { pack_id: 'AN002_0010_00_000', bueno: 'PC_PS_2408010_01_01_01' },   // Mythical Island
+    { pack_id: 'AN003_0010_00_000', bueno: 'PC_PS_2409010_01_01_01' },   // Dialga (probado)
+    { pack_id: 'AN004_0010_00_000', bueno: 'PC_PS_2502010_01_01_01' },   // Triumphant Light (probado)
+    { pack_id: 'AN006_0010_00_000', bueno: 'PC_PS_2504010_01_01_01' },   // Celestial Guardians: Solgaleo
+    { pack_id: 'AN006_0020_00_000', bueno: 'PC_PS_2504010_01_02_01' },   // Celestial Guardians: Lunala
+    { pack_id: 'AN007_0010_00_000', bueno: 'PC_PS_2505010_01_01_01' },   // Extradimensional Crisis
+    { pack_id: 'AN009_0010_00_000', bueno: 'PC_PS_2507000_01_01_01' },   // Wisdom of Sea and Sky: Ho-Oh
+    { pack_id: 'AN009_0020_00_000', bueno: 'PC_PS_2507000_01_02_01' },   // Wisdom of Sea and Sky: Lugia
+    { pack_id: 'BN002_0010_00_000', bueno: 'PC_PS_2512000_01_01_01' },   // Crimson Blaze (probado)
 ];
 function corregirProductos(motor) {
     try {
@@ -628,14 +642,16 @@ function corregirProductos(motor) {
         let texto = fs.readFileSync(ruta, 'utf8'), cambios = 0;
         texto = texto.split(/\r?\n/).map(linea => {
             for (const p of PRODUCTOS_CORREGIDOS) {
-                if (linea.includes(`"${p.pack_id}"`) && linea.includes(`"${p.malo}"`)) { cambios++; return linea.replace(`"${p.malo}"`, `"${p.bueno}"`); }
+                if (!linea.includes(`"${p.pack_id}"`)) continue;
+                const nueva = linea.replace(/"product_id":\s*"PC_PS_[0-9_]+"/, `"product_id": "${p.bueno}"`);
+                if (nueva !== linea) { cambios++; return nueva; }
             }
             return linea;
         }).join(texto.includes('\r\n') ? '\r\n' : '\n');
         if (!cambios) return;
         fs.copyFileSync(ruta, `${ruta}.bak-productos`);
         fs.writeFileSync(ruta, texto);
-        log(`pack_catalog.py: fixed ${cambios} wrong product id(s) (Dialga)`);
+        log(`pack_catalog.py: fixed ${cambios} wrong product id(s)`);
     } catch (e) { /* sin catalogo en este motor */ }
 }
 
