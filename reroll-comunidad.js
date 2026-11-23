@@ -72,7 +72,8 @@ function iniciar(d) {
         // (2026-11-22, Ale) RESET_PAUSE_V1: las solicitudes del GP farm esperan durante la pausa del reset diario.
         // (2026-11-22, Ale) UNPICKABLE_LIST_V1: los God Packs con Crown/Shiny/Immersive se anotan (muertos en all god packs).
         // (2026-11-23, Ale) STOP_BETWEEN_PACKS_V1: Stop de /farm para entre sobres, no al terminar la cuenta.
-        'STOP_BETWEEN_PACKS_V1');
+        // (2026-11-23, Ale) SPEND_ALL_STOP96_V1: "Gastar todos los relojes" del panel para en 96P en las cuentas propias.
+        'SPEND_ALL_STOP96_V1');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',

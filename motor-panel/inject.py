@@ -1947,6 +1947,18 @@ _fr_state = threading.local()   # proxy_blocked: the last send failed because th
 NEAR96_MAX_MISSING = 6   # NEAR96_GP_V1: "close to 96" = 90+ packs (Ale 2026-11-20)
 
 
+def _objetivo96(account: dict, args, fill96_targets: dict) -> Optional[int]:
+    """SPEND_ALL_STOP96_V1 (Ale 2026-11-23): "Spend all hourglasses" in the panel (host's own accounts) stops when
+    the account reaches 96 packs (God Pack eligible) and keeps the rest of the hourglasses. /farm sends its own
+    targets (--pack-targets). None = no limit (unknown pack history)."""
+    clave = os.path.basename(str(account.get("xml_path", "") or "")).lower()
+    if clave in fill96_targets:
+        return fill96_targets[clave]
+    if not getattr(args, "spend_all_hourglasses", False) or getattr(args, "mode", "") != "packs-only":
+        return None
+    return _near96_missing(account, {})
+
+
 def _near96_missing(account: dict, near96: dict) -> Optional[int]:
     """Packs still missing to be God Pack eligible: from the host's list (lent accounts, Monitor Link) or from the
     account's own card file (host accounts). None = unknown (a lent account not in the list: no exception)."""
@@ -3510,6 +3522,10 @@ def inject_one(
                 f"{free_power_at_start} free -> {_todos} packs", tag=tag)
             packs = _todos
             # FILL96_V1: "Reach 96 only" - stop at the packs still missing, keep the other hourglasses.
+            if pack_target is not None and int(pack_target) <= 0:
+                log(f"[96] already at 96 packs - nothing opened, hourglasses kept", tag=tag)
+                result["error"] = "already_96"
+                return result
             if pack_target is not None and packs > int(pack_target):
                 log(f"[fill96] {packs} possible, opening only {int(pack_target)} (to reach 96)", tag=tag)
                 packs = int(pack_target)
@@ -4826,7 +4842,7 @@ def run_injection(args) -> int:
             claim_rewards=bool(getattr(args, "claim_rewards", False)),
             claim_only=bool(getattr(args, "claim_only", False)),
             scan_only=bool(getattr(args, "scan_only", False)),
-            pack_target=_fill96_targets.get(os.path.basename(str(acct.get("xml_path", "") or "")).lower()),
+            pack_target=_objetivo96(acct, args, _fill96_targets),
         )
         if getattr(args, "claim_only", False) or getattr(args, "scan_only", False):
             return r   # nothing opened: no history, no pack count, no cooldown change
