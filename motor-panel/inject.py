@@ -3594,11 +3594,14 @@ def inject_one(
             elif pack_target is not None and int(pack_target) == 0:
                 log(f"[96] already at 96 packs - nothing opened, hourglasses kept", tag=tag)
                 result["error"] = "already_96"
+                result["faltan96"] = 0
                 return result
             elif pack_target is not None and packs > int(pack_target):
                 log(f"[fill96] {packs} possible, opening only {int(pack_target)} (to reach 96)", tag=tag)
                 packs = int(pack_target)
             if packs <= 0:
+                if pack_target is not None and int(pack_target) > 0:
+                    result["faltan96"] = int(pack_target)   # no hourglasses: still counted in the 96P summary
                 result["error"] = "no_power_no_hourglasses"
                 return result
 
@@ -4098,6 +4101,9 @@ def inject_one(
                 and result["packs_opened"] >= int(pack_target):
             result["reached_96"] = True
             log(f"[96] REACHED 96P - God Pack eligible now", tag=tag)
+        # SUMMARY96_V1: packs still missing to 96 after this run (end-of-run totals and %).
+        if spend_all_hg and pack_target is not None and int(pack_target) > 0:
+            result["faltan96"] = max(0, int(pack_target) - int(result["packs_opened"]))
         # (Ale 2026-11-12) Missions finished by opening packs, then the hourglasses left -> list.
         if claim_rewards and run_mode != "godpack" and not dry_run and result["packs_opened"]:
             _claim_rewards(sess, tag, gifts=False)
@@ -5005,8 +5011,8 @@ def run_injection(args) -> int:
         nonlocal accounts_no_packs, accounts_login_fail, accounts_aborted
         nonlocal accounts_proxy_dead, accounts_opened_at_least_one, cards_pulled_total
         processed += 1
-        if r.get("reached_96"):
-            reached_96.append(str(r.get("nickname") or r.get("account_key") or "?"))
+        if r.get("faltan96") is not None:
+            reached_96.append(int(r["faltan96"]))
         packs_opened_total += r["packs_opened"]
         cards_pulled_total += len(r.get("cards", []) or [])
         if r["packs_opened"] > 0:
@@ -5170,8 +5176,20 @@ def run_injection(args) -> int:
     log(f"   • Wonder-Pick god hits:{god_hits}")
     log(f"   • accounts with ≥1 pack opened: {accounts_opened_at_least_one}")
     log(f"   • accounts with 0 packs opened: {accounts_no_packs}")
+    # SUMMARY96_V1 (Ale 2026-11-23): totals only, no account names - how many are at 96P, how many still under,
+    # and how far the ones under 96P are (share of them in each range).
     if reached_96:
-        log(f"   • REACHED 96P ({len(reached_96)}): {', '.join(reached_96)}")
+        _listas = sum(1 for f in reached_96 if f <= 0)
+        _faltan = [96 - f for f in reached_96 if f > 0]   # packs they have now (toward 96)
+        log("=" * 70)
+        log(f"96P SUMMARY")
+        log(f"   • accounts at 96P:        {_listas}")
+        log(f"   • accounts still under:   {len(_faltan)}")
+        if _faltan:
+            for _ini, _fin in ((90, 95), (80, 89), (60, 79), (30, 59), (0, 29)):
+                _n = sum(1 for p in _faltan if _ini <= p <= _fin)
+                if _n:
+                    log(f"       {round(100 * _n / len(_faltan)):>3}% = {_ini}-{_fin}P ({_n} accounts)")
     if accounts_no_packs > 0:
         log(f"       ├─ login failed:      {accounts_login_fail}")
         log(f"       ├─ ABORTED (no power):{accounts_aborted}")
