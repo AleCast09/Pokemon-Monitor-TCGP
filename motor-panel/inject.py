@@ -4002,6 +4002,11 @@ def inject_one(
             outcome_str = (f"opened {result['packs_opened']}/{packs} packs, "
                            f"no match ({','.join(pack_labels) or '-'})")
         log(f"-- ACCOUNT SUMMARY: {outcome_str}", tag=tag)
+        # REACHED96_LIST_V1 (Ale 2026-11-23): "Reach 96P" - this account got there (listed at the end of the run).
+        if spend_all_hg and pack_target is not None and int(pack_target) > 0 \
+                and result["packs_opened"] >= int(pack_target):
+            result["reached_96"] = True
+            log(f"[96] REACHED 96P - God Pack eligible now", tag=tag)
         # (Ale 2026-11-12) Missions finished by opening packs, then the hourglasses left -> list.
         if claim_rewards and run_mode != "godpack" and not dry_run and result["packs_opened"]:
             _claim_rewards(sess, tag, gifts=False)
@@ -4903,11 +4908,14 @@ def run_injection(args) -> int:
     consec_fails = {"n": 0}
     consec_lock = threading.Lock()
 
+    reached_96 = []   # REACHED96_LIST_V1: accounts that got to 96P this run
     def _tally(r):
         nonlocal processed, packs_opened_total, god_hits, errors
         nonlocal accounts_no_packs, accounts_login_fail, accounts_aborted
         nonlocal accounts_proxy_dead, accounts_opened_at_least_one, cards_pulled_total
         processed += 1
+        if r.get("reached_96"):
+            reached_96.append(str(r.get("nickname") or r.get("account_key") or "?"))
         packs_opened_total += r["packs_opened"]
         cards_pulled_total += len(r.get("cards", []) or [])
         if r["packs_opened"] > 0:
@@ -5020,8 +5028,8 @@ def run_injection(args) -> int:
                         time.sleep(random.uniform(stagger * 0.8,
                                                   stagger * 1.2))
                 for fut in as_completed(futures):
-                    if _stop_event.is_set():
-                        break
+                    # (Ale 2026-11-23) No break on Stop: the accounts already running finish and are counted
+                    # (the summary said "0 accounts" after a Stop).
                     try:
                         r = fut.result()
                     except Exception as exc:
@@ -5071,6 +5079,8 @@ def run_injection(args) -> int:
     log(f"   • Wonder-Pick god hits:{god_hits}")
     log(f"   • accounts with ≥1 pack opened: {accounts_opened_at_least_one}")
     log(f"   • accounts with 0 packs opened: {accounts_no_packs}")
+    if reached_96:
+        log(f"   • REACHED 96P ({len(reached_96)}): {', '.join(reached_96)}")
     if accounts_no_packs > 0:
         log(f"       ├─ login failed:      {accounts_login_fail}")
         log(f"       ├─ ABORTED (no power):{accounts_aborted}")
