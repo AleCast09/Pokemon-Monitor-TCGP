@@ -2861,6 +2861,67 @@ def _purchase_special_pack(sess, pack_id: str, consistent_token: str, tag: str =
     return result, tx
 
 
+def open_pack_x10(sess, pack_id: str, product_id: str, tag: str = "",
+                  hg_cost: int = 0, power_id: str = "PACK_POWER_NORMAL") -> Optional[list]:
+    """OPEN_X10_V1 (Ale 2026-11-23): the game's "open x10" - ONE PurchaseV2 (AMOUNT_TEN) opens 10 packs paid with
+    hourglasses (10 x hg_cost LARGE). Tested on Ale_Cast_177_13 (Dual Fusion, 10 packs, 120 LARGE). Returns one
+    outcome dict per pack (same shape as open_pack), or None if the purchase failed (nothing was spent)."""
+    try:
+        from engine.takasho.schema.lettuce_server.player_api import pack_shop_purchase_v2_pb2
+        from engine.takasho.schema.lettuce_server.resource.item import pack_power_charger_pb2
+        detail = _pack_get_detail(sess, pack_id, tag=tag)
+        if detail is None:
+            return None
+        Request = pack_shop_purchase_v2_pb2.PackShopPurchaseV2.Types.Request
+        Response = pack_shop_purchase_v2_pb2.PackShopPurchaseV2.Types.Response
+        req = Request(pack_consistent_token=getattr(detail, "pack_consistent_token", ""),
+                      transaction_id=str(uuid.uuid4()), product_id=product_id,
+                      amount=Request.Types.Amount.AMOUNT_TEN)
+        use = req.use_powers.add()
+        use.power_id = power_id or "PACK_POWER_NORMAL"
+        use.amount = 10
+        charger = req.heal_items.chargers.add()
+        charger.type = pack_power_charger_pb2.PackPowerCharger.Types.Type.TYPE_LARGE
+        charger.amount = int(hg_cost) * 10
+        try:
+            result = sess._call("/takasho.schema.lettuce_server.player_api.PackShop/PurchaseV2",
+                                _apply_do_share(req, tag=tag), Response)
+        except Exception as exc:
+            log(f"[x10] PurchaseV2 x10 failed: {str(exc)[:200]}", tag=tag)
+            return None
+        _feed_share(sess, req.transaction_id, tag=tag)
+        salida = []
+        for order in result.unpack_orders:
+            cards: list[str] = []
+            for stock in order.produces.card_instances:
+                cid = getattr(stock.card_instance, "card_id", "")
+                if cid:
+                    cards.extend([cid] * int(getattr(stock, "amount", 1) or 1))
+            table = _unknown_string(order, PACK_TABLE_ID_FIELD)
+            info = gp_cards.classify_pack(cards, table)
+            label = info["label"]
+            summary = gp_cards.summarize_cards(cards)
+            if info["is_god_pickable"]:
+                tag_str = f" <-- GOD PACK {label} (WONDER-PICKABLE)"
+            elif info["is_god_unpickable"]:
+                tag_str = f" <-- [!!] god pack drawn but UNPICKABLE ({label})"
+            else:
+                tag_str = ""
+            log(f"pack opened cards={len(cards)} table={table or '?'}{tag_str}", tag=tag)
+            log(f"  cards: {summary}", tag=tag)
+            salida.append({
+                "pack_info": info, "god_pack": info["is_god_pickable"], "god_pack_raw": info["is_god_table"],
+                "wonder_pickable": not info["is_god_unpickable"], "god_pack_category": label,
+                "unpickable_rarities": info.get("unpickable_rarities", []), "cards": cards,
+                "pack_table_id": table, "summary": summary,
+            })
+        log(f"[x10] 10 packs in one purchase -> {len(salida)} opened", tag=tag)
+        return salida or None
+    except Exception as exc:
+        log(f"[x10] [!] failed: {str(exc)[:200]}", tag=tag)
+        return None
+
+
 def open_pack(sess, pack_id: str, product_id: str, tag: str = "",
               hg_cost: int = 0, power_id: str = "PACK_POWER_NORMAL") -> Optional[dict]:
     """
@@ -3784,11 +3845,14 @@ def inject_one(
         table_ids_seen: list[str] = []
         pack_labels: list[str] = []
         attempts = 0
+        _buf_x10: list = []   # OPEN_X10_V1: packs already opened by an x10 purchase, handed out one per loop turn
+        _x10_ok = True
         for i in range(packs):
             # STOP_BETWEEN_PACKS_V1 (Ale 2026-11-23: "le doy stop y no se detiene"): /farm abre hasta ~90 sobres por
             # cuenta; esperar a terminar la cuenta tardaba minutos. En Open Packs Only se para entre sobres (lo
             # abierto queda anotado igual). En God Pack no: las solicitudes ya mandadas se limpian al final.
-            if run_mode == "packs-only" and _stop_event.is_set():
+            # (Packs of an x10 purchase already opened are still recorded before stopping.)
+            if run_mode == "packs-only" and _stop_event.is_set() and not _buf_x10:
                 log(f"[stop-signal] stopping after {result['packs_opened']} pack(s)", tag=tag)
                 break
             if dry_run:
@@ -3804,12 +3868,38 @@ def inject_one(
                 remaining = free_power_at_start - i - 1
                 log(f"[pack {i+1}/{packs}] FREE (using recharged power, "
                     f"{remaining} free left after this)", tag=tag)
-            outcome = open_pack(sess, pack_id, product_id, tag=tag,
-                                hg_cost=per_pack_hg, power_id=power_id)
+            outcome = _buf_x10.pop(0) if _buf_x10 else None
+            # OPEN_X10_V1 (Ale 2026-11-23): "Reach 96P" (panel) and Farm 96P (/farm) pay with hourglasses: with 10+
+            # packs still to go, ONE x10 purchase opens 10 (the game's "open x10"). Free packs and the last <10
+            # still go one by one. If x10 is refused: log in again and retry once, else back to one by one.
+            _de_x10 = outcome is not None
+            if outcome is None and _x10_ok and spend_all_hg and run_mode == "packs-only" and per_pack_hg > 0 \
+                    and packs - i >= 10 and not str(pack_id).startswith("SP"):
+                _lote = open_pack_x10(sess, pack_id, product_id, tag=tag, hg_cost=per_pack_hg, power_id=power_id)
+                if _lote is None and not _stop_event.is_set() and not getattr(sess, "_gp_no_power", False):
+                    _nueva = login_account(account, max_retries=2)
+                    if _nueva is not None:
+                        try:
+                            sess.close()
+                        except Exception:
+                            pass
+                        sess = _nueva
+                        _lote = open_pack_x10(sess, pack_id, product_id, tag=tag, hg_cost=per_pack_hg,
+                                              power_id=power_id)
+                    else:
+                        account.pop("_login_failure", None)
+                if _lote:
+                    outcome, _buf_x10, _de_x10 = _lote[0], list(_lote[1:]), True
+                else:
+                    _x10_ok = False
+                    log(f"[x10] not accepted - opening one by one", tag=tag)
+            if outcome is None:
+                outcome = open_pack(sess, pack_id, product_id, tag=tag,
+                                    hg_cost=per_pack_hg, power_id=power_id)
             # RELOGIN_EVERY_2_V1 (Ale/Arcade 2026-11-16): the game refuses the 3rd PurchaseV2 of the same login
             # (PERMISSION_DENIED with an HTML page) - Eevee Grove and Dual Fusion alike, hourglasses untouched.
             # A fresh login opens 2 more, so log in again and retry this pack.
-            if outcome is None and run_mode == "packs-only" and result["packs_opened"] > 0 \
+            if outcome is None and not _de_x10 and run_mode == "packs-only" and result["packs_opened"] > 0 \
                     and not getattr(sess, "_gp_no_power", False) and not _stop_event.is_set():
                 log(f"[relogin] pack {i+1}/{packs} refused after {result['packs_opened']} opened - "
                     f"logging in again to keep going", tag=tag)
@@ -3957,7 +4047,8 @@ def inject_one(
                 except Exception as exc:
                     log(f"[gp-list] couldn't list the unpickable God Pack: {exc}", tag=tag)
 
-            if i < packs - 1:
+            # OPEN_X10_V1: the next pack already came out of the same x10 purchase - no wait (it was 15 s each).
+            if i < packs - 1 and not _buf_x10:
                 # Adjustable pack-open delay: base value ±20% jitter.
                 # Bumped from the old hardcoded uniform(1.5, 3.0) so users can
                 # slow the loop down when the server starts rate-limiting.
