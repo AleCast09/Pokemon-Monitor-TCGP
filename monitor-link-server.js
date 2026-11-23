@@ -315,6 +315,12 @@ function registrar(app, dependencias) {
     const porIp = new Map();   // ip -> { n, desde, hasta }
     setInterval(() => { const a = Date.now(); for (const [k, v] of porIp) if (a - v.desde > 120000 && a > (v.hasta || 0)) porIp.delete(k); }, 60 * 1000).unref?.();
     app.use('/link', (req, res, next) => {
+        // (2026-11-22) El tope cuenta SOLO pedidos sin clave valida: un Monitor Link vinculado hace ~280 pedidos/min
+        // normales (la primera version los contaba todos y bloqueo a todos los miembros).
+        if (req.path === '/claim' || req.path.startsWith('/host/')) return next();   // codigo de vinculo / clave de host
+        const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || '');
+        const falsa = !m || (clavesFalsas.get(hash(m[1])) || 0) > Date.now();
+        if (!falsa) return next();
         const ip = String(req.headers['cf-connecting-ip'] || req.socket?.remoteAddress || '?');
         if (!/^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(ip)) {
             const a = Date.now();
@@ -323,14 +329,11 @@ function registrar(app, dependencias) {
             if (!e || a - e.desde > 60 * 1000) { e = { n: 0, desde: a }; porIp.set(ip, e); }
             if (++e.n > PEDIDOS_POR_MIN) {
                 e.hasta = a + BLOQUEO_MS;
-                console.log(`🛡️ Monitor Link server: ${ip} blocked for 5 min (${e.n} requests in a minute)`);
+                console.log(`🛡️ Monitor Link server: ${ip} blocked for 5 min (${e.n} requests without a valid key in a minute)`);
                 return res.status(429).json({ error: 'too_many_requests' });
             }
         }
-        if (req.path === '/claim' || req.path.startsWith('/host/')) return next();   // codigo de vinculo / clave de host
-        const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || '');
-        if (!m || (clavesFalsas.get(hash(m[1])) || 0) > Date.now()) return res.status(401).json({ error: 'not_linked' });
-        next();
+        return res.status(401).json({ error: 'not_linked' });
     });
     // Excepcion: el resumen y las proxies se reciben igual en espera (ver anotarHost / espejos).
     // (2026-11-06, Ale) Tambien en espera: GET /jobs y POST /xml, asi cualquier host (no solo el del turno)
