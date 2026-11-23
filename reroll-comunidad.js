@@ -1498,6 +1498,7 @@ function fill96Parar(discordId) {
     const t = fill96Trabajos.get(id);
     if (!t) return false;
     t.parar = true;
+    t.publico.parando = true;   // /farm muestra "Stopping…" hasta que termina
     try { fs.writeFileSync(t.stopFile, 'stop'); } catch (e) { /* aun no arranco el motor */ }
     return true;
 }

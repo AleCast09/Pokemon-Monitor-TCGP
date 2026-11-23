@@ -17936,6 +17936,12 @@ async function pantallaFill96(userId, guild = null) {
                 .setDescription(`Accounts checked: **${t.hechas} / ${t.total}**\n${barraFill(t.hechas, t.total)}\n${HG} Reading hourglasses and free packs of each one. Nothing is opened.\nStarted ${min} min ago`)
             : new EmbedBuilder().setColor(0xEF9F27).setTitle({ open96: '📦 Reaching 96…', open2: '📦 Opening 2 packs…', special: '✨ Opening the special pack…', claim: '🎁 Claiming gifts and missions…' }[t.tipo] || '📦 Farm 96P…')
                 .setDescription(`Accounts: **${t.hechas} / ${t.total}** · ${PK} Packs opened: **${nf(t.sobres)}**\n${barraFill(t.hechas, t.total)}\n${OK} Reached 96: **${t.llegaron}** · Started ${min} min ago`);
+        // (Ale 2026-11-23: "le doy stop y no se detiene") El progreso volvia a pisar el "Stopping…": se ve que para.
+        if (t.parando) {
+            e.setColor(0x888780).setTitle('⏹️ Stopping…')
+                .setDescription(`Finishing the accounts already open (a few minutes), then it stops. You'll get a summary.\nAccounts: **${t.hechas} / ${t.total}** · ${PK} Packs opened: **${nf(t.sobres)}**`);
+            return { embeds: [e], components: [] };
+        }
         return { embeds: [e], components: [filaParar] };
     }
     if (!r.cuentas.length && !r.prestadas) {
