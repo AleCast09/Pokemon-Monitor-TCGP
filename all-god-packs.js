@@ -321,8 +321,15 @@ async function ciclo(guild) {
         // Los dos usan la misma marca zenith:allgp_ts, asi no hay repetidos ni saltos. zenith:allgp_off = 1 lo apaga del todo.
         if (String(await deps.host.marcaAllGp('off').catch(() => '')) === '1') return;
         const kyurem = Number(await deps.host.marcaAllGp('kyurem').catch(() => 0)) || 0;
-        if (Date.now() - kyurem < 5 * 60 * 1000) return;
         const lista = (await deps.host.godPacksComunidad(false).catch(() => null) || []).filter(h => h && Number(h.ts));
+        if (Date.now() - kyurem < 5 * 60 * 1000) {
+            // (Ale 2026-11-23: repetia los de KyuremBot) KyuremBot no mueve zenith:allgp_ts: mientras publica el, la
+            // marca avanza aca hasta el ultimo God Pack. Si KyuremBot se apaga, el nuestro sigue solo con los nuevos.
+            const ultimo = Math.max(0, ...lista.map(h => Number(h.ts)));
+            const marcaAct = Number(await deps.host.marcaAllGp('ts').catch(() => 0)) || 0;
+            if (ultimo > marcaAct) await deps.host.marcaAllGp('ts', String(ultimo)).catch(() => {});
+            return;
+        }
         let marca = Number(await deps.host.marcaAllGp('ts').catch(() => null));
         if (!marca) {   // primera vez: se empieza desde ahora (sin publicar los de antes)
             await deps.host.marcaAllGp('ts', String(Date.now()));
