@@ -3761,6 +3761,12 @@ def inject_one(
         pack_labels: list[str] = []
         attempts = 0
         for i in range(packs):
+            # STOP_BETWEEN_PACKS_V1 (Ale 2026-11-23: "le doy stop y no se detiene"): /farm abre hasta ~90 sobres por
+            # cuenta; esperar a terminar la cuenta tardaba minutos. En Open Packs Only se para entre sobres (lo
+            # abierto queda anotado igual). En God Pack no: las solicitudes ya mandadas se limpian al final.
+            if run_mode == "packs-only" and _stop_event.is_set():
+                log(f"[stop-signal] stopping after {result['packs_opened']} pack(s)", tag=tag)
+                break
             if dry_run:
                 log(f"[dry-run] would open pack {i+1}/{packs}", tag=tag)
                 continue
