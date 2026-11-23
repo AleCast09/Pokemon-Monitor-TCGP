@@ -1436,7 +1436,8 @@ function guardarFill96() {
         // ts (Ale 2026-11-21): latido; al reiniciar solo se retoma lo guardado hace poco (ver fill96Reanudar).
         const ts = Date.now();
         // p (ZERO 2026-11-23): lo que lleva hecho, para mandarle el resumen aunque el bot se reinicie y no se retome.
-        const lista = [...[...fill96Trabajos.values()].map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId, ts, p: progresoFill96(t) })),
+        // Un /farm con Stop no se retoma tras un reinicio (Ale 2026-11-23).
+        const lista = [...[...fill96Trabajos.values()].filter(t => !t.parar).map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId, ts, p: progresoFill96(t) })),
             ...fill96Cola.map(id => fill96Pendientes.get(id)).filter(Boolean).map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId, ts }))]
             .filter(x => x.tipo !== 'scan');
         // (2026-11-21) Antes de retomar los guardados (fill96Reanudar), un /farm nuevo pisaba la lista y se perdian:
