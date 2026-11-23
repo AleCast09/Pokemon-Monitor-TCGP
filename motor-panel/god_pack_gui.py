@@ -492,7 +492,7 @@ ES: dict = {
     "Only your own accounts (counters show only yours).": "Solo tus cuentas (los contadores muestran solo las tuyas).",
     "Tick at least one pack.": "Marca al menos un sobre.",
     "1 pack: every account opens it.": "1 sobre: todas las cuentas abren ese.",
-    "Spend all hourglasses — Open Packs Only, your accounts": "Gastar todos los relojes — Solo abrir sobres, tus cuentas",
+    "Reach 96P with hourglasses — Open Packs Only, your accounts": "Llegar a 96P con relojes — Solo abrir sobres, tus cuentas",
     "Each account opens its free packs + every paid pack its LARGE hourglasses can pay\n(12 per pack). Ignores 'Packs per Account'. Lent accounts never spend hourglasses.":
         "Cada cuenta abre sus sobres gratis + todos los que pueda pagar con relojes\n(12 por sobre). No usa 'Sobres por cuenta'. Las cuentas prestadas nunca gastan relojes.",
     "Claim gifts && finished missions — Open Packs Only, your accounts": "Cobrar regalos y misiones — Solo abrir sobres, tus cuentas",
@@ -1117,9 +1117,11 @@ class GodPackGui(QMainWindow):
         self._update_community_hint()
 
         # (Ale 2026-11-12) Hourglasses + rewards: own accounts only (lent accounts never spend anything).
-        self.w_spend_all = QCheckBox("Spend all hourglasses — Open Packs Only, your accounts")
-        self.w_spend_all.setToolTip("Each account opens its free packs + every paid pack its LARGE hourglasses can pay\n"
-                                    "(12 per pack). Ignores 'Packs per Account'. Lent accounts never spend hourglasses.")
+        # (Ale 2026-11-23) Ya no "gastar todos": cada cuenta para al llegar a 96P (SPEND_ALL_STOP96_V1 en inject.py).
+        self.w_spend_all = QCheckBox("Reach 96P with hourglasses — Open Packs Only, your accounts")
+        self.w_spend_all.setToolTip("Each account opens packs (free first, then hourglasses) until it reaches 96 packs, then stops.\n"
+                                    "Accounts already at 96 open nothing. Unknown pack history: free packs only.\n"
+                                    "Lent accounts never spend hourglasses.")
         self.w_spend_all.toggled.connect(lambda on: on and self.w_free_only.setChecked(False))
         self.w_free_only.toggled.connect(lambda on: on and self.w_spend_all.setChecked(False))
         l_flags.addWidget(self.w_spend_all)

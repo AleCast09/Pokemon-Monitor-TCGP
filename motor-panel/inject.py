@@ -1956,7 +1956,9 @@ def _objetivo96(account: dict, args, fill96_targets: dict) -> Optional[int]:
         return fill96_targets[clave]
     if not getattr(args, "spend_all_hourglasses", False) or getattr(args, "mode", "") != "packs-only":
         return None
-    return _near96_missing(account, {})
+    faltan = _near96_missing(account, {})
+    # Unknown pack history: -1 = free packs only, no hourglasses (Ale: the option only reaches 96P, never "spend all").
+    return -1 if faltan is None else faltan
 
 
 def _near96_missing(account: dict, near96: dict) -> Optional[int]:
@@ -3522,11 +3524,17 @@ def inject_one(
                 f"{free_power_at_start} free -> {_todos} packs", tag=tag)
             packs = _todos
             # FILL96_V1: "Reach 96 only" - stop at the packs still missing, keep the other hourglasses.
-            if pack_target is not None and int(pack_target) <= 0:
+            if pack_target is not None and int(pack_target) < 0:
+                log(f"[96] pack history unknown - only the {free_power_at_start} free pack(s), hourglasses kept", tag=tag)
+                packs = free_power_at_start
+                if packs <= 0:
+                    result["error"] = "no_power_no_hourglasses"
+                    return result
+            elif pack_target is not None and int(pack_target) == 0:
                 log(f"[96] already at 96 packs - nothing opened, hourglasses kept", tag=tag)
                 result["error"] = "already_96"
                 return result
-            if pack_target is not None and packs > int(pack_target):
+            elif pack_target is not None and packs > int(pack_target):
                 log(f"[fill96] {packs} possible, opening only {int(pack_target)} (to reach 96)", tag=tag)
                 packs = int(pack_target)
             if packs <= 0:
