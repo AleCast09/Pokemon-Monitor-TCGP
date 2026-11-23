@@ -40,6 +40,8 @@ function iniciar(d) {
     if (!deps.fastTransfer.rutaMotor()) return;
     instalarPanel(deps.fastTransfer.rutaMotor());
     agregarSobresExtra(deps.fastTransfer.rutaMotor());
+    // (2026-11-23) Aparte: dentro de agregarSobresExtra no corria cuando no faltaba ningun sobre (salia antes).
+    corregirProductos(deps.fastTransfer.rutaMotor());
     aplicarAjustesRecomendados(deps.fastTransfer.rutaMotor());
     borrarTemporalesViejas();
     setInterval(borrarTemporalesViejas, 60 * 60 * 1000);
@@ -613,7 +615,6 @@ function agregarSobresExtra(motor) {
         fs.writeFileSync(ruta, texto);
         log(`pack_catalog.py: added ${faltan.length} pack(s) (Special Pack: First Partners)`);
     } catch (e) { /* sin catalogo en este motor */ }
-    corregirProductos(motor);
 }
 
 // Tickets de compra equivocados en el catalogo de Miguel (2026-11-21, cy: Open 2 de Dialga abrio 0 sobres en
