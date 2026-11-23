@@ -1386,7 +1386,7 @@ function fill96Sobres() {
 function fill96Iniciar(discordId, tipo, avisar, packId = '', opciones = {}) {
     const id = String(discordId);
     if (fill96Trabajos.has(id) || fill96Cola.includes(id)) return fill96Estado(id);
-    const t = { id, tipo, avisar, packId, parar: false, reanudado: !!opciones.reanudado, publico: { fase: tipo === 'scan' ? 'scan' : 'open', tipo, packId, total: 0, hechas: 0, sobres: 0, llegaron: 0, inicio: 0, error: null } };
+    const t = { id, tipo, avisar, packId, parar: false, reanudado: !!opciones.reanudado, previo: opciones.previo || null, publico: { fase: tipo === 'scan' ? 'scan' : 'open', tipo, packId, total: 0, hechas: 0, sobres: 0, llegaron: 0, inicio: 0, error: null } };
     fill96Trabajos.set(id, t);
     // (Zeka 2026-11-19) Si ya hay fila, va al final: antes uno nuevo se colaba cuando se liberaba un lugar.
     if (fill96Cola.length || [...fill96Trabajos.values()].filter(x => x.publico.inicio).length >= FILL96_MAX) {
@@ -1406,11 +1406,19 @@ function fill96Iniciar(discordId, tipo, avisar, packId = '', opciones = {}) {
 const rutaFill96Pend = () => path.join(__dirname, 'reports', 'fill96_pendientes.json');
 let fill96Cargado = false;   // true cuando fill96Reanudar ya leyo la lista guardada
 setInterval(() => { if (fill96Trabajos.size || fill96Cola.length) guardarFill96(); }, 60 * 1000).unref?.();
+// Lo hecho por un /farm, sumando lo de antes de un reinicio (t.previo).
+function progresoFill96(t) {
+    const pub = t.publico || {}, pr = t.previo || {};
+    if (!pub.inicio && !pr.inicio) return null;
+    return { hechas: (pub.hechas || 0) + (pr.hechas || 0), sobres: (pub.sobres || 0) + (pr.sobres || 0),
+        llegaron: (pub.llegaron || 0) + (pr.llegaron || 0), inicio: pr.inicio || pub.inicio };
+}
 function guardarFill96() {
     try {
         // ts (Ale 2026-11-21): latido; al reiniciar solo se retoma lo guardado hace poco (ver fill96Reanudar).
         const ts = Date.now();
-        const lista = [...[...fill96Trabajos.values()].map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId, ts })),
+        // p (ZERO 2026-11-23): lo que lleva hecho, para mandarle el resumen aunque el bot se reinicie y no se retome.
+        const lista = [...[...fill96Trabajos.values()].map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId, ts, p: progresoFill96(t) })),
             ...fill96Cola.map(id => fill96Pendientes.get(id)).filter(Boolean).map(t => ({ id: t.id, tipo: t.tipo, packId: t.packId, ts }))]
             .filter(x => x.tipo !== 'scan');
         // (2026-11-21) Antes de retomar los guardados (fill96Reanudar), un /farm nuevo pisaba la lista y se perdian:
@@ -1430,7 +1438,9 @@ function guardarFill96() {
 // el lugar a los miembros) Solo se retoma si el corte fue corto (< 30 min) y el Monitor Link del miembro esta
 // encendido; si no, ese /farm se da por terminado y el lugar queda libre.
 const FILL96_REANUDAR_MAX_MS = 30 * 60 * 1000;
-async function fill96Reanudar(crearAvisar) {
+// avisarCortado(id, pub): /farm que no se retoma -> resumen de lo que alcanzo a hacer (ZERO 2026-11-23: se cortaba
+// sin decir nada).
+async function fill96Reanudar(crearAvisar, avisarCortado) {
     let lista = [];
     try { lista = JSON.parse(fs.readFileSync(rutaFill96Pend(), 'utf8')); } catch (e) { fill96Cargado = true; return 0; }
     fill96Cargado = true;
@@ -1439,10 +1449,11 @@ async function fill96Reanudar(crearAvisar) {
     try { mtime = fs.statSync(rutaFill96Pend()).mtimeMs; } catch (e) { /* nada */ }
     for (const x of lista) {
         if (!x?.id || fill96Trabajos.has(x.id) || fill96Cola.includes(x.id)) continue;
-        if (Date.now() - (x.ts || mtime) > FILL96_REANUDAR_MAX_MS) { viejos++; continue; }
+        const cortado = (motivo) => { if (x.p?.inicio && avisarCortado) avisarCortado(x.id, { ...x.p, tipo: x.tipo, packId: x.packId || '', fase: 'stopped', fin: x.ts || mtime, cortado: motivo }); };
+        if (Date.now() - (x.ts || mtime) > FILL96_REANUDAR_MAX_MS) { viejos++; cortado('restart'); continue; }
         const st = await deps?.ml?.estadoAgente?.(x.id).catch(() => null);
-        if (!st?.enLinea) { apagados++; continue; }
-        fill96Iniciar(x.id, x.tipo, crearAvisar(x.id), x.packId || '', { reanudado: true });
+        if (!st?.enLinea) { apagados++; cortado('monitor_link'); continue; }
+        fill96Iniciar(x.id, x.tipo, crearAvisar(x.id), x.packId || '', { reanudado: true, previo: x.p });
         n++;
     }
     if (n) log(`fill96: resumed ${n} /farm job(s) after a restart`);
@@ -1638,6 +1649,7 @@ async function correrFill96(t) {
         farmEnCurso.delete(String(t.id));
         entregarEnFondo();   // ahora si: todos los sobres del /farm a su Monitor Link
         guardarFill96();
+        if (t.previo) { const tot = progresoFill96(t); pub.hechas = tot.hechas; pub.sobres = tot.sobres; pub.llegaron = tot.llegaron; pub.inicio = tot.inicio; }
         avisar(true);
         fill96Siguiente();
     }

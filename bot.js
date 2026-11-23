@@ -12030,7 +12030,11 @@ async function manejarInteraccionPrincipal(interaction) {
         await interaction.deferUpdate().catch(e => console.error('DEBUG: Get these cards deferUpdate:', e?.message || e));
         console.log(`DEBUG: Get these cards ${interaction.customId.split('::')[0]} confirmado en ${Date.now() - t0} ms (edad ${Date.now() - interaction.createdTimestamp} ms)`);
     }
-    if (comunidad.esComunidad(interaction.guildId) && !hostComunidad.esActivo() && !sigueMiLista) return;
+    // (ZERO 2026-11-23) Lo mismo con Stop/Refresh de /farm: el /farm corre en el host donde empezo aunque el turno
+    // pase a otro; sin esto sus botones quedaban muertos ("didn't respond in time").
+    const sigueMiFarm = (interaction.isButton() || interaction.isStringSelectMenu()) && String(interaction.customId || '').startsWith('fill96_')
+        && !!fill96Mod().fill96Estado?.(interaction.user?.id);
+    if (comunidad.esComunidad(interaction.guildId) && !hostComunidad.esActivo() && !sigueMiLista && !sigueMiFarm) return;
     // Amigo de un miembro (lo anoto el miembro en su Monitor Link): sin Monitor Link propio, el bot le
     // muestra y le deja usar las cuentas del miembro -- todo lo que sigue corre como si fuera el dueño.
     if (comunidad.esComunidad(interaction.guildId) && interaction.user) {
@@ -18131,12 +18135,22 @@ function reanudarFarms(guild) {
         const canal = await canalFarm96(guild.id);
         const ok = await canal?.send({ content: `<@${id}> your /farm was resumed after a bot restart:`, embeds: [fin], allowedMentions: { users: [id] } }).catch(() => null);
         if (!ok) await (await client.users.fetch(id).catch(() => null))?.send({ embeds: [fin] }).catch(() => {});
+    }, async (id, pub) => {
+        // (ZERO 2026-11-23) No se retoma (corte largo o Monitor Link apagado): igual recibe lo que se hizo.
+        const fin = embedFinFill96(pub, await emojisFill96(guild));
+        const por = pub.cortado === 'monitor_link' ? 'your Monitor Link was off when the bot came back' : 'the bot was restarted';
+        const canal = await canalFarm96(guild.id);
+        const ok = await canal?.send({ content: `<@${id}> your /farm stopped (${por}). This is what was done — use **/farm** again to continue:`, embeds: [fin], allowedMentions: { users: [id] } }).catch(() => null);
+        if (!ok) await (await client.users.fetch(id).catch(() => null))?.send({ embeds: [fin] }).catch(() => {});
     });
 }
 // Cada 30 s mientras el bot tiene el turno: se edita solo si algo cambio.
 setInterval(() => {
-    if (!client.isReady?.() || !hostComunidad.esActivo()) return;
+    if (!client.isReady?.()) return;
+    // (ZERO 2026-11-23) Cada host retoma sus propios /farm (su archivo), tenga o no el turno: antes, un host que volvia
+    // en espera los perdia sin avisar.
     for (const guild of client.guilds.cache.values()) if (comunidad.esComunidad(guild.id)) reanudarFarms(guild);
+    if (!hostComunidad.esActivo()) return;
     for (const guild of client.guilds.cache.values()) if (comunidad.esComunidad(guild.id)) actualizarTableroFarm(guild);
     // 📚-all-god-packs: cada God Pack de los hosts (vivo o muerto) y el resumen del dia (all-god-packs.js).
     for (const guild of client.guilds.cache.values()) if (comunidad.esComunidad(guild.id)) pausaReset.ciclo(guild).catch(e => console.log('DEBUG: reset pause:', e?.message || e));
