@@ -2861,6 +2861,36 @@ def _purchase_special_pack(sess, pack_id: str, consistent_token: str, tag: str =
     return result, tx
 
 
+def _daily_login(sess, tag: str = "") -> bool:
+    """DAILY_LOGIN_V1 (Arcade 2026-11-24: "the welcome back screen appears, even if I open daily packs"): the engine
+    skipped System/LoginV1, so the game never counted the day (30-day login gifts, login events). The real client
+    sends it right after AuthorizeV1, with the account's own settings: country / birth date / age gate from
+    PlayerSettings/GetInfoV1 (other values -> INTERNAL). Tested on Ale_Cast_177_3: after it, the 30-day gift
+    (day 30) and new login-event days became claimable. Never fatal."""
+    try:
+        from engine.takasho.schema.lettuce_server.player_api import (
+            player_setting_get_info_v1_pb2 as _pg, system_login_v1_pb2 as _sl)
+        info = sess._call("/takasho.schema.lettuce_server.player_api.PlayerSettings/GetInfoV1",
+                          _pg.PlayerSettingGetInfoV1.Types.Request(),
+                          _pg.PlayerSettingGetInfoV1.Types.Response).info
+        req = _sl.SystemLoginV1.Types.Request(
+            language_type=info.language_type or 2,
+            third_party_data_provision_version_approved=info.third_party_data_provision_version or "1.0.0",
+            privacy_policy_consent_version_approved=info.privacy_policy_consent_version or "1.1.0",
+            terms_of_service_consent_version_approved=info.terms_of_service_consent_version or "1.1.0",
+            country_region_code=info.country_region_code, year_num_of_birth=info.year_num_of_birth,
+            month_num_of_birth=info.month_num_of_birth, use_of_last_login_time=info.use_of_last_login_time,
+            use_of_login_data=info.use_of_login_data, use_of_performance_errors=info.use_of_performance_errors,
+            age_gate_type=info.age_gate_type or 1)
+        sess._call("/takasho.schema.lettuce_server.player_api.System/LoginV1", req,
+                   _sl.SystemLoginV1.Types.Response)
+        log("[daily-login] OK - today's login counts (30-day gifts / login events)", tag=tag)
+        return True
+    except Exception as exc:
+        log(f"[daily-login] skipped: {' '.join(str(exc).split())[:120]}", tag=tag)
+        return False
+
+
 def open_pack_x10(sess, pack_id: str, product_id: str, tag: str = "",
                   hg_cost: int = 0, power_id: str = "PACK_POWER_NORMAL") -> Optional[list]:
     """OPEN_X10_V1 (Ale 2026-11-23): the game's "open x10" - ONE PurchaseV2 (AMOUNT_TEN) opens 10 packs paid with
@@ -3305,6 +3335,10 @@ def inject_one(
             if classification != "transient":
                 result["error"] = f"login_failed ({classification})"
         return result
+
+    # DAILY_LOGIN_V1 (Arcade 2026-11-24): the daily login (30-day gifts, login events) never counted here.
+    if not dry_run:
+        _daily_login(sess, tag)
 
     try:
         # Hoisted so the except-block cleanup can access them regardless of
