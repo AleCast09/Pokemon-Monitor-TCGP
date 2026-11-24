@@ -500,6 +500,7 @@ ES: dict = {
         "Antes de abrir: recibe todo el buzón de regalos (suelen ser relojes).\nDespués de abrir: cobra las misiones terminadas y los días de los eventos.",
     "  Hourglasses list": "  Lista de relojes",
     "  Claim only — your accounts": "  Solo cobrar — tus cuentas",
+    "  Solo battles — your accounts": "  Batallas solo — tus cuentas",
     "Logs into every one of your accounts (even the resting ones) and claims gifts,\nfinished missions and event days. Opens no packs and doesn't touch the cooldown.":
         "Entra a todas tus cuentas (aunque estén descansando) y cobra regalos,\nmisiones terminadas y días de eventos. No abre sobres ni cambia el descanso.",
     "Update needed": "Falta actualizar",
@@ -1141,6 +1142,13 @@ class GodPackGui(QMainWindow):
                                        "finished missions and event days. Opens no packs and doesn't touch the cooldown.")
         self.btn_claim_only.clicked.connect(self._start_claim_only)
         l_flags.addWidget(self.btn_claim_only)
+        # SOLO_BATTLES_V1 (Ale/Arcade 2026-11-24): solo battles on every own account (hourglasses), no packs.
+        self.btn_solo_battles = QPushButton("  Solo battles — your accounts")
+        self.btn_solo_battles.setToolTip("Logs into every one of your accounts and does its solo battles (stepup first,\n"
+                                         "then a few random ones). First clears and level-ups give hourglasses, then\n"
+                                         "'Reach 96P with hourglasses' uses them. Opens no packs. Uses your proxies.")
+        self.btn_solo_battles.clicked.connect(self._start_solo_battles)
+        l_flags.addWidget(self.btn_solo_battles)
 
         self.w_dry_run = QCheckBox("Dry run (test flow without opening packs)")
         l_flags.addWidget(self.w_dry_run)
@@ -2001,6 +2009,20 @@ class GodPackGui(QMainWindow):
         if not cmd:
             return
         cmd = [c for c in cmd if c not in ("--spend-all-hourglasses",)] + ["--claim-only"]
+        self._start_injection(cmd_override=cmd)
+
+    def _start_solo_battles(self):
+        try:
+            inj = Path(INJECT_SCRIPT).read_text("utf-8", errors="ignore")
+        except Exception:
+            inj = ""
+        if "--solo-battles" not in inj:
+            QMessageBox.information(self, "Update needed", "The engine doesn't have 'Solo battles' yet: restart the bot so it installs it.")
+            return
+        cmd = self._build_cmd()
+        if not cmd:
+            return
+        cmd = [c for c in cmd if c not in ("--spend-all-hourglasses", "--claim-rewards")] + ["--solo-battles"]
         self._start_injection(cmd_override=cmd)
 
     def _show_hourglasses(self):

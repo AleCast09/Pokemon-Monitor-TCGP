@@ -75,7 +75,11 @@ function iniciar(d) {
         // (2026-11-23, Ale) SPEND_ALL_STOP96_V1: "Gastar todos los relojes" del panel para en 96P en las cuentas propias.
         // (2026-11-23, Ale) OPEN_X10_V1: Llegar a 96P y Farm 96P abren de a 10 con relojes (una compra x10).
         // (2026-11-24, Arcade) DAILY_LOGIN_V1: cada cuenta hace el login diario del juego (regalos de 30 dias, eventos).
-        'DAILY_LOGIN_V1');
+        // (2026-11-24, Ale/Arcade) SOLO_BATTLES_V1: boton "Batallas solo" (con solo_battles_one.py, abajo).
+        'SOLO_BATTLES_V1');
+    // (2026-11-24) Batallas solo de una cuenta (lo lanza inject.py --solo-battles).
+    instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'solo_battles_one.py', ['scripts', 'god_pack', 'solo_battles_one.py'],
+        '', 'SOLO_BATTLES_V1', 'Solo battles button in the God Pack UI');
     // (2026-11-06) Aviso de God Pack que no se perdia al terminar cada tanda del GP farm.
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'discord_notifier.py', ['scripts', 'god_pack', 'discord_notifier.py'],
         '75d4eee05e3bb22f6cfe09ff1c8e935de312fc66b246b9f9d1b8214c4c85b908', 'daemon=False: en el GP farm', 'God Pack alerts always sent, and each God Pack is listed when you click GOD PACK HITS in the God Pack UI',
@@ -215,6 +219,12 @@ function instalarArchivoMotor(motor, archivo, rutaDestino, huellaOriginal, marca
     try {
         const nuevo = fs.readFileSync(path.join(__dirname, 'motor-panel', archivo));
         const destino = path.join(motor, ...rutaDestino);
+        // (2026-11-24) Archivo nuevo (no existe en este motor, ej. solo_battles_one.py): se copia directo.
+        if (!fs.existsSync(destino) && fs.existsSync(path.dirname(destino))) {
+            fs.writeFileSync(destino, nuevo);
+            log(`${archivo} installed: ${que}.`);
+            return;
+        }
         const actual = fs.readFileSync(destino);
         if (actual.equals(nuevo)) return;
         const huella = crypto.createHash('sha256').update(actual).digest('hex');

@@ -2861,6 +2861,53 @@ def _purchase_special_pack(sess, pack_id: str, consistent_token: str, tag: str =
     return result, tx
 
 
+def _solo_battles(account: dict, sess, tag: str = "") -> int:
+    """SOLO_BATTLES_V1 (Ale/Arcade 2026-11-24): run scripts/god_pack/solo_battles_one.py for this account in its
+    own process (the battle code keeps per-session globals), through the same proxy that just logged in. The
+    account's credentials go to a temp file that is deleted right after. Returns the battles won."""
+    import subprocess, tempfile
+    script = Path(__file__).with_name("solo_battles_one.py")
+    if not script.exists():
+        log("[battles] solo_battles_one.py missing - restart the bot so it installs it", tag=tag)
+        return 0
+    tmp = Path(tempfile.mkdtemp(prefix="battles_"))
+    ganadas = 0
+    try:
+        f = tmp / "account.json"
+        f.write_text(json.dumps({k: account.get(k) for k in ("account_id", "password", "device_identifier",
+                                                            "authorize_device_account") if account.get(k)}), "utf-8")
+        try:
+            sess.close()   # the battle process logs in on its own
+        except Exception:
+            pass
+        cmd = [sys.executable, "-X", "utf8", str(script), "--account-file", str(f),
+               "--state-json", str(tmp / "state.json"), "--proxy", str(getattr(sess, "_proxy_url", "") or ""),
+               "--max-random", str(int(os.environ.get("SOLO_BATTLES_MAX_RANDOM", "20")))]
+        log("[battles] starting solo battles", tag=tag)
+        proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding="utf-8", errors="replace",
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        for linea in proc.stdout:
+            l = linea.strip()
+            if _stop_event.is_set():
+                proc.terminate()
+                log("[battles] stopped", tag=tag)
+                break
+            m = re.search(r"(Stepup|Random) done=(\d+) failed=(\d+)", l)
+            if m:
+                ganadas += int(m.group(2))
+                log(f"[battles] {m.group(1).lower()}: {m.group(2)} won, {m.group(3)} failed", tag=tag)
+            elif re.search(r"HG from level-up|LARGE chargers=|\[!\]|blocked|limit|403", l) and "x-takasho" not in l:
+                log(f"[battles] {l[-160:]}", tag=tag)
+        proc.wait(timeout=60)
+    except Exception as exc:
+        log(f"[battles] failed: {' '.join(str(exc).split())[:150]}", tag=tag)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    log(f"[battles] done: {ganadas} battle(s) won", tag=tag)
+    return ganadas
+
+
 def _daily_login(sess, tag: str = "") -> bool:
     """DAILY_LOGIN_V1 (Arcade 2026-11-24: "the welcome back screen appears, even if I open daily packs"): the engine
     skipped System/LoginV1, so the game never counted the day (30-day login gifts, login events). The real client
@@ -3229,6 +3276,7 @@ def inject_one(
     track_hg: bool = False,              # (Ale 2026-11-12) write the hourglasses left to reports/hourglasses.json
     claim_rewards: bool = False,         # (Ale 2026-11-12) claim gifts (present box) and finished missions
     claim_only: bool = False,            # CLAIM_ONLY_V1 (Ale 2026-11-15): log in, claim everything, no packs
+    solo_battles: bool = False,          # SOLO_BATTLES_V1 (Ale/Arcade 2026-11-24): solo battles for hourglasses, no packs
     scan_only: bool = False,             # FILL96_V1 (Ale 2026-11-16): log in, note hourglasses + free power, no packs
     pack_target: Optional[int] = None,   # FILL96_V1: open at most this many packs (packs still missing to 96)
 ) -> dict:
@@ -3339,6 +3387,10 @@ def inject_one(
     # DAILY_LOGIN_V1 (Arcade 2026-11-24): the daily login (30-day gifts, login events) never counted here.
     if not dry_run:
         _daily_login(sess, tag)
+    if solo_battles:
+        if not dry_run:
+            result["battles"] = _solo_battles(account, sess, tag)
+        return result
 
     try:
         # Hoisted so the except-block cleanup can access them regardless of
@@ -4853,6 +4905,9 @@ def run_injection(args) -> int:
     if getattr(args, "scan_only", False):
         args.cooldown_hours = 0.0
         log("[fill96] scan only: logging into the accounts to read hourglasses and free packs - nothing is opened")
+    if getattr(args, "solo_battles", False):
+        args.cooldown_hours = 0.0
+        log("[battles] solo battles: logging into your accounts to do their solo battles (hourglasses) - no packs")
     if getattr(args, "claim_only", False):
         # Claim only: every account, even the ones resting (the cooldown is only for opening packs).
         args.cooldown_hours = 0.0
@@ -4951,7 +5006,8 @@ def run_injection(args) -> int:
         # Pack mode (friend requests first, Main friendships removed after if no God Pack, a God Pack is posted
         # like any other). Not in Farm 96P (spend all hourglasses), Claim or the scan. Everything else: no requests.
         if (_modo == "packs-only" and not getattr(args, "spend_all_hourglasses", False)
-                and not getattr(args, "claim_only", False) and not getattr(args, "scan_only", False)):
+                and not getattr(args, "claim_only", False) and not getattr(args, "scan_only", False)
+                and not getattr(args, "solo_battles", False)):
             _faltan = _near96_missing(acct, _near96)
             if _faltan is not None and _faltan <= NEAR96_MAX_MISSING:
                 _modo = "godpack"
@@ -4985,10 +5041,12 @@ def run_injection(args) -> int:
             track_hg=bool(getattr(args, "track_hourglasses", False)),
             claim_rewards=bool(getattr(args, "claim_rewards", False)),
             claim_only=bool(getattr(args, "claim_only", False)),
+            solo_battles=bool(getattr(args, "solo_battles", False)),
             scan_only=bool(getattr(args, "scan_only", False)),
             pack_target=_objetivo96(acct, args, _fill96_targets),
         )
-        if getattr(args, "claim_only", False) or getattr(args, "scan_only", False):
+        if getattr(args, "claim_only", False) or getattr(args, "scan_only", False) \
+                or getattr(args, "solo_battles", False):
             return r   # nothing opened: no history, no pack count, no cooldown change
         # Record state (touch mtime only on successful attempt)
         _record_kwargs = dict(
@@ -5040,6 +5098,7 @@ def run_injection(args) -> int:
     consec_lock = threading.Lock()
 
     reached_96 = []   # REACHED96_LIST_V1: accounts that got to 96P this run
+    battles_won = []  # SOLO_BATTLES_V1: battles won per account
     def _tally(r):
         nonlocal processed, packs_opened_total, god_hits, errors
         nonlocal accounts_no_packs, accounts_login_fail, accounts_aborted
@@ -5047,6 +5106,8 @@ def run_injection(args) -> int:
         processed += 1
         if r.get("faltan96") is not None:
             reached_96.append(int(r["faltan96"]))
+        if r.get("battles"):
+            battles_won.append(int(r["battles"]))
         packs_opened_total += r["packs_opened"]
         cards_pulled_total += len(r.get("cards", []) or [])
         if r["packs_opened"] > 0:
@@ -5212,6 +5273,9 @@ def run_injection(args) -> int:
     log(f"   • accounts with 0 packs opened: {accounts_no_packs}")
     # SUMMARY96_V1 (Ale 2026-11-23): totals only, no account names - how many are at 96P, how many still under,
     # and how far the ones under 96P are (share of them in each range).
+    if getattr(args, "solo_battles", False):
+        log("=" * 70)
+        log(f"SOLO BATTLES: {sum(battles_won)} battle(s) won on {len(battles_won)} account(s)")
     if reached_96:
         _listas = sum(1 for f in reached_96 if f <= 0)
         _faltan = [96 - f for f in reached_96 if f > 0]   # packs they have now (toward 96)
@@ -5301,6 +5365,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Claim gifts (present box) and finished missions on each account.")
     p.add_argument("--claim-only", action="store_true",
                    help="Only claim gifts, missions and event days on every own account (ignores the cooldown, opens no packs).")
+    p.add_argument("--solo-battles", action="store_true",
+                   help="SOLO_BATTLES_V1: log in to every own account and do its solo battles (hourglasses), no packs.")
     p.add_argument("--scan-only", action="store_true",
                    help="FILL96: log in, write hourglasses + free packs to reports/fill96_scan.jsonl, open nothing.")
     p.add_argument("--near96", default="",
