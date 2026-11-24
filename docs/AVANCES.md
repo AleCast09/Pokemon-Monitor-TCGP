@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-24 — cuenta 2 — Login diario en el motor (publicado)
+- **DAILY_LOGIN_V1** (reporte de Arcade: el regalo de 30 días no avanzaba con el motor): el motor saltaba `System/LoginV1`. Ahora `_daily_login()` en `motor-panel/inject.py` lo manda al entrar a cada cuenta, con los datos de la propia cuenta (`PlayerSettings/GetInfoV1`: país, fecha de nacimiento, age gate; con otros valores el juego da INTERNAL). Probado en Ale_Cast_177_3 y _13: después del login se desbloquean el día 30 del regalo y días nuevos de eventos de login.
+- Ojo: `_get_player_settings_info()` de `engine/core/session.py` devuelve None (no usarlo); llamar GetInfoV1 directo.
+- tana: ~300 cuentas (0-13 sobres, sin `packCount` en su JSON) no aparecen en "Share accounts for reroll" de Monitor Link. Sin arreglar.
+- Arcade pidió batallas solo en el God Pack UI (existe `scripts/sweep_solo_battles_v2.py` en el motor, solo se usa al crear cuentas). Sin hacer.
+
 ### 2026-11-23 — cuenta 2 — /farm, códigos de sobres, x10, Llegar a 96P (todo publicado)
 - **/farm (reporte de ZERO)**: Stop/Refresh funcionan en el host que corre el /farm aunque el turno pase a otro; cada host retoma sus /farm tras reiniciar; si no se retoma, igual manda el resumen (progreso guardado en `reports/fill96_pendientes.json`, campo `p`). Stop para entre sobres (STOP_BETWEEN_PACKS_V1) y muestra "Stopping…"; un /farm con Stop no se retoma.
 - **Códigos de compra (reporte de Arcade, Crimson Blaze no abría)**: los reales salen de `engine/config/pack.json` del motor. Crimson Blaze = `PC_PS_2512000_01_01_01` (probado), Triumphant Light probado; corregidos 11 en `PRODUCTOS_CORREGIDOS` (reroll-comunidad.js, se aplica al arrancar). B2-B4 siguen adivinados (patrón mensual, probablemente bien).
