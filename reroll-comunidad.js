@@ -615,6 +615,9 @@ async function codigoSet(packId) {
 const SOBRES_EXTRA = [
     // 2026-11-07 (Ale, datos de wr98): sobre especial, energia propia (PACK_POWER_SPECIAL), 1 por cuenta.
     '{"name": "Special Pack: First Partners", "expansion_id": "sp1", "sku_id": "SP1_1", "pack_id": "SP001_0010_00_000", "product_id": "PC_PS_2610010_01_01_01", "hg_cost": 0, "power_id": "PACK_POWER_SPECIAL", "default_packs": 1},',
+    // 2026-11-25 (Arcade: "secluded spring is missing"): codigo de engine/config/pack.json, probado abriendo 1 sobre.
+    // (Deluxe Pack: ex, AN011 / PC_PS_2509000, responde ABORTED: no se agrega.)
+    '{"name": "Secluded Springs", "expansion_id": "a4a", "sku_id": "A4a_1", "pack_id": "AN010_0010_00_000", "product_id": "PC_PS_2508000_01_01_01", "hg_cost": 12},',
 ];
 function agregarSobresExtra(motor) {
     try {
@@ -628,7 +631,7 @@ function agregarSobresExtra(motor) {
         fs.copyFileSync(ruta, `${ruta}.bak-sobres`);
         texto = texto.slice(0, fin) + '\n    # Monitor Pokemon (sobres extra)\n' + faltan.map(l => `    ${l}`).join('\n') + texto.slice(fin);
         fs.writeFileSync(ruta, texto);
-        log(`pack_catalog.py: added ${faltan.length} pack(s) (Special Pack: First Partners)`);
+        log(`pack_catalog.py: added ${faltan.length} pack(s): ${faltan.map(l => JSON.parse(l.replace(/,$/, "")).name).join(", ")}`);
     } catch (e) { /* sin catalogo en este motor */ }
 }
 
