@@ -2080,7 +2080,7 @@ class GodPackGui(QMainWindow):
                 cur["gifts"] += 1
             elif "pack opened cards=" in ln:
                 cur["packs"] += 1
-            elif "-- ACCOUNT SUMMARY:" in ln or "claim only: done" in ln:
+            elif ("-- ACCOUNT SUMMARY:" in ln and "(claim only)" not in ln) or "claim only: done" in ln:
                 cur["done"] += 1
         if not runs:
             return ("<p>No member has used /farm on this host yet.</p>", lineas[-400:])

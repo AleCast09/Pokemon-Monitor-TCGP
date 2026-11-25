@@ -1628,7 +1628,7 @@ async function correrFill96(t) {
                         : null, etiqueta: t.tipo, nombre: await nombreMiembro(t.id).catch(() => ''),
                     env: { FILL96_SCAN_FILE: archivoScan },
                     onLine: (l) => {
-                        if (/\[fill96\] scan:/.test(l) || /-- ACCOUNT SUMMARY:/.test(l) || /claim only: done/.test(l)) { pub.hechas++; avisar(); }
+                        if (/\[fill96\] scan:/.test(l) || (/-- ACCOUNT SUMMARY:/.test(l) && !/\(claim only\)/.test(l)) || /claim only: done/.test(l)) { pub.hechas++; avisar(); }
                         else if (/\] pack opened cards=/.test(l)) { pub.sobres++; avisar(); }
                     }
                 });

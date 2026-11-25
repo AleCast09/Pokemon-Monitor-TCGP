@@ -3390,6 +3390,7 @@ def inject_one(
     if solo_battles:
         if not dry_run:
             result["battles"] = _solo_battles(account, sess, tag)
+        log(f"-- ACCOUNT SUMMARY: opened 0/0 packs ({result.get('battles', 0)} solo battle(s) won)", tag=tag)
         return result
 
     try:
@@ -3430,6 +3431,8 @@ def inject_one(
             _claim_rewards(sess, tag)
         if claim_only:
             log("[rewards] claim only: done (no packs opened)", tag=tag)
+            # (Arcade 2026-11-25) The God Pack UI counters (accounts processed / left) count this line.
+            log("-- ACCOUNT SUMMARY: opened 0/0 packs (claim only)", tag=tag)
             return result
         hg_before = -1
         if (track_hg or spend_all_hg or scan_only) and not dry_run:
