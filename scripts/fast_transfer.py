@@ -313,8 +313,8 @@ def main():
     sess = None
     for n_intento, proxy in enumerate(plan):
         try:
-            if proxy:
-                print("[proxy] IP blocked - logging in through a proxy", flush=True)
+            if n_intento:
+                print("[proxy] blocked - logging in through another proxy", flush=True)
             sess = at.login_bot(cuenta, clave, proxy_url=proxy, max_retries=1 if proxy else 3)
             break
         except Cancelado:

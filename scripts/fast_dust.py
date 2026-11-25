@@ -177,8 +177,8 @@ def main():
             plan = rp.intentos(proxies)
             for n_intento, proxy in enumerate(plan):
                 try:
-                    if proxy:
-                        print(f"[proxy] IP blocked - retrying {c['key']} through a proxy", flush=True)
+                    if n_intento:
+                        print(f"[proxy] blocked - retrying {c['key']} through another proxy", flush=True)
                     sess = at.login_bot(usuario, clave, proxy_url=proxy, max_retries=1 if proxy else 3)
                     break
                 except Exception as e_login:

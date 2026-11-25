@@ -1,6 +1,6 @@
 """Respaldo por proxy para Fast Farm / Shinedust / Fast Share-Trade (Ale 2026-11-07).
 
-Estos scripts entran a las cuentas con la IP del host que tiene el turno. Si el juego bloquea esa IP un
+Estos scripts entran a las cuentas por los proxies del host (desde 2026-11-24, antes con su IP). Si el juego bloquea esa IP un
 rato (PERMISSION_DENIED / pagina web en vez de respuesta), se reintenta la cuenta por 1 o 2 proxies de la
 lista del host (la misma que usa el GP farm). No se insiste mas: muchos intentos hacen bloquear tambien
 los proxies.
@@ -12,8 +12,10 @@ MAX_PROXIES = 2
 
 
 def ip_bloqueada(err) -> bool:
+    """IP bloqueada por el juego, o proxy que no responde: en los dos casos se prueba con el siguiente proxy."""
     s = str(err or "")
-    return "PERMISSION_DENIED" in s or "403" in s or "<!doctype" in s.lower() or "<html" in s.lower()
+    return ("PERMISSION_DENIED" in s or "403" in s or "<!doctype" in s.lower() or "<html" in s.lower()
+            or "UNAVAILABLE" in s or "DEADLINE_EXCEEDED" in s or "proxy" in s.lower() or "timed out" in s.lower())
 
 
 def _a_url(linea: str) -> str:
@@ -47,5 +49,10 @@ def cargar(ruta: str) -> list:
 
 
 def intentos(proxies: list) -> list:
-    """Primero sin proxy (None = IP del host); despues hasta MAX_PROXIES proxies al azar."""
-    return [None] + random.sample(proxies, min(MAX_PROXIES, len(proxies)))
+    """(Ale 2026-11-24) SIEMPRE por proxy: hasta MAX_PROXIES + 1 proxies al azar, nunca la IP del host.
+    Los comandos de los miembros (Shinedust "all go" con muchas cuentas, trades) salian por la IP de la casa
+    del host del turno; el juego la frenaba y su MuMu daba "Error de autenticacion 102-002-007".
+    Solo si el host no tiene ningun proxy se usa su IP (None)."""
+    if not proxies:
+        return [None]
+    return random.sample(proxies, min(MAX_PROXIES + 1, len(proxies)))

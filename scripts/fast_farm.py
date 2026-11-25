@@ -82,8 +82,8 @@ def main():
         plan = rp.intentos(proxies)
         for n_intento, proxy in enumerate(plan):
             ultimo = n_intento == len(plan) - 1
-            if proxy:
-                print(f"[proxy] IP blocked - retrying {nombre} through a proxy", flush=True)
+            if n_intento:
+                print(f"[proxy] blocked - retrying {nombre} through another proxy", flush=True)
             sess = None
             try:
                 cuenta, clave = leer_credenciales(ruta)
