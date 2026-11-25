@@ -3431,7 +3431,7 @@ def inject_one(
             _claim_rewards(sess, tag)
         if claim_only:
             log("[rewards] claim only: done (no packs opened)", tag=tag)
-            # (Arcade 2026-11-25) The God Pack UI counters (accounts processed / left) count this line.
+            # CLAIM_COUNTER_V1 (Arcade 2026-11-25): the God Pack UI counters (accounts processed / left) count this line.
             log("-- ACCOUNT SUMMARY: opened 0/0 packs (claim only)", tag=tag)
             return result
         hg_before = -1

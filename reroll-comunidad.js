@@ -76,7 +76,8 @@ function iniciar(d) {
         // (2026-11-23, Ale) OPEN_X10_V1: Llegar a 96P y Farm 96P abren de a 10 con relojes (una compra x10).
         // (2026-11-24, Arcade) DAILY_LOGIN_V1: cada cuenta hace el login diario del juego (regalos de 30 dias, eventos).
         // (2026-11-24, Ale/Arcade) SOLO_BATTLES_V1: boton "Batallas solo" (con solo_battles_one.py, abajo).
-        'SOLO_BATTLES_V1');
+        // (2026-11-25, Arcade) CLAIM_COUNTER_V1: Solo cobrar / Batallas mueven los contadores del panel.
+        'CLAIM_COUNTER_V1');
     // (2026-11-24) Batallas solo de una cuenta (lo lanza inject.py --solo-battles).
     instalarArchivoMotor(deps.fastTransfer.rutaMotor(), 'solo_battles_one.py', ['scripts', 'god_pack', 'solo_battles_one.py'],
         '', 'SOLO_BATTLES_V1', 'Solo battles button in the God Pack UI');
