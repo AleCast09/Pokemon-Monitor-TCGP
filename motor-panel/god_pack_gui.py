@@ -1980,22 +1980,27 @@ class GodPackGui(QMainWindow):
         except Exception:
             data = {}
         filas = sorted(data.values(), key=lambda v: -int(v.get("hg", 0)))
-        total = sum(int(v.get("hg", 0)) for v in filas)
+        # (Arcade 2026-11-25: "641 LARGE is misleading, none of my accounts has 12 to spend") Each pack costs 12 on
+        # ONE account: what counts is how many packs each account can pay (hourglasses // 12), not the total.
+        pagables = sum(int(v.get("hg", 0)) // 12 for v in filas)
+        con_sobre = sum(1 for v in filas if int(v.get("hg", 0)) >= 12)
         gastado = sum(max(0, int(v.get("before", 0)) - int(v.get("hg", 0))) for v in filas if int(v.get("before", -1)) >= 0)
         def hace(ts):
             m = max(0, int((time.time() - int(ts or 0)) // 60))
             return f"{m} min ago" if m < 60 else f"{m // 60} h ago" if m < 2880 else f"{m // 1440} d ago"
-        cab = (f"<div style='font-size:15px;margin-bottom:6px'><b>Total: {total:,} LARGE</b> on {len(filas)} account(s)"
-               f" &nbsp;·&nbsp; spent last time: {gastado:,} &nbsp;·&nbsp; packs they can still pay: {total // 12:,}</div>")
+        cab = (f"<div style='font-size:15px;margin-bottom:6px'><b>Packs they can pay: {pagables:,}</b>"
+               f" (on {con_sobre:,} account(s) with 12+ hourglasses) &nbsp;·&nbsp; accounts listed: {len(filas):,}"
+               f" &nbsp;·&nbsp; spent last time: {gastado:,}</div>")
         if not filas:
             return cab + "<p>No data yet: it fills in while the bot opens your accounts.</p>"
         tr = "".join(
-            f"<tr><td>{_html.escape(str(v.get('name', '?')))}</td><td align='right'><b>{int(v.get('hg', 0)):,}</b></td>"
+            f"<tr><td>{_html.escape(str(v.get('name', '?')))}</td><td align='right'><b>{int(v.get('hg', 0)) // 12}</b></td>"
+            f"<td align='right'>{int(v.get('hg', 0)):,}</td>"
             f"<td align='right'>{int(v.get('before', -1)) if int(v.get('before', -1)) >= 0 else '—'}</td>"
             f"<td align='right'>{int(v.get('packs', 0))}</td><td>{hace(v.get('ts'))}</td></tr>" for v in filas[:2000])
         return (cab + "<table cellspacing='0' cellpadding='4' width='100%'>"
-                "<tr><th align='left'>Account</th><th align='right'>Hourglasses</th><th align='right'>Before</th>"
-                "<th align='right'>Packs</th><th align='left'>Seen</th></tr>" + tr + "</table>")
+                "<tr><th align='left'>Account</th><th align='right'>Can pay</th><th align='right'>Hourglasses</th>"
+                "<th align='right'>Before</th><th align='right'>Opened</th><th align='left'>Seen</th></tr>" + tr + "</table>")
 
     def _start_claim_only(self):
         try:

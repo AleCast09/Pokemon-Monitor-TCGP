@@ -42,6 +42,7 @@ function iniciar(d) {
     agregarSobresExtra(deps.fastTransfer.rutaMotor());
     // (2026-11-23) Aparte: dentro de agregarSobresExtra no corria cuando no faltaba ningun sobre (salia antes).
     corregirProductos(deps.fastTransfer.rutaMotor());
+    ordenarCatalogo(deps.fastTransfer.rutaMotor());
     aplicarAjustesRecomendados(deps.fastTransfer.rutaMotor());
     borrarTemporalesViejas();
     setInterval(borrarTemporalesViejas, 60 * 60 * 1000);
@@ -619,6 +620,33 @@ const SOBRES_EXTRA = [
     // (Deluxe Pack: ex, AN011 / PC_PS_2509000, responde ABORTED: no se agrega.)
     '{"name": "Secluded Springs", "expansion_id": "a4a", "sku_id": "A4a_1", "pack_id": "AN010_0010_00_000", "product_id": "PC_PS_2508000_01_01_01", "hg_cost": 12},',
 ];
+// (Arcade 2026-11-25: "Lugia is at the end after Dual Fusion instead of after Ho-Oh") Los sobres agregados despues
+// quedaban al final de la lista del God Pack UI y de /farm. Cada uno va detras del que le corresponde.
+const ORDEN_CATALOGO = [
+    ['AN009_0020_00_000', 'AN009_0010_00_000'],   // Lugia despues de Ho-Oh
+    ['AN010_0010_00_000', 'AN009_0020_00_000'],   // Secluded Springs despues de Lugia
+];
+function ordenarCatalogo(motor) {
+    try {
+        const ruta = path.join(motor, 'scripts', 'flow', 'pack_catalog.py');
+        const texto = fs.readFileSync(ruta, 'utf8');
+        const nl = texto.includes('\r\n') ? '\r\n' : '\n';
+        const lineas = texto.split(/\r?\n/);
+        const fila = (id) => lineas.findIndex(l => l.includes(`"pack_id": "${id}"`));
+        let cambios = 0;
+        for (const [mover, detras] of ORDEN_CATALOGO) {
+            const i = fila(mover), j = fila(detras);
+            if (i < 0 || j < 0 || i === j + 1) continue;
+            const [l] = lineas.splice(i, 1);
+            lineas.splice(fila(detras) + 1, 0, l);
+            cambios++;
+        }
+        if (!cambios) return;
+        fs.copyFileSync(ruta, `${ruta}.bak-orden`);
+        fs.writeFileSync(ruta, lineas.join(nl));
+        log(`pack_catalog.py: ${cambios} pack(s) moved to their place in the list (Lugia after Ho-Oh, Secluded Springs)`);
+    } catch (e) { /* sin catalogo en este motor */ }
+}
 function agregarSobresExtra(motor) {
     try {
         const ruta = path.join(motor, 'scripts', 'flow', 'pack_catalog.py');
