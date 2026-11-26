@@ -24,6 +24,12 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-25 — Bot — Idea: Gold trade que mande la carta en dorado (pendiente, sin código)
+- En el protocolo el dorado es un **card skin**: `CardSkinStock` (card_id, card_skin_id, amount) en `player_resources.card_skin_stocks`; se consigue con `CardSkin/ExchangeV1` (catalog_id + copias). `TradeSubmitProposal` lleva `CardInstance.card_skin`, que el motor manda vacío (`engine/core/session.py` ~3162), por eso siempre sale la normal.
+- Falta: (1) leer los skins de una cuenta de Ale que tenga una carta dorada (solo lectura) para ver el formato del `card_skin_id`; (2) probar 1 trade con el skin puesto; (3) si anda, cambiar Gold Cards / ⚡ Gold trade (`fast-transfer.js`, `scripts/fast_transfer.py`). Ale está haciendo reroll: probar cuando él diga.
+- Un trade lleva 1 sola carta: el 1x1 no se puede juntar.
+- Otras ideas del protocolo (revisado a fondo, 212 llamadas): **batallas de evento** (`session.get_event_battles/start_event_battle/finish_event_battle`, el cliente manda el resultado; probar en 1 cuenta bot, NO en Mains), **Pack Points → carta exacta** (`PackShop/ExchangeV1`, sin usar), **tickets de tienda → relojes** (`session.exchange_item_shop`, el panel no lo usa). PvP no sirve (servidor de batalla en vivo). Ale dijo "puede ser": esperar a que termine el reroll.
+
 ### 2026-11-24 — cuenta 2 — Login diario en el motor (publicado)
 - **DAILY_LOGIN_V1** (reporte de Arcade: el regalo de 30 días no avanzaba con el motor): el motor saltaba `System/LoginV1`. Ahora `_daily_login()` en `motor-panel/inject.py` lo manda al entrar a cada cuenta, con los datos de la propia cuenta (`PlayerSettings/GetInfoV1`: país, fecha de nacimiento, age gate; con otros valores el juego da INTERNAL). Probado en Ale_Cast_177_3 y _13: después del login se desbloquean el día 30 del regalo y días nuevos de eventos de login.
 - Ojo: `_get_player_settings_info()` de `engine/core/session.py` devuelve None (no usarlo); llamar GetInfoV1 directo.

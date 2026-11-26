@@ -647,6 +647,25 @@ const DUST_DELAY_S = 1.5;           // pausa entre logins (salen todos de la IP 
 const DUST_SEG_POR_CUENTA = 4;      // estimado para el ETA: login + consulta + pausa
 const DUST_SALTAR_SI_MENOS_DE_MS = 24 * 60 * 60 * 1000; // "Refresh all" salta las refrescadas hace <24 h
 
+const DUST_PAGINAS_DIA = 1;         // (Ale 2026-11-25) paginas de 25 por miembro por dia (UTC); Refresh one es libre
+
+function esAdminDust(interaction) {
+    if (!interaction?.guild) return false;
+    if (interaction.user?.id && interaction.user.id === interaction.guild.ownerId) return true;
+    return !!(interaction.memberPermissions?.has('ManageGuild') || interaction.memberPermissions?.has('Administrator'));
+}
+
+const diaUtc = () => new Date().toISOString().slice(0, 10);
+async function usosDustHoy(userId) {
+    await deps.db.run(`CREATE TABLE IF NOT EXISTS shinedust_uso (discord_id TEXT, dia TEXT, n INTEGER, PRIMARY KEY (discord_id, dia))`);
+    const f = await deps.db.get(`SELECT n FROM shinedust_uso WHERE discord_id = ? AND dia = ?`, [String(userId), diaUtc()]);
+    return f?.n || 0;
+}
+async function sumarUsoDust(userId) {
+    await deps.db.run(`INSERT INTO shinedust_uso (discord_id, dia, n) VALUES (?, ?, 1) ON CONFLICT(discord_id, dia) DO UPDATE SET n = n + 1`,
+        [String(userId), diaUtc()]);
+}
+
 async function asegurarTablaDust() {
     await deps.db.run(`CREATE TABLE IF NOT EXISTS shinedust_fast (
         archivo_json TEXT PRIMARY KEY,
@@ -791,10 +810,10 @@ async function mezclarShinedust(resultados, rutaJson) {
 
 function filaBotonesDust(guildId, pagina) {
     if (!habilitado(guildId)) return null;
+    // (Ale 2026-11-25) Sin "Refresh all": trababa la fila de ⚡ por horas. Pagina = 1 por dia (miembros).
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`fast_dust_one::${pagina}`).setLabel('⚡ Refresh one').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`fast_dust_page::${pagina}`).setLabel('⚡ Refresh this page').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('fast_dust_all').setLabel('⚡ Refresh all').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`fast_dust_page::${pagina}`).setLabel('⚡ Refresh this page (1/day)').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(`fast_dust_claim::${pagina}`).setLabel('🎁 Claim this page').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('fast_bulk').setLabel('📦 Bulk trade').setStyle(ButtonStyle.Primary)
     );
@@ -963,6 +982,25 @@ async function manejarDust(interaction, idForzado = null) {
     const rutaJson = (await deps.db.get(`SELECT webhook_url FROM configs_canales WHERE tipo = 'ruta_json_cuentas'`))?.webhook_url;
     rutaJsonActual = rutaJson;
     const miembro = deps.usuarioComunidad?.() || null;
+
+    // (Ale 2026-11-25) Un "Refresh all" de 2000 cuentas trabo la fila de ⚡ por horas (Fast Share de Nico en
+    // "position #5"). Ahora: "Refresh all" ya no existe en Discord (para nadie); "Refresh one" libre;
+    // "Refresh this page" / "Claim this page" (25 cuentas) = DUST_PAGINAS_DIA por dia para los miembros
+    // de la comunidad (los admins del servidor, sin limite).
+    if (/^fast_dust_all(_go)?$/.test(id)) {
+        const aviso = '🔒 **Refresh all** is turned off. Use **⚡ Refresh one**, or **⚡ Refresh this page** (25 accounts).';
+        if (id === 'fast_dust_all_go') await interaction.update({ content: aviso, components: [] }).catch(() => {});
+        else await interaction.reply({ content: aviso, ephemeral: true }).catch(() => {});
+        return true;
+    }
+    const sinLimite = !miembro || esAdminDust(interaction);
+    if (!sinLimite && /^fast_dust_(page|claim)::/.test(id)) {
+        if ((await usosDustHoy(interaction.user.id)) >= DUST_PAGINAS_DIA) {
+            await interaction.reply({ content: `🔒 You already refreshed **${DUST_PAGINAS_DIA}** page today. Try again tomorrow (resets at 00:00 UTC) — **⚡ Refresh one** still works.`, ephemeral: true }).catch(() => {});
+            return true;
+        }
+        await sumarUsoDust(interaction.user.id);
+    }
 
     // Una cuenta: menu con las de la pagina actual del reporte.
     if (interaction.isButton() && id.startsWith('fast_dust_one::')) {
