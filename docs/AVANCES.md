@@ -24,6 +24,16 @@ Los chats de la app también están copiados a la cuenta nueva (`C:\Users\Ale TC
 
 ## Registro (lo más nuevo arriba)
 
+### 2026-11-26 — Bot — Cambios del día (publicados juntos, Ale: "sube que arreglamos")
+- **📚all_god_packs repetía** (KyuremBot + nuestro respaldo publicaron el mismo GP cuando KyuremBot se cortó >5 min; KyuremBot no lee `zenith:allgp_ts`). Ale eligió apagar el nuestro: `zenith:allgp_off = 1` en Upstash (activo ya, sin reiniciar). Para volver a prenderlo: `DEL zenith:allgp_off`.
+- **God Pack UI**: los `unpickable` (Crown/Shiny/Immersive) ahora salen ❌ NOT USABLE (`GP_MODOS_MALOS` en `motor-panel/god_pack_gui.py`); copiado al motor de Ale, **falta publicar** (va con el próximo update).
+- **/missions** responde público como All Cards (`manejarAllMissions` en bot.js); **falta reiniciar** el bot de Ale.
+- **#godpack_gallery** (KyuremBot) repetía la foto de iChstr-302 en otros GP: es de KyuremBot, no nuestro.
+- **Farm 96P compacto**: el resultado ya no lista 25 líneas "stopped at"; agrupa `95/96`·`94/96`·`≤93` y botón **🔎 See accounts** (privado, solo el dueño; lista en memoria `listasFill96`, se pierde al reiniciar). `embedFinFill96`, `gruposNoLlegaron`, `botonesFinFill96`, `verCuentasFill96` en bot.js.
+- Pendientes de decisión: listas VIP exclusive (4/5–5/5) de wr98 en Sync reroll (A/B/C + por rol); PPM subir a 20 a la vez.
+- Ale hará los tutoriales en Canva; le preparo los pasos en inglés de cada comando.
+- **⚡ Fast Farm (tickets) con ayuda** como la de ⚡ Trade: si el Monitor Link de quien pide está apagado, sale "🔴 PC offline" + **🙋 Ask for help** (sin historial en el canal); menciona a los en línea con cuentas que nunca likearon ese perfil → **🤝 Lend my accounts** → quien pidió aprieta **⚡ Use their accounts** y corre el Fast Farm "como" quien presta. Código: `fast_helpfarm`, `ayudaFarm`, `cuentasLibresFarm` en fast-transfer.js + `precargarMiembro` en deps de bot.js. Sin probar en vivo.
+
 ### 2026-11-25 — Bot — Idea: Gold trade que mande la carta en dorado (pendiente, sin código)
 - En el protocolo el dorado es un **card skin**: `CardSkinStock` (card_id, card_skin_id, amount) en `player_resources.card_skin_stocks`; se consigue con `CardSkin/ExchangeV1` (catalog_id + copias). `TradeSubmitProposal` lleva `CardInstance.card_skin`, que el motor manda vacío (`engine/core/session.py` ~3162), por eso siempre sale la normal.
 - Falta: (1) leer los skins de una cuenta de Ale que tenga una carta dorada (solo lectura) para ver el formato del `card_skin_id`; (2) probar 1 trade con el skin puesto; (3) si anda, cambiar Gold Cards / ⚡ Gold trade (`fast-transfer.js`, `scripts/fast_transfer.py`). Ale está haciendo reroll: probar cuando él diga.

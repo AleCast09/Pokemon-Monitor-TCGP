@@ -214,6 +214,22 @@ def usar_idioma_de_la_cuenta(at, sess):
         at.LANG_ENUM = dict(at.LANG_ENUM, EN=lang_juego)  # run_share_flow pide "EN" fijo
         print(f"  [Lang] account language {lang_juego} (not EN)", flush=True)
 
+    # (Ale 2026-11-25, Charizard de Nico: Share ABORTED) El Share tambien tiene que ir en el idioma de la
+    # COPIA, no solo en el del juego (mismo caso que el trade del 2026-11-10).
+    share_orig = at.share_card
+
+    def share_con_idioma(sess_, receiver_player_id, card_id, lang_code="EN", log_fn=print):
+        lang = idioma(card_id)
+        print(f"  [Lang] sharing {card_id} in language {lang}", flush=True)
+        antes = at.LANG_ENUM
+        at.LANG_ENUM = dict(antes, EN=lang)
+        try:
+            return share_orig(sess_, receiver_player_id=receiver_player_id, card_id=card_id, lang_code="EN", log_fn=log_fn)
+        finally:
+            at.LANG_ENUM = antes
+
+    at.share_card = share_con_idioma
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -389,6 +405,10 @@ def main():
                     err = str(r.get("error") or "")
                     if err.startswith("quota/limit") or "already" in err.lower():
                         emitir("share", "error", "Your Main already received a share today (1 per day)")
+                    elif "ABORTED" in err:
+                        # (Ale 2026-11-25, Nico) El juego responde ABORTED sin detalle cuando la Main ya
+                        # recibio un Share hoy (Pikachu ex 15:58 UTC, despues 3 Charizard ABORTED).
+                        emitir("share", "error", "Your Main already received a Share today (1 per day) — try again after the daily reset")
                     elif err.startswith("feature locked"):
                         emitir("share", "error", "Share is locked on this account (it may be too new)")
                     else:

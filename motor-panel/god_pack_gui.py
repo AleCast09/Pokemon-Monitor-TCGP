@@ -2899,6 +2899,8 @@ class GodPackGui(QMainWindow):
     GP_HITS_FILE = ROOT / "reports" / "gp_hits.jsonl"
 
     GP_HITS_ALL_FILE = ROOT / "reports" / "gp_hits_all.json"
+    # (Ale 2026-11-26) "unpickable" = God Pack with a Crown/Shiny/Immersive card: never posted, Mains unfriended.
+    GP_MODOS_MALOS = ("packs-only", "unpickable")
 
     def _all_gp_hits(self) -> list[dict]:
         """God Packs of every host (reports/gp_hits_all.json, written by Monitor Pokemon from Upstash) plus
@@ -3011,7 +3013,7 @@ class GodPackGui(QMainWindow):
         vbox.addLayout(barra)
 
         nota = QLabel("✅ = GP farm (God Pack mode, Mains were added)   ·   "
-                      "❌ = Open Packs Only (no Mains added, can't be used)")
+                      "❌ = Open Packs Only (no Mains added) or Crown/Shiny/Immersive card (can't be Wonder Picked)")
         nota.setStyleSheet(f"color: {D['TEXT2']}; font-size: 11px;")
         vbox.addWidget(nota)
 
@@ -3040,11 +3042,11 @@ class GodPackGui(QMainWindow):
                 es_mio = h.get("host") in ("this PC", mi_host) or bool(h.get("image") and Path(str(h["image"])).is_file())
                 if hosts == "mine" and not es_mio:
                     continue
-                malo = h.get("mode") == "packs-only"
+                malo = h.get("mode") in self.GP_MODOS_MALOS
                 if (kind == "ok" and malo) or (kind == "bad" and not malo):
                     continue
                 hits.append(h)
-            ok = sum(1 for h in hits if h.get("mode") != "packs-only")
+            ok = sum(1 for h in hits if h.get("mode") not in self.GP_MODOS_MALOS)
             head.setText(f"🌟 {len(hits)} God Pack(s)  ·  ✅ {ok}  ·  ❌ {len(hits) - ok}")
 
             inner = QWidget()
@@ -3064,13 +3066,15 @@ class GodPackGui(QMainWindow):
             agregar()
 
         def tarjeta(h: dict, foto: str = None) -> QFrame:
-            malo = h.get("mode") == "packs-only"
+            malo = h.get("mode") in self.GP_MODOS_MALOS
             card = QFrame(objectName="statCard")
             card.setStyleSheet(f"QFrame#statCard {{ border: 1px solid {D['RED'] if malo else D['GREEN']}; }}")
             cv = QVBoxLayout(card)
             cv.setContentsMargins(12, 10, 12, 10)
             hora = time.strftime("%d/%m/%y %H:%M", time.localtime(int(h.get("ts", 0) or 0) / 1000))
-            estado = (f"<b style='color:{D['RED']}'>❌ NOT USABLE — Open Packs Only (no Mains added)</b>" if malo
+            estado = (f"<b style='color:{D['RED']}'>❌ NOT USABLE — Crown/Shiny/Immersive card (can't be Wonder Picked)</b>"
+                      if h.get("mode") == "unpickable" else
+                      f"<b style='color:{D['RED']}'>❌ NOT USABLE — Open Packs Only (no Mains added)</b>" if malo
                       else f"<b style='color:{D['GREEN']}'>✅ USABLE — GP farm (Mains added)</b>")
             vivo = {"alive": f"  <b style='color:{D['GREEN']}'>🟢 verified alive</b>",
                     "dead": f"  <b style='color:{D['RED']}'>💀 dead</b>"}.get(str(h.get("status") or ""), "")

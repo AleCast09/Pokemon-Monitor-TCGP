@@ -567,6 +567,12 @@ async function ejecutarFarm(interaction, friendId) {
             const args = ['--engine-dir', rutaMotor(), '--target', friendId, '--stop-file', stopFile];
             const xmls = await prepararXmls(miembro, cuentas, `${runId}_${ronda}`);
             limpiezas.push(xmls.limpiar);
+            // (Ale 2026-11-26) Como la ayuda de ⚡ Trade: su PC esta apagada -> boton para pedir ayuda a los que
+            // tienen Monitor Link en linea; uno presta sus cuentas y dan los likes a este perfil.
+            if (xmls.offline && miembro === interaction.user.id && ronda === 1) {
+                estadoFinal = 'offline';
+                return;
+            }
             if (xmls.error) { lineas.push(`${icono('error', mapa)} ${xmls.error}`); break; }
             for (const c of cuentas) {
                 const ruta = rutaXmlDe(xmls.mapa, c);
@@ -609,6 +615,19 @@ async function ejecutarFarm(interaction, friendId) {
         console.error('DEBUG: Fast Farm error:', e);
         estadoFinal = 'error';
     }).then(async () => {
+        if (estadoFinal === 'offline') {
+            // Sin historial en el canal (no es un resultado): solo el aviso con el boton de ayuda.
+            const ayuda = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`fast_helpfarm::${friendId}`).setLabel('🙋 Ask for help').setStyle(ButtonStyle.Primary));
+            try {
+                await interaction.editReply({ components: [ayuda], embeds: [new EmbedBuilder().setColor(0xE74C3C)
+                    .setTitle(`🔴 PC offline — ${alias}`)
+                    .setDescription('Your **Monitor Link** is not running, so your accounts can\'t send likes right now.\n\n' +
+                        'Press **🙋 Ask for help**: the members with Monitor Link **online** get a mention, and one of them can ' +
+                        `lend their accounts to farm ${ticket} tickets for this profile.`)] });
+            } catch (e) { /* token vencido */ }
+            return;
+        }
         if (estadoFinal === null) estadoFinal = 'done';
         const hoy = await deps.ticketsFarmeadosHoy(friendId).catch(() => null);
         const pie = [
@@ -1589,7 +1608,7 @@ async function manejarInteraccion(interaction) {
         });
         return true;
     }
-    if (/^fast_(help|lend|use|usecta)::/.test(id)) return await manejarAyuda(interaction);
+    if (/^fast_(help|helpfarm|lend|use|usecta)::/.test(id)) return await manejarAyuda(interaction);
     if (!id.startsWith('fast_go::')) return false;
     if (!habilitado(interaction.guildId)) {
         await interaction.reply({ content: '❌ Fast Share/Trade is not available here.', ephemeral: true });
@@ -1658,12 +1677,44 @@ async function manejarAyuda(interaction) {
         return true;
     }
 
+    // (Ale 2026-11-26) Lo mismo para ⚡ Fast Farm (tickets): sirve cualquier miembro en linea con cuentas que
+    // todavia no le dieron like a ese perfil.
+    if (id.startsWith('fast_helpfarm::')) {
+        const friendId = id.split('::')[1];
+        await interaction.deferUpdate().catch(() => {});
+        const alias = (await Promise.resolve(deps.nombreAmigo?.(interaction.guildId, friendId, interaction.user?.id)).catch(() => null)) || deps.formatearFriendId(friendId);
+        const enLinea = (await deps.vinculados().catch(() => [])).filter(v => v.enLinea && String(v.discordId) !== interaction.user.id);
+        const conCuentas = [];
+        for (const v of enLinea) if ((await cuentasLibresFarm(v.discordId, friendId)) > 0) conCuentas.push(String(v.discordId));
+        if (!conCuentas.length) {
+            await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xE67E22).setTitle('🙋 Nobody can help right now')
+                .setDescription('No member with Monitor Link **online** has accounts that can still like this profile. Try again later.')], components: [] }).catch(() => {});
+            return true;
+        }
+        const pid = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        pedidosAyuda.set(pid, { tipo: 'farm', pide: interaction.user.id, friendId, alias, guildId: interaction.guildId, ayuda: null, ts: Date.now(), candidatos: conCuentas });
+        const msg = await interaction.followUp({
+            content: `🙋 <@${interaction.user.id}>'s PC is offline — can someone lend accounts to farm 🎟️ shop tickets for **${alias}**? ${conCuentas.slice(0, 15).map(d => `<@${d}>`).join(' ')}`,
+            components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`fast_lend::${pid}`).setLabel('🤝 Lend my accounts').setStyle(ButtonStyle.Success))],
+            allowedMentions: { users: conCuentas.slice(0, 15) }
+        }).catch(e => { console.error('DEBUG: farm help request:', e?.message || e); return null; });
+        if (msg) {
+            pedidosAyuda.get(pid).msg = msg;
+            setTimeout(() => { const p = pedidosAyuda.get(pid); if (p && !p.ayuda) { pedidosAyuda.delete(pid); msg.delete().catch(() => {}); } }, PEDIDO_MS);
+        }
+        await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x2ECC71).setTitle('🙋 Help requested')
+            .setDescription(`${conCuentas.length} member(s) online got a mention. You'll see a button when someone lends you their accounts.`)], components: [] }).catch(() => {});
+        return true;
+    }
+
     const pid = id.split('::')[1];
     const p = pedidosAyuda.get(pid);
     if (!p) {
         await interaction.reply({ content: '⌛ This help request expired.', ephemeral: true }).catch(() => {});
         return true;
     }
+    if (p.tipo === 'farm') return await ayudaFarm(interaction, id, pid, p);
     const carta = await nombre(p.cartaId);
 
     if (id.startsWith('fast_lend::')) {
@@ -1705,6 +1756,47 @@ async function manejarAyuda(interaction) {
         p.msg?.edit({ content: `✅ <@${p.ayuda}> helped <@${p.pide}> with **${carta}**.`, components: [], allowedMentions: { parse: [] } }).catch(() => {});
         // El ⚡ corre "como" quien presta: su Monitor Link da la XML y el ajuste de copias queda en sus cuentas.
         deps.comoMiembro(interaction.guildId, p.ayuda, () => ejecutar(interaction, { cartaId: p.cartaId, friendId: p.friendId, fileName, modo: p.modo }));
+        return true;
+    }
+    return false;
+}
+
+// Cuentas de un miembro que todavia pueden dar like a ese perfil (nunca le dieron like).
+async function cuentasLibresFarm(discordId, friendId) {
+    if (!(await Promise.resolve(deps.precargarMiembro?.(String(discordId))).catch(() => false))) return 0;
+    const usadas = new Set([...(await deps.cuentasYaUsadasParaId(friendId).catch(() => null) || [])].map(x => String(x).toLowerCase()));
+    return (deps.cuentasMiembro(String(discordId)) || []).filter(c => c.fileNameXml && !usadas.has(String(c.fileNameXml).toLowerCase())).length;
+}
+
+// 🤝 / ⚡ de un pedido de ayuda de Fast Farm: quien presta solo pone sus cuentas; quien pidio aprieta
+// "Use their accounts" y corre el ⚡ Fast Farm de siempre "como" quien presta (su Monitor Link da las XML).
+async function ayudaFarm(interaction, id, pid, p) {
+    if (id.startsWith('fast_lend::')) {
+        if (interaction.user.id === p.pide) return !!(await interaction.reply({ content: '🙂 This is your own request.', ephemeral: true }).catch(() => {}));
+        if (p.ayuda) return !!(await interaction.reply({ content: `✅ <@${p.ayuda}> is already helping.`, ephemeral: true }).catch(() => {}));
+        const enLinea = (await deps.vinculados().catch(() => [])).some(v => String(v.discordId) === interaction.user.id && v.enLinea);
+        const libres = enLinea ? await cuentasLibresFarm(interaction.user.id, p.friendId) : 0;
+        if (!libres) {
+            return !!(await interaction.reply({ ephemeral: true, content: enLinea
+                ? '❌ All your accounts already liked this profile.' : '❌ Your Monitor Link has to be **online** to lend accounts.' }).catch(() => {}));
+        }
+        p.ayuda = interaction.user.id;
+        await interaction.update({
+            content: `🤝 <@${p.ayuda}> lent their accounts to <@${p.pide}> to farm 🎟️ tickets for **${p.alias}**.`,
+            components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`fast_use::${pid}`).setLabel('⚡ Use their accounts').setStyle(ButtonStyle.Primary))],
+            allowedMentions: { users: [p.pide] }
+        }).catch(() => {});
+        await interaction.followUp({ content: `Thanks! <@${p.pide}> can now farm tickets with your accounts (only ones that never liked that profile).`, ephemeral: true }).catch(() => {});
+        return true;
+    }
+    if (id.startsWith('fast_use::')) {
+        if (interaction.user.id !== p.pide) return !!(await interaction.reply({ content: `🔒 Only <@${p.pide}> can use this.`, ephemeral: true }).catch(() => {}));
+        if (!habilitado(interaction.guildId)) return !!(await interaction.reply({ content: '❌ Fast Farm is not available here.', ephemeral: true }).catch(() => {}));
+        pedidosAyuda.delete(pid);
+        await interaction.update({ content: `✅ <@${p.ayuda}> is helping <@${p.pide}> with **${p.alias}**.`, components: [], allowedMentions: { parse: [] } }).catch(() => {});
+        // El progreso queda en este mismo mensaje (a la vista) y el resultado va al historial del canal.
+        deps.comoMiembro(interaction.guildId, p.ayuda, () => ejecutarFarm(interaction, p.friendId));
         return true;
     }
     return false;

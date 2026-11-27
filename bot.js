@@ -98,6 +98,7 @@ fastTransfer.init({
             .sort((a, b) => b.cantidad - a.cantidad);
     },
     cuentasMiembro: (discordId) => monitorLink.cuentasDe(discordId),
+    precargarMiembro: (discordId) => monitorLink.precargar(discordId),
     auditarStockCarta, construirEmbedDetalleCarta, obtenerCanalComando,
     // ⚡ Fast Farm: mismas reglas y tablas que el Farm Tickets con MuMu.
     formatearFriendId, ticketsFarmeadosHoy, cuentasPoolFarmTickets, cuentasYaUsadasParaId,
@@ -2585,7 +2586,9 @@ async function pantallaGruposMisiones(letra = null) {
 async function manejarAllMissions(interaction) {
     const id = interaction.customId;
     if (id === 'missions_ver') {
-        await interaction.deferReply({ ephemeral: true });
+        // (Ale 2026-11-26) Publico como All Cards: queda en el canal (se ve en el celular y se ve que se usa).
+        // Los botones de ese mensaje solo los usa quien lo abrio (regla de comunidad en el manejador general).
+        await interaction.deferReply();
         return await interaction.editReply(await pantallaGruposMisiones());
     }
     await interaction.deferUpdate().catch(() => {});
@@ -18036,17 +18039,58 @@ function embedFinFill96(pub, E = (n, r) => r) {
         .setDescription([
             `${PK} Packs opened: **${nf(pub.sobres)}** on ${nf(pub.hechas)} account(s) · ${min} min`,
             [].concat(pub.packId || []).length ? `${PK} ${[].concat(pub.packId).length > 1 ? 'Packs' : 'Pack'}: **${[].concat(pub.packId).map(p => (fill96Mod().fill96Sobres().sobres.find(x => x.pack_id === p)?.name) || (fill96Mod().fill96Sobres().especial?.pack_id === p ? fill96Mod().fill96Sobres().especial.name : p)).join(', ')}**` : '',
-            pub.tipo === 'open96' ? `${OK} Reached 96: **${nf(pub.llegaron)}** — they turn GP-eligible by themselves` : '',
-            pub.tipo === 'open96' && no.length ? `${NO} Not enough hourglasses: **${nf(no.length)}** account(s)` : '',
+            pub.tipo === 'open96' ? `${OK} **${nf(pub.llegaron)}** reached 96 → GP-eligible now` : '',
+            // (Ale 2026-11-26) Compacto: antes salian hasta 25 lineas "stopped at"; ahora agrupado y la lista con el boton.
+            pub.tipo === 'open96' && no.length ? `${HG} **${nf(no.length)}** out of hourglasses:` : '',
+            pub.tipo === 'open96' && no.length ? `\u2003${gruposNoLlegaron(no).map(([g, n]) => `\`${g}\` **${nf(n)}**`).join('  ·  ')}` : '',
             pub.error && FILL96_ERRORES[pub.error] ? `⚠️ ${FILL96_ERRORES[pub.error]}` : '',
-            `${BALL} Your Monitor Link updates each account file with the new packs.`
+            `${BALL} Your Monitor Link updates each account file with the new packs.`,
+            no.length ? '-# Only the owner sees the full list (🔎 See accounts).' : ''
         ].filter(Boolean).join('\n'));
-    if (no.length) {
-        const lineas = [...no].sort((x, y) => y[1] - x[1]).slice(0, 25).map(([n, p]) => `${NO} \`${n}\` · ${HG} stopped at **${p}/96**`);
-        if (no.length > 25) lineas.push(`… and ${nf(no.length - 25)} more`);
-        e.addFields({ name: 'Did not reach 96', value: lineas.join('\n').slice(0, 1024) });
-    }
     return e;
+}
+// 95/96, 94/96 y el resto (≤93), solo los grupos que tengan cuentas.
+function gruposNoLlegaron(no) {
+    const g = [['95/96', 0], ['94/96', 0], ['≤93', 0]];
+    for (const [, p] of no) g[p >= 95 ? 0 : p === 94 ? 1 : 2][1]++;
+    return g.filter(([, n]) => n);
+}
+// Lista completa de las que no llegaron, para el boton "🔎 See accounts" (en memoria; se pierde al reiniciar).
+const listasFill96 = new Map();   // clave -> { userId, no, ts }
+function botonesFinFill96(userId, pub) {
+    const no = pub.noLlegaron || [];
+    if (!no.length) return [];
+    const clave = Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    listasFill96.set(clave, { userId, no: [...no], ts: Date.now() });
+    for (const [k, v] of listasFill96) if (Date.now() - v.ts > 7 * 24 * 3600 * 1000) listasFill96.delete(k);
+    return [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`fill96_ver::${userId}::${clave}`)
+        .setLabel('See accounts').setEmoji('🔎').setStyle(ButtonStyle.Secondary))];
+}
+async function verCuentasFill96(interaction) {
+    const [, duenoId, clave] = interaction.customId.split('::');
+    if (interaction.user.id !== duenoId) return await interaction.reply({ ephemeral: true, content: `🔒 Only <@${duenoId}> can see this list.` }).catch(() => {});
+    const d = listasFill96.get(clave);
+    if (!d) return await interaction.reply({ ephemeral: true, content: 'This list expired (the bot was restarted or the turn moved to another host).' }).catch(() => {});
+    const E = await emojisFill96(interaction.guild);
+    const HG = E('Reloj_de_arena_de_sobres_TCGP', '⌛');
+    const lineas = [...d.no].sort((x, y) => y[1] - x[1]).map(([n, p]) => `\`${n}\` · ${HG} **${p}/96**`);
+    // Hasta ~5,500 caracteres en total (limite de Discord: 6,000 por mensaje, 4,096 por embed).
+    const partes = [[]];
+    let total = 0, mostradas = 0;
+    for (const l of lineas) {
+        if (total + l.length + 1 > 5500) break;
+        if (partes[partes.length - 1].join('\n').length + l.length + 1 > 3900) partes.push([]);
+        partes[partes.length - 1].push(l);
+        total += l.length + 1;
+        mostradas++;
+    }
+    const embeds = partes.filter(p => p.length).map((p, i) => {
+        const e = new EmbedBuilder().setColor(0xEF9F27).setDescription(p.join('\n'));
+        if (!i) e.setTitle(`🔎 Did not reach 96 (${nf(d.no.length)})`);
+        return e;
+    });
+    if (mostradas < lineas.length) embeds[embeds.length - 1].setFooter({ text: `Showing ${mostradas} of ${lineas.length} (highest first)` });
+    return await interaction.reply({ ephemeral: true, embeds }).catch(e => console.error('fill96 see accounts:', e?.message || e));
 }
 // ---- Tarjeta fija del canal 📦-farm-96p (Ale 2026-11-19) -------------------------------------------------
 // Siempre es el ULTIMO mensaje del canal (lo primero que se ve al entrar): si llega otro mensaje, se borra y se
@@ -18139,14 +18183,14 @@ function reanudarFarms(guild) {
         actualizarTableroFarm(guild).catch(() => {});
         const fin = embedFinFill96(pub, await emojisFill96(guild));
         const canal = await canalFarm96(guild.id);
-        const ok = await canal?.send({ content: `<@${id}> your /farm was resumed after a bot restart:`, embeds: [fin], allowedMentions: { users: [id] } }).catch(() => null);
+        const ok = await canal?.send({ content: `<@${id}> your /farm was resumed after a bot restart:`, embeds: [fin], components: botonesFinFill96(id, pub), allowedMentions: { users: [id] } }).catch(() => null);
         if (!ok) await (await client.users.fetch(id).catch(() => null))?.send({ embeds: [fin] }).catch(() => {});
     }, async (id, pub) => {
         // (ZERO 2026-11-23) No se retoma (corte largo o Monitor Link apagado): igual recibe lo que se hizo.
         const fin = embedFinFill96(pub, await emojisFill96(guild));
         const por = pub.cortado === 'monitor_link' ? 'your Monitor Link was off when the bot came back' : 'the bot was restarted';
         const canal = await canalFarm96(guild.id);
-        const ok = await canal?.send({ content: `<@${id}> your /farm stopped (${por}). This is what was done — use **/farm** again to continue:`, embeds: [fin], allowedMentions: { users: [id] } }).catch(() => null);
+        const ok = await canal?.send({ content: `<@${id}> your /farm stopped (${por}). This is what was done — use **/farm** again to continue:`, embeds: [fin], components: botonesFinFill96(id, pub), allowedMentions: { users: [id] } }).catch(() => null);
         if (!ok) await (await client.users.fetch(id).catch(() => null))?.send({ embeds: [fin] }).catch(() => {});
     });
 }
@@ -18177,6 +18221,8 @@ async function manejarFill96(interaction) {
         }
     }
     const id = interaction.isChatInputCommand() ? '' : interaction.customId;
+    // (Ale 2026-11-26) "🔎 See accounts" del resultado: respuesta privada propia (sin deferUpdate).
+    if (id.startsWith('fill96_ver::')) return await verCuentasFill96(interaction);
     if (!id) await interaction.deferReply({ ephemeral: true }).catch(() => {});
     else await interaction.deferUpdate().catch(() => {});
     if (id === 'fill96_stop') {
@@ -18215,7 +18261,7 @@ async function manejarFill96(interaction) {
             }
             await interaction.editReply({ embeds: [fin], components: [] }).catch(() => {});
             const canal = await canalFarm96(interaction.guildId) || interaction.channel;
-            const publicado = await canal?.send({ content: `<@${userId}>`, embeds: [fin], allowedMentions: { users: [userId] } }).catch(() => null);
+            const publicado = await canal?.send({ content: `<@${userId}>`, embeds: [fin], components: botonesFinFill96(userId, pub), allowedMentions: { users: [userId] } }).catch(() => null);
             if (!publicado) await interaction.user.send({ embeds: [fin] }).catch(() => {});
         }, packId);
     }
