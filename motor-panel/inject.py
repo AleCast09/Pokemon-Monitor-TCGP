@@ -3279,6 +3279,7 @@ def inject_one(
     solo_battles: bool = False,          # SOLO_BATTLES_V1 (Ale/Arcade 2026-11-24): solo battles for hourglasses, no packs
     scan_only: bool = False,             # FILL96_V1 (Ale 2026-11-16): log in, note hourglasses + free power, no packs
     pack_target: Optional[int] = None,   # FILL96_V1: open at most this many packs (packs still missing to 96)
+    near96: bool = False,                # NEAR96_NO_MAINS_V1: Open Packs Only account promoted to God Pack mode
 ) -> dict:
     """
     Run the full injection flow for one account.
@@ -3473,7 +3474,15 @@ def inject_one(
         needs_target_pids = (run_mode == "godpack")
         if needs_target_pids:
             live_codes = fetch_live_worker_codes(friend_codes)
+            # NEAR96_NO_MAINS_V1 (Arcade 2026-11-28): in Open Packs Only a near-96 account waited forever when no
+            # Main was online (3:35 AM) and blocked the farm. It now waits at most 1 min, then is left for later
+            # (packs not opened, so the God Pack chance is not wasted).
+            _wait_until = time.time() + 60.0
             while not live_codes and not _stop_event.is_set():
+                if near96 and time.time() >= _wait_until:
+                    log("[near96] no Mains online after 1 min - account skipped, left for later", tag=tag)
+                    result["error"] = "near96_no_mains_online"
+                    return result
                 log("[!] 0 usuarios online en el Worker; esperando 10s...", tag=tag)
                 time.sleep(10.0)
                 live_codes = fetch_live_worker_codes(friend_codes, ttl_sec=0)
@@ -5026,6 +5035,7 @@ def run_injection(args) -> int:
             dry_run=args.dry_run,
             verify_power=getattr(args, "verify_power", False),
             run_mode=_modo,
+            near96=(_modo == "godpack" and getattr(args, "mode", "godpack") == "packs-only"),
             farming_mode=getattr(args, "farming_mode", "only_gp"),
             pack_power_min=getattr(args, "pack_power_min", "1/5"),
             pack_delay=getattr(args, "pack_delay", 2.0),
