@@ -57,6 +57,25 @@ const FUENTES_EMOJIS = {
     bad: 'element/bad.png'
 };
 
+// (Ale 2026-11-15: "añádelo, nos sirve") Iconos del juego de WikiDex. Se suben SOLO como emojis de la
+// APLICACION (limite 2000), nunca a un server: asi no se llenan los 50 lugares de emoji de nadie.
+const EMOJIS_EXTRA_APP = {
+    Cupon_de_baraja_evento_TCGP: 'element/Cupon_de_baraja_evento_TCGP.png',
+    Cupon_carta_promocion_TCGP: 'element/Cupon_carta_promocion_TCGP.png',
+    Cupon_de_evento_1_TCGP: 'element/Cupon_de_evento_1_TCGP.png',
+    Cupon_de_evento_2_TCGP: 'element/Cupon_de_evento_2_TCGP.png',
+    Cupon_de_evento_3_TCGP: 'element/Cupon_de_evento_3_TCGP.png',
+    Cupon_de_evento_4_TCGP: 'element/Cupon_de_evento_4_TCGP.png',
+    Cupon_de_evento_5_TCGP: 'element/Cupon_de_evento_5_TCGP.png',
+    Cupon_futuro_TCGP: 'element/Cupon_futuro_TCGP.png',
+    Energia_evento_individual_TCGP: 'element/Energia_evento_individual_TCGP.png',
+    Energia_evento_versus_TCGP: 'element/Energia_evento_versus_TCGP.png',
+    Energia_de_intercambio_TCGP: 'element/Energia_de_intercambio_TCGP.png',
+    Energia_magica_TCGP: 'element/Energia_magica_TCGP.png',
+    Rareza_arcoiris_TCGP: 'element/Rareza_arcoiris_TCGP.png',
+    Reloj_de_arena_de_eventos_TCGP: 'element/Reloj_de_arena_de_eventos_TCGP.png'
+};
+
 // El link de invitación de OAuth2 no es secreto, y cada usuario final corre su
 // propia aplicación de bot con IDs de emoji distintos a los del dueño — por
 // eso no se puede hardcodear un ID de emoji, hay que subirlos por servidor.
@@ -276,8 +295,63 @@ async function construirMapaEmojisGuild(guild) {
 // type_emojis.json / card_emojis.json — así el código que arma el tag
 // `<:nombre:id>` a mano no necesita cambiar. Sube lo que falte la primera vez
 // y cachea en memoria el resto de la sesión.
+// Emojis de la APLICACION (2026-10-24, host de la comunidad / Zenith Bot): se suben al bot mismo, no
+// a un server, y se pueden usar en cualquier server sin estar en el server de origen ni tocar los
+// emojis de nadie. Mismos nombres y archivos que FUENTES_EMOJIS.
+const cachesApp = {};   // 'base' | 'extra' -> { cache: { mapa, ts }, promesa }
+async function obtenerMapaEmojisAplicacion(client) {
+    const extra = await mapaAplicacion(client, 'extra', EMOJIS_EXTRA_APP);
+    return { ...extra, ...(await mapaAplicacion(client, 'base', FUENTES_EMOJIS)) };
+}
+async function mapaAplicacion(client, clave, fuentes) {
+    const c = cachesApp[clave] || (cachesApp[clave] = { cache: null, promesa: null });
+    if (c.cache && Date.now() - c.cache.ts < CACHE_TTL_MS) return c.cache.mapa;
+    if (c.promesa) return c.promesa;
+    c.promesa = (async () => {
+        const app = client.application;
+        let existentes = await app.emojis.fetch();
+        const mapa = {};
+        for (const [nombre, rutaRelativa] of Object.entries(fuentes)) {
+            const existente = existentes.find((e) => e.name === nombre);
+            if (existente) { mapa[nombre] = existente.id; continue; }
+            try {
+                const buffer = await sharp(fs.readFileSync(path.join(__dirname, 'assets', rutaRelativa)))
+                    .resize(128, 128, { fit: 'inside', withoutEnlargement: true }).png({ compressionLevel: 9 }).toBuffer();
+                mapa[nombre] = (await app.emojis.create({ attachment: buffer, name: nombre })).id;
+            } catch (e) {
+                console.error(`❌ No se pudo subir el emoji de aplicacion ${nombre}:`, e?.message || e);
+            }
+        }
+        c.cache = { mapa, ts: Date.now() };
+        return mapa;
+    })().catch((e) => {
+        console.error('❌ Error armando emojis de la aplicacion:', e?.message || e);
+        return c.cache?.mapa || {};
+    }).finally(() => { c.promesa = null; });
+    return c.promesa;
+}
+
+// Mapa del server + los iconos extra de la aplicacion (EMOJIS_EXTRA_APP).
 async function obtenerMapaEmojisGuild(guild) {
     if (!guild) return {};
+    const base = await obtenerMapaEmojisGuildBase(guild);
+    const extra = guild.client?.application ? await mapaAplicacion(guild.client, 'extra', EMOJIS_EXTRA_APP).catch(() => ({})) : {};
+    return { ...extra, ...base };
+}
+
+async function obtenerMapaEmojisGuildBase(guild) {
+    if (!guild) return {};
+    // Host de la comunidad: todos los emojis salen de la aplicacion; nunca se toca ningun server.
+    if (require('./community.js').soloComunidad()) return obtenerMapaEmojisAplicacion(guild.client);
+    // Server de comunidad (community.js, 2026-10-23): NUNCA se suben, borran ni "limpian"
+    // emojis ahi -- son del server de otra persona (bug real: la limpieza de duplicados borro un
+    // emoji propio de wr98 en Zenith Rise, y subir ~35 emojis a un server lleno trababa el Sync).
+    // Se usan los emojis del server propio del bot: un bot puede mostrar emojis de cualquier
+    // server donde este.
+    if (require('./community.js').esComunidad(guild.id)) {
+        const origen = guild.client?.guilds?.cache?.find(g => !require('./community.js').esComunidad(g.id));
+        return origen ? obtenerMapaEmojisGuildBase(origen) : {};
+    }
     const cacheado = cachePorGuild.get(guild.id);
     if (cacheado && Date.now() - cacheado.ts < CACHE_TTL_MS) return cacheado.mapa;
     if (promesaEnCursoPorGuild.has(guild.id)) return promesaEnCursoPorGuild.get(guild.id);

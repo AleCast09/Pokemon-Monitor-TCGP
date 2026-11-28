@@ -1428,6 +1428,75 @@ llegarAlPerfilDespuesDelTradeo() {
     }
 }
 
+; Gold Trade, copias 2 en adelante (2026-10-09, diseño de Ale): despues del "Got it!" NO se entra al
+; perfil. Se pasa la secuencia del juego (primer >| -> dex -> Next -> "Items acquired") y en "Send a
+; thanks?" se toca la X, para volver a Comunidad y ofrecer la misma carta otra vez.
+cerrarThanksParaRepetir() {
+    asegurarHwndFast()
+    inicio := A_TickCount
+    ultimoChequeoThanks := 0
+    inicioComunidad := 0
+    while (A_TickCount - inicio < 50000) {
+        if (A_TickCount - ultimoChequeoThanks >= 1500) {
+            ultimoChequeoThanks := A_TickCount
+            if (esperarNeedleSinAccion("own_thanks_avatar_lupa", 40, 1)) {
+                Loop, 3 {
+                    logDebugWishlist("REPETIR: 'Send a thanks?' visible, tocando la X (intento " . A_Index . ")")
+                    Sleep, 500
+                    tap(152, 486)
+                    Sleep, 1500
+                    if (!esperarNeedleSinAccion("own_thanks_avatar_lupa", 40, 1))
+                        return true
+                }
+                return false
+            }
+        }
+        if (pantallaEstable("kevin_pack_skip_native", 40)) {
+            ; Solo el PRIMER >| (el segundo, sobre el dex, avanza solo y un toque ahi abre una carta).
+            logDebugWishlist("REPETIR: primer >|, tocando")
+            Sleep, 700
+            tap(247, 500)
+            Loop, 4 {
+                Sleep, 1000
+                if (!chequeoRapidoNeedle("kevin_pack_skip_native", 40) || chequeoRapidoNeedle("kevin_pack_next_native", 50))
+                    break
+                logDebugWishlist("REPETIR: el primer >| sigue a la vista, tocandolo otra vez")
+                tap(247, 500)
+            }
+            espera := A_TickCount
+            while (A_TickCount - espera < 6000 && chequeoRapidoNeedle("kevin_pack_skip_native", 40))
+                Sleep, 250
+            continue
+        }
+        if (vistaContinua("kevin_pack_next_native", 50, 1500)) {
+            logDebugWishlist("REPETIR: dex, tocando Next")
+            Sleep, 700
+            tap(146, 489)
+            Sleep, 2000
+            continue
+        }
+        if (pantallaEstable("kevin_getitem_dialog_native", 20)) {
+            logDebugWishlist("REPETIR: 'Items acquired', tocando OK")
+            Sleep, 700
+            tap(141, 420)
+            Sleep, 2000
+            continue
+        }
+        ; En Comunidad sin popup: el "Send a thanks?" sale ~6 s despues; si a los 15 s no salio, se sigue.
+        if (chequeoRapidoNeedle("own_mainaccept_friends_icon_native", 30)) {
+            if (!inicioComunidad)
+                inicioComunidad := A_TickCount
+            else if (A_TickCount - inicioComunidad > 15000) {
+                logDebugWishlist("REPETIR: en Comunidad y sin 'Send a thanks?' en 15 s, se sigue")
+                return true
+            }
+        }
+        Sleep, 300
+    }
+    logDebugWishlist("REPETIR: FALLO -- 50 s sin volver a Comunidad")
+    return false
+}
+
 pantallaEstable(needle, variation) {
     if (!chequeoRapidoNeedle(needle, variation))
         return false
@@ -1969,6 +2038,16 @@ if (g_modoDesmarcar) {
     ExitApp, 0
 }
 
+; Gold Trade, copias 2+ (2026-10-09): ya son amigos y la carta ya esta marcada en Favoritos. Se cierra
+; "Send a thanks?" con la X y se va directo a Trade (sin los pasos 1-4 ni la wishlist).
+; Uso: _DonorOfferCard.ahk "<winTitle>" "<folderPath>" "<imagen>" "REPETIR" "<outputFile>"
+if (g_modoExtra = "REPETIR") {
+    logDebugWishlist("REPETIR: copia siguiente, cerrando las pantallas del tradeo anterior")
+    if (!cerrarThanksParaRepetir())
+        ExitConError("repetir_no_volvio_a_comunidad")
+    Goto, RepetirDesdeTrade
+}
+
 logDebugWishlist("paso1: esperando Search Results")
 if (!esperarNeedleYTap("own_donoroffer_x_searchresults", 30, 141, 499)) {
     logDebugWishlist("paso1: FALLO -- nunca aparecio Search Results")
@@ -2020,6 +2099,7 @@ if (g_modoExtra = "SHARE") {
     ExitApp, 0
 }
 
+RepetirDesdeTrade:
 logDebugWishlist("paso5: esperando tile Trade en Social Hub")
 ; Chequeo rapido cableado (2026-08-26): needle propia own_donoroffer_trade_icon_native (el
 ; tile "Trade" de Social Hub), validada en vivo en _FriendTradeCheckPendingOffer.ahk (misma
@@ -2155,7 +2235,8 @@ if (!esperarNeedleSinAccion("own_donoroffer_selectfriend_trade", 30, 15000, "own
 ; TECNICO (perfil no cargo, corazon nunca aparecio, etc.) sigue con el metodo viejo a ciegas
 ; sin cortar el trade -- pero si se revisaron las 3 cartas de verdad y ninguna matcheo, ver
 ; el corte explicito de abajo.
-g_favoritoMarcado := intentarMarcarFavoritoPorWishlist(g_rutaImagenReferencia)
+; En REPETIR la estrella sigue puesta desde la primera copia (se desmarca recien al final).
+g_favoritoMarcado := (g_modoExtra = "REPETIR") ? true : intentarMarcarFavoritoPorWishlist(g_rutaImagenReferencia)
 
 ; Bug real reportado en vivo 2026-09-15, a pedido explicito del usuario (viendo la pantalla
 ; el mismo, reproducido 2 veces seguidas): antes, si se revisaban las 3 cartas del Wishlist
